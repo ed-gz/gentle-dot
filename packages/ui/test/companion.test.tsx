@@ -100,6 +100,16 @@ it("reacts locally to typing without passing draft content to a client", async (
 	expect(localStorage.getItem(COMPANION_KEY)).not.toContain("borrador");
 });
 
+it.each([["run", "working"], ["read", "reading"], ["edit", "typing"], ["thinking", "thinking"]] as const)("renders in-app %s as %s", (actionKind, pose) => {
+ localStorage.setItem(COMPANION_KEY, JSON.stringify({ mode: "capri", visible: true, motion: false }));
+ function Fixture() {
+  const controls = useCompanion();
+  return <CapriCompanion controls={controls} state="working" actionKind={actionKind} connected />;
+ }
+ render(<Fixture />);
+ expect(document.querySelector(".capri-float .capri-sprite")).toHaveAttribute("data-pose", pose);
+});
+
 it("keeps a theme from another window when a mood event arrives before React renders", () => {
 	const { result } = renderHook(() => useCompanion(undefined, false));
 	act(() => {

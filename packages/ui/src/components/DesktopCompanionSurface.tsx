@@ -1,7 +1,7 @@
 import type { AgentState } from "@gentle-dot/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type CapriAction, capriAnimation } from "../capri-animation.ts";
-import { capriBehavior, CAPRI_OUTCOME_MS } from "@gentle-dot/theme-capri/behavior";
+import { capriBehavior, CAPRI_OUTCOME_MS, type CapriActionKind } from "@gentle-dot/theme-capri/behavior";
 import { sceneCaption } from "../capri-scenes.ts";
 import { isVisualNotification, notificationPresentation } from "../companion-notification.ts";
 import type { DesktopCompanionControls } from "../desktop-companion.ts";
@@ -11,6 +11,7 @@ import "../desktop-companion.css";
 interface Props {
 	controls: DesktopCompanionControls;
 	agentState: AgentState;
+	actionKind?: CapriActionKind;
 	connected: boolean;
 	inControl?: boolean;
 	yolo?: boolean;
@@ -29,6 +30,7 @@ interface Press {
 export function DesktopCompanionSurface({
 	controls,
 	agentState,
+	actionKind,
 	connected,
 	inControl = false,
 	yolo = false,
@@ -202,6 +204,7 @@ export function DesktopCompanionSurface({
 		outcome,
 		typingUntil: cue?.kind === "typing" ? cue.expiresAt : undefined,
 		agentWorking: inControl || cue?.kind === "working" || agentState === "working" || agentState === "thinking",
+		actionKind: inControl ? "run" : actionKind ?? (agentState === "thinking" ? "thinking" : undefined),
 		reply: cue?.kind === "submitted" ? { kind: "submitted", at: cue.expiresAt - 4500 } : undefined,
 	});
 	let pose = behavior.animation;

@@ -1,11 +1,18 @@
 import type { CapriPose } from "./art.ts";
 
+export type CapriActionKind = "run" | "read" | "search" | "edit" | "thinking" | "memory" | "delegate" | "other";
+const ACTION_POSES: Record<CapriActionKind, CapriPose> = {
+ run: "working", read: "reading", search: "reading", edit: "typing",
+ thinking: "thinking", memory: "reading", delegate: "working", other: "working",
+};
+
 export interface CapriBehaviorFacts {
  now: number;
  pendingQuestion?: boolean;
  outcome?: { kind: "done" | "error"; at: number };
  typingUntil?: number;
  agentWorking?: boolean;
+ actionKind?: CapriActionKind;
  reply?: { kind: "reply" | "reading" | "submitted"; at: number };
 }
 export interface CapriBehavior {
@@ -25,7 +32,7 @@ export function capriBehavior(facts: CapriBehaviorFacts): CapriBehavior {
   return { state: facts.outcome.kind, animation: facts.outcome.kind === "error" ? "crying" : "victory", target: "stay" };
  if (facts.typingUntil !== undefined && facts.typingUntil > facts.now)
   return { state: "userTyping", animation: "eyes", target: "editor" };
- if (facts.agentWorking) return { state: "agentWorking", animation: "working", target: "stay" };
+ if (facts.agentWorking) return { state: "agentWorking", animation: ACTION_POSES[facts.actionKind ?? "other"], target: "stay" };
  if (facts.reply && fresh(facts.reply.at, facts.reply.kind === "submitted" ? 4500 : CAPRI_REPLY_MS))
   return facts.reply.kind === "submitted"
    ? { state: "submitted", animation: "follow-message", target: "stay" }

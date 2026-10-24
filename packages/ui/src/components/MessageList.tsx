@@ -1,4 +1,5 @@
 import { Fragment, memo } from "react";
+import { ACTION_LABELS, currentAgentAction } from "../agent-activity.ts";
 import type { ChatMessage } from "../store.ts";
 import { formatSize } from "../uploads.ts";
 import { SharedMarkdown } from "./SharedMarkdown.tsx";
@@ -91,7 +92,7 @@ export function MessageList({
 			{working ? (
 				<div className="chat-working" role="status" aria-atomic="true">
 					<span className="chat-working-dot" aria-hidden="true" />
-					{mobile ? "Trabajando…" : "Working…"}
+					{ACTION_LABELS[currentAgentAction("working", messages) ?? "other"]}
 				</div>
 			) : null}
 		</div>

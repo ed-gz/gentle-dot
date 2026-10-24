@@ -1,0 +1,32 @@
+.session-working {
+ display: flex;
+ align-items: center;
+ gap: 8px;
+ flex-shrink: 0;
+ padding: 8px 16px;
+ color: var(--text);
+ font-size: 14px;
+ line-height: 20px;
+}
+.session-working-spinner {
+ width: 16px;
+ height: 16px;
+ flex: 0 0 16px;
+ border: 2px solid var(--line);
+ border-top-color: var(--accent);
+ border-radius: 50%;
+ animation: session-working-spin 1s linear infinite;
+}
+.session-working-dot {
+ width: 7px;
+ height: 7px;
+ flex: 0 0 7px;
+ border-radius: 50%;
+ background: var(--accent);
+ animation: session-working-pulse 1.6s ease-in-out infinite;
+}
+@keyframes session-working-spin { to { transform: rotate(360deg); } }
+@keyframes session-working-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) {
+ .session-working-spinner, .session-working-dot { animation: none; }
+}

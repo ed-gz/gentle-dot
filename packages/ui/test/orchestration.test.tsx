@@ -66,6 +66,17 @@ function setup(next = snapshot, conversation?: AgentConversation) {
 	return { controls, client, view };
 }
 
+it.each([false, true])("shows live work above the composer, marks the list row, and clears on idle (mobile=%s)", async mobile => {
+ const next: OrchestrationSnapshot = { ...snapshot, approvals: [], sessions: snapshot.sessions.map(s => ({ ...s, state: "working" })) };
+ const { controls, client, view } = setup(next);
+ view.rerender(<OrchestrationPanel client={client} controls={controls} mobile={mobile} />);
+ expect(view.container.querySelector(".agent-session-state .session-working-dot")).toBeInTheDocument();
+ fireEvent.click(screen.getByRole("button", { name: /Release/ }));
+ expect(await screen.findByRole("status", { name: "Actividad de la sesión" })).toHaveTextContent("Trabajando…");
+ view.rerender(<OrchestrationPanel client={client} mobile={mobile} controls={{ ...controls, snapshot: { ...next, sessions: next.sessions.map(s => ({ ...s, state: "idle" })) } }} />);
+ expect(screen.queryByRole("status", { name: "Actividad de la sesión" })).not.toBeInTheDocument();
+});
+
 function ProductionAgentPanel({ client, active = true, connected = true, send = () => false }: { client: OrchestrationClient; active?: boolean; connected?: boolean; send?: Send }) {
 	const controls = useOrchestration(client, active);
 	return <AgentVoiceContext value={{ state: { ...initialState, connection: connected ? "open" : "closed" }, send }}>

@@ -7,7 +7,7 @@ import type { CompanionControls } from "../useCompanion.ts";
 import "../capri.css";
 import { type CapriAction, capriAnimation } from "../capri-animation.ts";
 import { type CapriPose, capriFrame } from "../capri-art.ts";
-import { capriBehavior, CAPRI_OUTCOME_MS } from "@gentle-dot/theme-capri/behavior";
+import { capriBehavior, CAPRI_OUTCOME_MS, type CapriActionKind } from "@gentle-dot/theme-capri/behavior";
 import { sceneCaption } from "../capri-scenes.ts";
 import { CapriAnimatedSprite } from "./CapriAnimatedSprite.tsx";
 import { CompanionSpaceEditor } from "./CompanionSpaceEditor.tsx";
@@ -254,6 +254,7 @@ export function CompanionSettings({
 export function CapriCompanion({
 	controls,
 	state,
+	actionKind,
 	connected,
 	needsYou = false,
 	speaking = false,
@@ -264,6 +265,7 @@ export function CapriCompanion({
 }: {
 	controls: CompanionControls;
 	state: AgentState;
+	actionKind?: CapriActionKind;
 	connected: boolean;
 	sessions?: boolean;
 	needsYou?: boolean;
@@ -332,6 +334,7 @@ export function CapriCompanion({
 		outcome: interaction === "failed" ? { kind: "error", at: activity.at ?? Date.now() } : outcome,
 		typingUntil: interaction === "typing" ? activity.expiresAt : undefined,
 		agentWorking: busy || interaction === "sending" || interaction === "queued",
+		actionKind: actionKind ?? (state === "thinking" ? "thinking" : undefined),
 		reply: ["response", "reading", "submitted"].includes(interaction)
 			? { kind: interaction === "submitted" ? "submitted" : "reply", at: activity.at ?? Date.now() } : undefined,
 	});

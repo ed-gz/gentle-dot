@@ -1,6 +1,6 @@
 import type { AgentState, CompanionActivityKind } from "@gentle-dot/protocol";
 import type { CapriPose } from "./art.ts";
-import { capriBehavior } from "./behavior.ts";
+import { capriBehavior, type CapriActionKind } from "./behavior.ts";
 export { capriBehavior, CAPRI_OUTCOME_MS, CAPRI_REPLY_MS } from "./behavior.ts";
 
 export type CompanionCompany = "visits" | "capri" | "rebecca" | "duo";
@@ -10,6 +10,7 @@ export type CompanionInteraction = CompanionActivityKind;
 /** Compatibility adapter for scene consumers. Legacy appearance preferences never rotate behavior. */
 export function sceneForActivity(input: {
  state: AgentState;
+ actionKind?: CapriActionKind;
  connected: boolean;
  attention: boolean;
  sessions: boolean;
@@ -31,6 +32,7 @@ export function sceneForActivity(input: {
   outcome: outcome ? { kind: outcome, at: input.outcomeAt ?? now } : undefined,
   typingUntil: input.interaction === "typing" ? now + 1 : undefined,
   agentWorking: input.state === "working" || input.state === "thinking" || input.interaction === "sending" || input.interaction === "queued",
+  actionKind: input.actionKind ?? (input.state === "thinking" ? "thinking" : undefined),
   reply: ["response", "reading", "submitted"].includes(input.interaction)
    ? { kind: input.interaction === "submitted" ? "submitted" : "reply", at: now } : undefined,
  }).animation;

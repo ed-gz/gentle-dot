@@ -1,4 +1,5 @@
 import type { AgentState } from "@gentle-dot/protocol";
+import type { CapriActionKind } from "@gentle-dot/theme-capri/behavior";
 import { useRef } from "react";
 import type { DesktopCompanionControls } from "../desktop-companion.ts";
 import { Rose, type RoseMood } from "../rose/Rose.tsx";
@@ -28,6 +29,7 @@ const DRAG_THRESHOLD_PX = 3;
 
 interface DotSurfaceProps {
 	agentState: AgentState;
+	actionKind?: CapriActionKind;
 	connected: boolean;
 	/** The assistant controls the Mac (S24.6); it shows over every other state. */
 	inControl?: boolean;
@@ -41,6 +43,7 @@ interface DotSurfaceProps {
 /** The collapsed, always-on-top rose in its black circle. A click opens the panel; a drag moves the window. */
 export function DotSurface({
 	agentState,
+	actionKind,
 	connected,
 	inControl = false,
 	yolo = false,
@@ -56,6 +59,7 @@ export function DotSurface({
 			<DesktopCompanionSurface
 				controls={desktopCompanion}
 				agentState={agentState}
+				actionKind={actionKind}
 				connected={connected}
 				inControl={inControl}
 				yolo={yolo}

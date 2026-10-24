@@ -4,6 +4,7 @@ import { type ConnectionInfo, tokenFromLocation } from "./client.ts";
 import { createCompanionClient } from "./companion.ts";
 import { focusCompanionSession, useDesktopSessionContext } from "./companion-sessions.ts";
 import { CapriCompanion } from "./components/CapriCompanion.tsx";
+import { currentAgentAction } from "./agent-activity.ts";
 import { ChatSurface, type CompanionActivity } from "./components/ChatSurface.tsx";
 import type { ComputerControls } from "./components/Computer.tsx";
 import { DesktopCompanionBubble } from "./components/DesktopCompanionBubble.tsx";
@@ -222,6 +223,7 @@ function Assistant({
 			portalHost={companionHost}
 			controls={companionControls}
 			state={companionActivity.working ? "working" : state.agentState}
+			actionKind={companionActivity.working ? "other" : currentAgentAction(state.agentState, state.messages)}
 			connected={state.connection === "open"}
 			sessions={companionActivity.sessions}
 			needsYou={state.asks.length > 0 || companionActivity.needsYou}
@@ -362,6 +364,7 @@ function Assistant({
 		return (
 			<DotSurface
 				agentState={state.agentState}
+				actionKind={currentAgentAction(state.agentState, state.messages)}
 				connected={state.connection === "open"}
 				inControl={computerSession !== undefined}
 				yolo={yolo !== undefined}

@@ -215,7 +215,7 @@ const ACTION_FOR_POSE: Partial<Record<CapriPose, CapriAction>> = {
 	"face-talk": "face",
 	"point-left": "point-left",
 	"point-right": "point-right",
-	reading: "working",
+	reading: "curious",
 	coffee: "coffee",
 	"sleepy-coffee": "coffee",
 	chill: "chill",

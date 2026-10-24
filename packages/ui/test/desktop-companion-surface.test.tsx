@@ -67,6 +67,11 @@ function setup(value = controls()) {
 	return { value, toggle, startDrag, view, button: screen.getByRole("button") };
 }
 
+it.each([["run", "working"], ["read", "reading"], ["edit", "typing"], ["thinking", "thinking"]] as const)("renders the %s action pose", (actionKind, pose) => {
+ const { container } = render(<DesktopCompanionSurface controls={controls()} agentState="working" actionKind={actionKind} connected toggle={vi.fn()} startDrag={vi.fn()} />);
+ expect(container.querySelector("[data-pose]")).toHaveAttribute("data-pose", pose);
+});
+
 it("watches typing without verified editor geometry and without phase changes", () => {
  const { button } = setup(controls({ context: { musicPlaying: false, musicAvailable: false, notificationsAvailable: false, cue: { kind: "typing", id: "typing:test", expiresAt: Date.now() + 90_000 } } }));
  expect(button).toHaveAttribute("data-pose", "eyes");

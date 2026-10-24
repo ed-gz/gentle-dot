@@ -14,6 +14,7 @@ import { TerminalMoodControl } from "./TerminalMoodControl.tsx";
 import "../orchestration.css";
 import "../agent-mobile.css";
 import "../agent-session.css";
+import "../agent-activity.css";
 import { SessionDeliveryPicker, SessionWorkShelf } from "./SessionMobileControls.tsx";
 
 const STATES: Record<AgentSession["state"], string> = {
@@ -453,6 +454,12 @@ export function OrchestrationPanel({
 					Ir al último mensaje ↓
 				</button>
 			) : null}
+			{active && connected && session.connected && session.state === "working" ? (
+				<div className="session-working" role="status" aria-label="Actividad de la sesión" aria-atomic="true">
+					<span className="session-working-spinner" aria-hidden="true" />
+					Trabajando…
+				</div>
+			) : null}
 			{!(session.capabilities?.prompt ?? session.managed) || !session.sessionId ? (
 				<p className="orchestration-intro">
 					Solo consulta
@@ -686,7 +693,7 @@ export function OrchestrationPanel({
 						>
 							<span className="agent-session-top">
 								<strong>{entry.label || "Sesión sin nombre"}</strong>
-								<span className="agent-session-state"><SessionStatus session={entry} /><span aria-hidden="true">{entry.connected ? STATES[entry.state] : "Sin conexión"}</span></span>
+								<span className="agent-session-state">{entry.connected && entry.state === "working" ? <span className="session-working-dot" aria-hidden="true" /> : null}<SessionStatus session={entry} /><span aria-hidden="true">{entry.connected ? STATES[entry.state] : "Sin conexión"}</span></span>
 							</span>
 							<span className="agent-preview">
 								{entry.lastMessage ||
