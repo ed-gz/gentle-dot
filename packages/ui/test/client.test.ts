@@ -331,3 +331,52 @@ describe("background history responses", () => {
 		if (change === "user_message") expect(f.result.current.state.messages.at(-1)?.id).toBe("new");
 	});
 });
+
+describe("native chat background lifecycle", () => {
+	afterEach(() => {
+		delete window.__GENTLE_MOBILE__;
+		vi.unstubAllGlobals();
+	});
+	it("closes hidden UI connections and restores history without replaying a sent prompt", () => {
+		window.__GENTLE_MOBILE__ = { transcribe: async () => ({ text: "" }) };
+		vi.stubGlobal("WebSocket", FakeSocket);
+		const info = { url: "wss://fixture.test/ws", token: "fixture" };
+		const { result, unmount } = renderHook(() => useDot(info));
+		const first = FakeSocket.all[0];
+		act(() => {
+			first?.open();
+			first?.receive({ type: "ready", agentState: "idle" });
+			expect(result.current.send({ type: "send", text: "Una sola vez", requestId: "once" })).toBe(true);
+			window.dispatchEvent(new Event("gentledot-pause"));
+		});
+		expect(first?.readyState).toBe(3);
+		act(() => {
+			window.dispatchEvent(new Event("online"));
+			vi.advanceTimersByTime(60_000);
+		});
+		expect(FakeSocket.all).toHaveLength(1);
+		act(() => window.dispatchEvent(new Event("gentledot-resume")));
+		expect(FakeSocket.all).toHaveLength(2);
+		const second = FakeSocket.all[1];
+		act(() => {
+			second?.open();
+			second?.receive({ type: "ready", agentState: "idle" });
+		});
+		expect(second?.sent).toContainEqual({ type: "get_history" });
+		expect(second?.sent).not.toContainEqual(expect.objectContaining({ type: "send" }));
+		unmount();
+		window.dispatchEvent(new Event("gentledot-resume"));
+		expect(FakeSocket.all).toHaveLength(2);
+	});
+	it("does not apply native background policy to desktop or ordinary web clients", () => {
+		vi.stubGlobal("WebSocket", FakeSocket);
+		const info = { url: "wss://fixture.test/ws", token: "fixture" };
+		renderHook(() => useDot(info));
+		act(() => {
+			FakeSocket.all[0]?.open();
+			FakeSocket.all[0]?.receive({ type: "ready", agentState: "idle" });
+			window.dispatchEvent(new Event("gentledot-pause"));
+		});
+		expect(FakeSocket.all[0]?.readyState).toBe(1);
+	});
+});

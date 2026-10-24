@@ -1,3 +1,4 @@
+import { useMobileDraft } from "../useMobileDraft.ts";
 import type { ClientMessage } from "@gentle-dot/protocol";
 import { type DragEvent, lazy, type ReactNode, Suspense, useEffect, useId, useRef, useState } from "react";
 import type { CompanionClient } from "../companion.ts";
@@ -78,6 +79,7 @@ const WatchersSettings = lazy(() =>
 );
 
 interface ChatSurfaceProps {
+	mobileDraftScope?: string;
 	desktopCompanion?: DesktopCompanionControls;
 	companionClient?: CompanionClient;
 	companionControls?: CompanionControls;
@@ -181,10 +183,14 @@ function ChatSurfaceView({
 	usage,
 	watchers,
 	mobileControls,
+	mobileDraftScope,
 }: ChatSurfaceProps & { companionControls: CompanionControls }) {
 	// The Android shell supplies these controls. A narrow desktop window remains the desktop chat.
 	const mobile = mobileControls !== undefined && mobileControls !== null;
 	const appearance = useChatAppearance(mobile);
+	const draftConversation = state.features.conversations ? state.conversationId : "continuous";
+	const mobileDraft = useMobileDraft(mobile && mobileDraftScope && draftConversation
+		? JSON.stringify([mobileDraftScope, draftConversation]) : undefined);
 	const capri = companion.settings.mode === "capri";
 	const capriPersona = companion.settings.persona === "capri";
 	const [requestMode] = useRequestPresentation();
@@ -324,6 +330,30 @@ function ChatSurfaceView({
 		window.addEventListener("gentle-dot-companion-question", guide);
 		return () => window.removeEventListener("gentle-dot-companion-question", guide);
 	}, [pendingSession]);
+	useEffect(() => {
+		const open = () => {
+			setShowTools(false); setShowSettings(false); setShowAgents(false);
+			setShowUsage(false); setShowWatchers(false); setShowConversations(false);
+			setRequestedAgent(undefined);
+		};
+		window.addEventListener("gentledot-open-chat", open);
+		return () => window.removeEventListener("gentledot-open-chat", open);
+	}, []);
+	useEffect(() => {
+		const open = (event: Event) => {
+			const target = event instanceof CustomEvent ? event.detail : undefined;
+			if (!target || typeof target.paneId !== "string" || !target.paneId.trim() ||
+				target.paneId.length > 1024 || target.paneId.includes("\0") ||
+				(target.sessionId !== undefined && (typeof target.sessionId !== "string" ||
+					!target.sessionId.trim() || target.sessionId.length > 256 || target.sessionId.includes("\0")))) return;
+			setShowTools(false); setShowSettings(false); setShowAgents(true);
+			// The session panel resolves both IDs against a fresh snapshot. A recycled pane
+			// or notification without a session identity never selects another conversation.
+			setRequestedAgent({ paneId: target.paneId, sessionId: target.sessionId, key: Date.now() });
+		};
+		window.addEventListener("gentledot-open-session", open);
+		return () => window.removeEventListener("gentledot-open-session", open);
+	}, []);
 	useEffect(
 		() => () => onCompanionActivity?.({ sessions: false, working: false, needsYou: false, speaking: false }),
 		[onCompanionActivity],
@@ -1142,12 +1172,15 @@ function ChatSurfaceView({
 						</button>
 					</div>
 				) : null}
+				{mobileDraft?.note ? <p className="voice-status" role="status">{mobileDraft.note}</p> : null}
 				<Composer
+					{...(mobileDraft ? { text: mobileDraft.text, onText: mobileDraft.onText,
+						temporaryAttachmentsNote: "Archivos temporales: vuelve a adjuntarlos si Android cierra la app." } : {})}
 					busy={isBusy(state.agentState)}
 					disabled={!ready}
 					send={(message) => {
 						if (message.type === "send") jumpToLatest();
-						send(message);
+						return send(message);
 					}}
 					focusKey={mobile ? undefined : focusKey}
 					onStartTyping={closeOptions}

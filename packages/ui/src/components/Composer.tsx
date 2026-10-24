@@ -21,6 +21,7 @@ interface ComposerProps {
 	attachments?: AttachmentControls;
 	/** Compact phone copy; desktop keeps its existing labels and behavior. */
 	mobile?: boolean;
+	temporaryAttachmentsNote?: string;
 	/** Optional acknowledged, controlled input; the default Dot transport is unchanged. */
 	text?: string;
 	onText?(text: string): void;
@@ -38,6 +39,7 @@ export function Composer({
 	voice,
 	attachments,
 	mobile = false,
+	temporaryAttachmentsNote,
 	text: controlledText,
 	onText,
 	onSubmitText,
@@ -172,6 +174,7 @@ export function Composer({
 					))}
 				</ul>
 			) : null}
+			{files.length > 0 && temporaryAttachmentsNote ? <p className="voice-status">{temporaryAttachmentsNote}</p> : null}
 			<form
 				className="composer"
 				onSubmit={(event) => {

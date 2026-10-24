@@ -1,6 +1,7 @@
 import type { ClientMessage } from "@gentle-dot/protocol";
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { type ConnectionInfo, DotClient } from "./client.ts";
+import { mobileBridge } from "./mobile.ts";
 import { initialState, reduce } from "./store.ts";
 import type { RefreshHistory } from "./useHistoryRefresh.ts";
 
@@ -37,18 +38,35 @@ export function useDot(info: ConnectionInfo | undefined) {
 		});
 		client.current = c;
 		c.start();
-		const visible = () => {
-			if (document.visibilityState === "visible") c.resume();
+		let paused = false;
+		const pause = () => {
+			if (!mobileBridge() || paused) return;
+			paused = true;
+			pendingRefresh.current = undefined;
+			c.stop();
+			dispatch({ type: "connection", status: "closed" });
 		};
-		const resumed = () => c.resume();
+		const resumed = () => {
+			if (paused) {
+				paused = false;
+				c.start();
+			} else c.resume();
+		};
+		const visible = () => {
+			if (document.visibilityState === "visible") resumed();
+		};
 		const online = () => c.resume(true);
 		document.addEventListener("visibilitychange", visible);
+		// The native monitor owns background delivery. A collapsed Android chat
+		// keeps its draft in memory without a second live UI connection.
+		window.addEventListener("gentledot-pause", pause);
 		window.addEventListener("gentledot-resume", resumed);
 		window.addEventListener("online", online);
 		return () => {
 			c.stop();
 			if (client.current === c) client.current = undefined;
 			document.removeEventListener("visibilitychange", visible);
+			window.removeEventListener("gentledot-pause", pause);
 			window.removeEventListener("gentledot-resume", resumed);
 			window.removeEventListener("online", online);
 		};

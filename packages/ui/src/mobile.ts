@@ -56,7 +56,20 @@ export interface ReceiveFileResult {
 	status: "saved" | "shared" | "cancelled";
 }
 
+export interface MobileDraftSnapshot {
+	text: string;
+	/** Opaque native storage revision, shared by both Android WebViews. */
+	revision: string;
+}
+export interface MobileDraftSaveResult extends MobileDraftSnapshot {
+	applied: boolean;
+}
+
 export interface GentleMobileBridge {
+	/** Encrypted local text drafts, scoped by the paired device and conversation. */
+	readDraft?(key: string): Promise<MobileDraftSnapshot>;
+	/** Compare-and-set prevents a suspended WebView from restoring an older draft. */
+	saveDraft?(key: string, text: string, expectedRevision: string): Promise<MobileDraftSaveResult>;
 	transcribe(options: { language: string }): Promise<{ text: string }>;
 	notify?(options: {
 		title: string;

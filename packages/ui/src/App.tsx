@@ -85,9 +85,11 @@ export interface AppProps {
 	connection?: ConnectionInfo;
 	/** Device controls rendered inside the mobile tools sheet; enables the compact mobile layout. */
 	mobileControls?: ReactNode;
+	/** Non-secret endpoint + pairing identity supplied by the native shell. */
+	mobileDraftScope?: string;
 }
 
-export function App({ connection, mobileControls }: AppProps = {}) {
+export function App({ connection, mobileControls, mobileDraftScope }: AppProps = {}) {
 	const surface = currentSurface();
 	return surface === "companion-launcher" ? (
 		<CompanionLauncher />
@@ -96,7 +98,7 @@ export function App({ connection, mobileControls }: AppProps = {}) {
 	) : surface === "glow" ? (
 		<GlowSurface />
 	) : (
-		<Assistant surface={surface} connection={connection} mobileControls={mobileControls} />
+		<Assistant surface={surface} connection={connection} mobileControls={mobileControls} mobileDraftScope={mobileDraftScope} />
 	);
 }
 
@@ -116,7 +118,7 @@ function CompanionLauncher() {
 	return <DesktopCompanionLauncher toggle={togglePanel} />;
 }
 
-function Assistant({ surface, connection, mobileControls }: AppProps & { surface: Surface }) {
+function Assistant({ surface, connection, mobileControls, mobileDraftScope }: AppProps & { surface: Surface }) {
 	const [info, setInfo] = useState<ConnectionInfo | undefined>(undefined);
 	const [missingToken, setMissingToken] = useState(false);
 	/** Why the desktop app could not reach its assistant, in the app's own words (S35.2). */
@@ -391,7 +393,7 @@ function Assistant({ surface, connection, mobileControls }: AppProps & { surface
 				{...(orchestration ? { orchestration } : {})}
 				{...(usage ? { usage } : {})}
 				{...(watchers ? { watchers } : {})}
-				{...(mobileControls !== undefined ? { mobileControls } : {})}
+				{...(mobileControls !== undefined ? { mobileControls, mobileDraftScope } : {})}
 			/>
 			{companionOverlay}
 		</SharedFileContext>
