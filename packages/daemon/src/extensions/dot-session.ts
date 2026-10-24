@@ -30,6 +30,7 @@ import { connectReviewConsent, isNativeReviewSource, type LiveReviewConsent, rev
 import { copySession } from "../orchestration/session-copy.ts";
 import { createSessionMetadata } from "../orchestration/session-info.ts";
 import { projectSessionMessages } from "../orchestration/transcript.ts";
+import { workspaceToolPermission } from "./approval-guard.ts";
 
 interface DialogDetails extends Record<string, unknown> {
 	kind: "confirm" | "select" | "input" | "editor" | "questionnaire";
@@ -62,6 +63,13 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 	let reviewTool: string | undefined;
 	let reviewConsent: LiveReviewConsent | undefined;
 	let restoreDialogs: (() => void) | undefined;
+	let confirmTool: ((tool: string, input: Record<string, unknown>) => Promise<boolean>) | undefined;
+	const trustedWorkspaceDialogs = new WeakMap<object, () => boolean>();
+	// Enrollment is a live coordinator connection, never a dialog/tool argument.
+	let enrollment: { socket: Socket; expiresAt: number; humanActivityAt: string | null } | undefined;
+	const autonomouslyEnrolled = () => !!enrollment && !enrollment.socket.destroyed &&
+		enrollment.expiresAt > Date.now() && enrollment.humanActivityAt ===
+		(companionActivity.snapshot(ctx?.isIdle() ?? true, false).humanActivityAt ?? null);
 	let ownedUI: object | undefined;
 	const owner = {};
 	let revision = 0;
@@ -92,6 +100,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 	}
 
 	async function close() {
+		enrollment = undefined;
 		queuedHuman.length = 0;
 		deliveries.clear();
 		companionActivity.reset();
@@ -108,6 +117,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 		question = undefined;
 		restoreDialogs?.();
 		restoreDialogs = undefined;
+		confirmTool = undefined;
 		if (ownedUI && Reflect.get(ownedUI, UI_OWNER) === owner) Reflect.deleteProperty(ownedUI, UI_OWNER);
 		ownedUI = undefined;
 		for (const socket of clients) socket.destroy();
@@ -134,6 +144,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 			options: ExtensionUIDialogOptions | undefined,
 			local: (options?: ExtensionUIDialogOptions) => Promise<T>,
 			cancelled: T,
+			verifyPermission?: () => ReturnType<typeof workspaceToolPermission>,
 		): Promise<T> {
 			if (
 				question ||
@@ -152,6 +163,11 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				answerable: true,
 			};
 			if (!questionDetails(pending)) return local(options);
+			const permission = verifyPermission?.();
+			if (permission && verifyPermission) {
+				pending.workflowPermission = permission;
+				trustedWorkspaceDialogs.set(pending, () => autonomouslyEnrolled() && JSON.stringify(verifyPermission()) === JSON.stringify(permission));
+			}
 			question = pending;
 			revision++;
 			let decided = false;
@@ -245,6 +261,16 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				},
 				undefined,
 			);
+		};
+		// Only this closure can mark a pending dialog. Generic ui.confirm, its options,
+		// bus events and model-authored tool arguments never enter this channel.
+		confirmTool = (tool, input) => {
+			const permission = () => workspaceToolPermission({ toolName: tool, input, cwd: context.cwd });
+			const title = `Allow ${tool} in this project?`;
+			const message = JSON.stringify(input, null, 2);
+			return dialog({ kind: "confirm", title, message, action: title,
+				fingerprint: createHash("sha256").update(JSON.stringify([instanceId, sessionId, context.cwd, tool, input])).digest("hex"),
+			}, undefined, opts => original.confirm.call(ui, title, message, opts), false, permission);
 		};
 		ui.confirm = confirm;
 		if (typeof original.select === "function") ui.select = select;
@@ -487,7 +513,8 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 			if (reviewConsent && Object.keys(params).some(key =>
 				!["expectedInstanceId", "expectedSessionId", "questionId", "optionId", "cancelled", "expectedHumanActivityAt"].includes(key)))
 				throw new OrchestrationError("INVALID_ANSWER", "La respuesta no corresponde a esta solicitud.");
-			if ("expectedHumanActivityAt" in params && humanOnlyQuestion(question))
+			if ("expectedHumanActivityAt" in params && (humanOnlyQuestion(question) ||
+				(record(question.workflowPermission) && question.workflowPermission.category === "workspace-tool" && trustedWorkspaceDialogs.get(question)?.() !== true)))
 				throw new OrchestrationError("HUMAN_REQUIRED", "Esta publicación o envío necesita una respuesta humana directa.", 403);
 			const response = questionAnswer(question, params);
 			if (!("expectedHumanActivityAt" in params)) companionActivity.human();
@@ -573,6 +600,25 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				id = request.id;
 				if ((request.method !== "prompt" || request.params.files === undefined) && newline > 128 * 1024)
 					throw new OrchestrationError("TOO_LARGE", "La solicitud local supera el límite.");
+				if (request.method === "workflow.enroll") {
+					const params = request.params;
+					if (!ctx || closing || params.expectedSessionId !== sessionId || params.expectedInstanceId !== instanceId ||
+						ctx.sessionManager.getSessionId() !== sessionId || typeof params.expiresAt !== "number" ||
+						!Number.isFinite(params.expiresAt) || params.expiresAt <= Date.now() ||
+						params.humanActivityAt !== (companionActivity.snapshot(ctx.isIdle(), false).humanActivityAt ?? null))
+						throw new OrchestrationError("ENROLLMENT_CHANGED", "La autorización de autonomía ya no está vigente.");
+					if (enrollment) enrollment.socket.destroy();
+					const grant = { socket, expiresAt: params.expiresAt, humanActivityAt: params.humanActivityAt as string | null };
+					enrollment = grant;
+					const revoke = () => { if (enrollment === grant) enrollment = undefined; };
+					// FIN is acknowledged only after revocation. A completed pause therefore
+					// cannot leave a stale enrollment; a daemon crash also revokes it.
+					socket.once("end", revoke);
+					socket.once("close", revoke);
+					socket.setTimeout(0);
+					socket.write(`${JSON.stringify({ id, result: { accepted: true } })}\n`);
+					return;
+				}
 				const result = await handle(request.method, request.params);
 				const shutdown = request.method === "close" ? ctx : undefined;
 				const originalId = sessionId;
@@ -782,6 +828,15 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 	pi.on("session_tree", (event, context) => {
 		activity.reset();
 		refresh(event, context);
+	});
+	pi.on("tool_call", async (event, context) => {
+		if (!autonomouslyEnrolled() || !confirmTool || context.ui !== ownedUI || context.sessionManager.getSessionId() !== sessionId ||
+			!["read", "edit", "write", "bash"].includes(event.toolName)) return;
+		// A sibling tool must not fall through to an untracked local dialog. Retry it
+		// after the current permission resolves, rather than sharing another call's grant.
+		if (question || closing) return { block: true, reason: "Resolve the pending permission before retrying this tool." };
+		const allowed = await confirmTool(event.toolName, event.input as Record<string, unknown>);
+		return allowed ? undefined : { block: true, reason: "The user did not allow this tool call." };
 	});
 	pi.on("tool_execution_start", (event, context) => {
 		if (event.toolName === "gentle_review" && isNativeReviewSource(

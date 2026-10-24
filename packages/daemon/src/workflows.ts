@@ -1,9 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { connect, type Socket } from "node:net";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CompletionEvent, CompletionSession } from "./completion-reports.ts";
 import { humanOnlyQuestion } from "./orchestration/questions.ts";
+import { defaultHerdrSocket } from "./orchestration/herdr.ts";
+import { readManifests } from "./orchestration/registry.ts";
 import { writePrivateFile } from "./private-file.ts";
 import { runtimeDir } from "./runtime.ts";
 import { type SessionApprovalPolicy, sessionApprovalPolicy } from "./workflow-authorization.ts";
@@ -97,6 +101,8 @@ export interface WorkflowBatch {
 }
 export interface WorkflowOptions {
 	dataDir: string;
+	/** Trusted adapter registries, matching the orchestrator's configured directories. */
+	registryDirs?: string[];
 	snapshot: () => Promise<{
 		sessions: Array<
 			CompletionSession & {
@@ -228,6 +234,71 @@ export function workflowQuestionHash(question: unknown): string {
 /** Durable, explicitly scoped continuations. Files contain task metadata, never session transcripts. */
 export class WorkflowContinuations {
 	private readonly options: WorkflowOptions;
+	private enrollmentSync: Promise<void> = Promise.resolve();
+	private readonly enrollments = new Map<string, { socket: Socket; signature: string }>();
+
+	/** Publish live grants over the existing private adapter socket, never model/tool input. */
+	private syncEnrollments(): Promise<void> {
+		this.enrollmentSync = this.enrollmentSync.then(async () => {
+			const desired = new Map<string, { sessionId: string; expiresAt: number; humanActivityAt: string | null }>();
+			if (!this.closed && !this.storageError) for (const work of this.works.values()) {
+				if (work.mode !== "session" || !work.authorization || !active(work) || deadline(work) <= this.now() ||
+					(runLimitReached(work) && !work.lease && !work.operations.some(op => op.state === "dispatching"))) continue;
+				for (const target of work.sessions) {
+					const observed = work.observed[pair(target)];
+					if (!observed?.activityInstanceId || observed.humanActivityAt === undefined) continue;
+					desired.set(observed.activityInstanceId, { sessionId: target.sessionId, expiresAt: deadline(work), humanActivityAt: observed.humanActivityAt });
+				}
+			}
+			for (const [id, peer] of this.enrollments) {
+				if (!peer.socket.destroyed && JSON.stringify(desired.get(id)) === peer.signature) continue;
+				this.enrollments.delete(id);
+				if (!peer.socket.destroyed) await new Promise<void>(resolve => {
+					const timer = setTimeout(() => peer.socket.destroy(), 1000);
+					peer.socket.once("close", () => { clearTimeout(timer); resolve(); });
+					peer.socket.end();
+				});
+			}
+			if (!desired.size || this.closed) return;
+			const directories = this.options.registryDirs ?? [join(this.options.dataDir, "pi-sessions"),
+				process.env.HERDR_MOBILE_PI_DIR || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "herdr-mobile", "pi-connect")];
+			const manifests = await readManifests(directories, defaultHerdrSocket());
+			for (const manifest of manifests) {
+				const id = manifest.instanceId;
+				const grant = id ? desired.get(id) : undefined;
+				if (!id || !grant || manifest.sessionId !== grant.sessionId || this.enrollments.has(id) || this.closed) continue;
+				await new Promise<void>(resolve => {
+					const socket = connect(manifest.socketPath);
+					const timer = setTimeout(() => socket.destroy(), 1000);
+					let response = "";
+					const finish = () => { clearTimeout(timer); resolve(); };
+					socket.once("error", () => socket.destroy());
+					socket.once("close", () => { if (this.enrollments.get(id)?.socket === socket) this.enrollments.delete(id); finish(); });
+					socket.once("connect", () => socket.write(`${JSON.stringify({ id: randomUUID(), method: "workflow.enroll", params: {
+						expectedSessionId: grant.sessionId, expectedInstanceId: id, expiresAt: grant.expiresAt, humanActivityAt: grant.humanActivityAt,
+					} })}\n`));
+					socket.on("data", chunk => {
+						response += String(chunk);
+						if (response.length > 4096) { socket.destroy(); return; }
+						if (!response.includes("\n")) return;
+						try {
+							const value = JSON.parse(response.split("\n")[0]!);
+							if (value.result?.accepted !== true || this.closed) { socket.destroy(); return; }
+							this.enrollments.set(id, { socket, signature: JSON.stringify(grant) });
+							socket.removeAllListeners("data");
+							socket.unref();
+							finish();
+						} catch { socket.destroy(); }
+					});
+				});
+			}
+		}).catch(() => {
+			// A missing/stale adapter grants nothing. Never leave a cached grant on failure.
+			for (const peer of this.enrollments.values()) peer.socket.destroy();
+			this.enrollments.clear();
+		});
+		return this.enrollmentSync;
+	}
 	private readonly path: string;
 	private readonly now: () => number;
 	private readonly works = new Map<string, StoredWorkflow>();
@@ -371,8 +442,10 @@ export class WorkflowContinuations {
 				state = encode();
 			}
 			writePrivateFile(this.path, state);
+			void this.syncEnrollments();
 		} catch {
 			this.storageError = "No se pudo guardar el seguimiento. Las continuaciones están detenidas.";
+			void this.syncEnrollments();
 			throw new WorkflowError(this.storageError, 503);
 		}
 	}
@@ -840,6 +913,10 @@ export class WorkflowContinuations {
 		return this.recovering;
 	}
 	async poll(take: boolean, authorize: () => boolean = () => true): Promise<WorkflowBatch> {
+		try { return await this.pollWork(take, authorize); }
+		finally { await this.syncEnrollments(); }
+	}
+	private async pollWork(take: boolean, authorize: () => boolean): Promise<WorkflowBatch> {
 		this.ensure(authorize);
 		this.expire();
 		if (!take || this.busy) return this.status();
@@ -970,6 +1047,10 @@ export class WorkflowContinuations {
 		actor: "human" | "agent",
 		authorize: () => boolean = () => true,
 	): Promise<unknown> {
+		try { return await this.dispatchWork(value, actor, authorize); }
+		finally { await this.syncEnrollments(); }
+	}
+	private async dispatchWork(value: unknown, actor: "human" | "agent", authorize: () => boolean): Promise<unknown> {
 		if (!record(value)) throw new WorkflowError("La solicitud de seguimiento no es válida.");
 		if (value.action === "pauseAll") {
 			if (actor !== "human" || !authorize())
@@ -1533,5 +1614,7 @@ export class WorkflowContinuations {
 	}
 	close(): void {
 		this.closed = true;
+		for (const peer of this.enrollments.values()) peer.socket.destroy();
+		this.enrollments.clear();
 	}
 }

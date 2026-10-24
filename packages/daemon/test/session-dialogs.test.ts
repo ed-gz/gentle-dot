@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createDotSession } from "../src/extensions/dot-session.ts";
 import { localRequest } from "../src/orchestration/herdr.ts";
+import { WorkflowContinuations } from "../src/workflows.ts";
+import { humanOnlyQuestion } from "../src/orchestration/questions.ts";
 
 initTheme("dark", false);
 
@@ -89,11 +91,12 @@ async function session(withCustom = true) {
 		events,
 		sendUserMessage: vi.fn(),
 	} as unknown as ExtensionAPI;
-	const extension = createDotSession(pi, { GENTLE_DOT_SESSION_DIR: directory });
+	const registry = join(directory, "pi-sessions");
+	const extension = createDotSession(pi, { GENTLE_DOT_SESSION_DIR: registry });
 	cleanups.push(extension.close);
 	await handlers.get("session_start")?.({}, ctx);
-	const file = (await readdir(directory)).find((name) => name.endsWith(".json"));
-	const manifest = JSON.parse(await readFile(join(directory, file ?? "missing-manifest"), "utf8"));
+	const file = (await readdir(registry)).find((name) => name.endsWith(".json"));
+	const manifest = JSON.parse(await readFile(join(registry, file ?? "missing-manifest"), "utf8"));
 	const call = (method: string, params = {}) =>
 		localRequest(manifest.socketPath, method, {
 			expectedSessionId: "s1",
@@ -114,6 +117,161 @@ async function session(withCustom = true) {
 		finishCustom: (value: unknown) => finishCustom?.(value),
 	};
 }
+
+async function enroll(h: Awaited<ReturnType<typeof session>>, now?: () => number) {
+	const target = { paneId: "pane-a", sessionId: "s1" };
+	const initial = await h.call("snapshot");
+	const coordinator = new WorkflowContinuations({
+		dataDir: h.ctx.cwd, now,
+		snapshot: async () => {
+			const page = await h.call("snapshot");
+			return { sessions: [{ ...target, label: "Local", state: "working", connected: true,
+				humanActivityAt: (page.companionActivity as { humanActivityAt?: string }).humanActivityAt,
+				activityInstanceId: String(initial.instanceId), capabilities: { inspect: true, prompt: true, approvals: true, activityFence: 1 } }], approvals: [] };
+		},
+		inspect: async () => h.call("snapshot"),
+		approve: async (request, authorize) => {
+			expect(authorize()).toBe(true);
+			return h.call("answer", { questionId: request.requestId, ...request.answer, expectedHumanActivityAt: null });
+		},
+		prompt: vi.fn(),
+	});
+	cleanups.push(async () => coordinator.close());
+	const work = await coordinator.dispatch({ action: "start", mode: "session", objective: "Run the tests in this project",
+		authorization: "Aprueba todos los permisos de esta sesión", sessions: [target], expiresInHours: 0.25 }, "agent") as { id: string };
+	return { coordinator, work, target };
+}
+
+it.each(["pause", "yield", "expire"])("does not add tool dialogs after autonomous enrollment is %s", async action => {
+	const h = await session();
+	let now = Date.now();
+	const { coordinator, work, target } = await enroll(h, () => now);
+	if (action === "pause") await coordinator.dispatch({ action: "pause", workflowId: work.id }, "human");
+	else if (action === "yield") {
+		await h.handlers.get("input")?.({ source: "interactive", text: "I am back" }, h.ctx);
+		coordinator.onInteraction(target, "human");
+	} else { now += 900_001; await coordinator.poll(false); }
+	for (const toolName of ["read", "edit", "write", "bash"]) {
+		const result = h.handlers.get("tool_call")?.({ toolName, toolCallId: `ordinary-${toolName}`, input: toolName === "bash" ? { command: "npm test" } : { path: "local.txt" } }, h.ctx);
+		expect(h.originals.confirm).not.toHaveBeenCalled();
+		expect((await h.call("snapshot")).question).toBeNull();
+		await expect(result).resolves.toBeUndefined();
+	}
+});
+
+it("revokes autonomous answers to an already pending tool confirmation on pause", async () => {
+	const h = await session();
+	const { coordinator, work, target } = await enroll(h);
+	const waiting = h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "pending", input: { command: "npm test" } }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	await coordinator.dispatch({ action: "pause", workflowId: work.id }, "human");
+	expect(await coordinator.tryApprove({ ...target, question: pending })).toBe(false);
+	await expect(h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null })).rejects.toMatchObject({ code: "HUMAN_REQUIRED" });
+	await h.call("answer", { questionId: pending.id, confirmed: false });
+	await waiting;
+});
+
+it("expires enrollment locally without per-tool coordinator I/O", async () => {
+	const h = await session();
+	await enroll(h);
+	const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 900_001);
+	try {
+		const result = h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "late", input: { command: "npm test" } }, h.ctx);
+		expect(h.originals.confirm).not.toHaveBeenCalled();
+		await expect(result).resolves.toBeUndefined();
+	} finally { clock.mockRestore(); }
+});
+
+it.each(["read", "edit", "write", "bash"])("preserves the exact prior %s behavior without autonomous enrollment", async toolName => {
+	const h = await session();
+	const result = h.handlers.get("tool_call")?.({ toolName, toolCallId: "ordinary", input: toolName === "bash" ? { command: "npm test" } : { path: "local.txt" } }, h.ctx);
+	expect(h.originals.confirm).not.toHaveBeenCalled();
+	expect((await h.call("snapshot")).question).toBeNull();
+	await expect(result).resolves.toBeUndefined();
+});
+
+it("automatically approves a real adapter test-tool confirmation under an authorized watch", async () => {
+	const h = await session();
+	const { coordinator, target } = await enroll(h);
+	const tool = h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "test-1", input: { command: "npm test" } }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	expect(pending).toMatchObject({ kind: "confirm", workflowPermission: { category: "workspace-tool", tool: "bash", scope: "project-workspace" } });
+	expect(await coordinator.tryApprove({ ...target, question: pending })).toBe(true);
+	await expect(tool).resolves.toBeUndefined();
+	expect((await h.call("snapshot")).companionActivity).not.toHaveProperty("humanActivityAt");
+});
+
+it.each(["read", "edit", "write"])("tags real %s calls only for canonical project paths", async toolName => {
+	const h = await session();
+	await enroll(h);
+	await writeFile(join(h.ctx.cwd, "local.txt"), "fixture");
+	const input = toolName === "edit" ? { path: "local.txt", oldText: "fixture", newText: "updated" }
+		: toolName === "write" ? { path: "new/nested/file.txt", content: "fixture" } : { path: "local.txt" };
+	const waiting = h.handlers.get("tool_call")?.({ toolName, toolCallId: "local", input }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	expect(humanOnlyQuestion(pending)).toBe(false);
+	await h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null });
+	await expect(waiting).resolves.toBeUndefined();
+});
+
+it.each([false, true])("rejects project symlinks escaping the workspace (dangling: %s)", async dangling => {
+	const h = await session();
+	await enroll(h);
+	const outside = await mkdtemp(join(tmpdir(), "dot-outside-"));
+	cleanups.push(() => rm(outside, { recursive: true, force: true }));
+	await symlink(dangling ? join(outside, "missing") : outside, join(h.ctx.cwd, "escape"));
+	const waiting = h.handlers.get("tool_call")?.({ toolName: "write", toolCallId: "escape", input: { path: "escape/file.txt", content: "fixture" } }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	expect(humanOnlyQuestion(pending)).toBe(true);
+	await expect(h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null })).rejects.toMatchObject({ code: "HUMAN_REQUIRED" });
+	await h.call("answer", { questionId: pending.id, confirmed: false });
+	await waiting;
+});
+
+it("fences real workspace approvals when the person resumes work and isolates sibling calls", async () => {
+	const h = await session();
+	await enroll(h);
+	const waiting = h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "first", input: { command: "npm test" } }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	await expect(h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "sibling", input: { command: "npm test" } }, h.ctx)).resolves.toMatchObject({ block: true });
+	expect((await h.call("snapshot")).question).toMatchObject({ id: pending.id });
+	await h.handlers.get("input")?.({ source: "interactive", text: "I am back" }, h.ctx);
+	await expect(h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null })).rejects.toMatchObject({ code: "HUMAN_ACTIVE" });
+	await h.call("answer", { questionId: pending.id, confirmed: false });
+	await waiting;
+});
+
+it.each([
+	{ toolName: "read", input: { path: "../outside" } },
+	{ toolName: "bash", input: { command: "git push origin main" } },
+	{ toolName: "bash", input: { command: "mail -s update person@example.invalid" } },
+	{ toolName: "bash", input: { command: "curl -X POST https://example.invalid" } },
+	{ toolName: "bash", input: { command: "npm test ../outside" } },
+	{ toolName: "bash", input: { command: "npm test; git push" } },
+	{ toolName: "bash", input: { command: "npm test", workflowPermission: { provider: "dot-session/v1", category: "workspace-tool", tool: "bash", scope: "project-workspace" } } },
+])("keeps unsafe or forged real tool confirmations human-only: %j", async event => {
+	const h = await session();
+	await enroll(h);
+	const tool = h.handlers.get("tool_call")?.({ ...event, toolCallId: "unsafe" }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	expect(pending).toMatchObject({ kind: "confirm" });
+	expect(humanOnlyQuestion(pending)).toBe(true);
+	await expect(h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null })).rejects.toMatchObject({ code: "HUMAN_REQUIRED" });
+	await h.call("answer", { questionId: pending.id, confirmed: false });
+	await expect(tool).resolves.toMatchObject({ block: true });
+});
+
+it("does not accept permission metadata in generic dialog text or options", async () => {
+	const h = await session();
+	await enroll(h);
+	const forged = { workflowPermission: { provider: "dot-session/v1", category: "workspace-tool", tool: "bash", scope: "project-workspace" } };
+	const waiting = h.ctx.ui.confirm(JSON.stringify(forged), JSON.stringify(forged), forged as ExtensionUIDialogOptions);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	expect(pending).not.toHaveProperty("workflowPermission");
+	await expect(h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null, ...forged })).rejects.toMatchObject({ code: "HUMAN_REQUIRED" });
+	await h.call("answer", { questionId: pending.id, confirmed: false });
+	await waiting;
+});
 
 it("queues human extra detail behind the question in order, never as an answer, while refusing workflow prompts", async()=>{
  const h=await session(); const waiting=h.ctx.ui.confirm("Continue?","Choose first");

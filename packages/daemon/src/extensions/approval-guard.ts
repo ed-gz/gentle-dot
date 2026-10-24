@@ -34,7 +34,7 @@
  * extensions folder (`child-guard.ts`), but get no `propose_connector`.
  * This file has no dependencies besides Node, so the engine loads it as is.
  */
-import { realpathSync, statSync } from "node:fs";
+import { lstatSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { pruneScreenshots } from "./screenshot-context.ts";
@@ -300,6 +300,65 @@ export function decide(call: GuardCall, policy: ConnectorPolicy): GuardDecision 
 		action: "ask",
 		...approvalCard(name, server ?? "", toolName.slice(toolId(server ?? "", "").length), input),
 	};
+}
+
+/** A verified local operation, not a promise about arbitrary shell program effects. */
+export function workspaceToolPermission(call: GuardCall): { provider: "dot-session/v1"; category: "workspace-tool"; tool: string; scope: "project-workspace" } | undefined {
+	if (!["read", "edit", "write", "bash"].includes(call.toolName)) return;
+	const policy = parsePolicy(process.env[POLICY_ENV]) ?? { protectedPaths: [] };
+	if (decide(call, policy).action !== "pass") return;
+	// Unknown/model-authored authority fields must never become permission metadata.
+	const fields: Record<string, string[]> = {
+		read: ["path", "offset", "limit"], edit: ["path", "oldText", "newText"],
+		write: ["path", "content"], bash: ["command", "timeout"],
+	};
+	if (Object.keys(call.input).some(key => !fields[call.toolName]!.includes(key))) return;
+	let root: string;
+	try { root = realpathSync(call.cwd); } catch { return; }
+	const inside = (raw: string): boolean => {
+		if (!raw || /[\0$~*?{}]/.test(raw) || /(?:^|[/\\])(?:\.env(?:\.[^/\\]*)?|\.ssh|\.aws|credentials?|auth\.json)(?:$|[/\\])/i.test(raw)) return false;
+		const target = resolvePath(raw, call.cwd);
+		// Resolve the nearest existing ancestor for new files/directories. Never follow a
+		// dangling symlink by pretending it is a new path (lstat distinguishes the two).
+		const canonical = (path: string): string => {
+			try { return realpathSync(path); } catch {
+				// lstat, unlike stat, sees dangling symlinks.
+				if (lstatSync(path, { throwIfNoEntry: false })) throw new Error("unresolved path");
+				const parent = dirname(path);
+				if (parent === path) throw new Error("unresolved root");
+				return join(canonical(parent), basename(path));
+			}
+		};
+		try {
+			const real = canonical(target);
+			return real === root || real.startsWith(root + sep);
+		} catch { return false; }
+	};
+	if (call.toolName === "bash") {
+		const command = call.input.command;
+		if (typeof command !== "string" || namesPrivateFile(command, policy.protectedPaths)) return;
+		// No general shell parsing: only a single local test runner invocation, without
+		// expansion, redirection, chaining, environment overrides or network commands.
+		if (!/^[A-Za-z0-9_./:@=\s-]+$/.test(command) || /[\r\n]/.test(command)) return;
+		const words = command.trim().split(/\s+/);
+		let count = 0;
+		if (["npm", "pnpm", "yarn", "bun"].includes(words[0] ?? "")) {
+			count = words[1] === "test" ? 2 : words[1] === "run" && words[2] === "test" ? 3 : 0;
+		} else if (["node_modules/.bin/vitest", "./node_modules/.bin/vitest"].includes(words[0] ?? "") && words[1] === "run") count = 2;
+		else if (["pytest", "./node_modules/.bin/jest", "node_modules/.bin/jest"].includes(words[0] ?? "")) count = 1;
+		else if (["go", "cargo"].includes(words[0] ?? "") && words[1] === "test") count = 2;
+		else if (words[0] === "node" && words[1] === "--test") count = 2;
+		if (!count) return;
+		if (words[0]!.includes("/") && !inside(words[0]!)) return;
+		for (const arg of words.slice(count)) {
+			if (["--", "--runInBand", "--coverage", "--watch=false", "--no-watch", "--verbose", "-v"].includes(arg)) continue;
+			// Unknown options (including --prefix/--config/--eval) cannot redirect execution.
+			if (arg.startsWith("-") || arg.includes(":") || arg.includes("=") || !inside(arg)) return;
+		}
+	} else {
+		if (typeof call.input.path !== "string" || !inside(call.input.path)) return;
+	}
+	return { provider: "dot-session/v1", category: "workspace-tool", tool: call.toolName, scope: "project-workspace" };
 }
 
 /**
