@@ -40,3 +40,7 @@ La pregunta pendiente aparece como tarjeta con sus opciones encima del composito
 ## Ver y detener
 
 Usa «mostrame qué estás vigilando», «pausá la vigilancia de X», «seguí vigilando X» o «dejá de vigilar X». Capri lista primero y usa el identificador exacto. `dot_watch` tiene list/pause/resume/delete; `dot_workflows` tiene list/pause/resume/stop. Las vigilancias de sólo avisos también están en Ajustes → Dot 24/7. Un tema nuevo en el chat no cambia estos encargos. No uses un bucle de consultas al modelo para esperar eventos.
+
+## Límites conocidos
+
+Las vigilancias activas sólo aprueban solas lecturas, ediciones, escrituras y ejecuciones de pruebas locales dentro del proyecto. Las rutas sensibles se comprueban por nombre en la ruta escrita y en su destino real, incluidas carpetas enlazadas; un *hardlink* con nombre inocente a un archivo sensible sólo se detecta si ese archivo está en las rutas protegidas, que se comparan por inodo. Si la sesión pierde la conexión, la vigilancia se pausa; si no confirma la pausa, Capri la informa como no confirmada y el adaptador pierde la autorización al vencer su plazo de tres segundos. Varias sesiones bloqueadas a la vez pueden retrasar la renovación de otra sana; en ese caso la vigilancia se pausa en lugar de actuar.
