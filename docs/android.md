@@ -4,7 +4,7 @@ La APK incluye la interfaz de Gentle Dot y se conecta al daemon de tu equipo por
 
 ## Compilar
 
-Requisitos: Node 24+, pnpm, JDK 21 y Android SDK 36. Define `JAVA_HOME` y `ANDROID_HOME`; instala las plataformas y herramientas del SDK desde Android Studio o `sdkmanager`.
+Requisitos: Node 24+, pnpm 11.5.0, JDK 21 o posterior, Android SDK 36 y Build Tools 36.0.0. Define `JAVA_HOME` y `ANDROID_HOME`; instala las plataformas y herramientas del SDK desde Android Studio o `sdkmanager`.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -14,7 +14,7 @@ pnpm android:apk --lint
 
 El resultado instalable es `build/android/gentle-dot-debug.apk` y su hash está en `build/android/gentle-dot-debug.apk.sha256`. Es una APK de desarrollo firmada con la clave debug local, apta para instalación directa; no es un paquete de publicación en Play Store. Para actualizar una instalación, conserva la misma clave de firma. No guardes claves privadas de publicación en el repositorio.
 
-El script verifica la firma y la alineación del paquete antes de copiarlo a esa ruta. La actualización 0.20.3 usa `versionCode 28`, de modo que Android puede instalarla sobre las versiones anteriores conservando la conexión cuando se mantiene la misma clave.
+El script verifica la firma y la alineación del paquete antes de copiarlo a esa ruta. La versión actual del proyecto es 0.21.0 con `versionCode 34`. Android permite actualizar una instalación anterior conservando sus datos cuando se mantiene la misma identidad y clave de firma. El APK se genera localmente; no forma parte del contenido de Git.
 
 La vista móvil usa navegación inferior **Dot · Sesiones · Ajustes**, sin cabecera permanente. Mantiene el chat y las sesiones abiertos al cambiar de pantalla, conservando borradores y posición de lectura. **Ajustes** reúne cuentas, perfiles, conexiones, modelo, voz, avisos y la opción de desvincular el teléfono. El icono de Android y la pantalla de inicio usan la rosa oficial.
 
@@ -22,7 +22,7 @@ El script también reconoce una instalación local de las herramientas en `.cach
 
 ## Apariencia y archivos en el chat
 
-Activa **Modo Capri** desde **Ajustes → Capri, a tu ritmo**. Capri elige sus formas y reacciones, y recibe visitas de Rebecca automáticamente. Flota sobre toda la app, incluso sobre los diálogos, y conserva su posición al cambiar entre Dot, Sesiones y Ajustes. No ocupa una fila del chat ni depende de la vista de conversación. Puedes arrastrarla con el dedo o el ratón; un toque abre las acciones **Hazte a un lado**, **Pausar movimiento** y **Minimizar a Capri**. Las flechas del teclado también permiten moverla cuando tiene el foco. Se aparta del compositor y se reajusta al aparecer el teclado. Su movimiento se pausa durante la interacción, al ocultar la app o si el sistema pide reducir movimiento. La burbuja permanece dentro de Gentle Dot; no se muestra sobre otras aplicaciones de Android. Consulta [la guía de Capri](capri.md).
+Activa **Tema Capri** desde **Ajustes**. La personalidad del agente se elige por separado desde **Conversación → Personalidad Capri**. Capri elige sus formas y reacciones, y recibe visitas de Rebecca automáticamente. Flota sobre toda la app, incluso sobre los diálogos, y conserva su posición al cambiar entre Dot, Sesiones y Ajustes. No ocupa una fila del chat ni depende de la vista de conversación. Puedes arrastrarla con el dedo o el ratón; un toque abre las acciones **Hazte a un lado**, **Pausar movimiento** y **Minimizar a Capri**. Las flechas del teclado también permiten moverla cuando tiene el foco. Se aparta del compositor y se reajusta al aparecer el teclado. Su movimiento se pausa durante la interacción, al ocultar la app o si el sistema pide reducir movimiento. Este personaje web permanece dentro de Gentle Dot. Desde **Ajustes → Este teléfono → Sobre otras apps** puedes activar además el acompañante nativo de Android 8+, que requiere un permiso explícito y abre una conversación parcial. Consulta [la guía de Capri](capri.md) y [el acompañante Android](android-companion.md).
 
 Las acciones internas comparten un único indicador **Trabajando…**, que desaparece al finalizar el turno. No dejan tarjetas de pasos en la conversación. Si estás leyendo mensajes anteriores, las respuestas, permisos e imágenes nuevos conservan tu posición; **Volver al final** permite retomar el seguimiento. Enviar un mensaje propio también vuelve al final.
 
@@ -62,7 +62,7 @@ Sigue [la guía de conexión y orquestación](mobile-orchestration.md) para gene
 
 Con la aplicación de escritorio abierta, confirma **¿Permitir acceso a este teléfono?** en el equipo al vincular. Solo los teléfonos confirmados así pueden responder los permisos de las acciones de Gentle Dot. Una vinculación anterior a 0.2.0 permite conversar y gestionar sesiones; para habilitar estos permisos, desvincula y vuelve a vincular con el escritorio abierto. El QR no reemplaza esta confirmación inicial.
 
-Cuando un teléfono autorizado está conectado, las nuevas solicitudes concretas se muestran dentro del **Chat** y en **Sesiones → Permisos de Gentle Dot**, con su vista previa completa, vencimiento y botones **Permitir / Rechazar**. Si no hay ningún teléfono autorizado conectado, Gentle Dot usa el diálogo habitual del escritorio. Si el teléfono se reconecta antes del vencimiento, recupera la solicitud pendiente. Gana una sola respuesta; las respuestas tardías no repiten la operación. Si la solicitud empezó en un diálogo Linux, ese diálogo puede seguir visible hasta cerrarlo: su respuesta tardía se ignora. Revocar el teléfono o cancelar la operación invalida la solicitud.
+Cuando un teléfono autorizado está conectado, las nuevas solicitudes concretas se muestran dentro del **Chat** y en **Sesiones → Permisos de Gentle Dot**, con su vista previa completa, vencimiento y botones **Permitir / Rechazar**. Si no hay ningún teléfono autorizado conectado, Gentle Dot usa el diálogo habitual del escritorio. Si el teléfono se reconecta antes del vencimiento, recupera la solicitud pendiente. Gana una sola respuesta; las respuestas tardías no repiten la operación. Una respuesta móvil confirmada cierra el diálogo Linux correspondiente en el escritorio actualizado; las respuestas tardías se ignoran. Revocar el teléfono o cancelar la operación invalida la solicitud.
 
 **Agentes** detecta las sesiones activas de Herdr, Orca y terminales compatibles en segundo plano. Toca una sesión para abrir su conversación y continuarla; el botón Atrás vuelve primero al listado. Los proveedores quedan en un diagnóstico cerrado, sin obligarte a configurarlos. **Navegación web → Duración del permiso** sólo indica cuánto tiempo autorizas a Dot a controlar su navegador; no limita el chat ni las sesiones de agentes.
 
@@ -88,7 +88,7 @@ El equipo debe estar despierto y Dot debe permanecer ejecutándose. La aplicaci�
 
 ## Avisos con la pantalla apagada
 
-Abre **Ajustes → Avisos en el teléfono**, activa los avisos y concede el permiso de notificaciones. Un servicio nativo mantiene la suscripción WSS de Gentle Dot y consulta el estado de los agentes cada 10 segundos. Cuando falta la red, aplica reintentos de hasta 60 segundos. La notificación permanente permite detener los avisos.
+Abre los ajustes de alertas del teléfono, activa los avisos en segundo plano y concede el permiso de notificaciones. Un servicio nativo entrega eventos mediante la suscripción WSS de Gentle Dot y conserva una consulta cada 10 segundos para recuperar cambios. Cuando falta la red, aplica reintentos de hasta 60 segundos. La notificación permanente permite detener los avisos.
 
 **Qué avisos recibir** permite elegir **Dot y agentes**, **Sólo Gentle Dot** o **Sólo agentes**. La preferencia se conserva en el teléfono. Las solicitudes reales de permiso siguen avisando mientras el monitor esté activo, incluso si silencias la actividad de los agentes. Para apagar todos los avisos de fondo, desactiva **Avisos en el teléfono**.
 
@@ -100,7 +100,7 @@ El servicio avisa de preguntas pendientes, respuestas terminadas, solicitudes de
 
 Si la conexión se corta mientras el servicio sigue activo, al reconectar compara el historial del chat activo y avisa cuando hay respuestas nuevas. La primera activación establece una referencia y no reproduce todos los avisos antiguos. Esta referencia vive en memoria: después de que Android cierre el proceso, abre la conversación para revisar lo ocurrido. El inicio de avisos solo se confirma cuando Android ha iniciado el servicio; las respuestas tardías de una conexión detenida se descartan al cambiar de conexión.
 
-Android puede detener aplicaciones por ahorro de batería, cierre forzado, reinicio o restricciones del fabricante. Después de reiniciar el teléfono o forzar el cierre, abre la app y vuelve a activar los avisos. El equipo y Tailscale deben permanecer encendidos y conectados. El servicio no usa Firebase ni un servidor de notificaciones externo.
+Android puede detener aplicaciones por ahorro de batería, cierre forzado, reinicio o restricciones del fabricante. Después de reiniciar el teléfono o forzar el cierre, abre la app y comprueba los avisos. La preferencia cifrada permite recuperarlos cuando Android lo admite; si los desactivaste expresamente, debes activarlos de nuevo. Consulta [la recuperación del monitor](mobile-notification-delivery.md). El equipo y Tailscale deben permanecer encendidos y conectados. El servicio no usa Firebase ni un servidor de notificaciones externo.
 
 ## Verificación
 

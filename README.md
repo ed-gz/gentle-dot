@@ -1,215 +1,97 @@
-<!-- markdownlint-disable-next-line MD041 -->
-<a id="top"></a>
+# Gentle Dot — fork con Android, orquestación y Capri opcional
 
-> **Eduardo Garza's personal fork:** [ed-gz/gentle-dot](https://github.com/ed-gz/gentle-dot), based on [Gentleman-Programming/gentle-dot](https://github.com/Gentleman-Programming/gentle-dot). Gentle Dot remains the base application. The bundled **Capri** fan theme is optional and contains its sprites, animation data, colors and persona in [`packages/theme-capri`](packages/theme-capri). See [what belongs to the base and to this fork](docs/fork.md) and [the Android companion](docs/android-companion.md).
+Este es el fork de [Eduardo Garza (`ed-gz`)](https://github.com/ed-gz/gentle-dot) de [Gentle Dot](https://github.com/Gentleman-Programming/gentle-dot), creado por Gentleman Programming. Conserva el asistente, la rosa y la identidad de Gentle Dot, y añade trabajo en sesiones remotas, mejoras de chat, integración Linux y un cliente Android. **Capri es un tema y una personalidad opcionales; una instalación nueva empieza con Gentle Dot.**
 
-<div align="center">
+El repositorio contiene código fuente, pruebas y recursos gráficos. **Los APK y demás instaladores se construyen localmente; no están incluidos en Git.** Esta guía describe el fork. El [registro de cambios](docs/fork-changelog.md) separa sus aportaciones de la base upstream y enlaza los detalles de cada área.
 
-<img width="100%" alt="Gentle Dot banner: the neon rose glowing inside a black circle, the Gentle Dot wordmark, and the tagline Your assistant, always one key away" src="docs/assets/brand/gentle-dot-banner.png" />
+## Empezar desde el código
 
-<h1>Gentle Dot</h1>
-
-<p><strong>A personal assistant that lives on your desktop, remembers what matters, and can use your Mac for you.</strong></p>
-
-
-https://github.com/user-attachments/assets/0c0f4d2d-7e0e-4c35-961a-8816d95a390c
-
-
-<p>
-<img src="https://img.shields.io/badge/macOS%20%C2%B7%20Linux%20%C2%B7%20Web-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="Platform">
-<img src="https://img.shields.io/badge/status-early%20preview-F095C8?style=for-the-badge&labelColor=1A1218" alt="Status: early preview">
-<a href="LICENSE"><img src="https://img.shields.io/badge/MIT-D7A0B8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
-</p>
-
-<p>
-<a href="https://gentlemanprogramming.com/"><strong>Website</strong></a> &bull;
-<a href="docs/install.md"><strong>Install</strong></a> &bull;
-<a href="docs/design.md"><strong>Design</strong></a> &bull;
-<a href="https://github.com/Gentleman-Programming/gentle-ai"><strong>Gentle-AI</strong></a>
-</p>
-
-<br/>
-
-<p>
-Assistants live in a browser tab you have to go find, forget you between chats, and stop at the edge of the page.
-<strong>Gentle Dot is one key away, keeps one continuous conversation with a real memory, and can talk, read your files, and operate your apps.</strong>
-</p>
-
-</div>
-
-<br/>
-
-> [!WARNING]
-> **Early preview.** Gentle Dot can see your screen and control your Mac when you allow it, and it runs an AI agent with a shell. Its safety checks are real, but some still live within the agent's reach (see [Security status](#security-status)). Use it on a machine and accounts you are comfortable letting an assistant act on.
-
-<br/>
-
-<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
-
-## Features
-
----
-
-### Always one key away
-
-A glowing rose sits on your desktop. Click it, press your shortcut (**`⌥ Space`** unless you pick another), or use the menu bar, and the chat opens over whatever you are doing. Hide the rose if you prefer, or open the chat full screen with **`⌘⇧F`**. The same chat runs in the browser, on your machine or on your own server.
-
----
-
-### One conversation, with memory
-
-There is one continuous chat, not a list of threads to manage. When it grows too large, Gentle Dot quietly carries on in a fresh session seeded with a summary, so it stays fast and affordable. It remembers through your global **Engram™** memory: it saves to its own project, `gentle-dot`, and recalls from everything you keep there.
-
----
-
-### Uses your Mac (macOS)
-
-With your permission, Gentle Dot sees the screen and operates your apps: clicks, typing, shortcuts, and opening apps, batched into quick sequences. A pink glow shows where it acts. Every control session needs your approval in a native dialog, risky actions (send, pay, delete, submit) ask first, password managers and System Settings are off limits, and **`⌥⇧Esc`** stops everything instantly. Yolo mode skips the per-action questions for up to an hour, and only you can turn it on.
-
----
-
-### Talk to it
-
-Press the mic and speak: the transcript lands in the input for you to review, or goes out as soon as you stop if you prefer. Replies to what you said are read aloud. Speech runs on your Mac by default; download the optional local model (NVIDIA Parakeet, 25 languages including Spanish) to keep your voice fully offline, or connect an OpenAI API key.
-
----
-
-### Your accounts, your models
-
-Sign in with the subscriptions or API keys you already have (OpenAI, NaN, and others), save role profiles, and switch models from a chip above the input without leaving the chat.
-
----
-
-### Connectors, with approvals
-
-Notion, Linear, and Atlassian connect through their official servers; Discord, Slack, and Gmail come with a step-by-step guide; your existing MCP servers can be imported from Claude, Cursor, VS Code, and others. Each connector is read only or read and send, and the assistant shows you a preview and asks before every action that sends or changes something.
-
----
-
-### Files in the chat
-
-Attach files with the paperclip, drag and drop, or paste. Images go straight to the model when it can see them; everything else lands in the assistant's workspace for it to read.
-
----
-
-### Also in the box
-
-| Component | What it does |
-| :--- | :--- |
-| **Self-contained installers** | A macOS DMG and Linux `.deb` and Arch packages carry their own Node, engine, and Engram |
-| **Stable signing** | A self-signed identity keeps macOS permissions across updates |
-| **Isolated engine** | The assistant runs its own engine and home folder; it never touches your own agent setup |
-| **Web and server** | The same interface in the browser, and a Docker setup for your own VPS behind HTTPS, where the assistant runs as its own user, connector secrets are encrypted, and connector changes need your PIN |
-| **White label** | Built on [Gentle Shell](https://github.com/Gentleman-Programming/gentle-pi), presented as Gentle Dot |
-
-<div align="right"><a href="#top">Back to top</a></div>
-
-<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
-
-## Android and remote sessions
-
-Build an installable Android companion with `pnpm android:apk`, then run `pnpm mobile:connect` to pair over private Tailscale HTTPS. The app shares the desktop chat, supports Android dictation, and adds HERDR session controls with explicit, expiring approvals. An optional native companion floats above other Android apps and opens a compact chat window. Its local animation can remain visible without a connection; AI responses and session updates still require the paired computer. See [the mobile guide](docs/mobile-orchestration.md) and [overlay controls](docs/android-companion.md).
-
-## Get started
-
-There are no published releases yet: build the installer for your system. You need Node.js 24 and pnpm; the macOS app also needs Rust and the Xcode command line tools, and the Linux packages need Docker.
+Necesitas Git, **Node.js 24** y **pnpm 11.5.0**, la versión fijada en `package.json`. Si ya tienes Node 24 y te falta pnpm, puedes instalarlo con `npm install --global pnpm@11.5.0`.
 
 ```sh
-pnpm install
-
-# macOS (Apple Silicon): writes a DMG
-pnpm package:mac
-
-# Linux: a .deb (amd64 also builds the Arch package)
-pnpm package:linux --arch arm64
-pnpm package:linux --arch amd64
+git clone https://github.com/ed-gz/gentle-dot.git
+cd gentle-dot
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-Then follow **[docs/install.md](docs/install.md)**: opening an unsigned app on macOS 15 and later goes through **System Settings → Privacy & Security → Open Anyway**, and the guide covers permissions, where your data lives, and uninstalling.
+`pnpm dev` construye la interfaz y arranca el servicio local en `127.0.0.1:4317`. Abre el enlace que imprime la terminal y configura tu proveedor de modelo desde **Cuentas**. El enlace incluye una credencial de acceso: consérvalo privado. La instalación incluye el motor Gentle Shell; usar un modelo requiere tu propia cuenta o configuración de proveedor.
 
-Prefer to run it from the source?
+Esta ruta permite usar el chat web. Las ventanas flotantes, el llavero y el control nativo del equipo necesitan la aplicación de escritorio. Si ya tienes Gentle Dot en ejecución, usa esa instancia o ciérrala antes de arrancar otra en el mismo puerto; consulta [aislamiento y datos locales](docs/fork.md#datos-y-compatibilidad) para desarrollo separado.
+
+## Instalar el escritorio
+
+En Linux, elige el script de tu distribución desde el repositorio:
 
 ```sh
-pnpm dev   # builds the UI and starts the daemon on http://127.0.0.1:4317
-PATH=/opt/homebrew/opt/rustup/bin:$PATH pnpm --filter @gentle-dot/desktop dev   # the macOS app
+scripts/linux/setup-debian.sh   # Debian / Ubuntu
+# O bien:
+scripts/linux/setup-arch.sh     # Arch / Omarchy
 ```
 
-On a terminal, the daemon prints a URL that already carries its access key. Linux users can also build from source with `scripts/linux/setup-debian.sh` or `scripts/linux/setup-arch.sh`.
+Los scripts preparan dependencias, Node/pnpm y Rust, construyen la aplicación e instalan un lanzador en `~/.local/bin/gentle-dot`. Piden autorización para instalar paquetes del sistema. Conserva el checkout: esta instalación utiliza sus rutas. Los detalles de GNOME, Hyprland, bandeja y atajos están en [la guía de escritorio](apps/desktop/README.md#linux).
 
-<div align="right"><a href="#top">Back to top</a></div>
+Para crear paquetes Linux con Docker, usa `pnpm package:linux --arch amd64` o `--arch arm64`. En un Mac Apple Silicon con Rust y las herramientas de Xcode, usa `pnpm package:mac`. Sigue [instalación, permisos y desinstalación](docs/install.md) para el paquete resultante.
 
-<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
+El control visual añadido en Linux admite **Hyprland/Wayland y X11**, con sus herramientas instaladas. GNOME/KDE sobre Wayland no admiten ese control nativo actualmente. El acompañante flotante Capri de PC requiere **Hyprland con configuración Lua**. Son capacidades distintas: consulta [control del equipo](docs/computer-control.md) y [Capri en el escritorio](docs/capri.md#capri-sobre-el-escritorio-de-pc).
 
-## How it works
+## Compilar y vincular Android
 
-A small Node daemon starts the agent engine (Gentle Shell, `gentle-shell --mode rpc`) as a child process, gives it the Gentle Dot identity, restarts it if it crashes, and translates its events into a WebSocket protocol for the desktop app and the browser. The desktop app is Tauri 2: it draws the rose and the panel, owns the global shortcuts, and hosts a native helper for computer control and speech, so the session grant, the panic stop, the blocklist, and the risky-action dialogs live outside the agent.
-
-- **Your data:** `~/.gentle-dot` (mode 0700): sessions, settings, the access key (`token`), and the engine's own home and workspace. Point the assistant at a folder of yours with `GENTLE_DOT_WORKSPACE` or `"workspace"` in `~/.gentle-dot/config.json`.
-- **Memory:** your global Engram (`~/.engram`, port 7437), project `gentle-dot`; `GENTLE_DOT_ENGRAM=private` gives the assistant a memory of its own.
-- **Connectors:** the daemon alone writes `~/.gentle-dot/connectors.json` and the engine's `mcp.json`, and puts them back if anything else changes them. `connectors.json` is signed with a key kept in the Keychain; if it was changed while Gentle Dot was closed, it is set aside and you are told.
-- **Screenshots:** each model call carries only the latest one; earlier ones become one-line log entries, which keeps long control sessions fast.
-
-<div align="right"><a href="#top">Back to top</a></div>
-
-<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
-
-## Security status
-
-What already holds: computer control's grant, panic stop, blocklist, rate limit, and risky-action confirmations are enforced by the desktop app, not the agent, and the agent's processes do not inherit the app's macOS permissions. Connectors are reached only through the assistant's own proxy, which hides what their mode does not allow, and that holds for its subagents too: they are back on, reach connectors through the same proxy and approvals, and run with the same file checks as the assistant (set `GENTLE_DOT_SUBAGENTS=off` to turn them off). Approving a connector's action and changing a connector (its mode, connecting, removing, importing) happen only in the desktop app that started the assistant, in native dialogs, over a private channel the agent cannot open; in the browser those controls are read-only. Credentials are typed in the app, never in the chat. On macOS, connector tokens, client secrets, and sign-ins live in the Keychain, in items the signed app creates, and reach the assistant only in memory over that private channel; they are never written to a file, and tokens from older versions move there once. Without the app, connectors that need a token stop working instead of falling back to a file. The connector settings file is signed with a key kept in the Keychain: if anything changes it while Gentle Dot is closed, the app sets it aside at the next start, starts with no connectors, and tells you.
-
-What does not yet: the agent has a shell, and its shell commands (and its subagents') are checked on a best-effort basis only. Started without the app (from a terminal, or in the browser-only setup), the assistant cannot check that signature and loads the settings as they are, with token-based connectors locked. The app cannot yet tell its own Keychain items from ones another program of yours planted. On Linux, connector secrets live in your desktop keyring (Secret Service); while it is unlocked, any program running as you, the assistant's shell included, can read them. See [docs/install.md](docs/install.md).
-
-<div align="right"><a href="#top">Back to top</a></div>
-
-<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
-
-## Documentation
-
-| Where to go | What you'll find |
-| :--- | :--- |
-| **[Install](docs/install.md)** | Installers, first open, permissions, data, uninstall |
-| **[Design](docs/design.md)** | Architecture, protocol, desktop shell, computer control, voice, attachments |
-| **[Linux testing](docs/linux-testing.md)** | GNOME and Hyprland setup and the tester checklist |
-| **[Deploy to a VPS](docs/deploy-vps.md)** | Docker and HTTPS on your own server |
-| **[Desktop app](apps/desktop/README.md)** | The Tauri shell and platform notes |
-
-### Checks
+Necesitas además **JDK 21 o posterior, Android SDK 36 y Build Tools 36.0.0**. Configura `JAVA_HOME` y `ANDROID_HOME` según tu instalación.
 
 ```sh
-pnpm typecheck && pnpm lint && pnpm test   # unit and integration tests, with a fake agent
-pnpm e2e                                   # Playwright against the daemon
+pnpm android:apk --lint
 ```
 
-<div align="right"><a href="#top">Back to top</a></div>
+El resultado es `build/android/gentle-dot-debug.apk`, acompañado de su SHA-256. Instálalo directamente en tu teléfono; con las herramientas ADB puedes usar `adb install -r build/android/gentle-dot-debug.apk`. Es una compilación de desarrollo, no una publicación de Play Store. Conserva la misma clave de firma para actualizar una instalación existente sin tener que desinstalarla.
 
-<div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
+Con Gentle Dot abierto en el PC y ambos dispositivos conectados a tu red privada Tailscale:
 
-## About the author
+```sh
+# Publica el servicio sólo dentro de tu red Tailscale:
+tailscale serve --bg 4317
+pnpm mobile:connect
+```
 
-Built by [Alan Buscaglia](https://github.com/Gentleman-Programming) (Gentleman Programming), on top of [Gentle-AI](https://github.com/Gentleman-Programming/gentle-ai) and its own workflow.
+Escanea el QR desde Android y confirma la vinculación en el PC. Si no tienes `qrencode`, `pnpm mobile:connect --show-link` permite copiar el enlace privado. El código vence en cinco minutos. Si ya usas Tailscale Serve para otro servicio, revisa su configuración antes de cambiarla. Consulta [la guía de Android](docs/android.md) y [conexión y sesiones](docs/mobile-orchestration.md) para permisos, revocación y resolución de problemas.
 
-<div align="center">
+**El PC ejecuta el asistente y debe permanecer despierto, conectado y con Gentle Dot en marcha.** Android es su cliente: el personaje puede animarse localmente sin PC, pero conversar, controlar sesiones y recibir novedades del equipo requiere esa conexión. Este fork no añade un asistente cloud independiente ni un proveedor de notificaciones push.
 
-<a href="https://gentlemanprogramming.com/"><img src="https://img.shields.io/badge/Website-F095C8?style=for-the-badge&labelColor=1A1218&logo=googlechrome&logoColor=F095C8" alt="Website"></a>
-<a href="https://www.youtube.com/@GentlemanProgramming"><img src="https://img.shields.io/badge/YouTube-F095C8?style=for-the-badge&labelColor=1A1218&logo=youtube&logoColor=F095C8" alt="YouTube"></a>
-<a href="https://github.com/Gentleman-Programming"><img src="https://img.shields.io/badge/GitHub-D7A0B8?style=for-the-badge&labelColor=1A1218&logo=github&logoColor=D7A0B8" alt="GitHub"></a>
+## Qué añade este fork
 
-</div>
+| Área | Uso y documentación |
+| --- | --- |
+| Sesiones de agentes | Descubrir, inspeccionar, crear y continuar sesiones Pi/Gentle Shell mediante Herdr, Orca o terminales compatibles; [guía](docs/mobile-orchestration.md). |
+| Entrega y preguntas | Estados de envío y recepción separados, `steer`/`followUp`, preguntas estructuradas y permisos dentro de la conversación; [entrega](docs/session-delivery.md), [preguntas](docs/agent-questions.md), [presentación](docs/mobile-contextual-requests.md). |
+| Continuidad | Objetivos y vigilancias persistentes, historial paginado y recuperación de recuerdos; [chat y memoria](docs/continuous-assistant.md). |
+| Chat y archivos | Apariencia por dispositivo, lectura sin saltos, diagramas, visor de imágenes, archivos privados y adjuntos a sesiones; [Android](docs/android.md), [adjuntos de agentes](docs/agent-attachments.md). |
+| Avisos Android | Eventos en directo y recuperación de conexión, filtros por tipo y avisos dentro de la app; [comportamiento y límites](docs/mobile-notification-delivery.md). |
+| Acompañante Android | Activación voluntaria sobre otras apps, conversación parcial, borradores cifrados y navegación a la sesión exacta; [guía](docs/android-companion.md). |
+| Linux y cuentas | Control visual compatible, navegador dedicado, autenticación administrativa local y reutilización de la sesión existente de GitHub CLI; [control](docs/computer-control.md), [autenticación](docs/system-authentication.md), [GitHub](docs/github.md). |
+| Capri opcional | Sprites locales, animaciones, colores, zonas de movimiento y personalidad independiente; [uso](docs/capri.md), [límites del tema](docs/fork.md). |
+| Consumo y terminal | Lecturas de cuota Codex/Claude y ambientes reversibles para ventanas Kitty compatibles; [porcentajes](docs/usage-badges.md), [ambientes](docs/terminal-moods.md). |
 
----
+El [registro completo del fork](docs/fork-changelog.md) incluye los cambios de implementación, compatibilidad y comprobación. Las sesiones ya abiertas conservan el adaptador que cargaron: actualizar la app no recarga agentes ni cambia preguntas pendientes. Instala el adaptador actual en sesiones nuevas o recárgalo cuando estén en reposo, según la guía de sesiones.
 
-<div align="center">
+## Estado y comprobaciones
 
-<img src="docs/assets/brand/rose.png" width="56" alt="" />
+Hay pruebas unitarias, de integración, navegador y contratos nativos. Una compilación correcta no garantiza el comportamiento de todos los escritorios o teléfonos. **La validación física del acompañante Android, teclado, bloqueo de pantalla, recuperación del proceso y batería sigue pendiente** en la evidencia documentada. Android puede suspender los avisos; los envíos sin confirmación requieren revisar el historial antes de repetirlos.
 
-<br/>
+Desde la raíz, las comprobaciones generales son:
 
-<h3>Gentle Dot is crafted with Gentle-AI</h3>
+```sh
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+```
 
-<br/><br/>
+Las pruebas móviles y nativas tienen requisitos adicionales: consulta [validación del fork](docs/fork.md#validación), [Linux](docs/linux-testing.md) y [Android](docs/android.md#verificación). Las cifras históricas de pruebas en las guías corresponden a sus revisiones, no certifican una compilación nueva.
 
-<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-F095C8?style=for-the-badge&labelColor=1A1218" alt="License: MIT"></a>
+Lee [SECURITY.md](SECURITY.md) para las fronteras de confianza y [higiene del repositorio](docs/repository-hygiene.md) antes de publicar cambios. Las conversaciones, cuentas, invitaciones, claves de firma y archivos del usuario pertenecen al almacenamiento local, no al repositorio.
 
-</div>
+## Autoría y licencia
 
-> **Trademark notice:** Gentle AI™ and Engram™ are trademarks of Alan Buscaglia. The MIT License applies to the code; it does not permit implying endorsement or official affiliation. See [Gentle-AI's TRADEMARKS.md](https://github.com/Gentleman-Programming/gentle-ai/blob/main/TRADEMARKS.md).
+Gentle Dot es un proyecto de **Gentleman Programming / Alan Buscaglia**. Este fork mantiene su [licencia MIT y aviso de copyright](LICENSE), y no implica respaldo del autor original. Gentle AI™ y Engram™ son marcas de Alan Buscaglia; consulta el [aviso de marcas upstream](https://github.com/Gentleman-Programming/gentle-ai/blob/main/TRADEMARKS.md).
+
+Capri es la personalización de Eduardo Garza. Sus sprites y los de Rebecca son arte de fans inspirado en *Cyberpunk: Edgerunners*, generado y empaquetado localmente. La licencia del software no concede derechos sobre personajes o marcas ni representa afiliación o respaldo de sus titulares. El [aviso del tema](packages/theme-capri/NOTICE.md) y su [procedencia](packages/theme-capri/provenance/) explican esa distinción.

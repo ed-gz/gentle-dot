@@ -1,6 +1,6 @@
 # Gentle Dot en Android: sesiones y navegador
 
-La APK conecta el mismo chat de Gentle Dot con el equipo mediante HTTPS privado de Tailscale. Desde **Agentes** puedes revisar sesiones, continuar trabajo, responder confirmaciones compatibles y conceder permisos temporales para una acción revisada. El equipo ejecuta los agentes; el teléfono actúa como control remoto.
+La APK conecta el mismo chat de Gentle Dot con el equipo mediante HTTPS privado de Tailscale. Desde **Sesiones** puedes revisar agentes, continuar trabajo y responder solicitudes compatibles. Los objetivos y delegaciones se basan en el encargo explícito guardado; las políticas temporales de versiones anteriores siguen siendo revocables. El equipo ejecuta los agentes; el teléfono actúa como control remoto.
 
 ## Conectar el teléfono
 
@@ -10,7 +10,7 @@ La APK conecta el mismo chat de Gentle Dot con el equipo mediante HTTPS privado 
 4. El código vence en cinco minutos y sólo se puede usar una vez. Genera otro cuando sea necesario.
 5. Envía un mensaje de prueba y comprueba que aparecen la conversación y el estado de conexión.
 
-La URL debe ser el origen HTTPS de Tailscale, por ejemplo `https://equipo.red.ts.net`. `tailscale serve` debe apuntar al puerto local de Gentle Dot (4317 por defecto). No se necesita Funnel ni abrir puertos públicos. El generador comprueba que esa URL llega al mismo daemon antes de emitir el QR.
+La URL debe ser el origen HTTPS de Tailscale, por ejemplo `https://desktop.example.ts.net` (ejemplo ficticio; usa el origen de tu equipo). `tailscale serve` debe apuntar al puerto local de Gentle Dot (4317 por defecto). No se necesita Funnel ni abrir puertos públicos. El generador comprueba que esa URL llega al mismo daemon antes de emitir el QR.
 
 Cada teléfono recibe una clave propia. La app la guarda con almacenamiento seguro nativo; el equipo conserva sólo su hash. Para ver dispositivos: `pnpm mobile:connect --list`. Para retirar acceso: `pnpm mobile:connect --revoke ID`. La revocación cierra también el chat abierto del dispositivo. **Desvincular** en la app revoca su propia clave en el equipo antes de borrarla del teléfono; si no hay conexión, conserva la clave para reintentarlo.
 
@@ -38,7 +38,7 @@ El panel **Agentes** prioriza las sesiones y los permisos pendientes. Los gestor
 
 Las sesiones compatibles exponen conversación, estado y confirmaciones. Puedes enviar una instrucción o detener el trabajo con **Detener**. Con el adaptador actual de Dot, la identidad se comprueba con el proceso real, su fecha de arranque, el identificador de sesión y una instancia única; un proceso nuevo no hereda permisos del anterior. La compatibilidad con el adaptador anterior de HERDR Mobile conserva sus comprobaciones de proceso y sesión. Sólo puede responder cuestionarios que publiquen un canal cooperativo real; no habilita permisos temporales ni inventa respuestas para diálogos sin ese canal.
 
-También puedes pedirlo desde el chat: “Revisa mis sesiones y continúa la de este proyecto con la siguiente tarea”. Gentle Dot dispone de herramientas para listar, inspeccionar, crear, detener y enviar instrucciones. El agente principal no tiene herramientas de aprobación ni de concesión de permisos.
+También puedes pedirlo desde el chat: “Revisa mis sesiones y continúa la de este proyecto con la siguiente tarea”. Gentle Dot dispone de herramientas para listar, inspeccionar, crear, detener y enviar instrucciones. Las herramientas directas del orquestador no conceden permisos. Las respuestas delegadas usan el seguimiento vigente de `dot_workflows`, después de inspeccionar la solicitud y comprobar su alcance.
 
 Una terminal sin adaptador puede aparecer en la lista sin admitir control estructurado. No se escriben respuestas automáticas en terminales desconocidas. Las nuevas sesiones creadas por Dot incluyen el adaptador. Las sesiones con el adaptador de HERDR Mobile ya permiten inspección e instrucciones; necesitan la extensión de Dot para responder confirmaciones desde esta app.
 
@@ -50,17 +50,17 @@ Para incorporar el adaptador a próximas cargas de Pi / Gentle Shell sin reabrir
 node scripts/orchestration/prepare-session-extension.mjs --install --agent-dir ~/.pi/agent
 ```
 
-La próxima apertura de una sesión cargará el adaptador. `/reload` conserva la conversación, pero Gentle Shell puede cancelar trabajos y monitores de sus extensiones al recargarlas: no lo uses si hay tareas delegadas o vigilancias que deban continuar. En esta instalación el adaptador ya quedó instalado para la siguiente carga; no se recargaron ni respondieron las preguntas existentes. El guard de carga evita duplicarlo cuando el lanzador de Dot ya incluye la misma extensión.
+La próxima apertura de una sesión cargará el adaptador. `/reload` conserva la conversación, pero Gentle Shell puede cancelar trabajos y monitores de sus extensiones al recargarlas: no lo uses si hay tareas delegadas o vigilancias que deban continuar. El guard de carga evita duplicarlo cuando el lanzador de Dot ya incluye la misma extensión.
 
 No todos los motores tienen la misma API: esta integración controla Pi / Gentle Shell y los adaptadores compatibles. Un terminal con Bash, Codex u otro motor sin adaptador puede aparecer como no conectado; no se le envían teclas ni se aceptan sus permisos a ciegas.
 
 ## Navegador desde el teléfono
 
-En **Agentes**, activa **Navegador de Gentle Dot** por 30 minutos, una hora u ocho horas. Después pide desde el chat que abra una página, lea su contenido o complete una tarea. Dot utiliza un perfil propio de Chromium/Chrome, conserva ese perfil entre sesiones y admite hasta ocho pestañas. Las acciones usan elementos observados en una instantánea reciente. No necesita un puerto de depuración público.
+Desde los controles del navegador, activa **Navegador de Gentle Dot**. Por defecto permanece autorizado hasta que lo detengas o cierre; puedes elegir desactivarlo automáticamente en 30 minutos, una hora u ocho horas. Después pide desde el chat que abra una página, lea su contenido o complete una tarea. Dot utiliza un perfil propio de Chromium/Chrome, conserva ese perfil entre sesiones y admite hasta ocho pestañas. Las acciones usan elementos observados en una instantánea reciente. No necesita un puerto de depuración público.
 
 Puedes detener el navegador desde la misma tarjeta. Al detenerlo o vencer el plazo se cierran las ventanas y se cancelan las acciones pendientes. El agente no puede activar ni ampliar su propio permiso. La autorización temporal permite manejar páginas; las operaciones con consecuencias externas siguen requiriendo tus instrucciones y permisos.
 
-Este navegador no incluye tus pestañas ni las cuentas de tu navegador personal. Si necesitas iniciar sesión, usa una ventana visible del navegador dedicado en el equipo. El control general del escritorio de la versión oficial sigue limitado a macOS; esta mejora añade navegación en Linux, sin prometer control de todas las aplicaciones.
+Este navegador no incluye tus pestañas ni las cuentas de tu navegador personal. Si necesitas iniciar sesión, usa una ventana visible del navegador dedicado en el equipo. Este fork añade además control visual en Hyprland/Wayland y X11 con sus requisitos nativos. GNOME/KDE sobre Wayland no admiten ese control. Consulta [Control del escritorio](computer-control.md); el navegador dedicado y el control visual son accesos distintos.
 
 En instalaciones con systemd, `detached` por sí solo no separa una ventana del grupo del servicio. Para conservar ventanas al reiniciar Dot puede configurarse `GENTLE_DOT_TERMINAL_ARGV` como `["/usr/bin/systemd-run","--user","--scope","--collect","--quiet","/usr/bin/kitty","--"]`. La sesión gráfica debe seguir activa.
 
@@ -70,7 +70,7 @@ Los controles locales de sesiones y navegador se desactivan en el modo VPS de la
 
 Un teléfono nuevo recibe permiso para responder a los conectores de Dot sólo después de autorizar su vinculación en el diálogo nativo del equipo. Los teléfonos vinculados con una versión anterior conservan el chat; vuelve a vincularlos para habilitar esta capacidad. La clave general del chat y la clave del agente no permiten contestar estas solicitudes.
 
-Si hay un teléfono autorizado conectado, la solicitud aparece en **Sesiones → Permisos de Gentle Dot**, con el conector, la acción y todos sus argumentos. El monitor nativo mantiene esa conexión en segundo plano y avisa del permiso. Si no hay ningún teléfono autorizado conectado, se utiliza el diálogo del equipo. Un corte temporal del teléfono conserva la solicitud hasta su vencimiento. Si empezó en el equipo, el teléfono puede recuperarla al conectar; sólo la primera respuesta decide. En Linux el diálogo original puede permanecer visible hasta cerrarlo y sus respuestas tardías se ignoran. Revocar su acceso, cancelar la operación o dejar vencer el plazo rechaza la solicitud.
+Si hay un teléfono autorizado conectado, la solicitud aparece en **Sesiones → Permisos de Gentle Dot**, con el conector, la acción y todos sus argumentos. El monitor nativo mantiene esa conexión en segundo plano y avisa del permiso. Si no hay ningún teléfono autorizado conectado, se utiliza el diálogo del equipo. Un corte temporal del teléfono conserva la solicitud hasta su vencimiento. Si empezó en el equipo, el teléfono puede recuperarla al conectar; sólo la primera respuesta decide. En el escritorio Linux actualizado se cierra el diálogo correspondiente tras confirmar la respuesta remota; sus respuestas tardías se ignoran. Revocar su acceso, cancelar la operación o dejar vencer el plazo rechaza la solicitud.
 
 Los conectores nuevos y sus ajustes se siguen iniciando desde la aplicación del equipo. Las confirmaciones concretas pueden responderse en el teléfono autorizado. La delegación de un objetivo a agentes no cambia la autorización de los conectores del equipo.
 
@@ -95,7 +95,7 @@ En **Ajustes → Trabajo en segundo plano** puedes revisar objetivo y estado, pa
 
 La app muestra eventos de terminación y solicitudes de atención. Los avisos en segundo plano requieren activar la monitorización nativa y conceder notificaciones. Android puede limitar servicios en segundo plano; abre de nuevo la app para recuperar el estado y los eventos. No se utilizan servicios públicos de notificaciones.
 
-El equipo debe estar encendido, conectado y con Gentle Dot y el gestor elegido disponibles. En esta instalación, el servicio de escritorio inicia con la sesión gráfica: no garantiza acceso antes de iniciar sesión ni durante suspensión. Un corte de red no detiene el agente del equipo. La app reconecta y consulta de nuevo el estado; también recupera respuestas del chat finalizadas durante un corte de red mientras su monitor seguía activo. Una autorización vencida no se reutiliza.
+El equipo debe estar encendido, conectado y con Gentle Dot y el gestor elegido disponibles. Una instalación de escritorio depende de su sesión gráfica: no garantiza acceso antes de iniciar sesión ni durante suspensión. Un corte de red no detiene el agente del equipo. La app reconecta y consulta de nuevo el estado; también recupera respuestas del chat finalizadas durante un corte de red mientras su monitor seguía activo. Una autorización vencida no se reutiliza.
 
 ## Quedarse pendiente sin gastar tokens en espera
 
@@ -109,7 +109,7 @@ El adaptador de correo inicial admite **Gmail del catálogo**, con una cuenta co
 
 Gmail MCP ofrece búsquedas recientes, no un cursor de llegada. Este adaptador consulta los últimos dos días y deduplica mensajes, hasta 200 conversaciones y 512 identificadores recientes. Un mensaje con fecha antigua recibido con retraso puede quedar fuera. Si cambia la cuenta, la respuesta del conector, se supera ese volumen o pasan más de dos días sin poder consultar, la vigilancia explica el problema y se pausa; revisa el correo y reanuda para establecer una referencia nueva. No sustituye una cola de correo con garantía de entrega. Los errores transitorios se reintentan sin generar respuestas repetidas de Dot.
 
-El modelo sí consume tokens cuando interpreta una novedad o trabaja en un objetivo. El equipo debe permanecer despierto y con el servicio activo. No se ha verificado recepción con una cuenta de correo real en esta instalación porque todavía no hay ninguna conectada.
+El modelo sí consume tokens cuando interpreta una novedad o trabaja en un objetivo. El equipo debe permanecer despierto y con el servicio activo. La evidencia documentada no incluye recepción con una cuenta de correo real; compruébala con tu cuenta antes de depender de esa vigilancia.
 
 ## Construcción y verificación
 
@@ -121,7 +121,7 @@ pnpm build
 pnpm android:apk
 ```
 
-La compilación móvil requiere JDK y Android SDK compatibles con la versión fijada de Capacitor. El script muestra los requisitos y la ruta de la APK. La APK de desarrollo sirve para instalación directa; la distribución pública necesita una firma de lanzamiento administrada por el propietario.
+La compilación móvil requiere JDK 21 o posterior, Android SDK 36 y Build Tools 36.0.0. El script muestra los requisitos y la ruta de la APK. La APK de desarrollo sirve para instalación directa; la distribución pública necesita una firma de lanzamiento administrada por el propietario.
 
 La implementación prueba autenticación, expiración, revocación, aislamiento entre sesiones, respuestas obsoletas y límites de las políticas. Una prueba de escritorio o de servidor no sustituye la prueba en un teléfono real de micrófono, cámara, batería y notificaciones.
 

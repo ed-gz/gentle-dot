@@ -10,7 +10,7 @@ Gentle Dot y Capri pueden aplicar **Hacker**, **Afterlife** y **Atardecer**, y r
 
 Las ventanas antiguas sin control remoto muestran el motivo. Para crear una preparada, elige **Nueva sesión → Abrir en: Terminal → Crear sesión**. Las sesiones actuales siguen trabajando; no se reinicia Kitty ni Gentle Shell. Crear otra sesión dentro de Herdr conserva la ventana antigua y no añade un canal de control.
 
-En el equipo revisado, las sesiones actuales están dentro de Herdr en una única ventana Kitty sin listener de control remoto. Sus ambientes no se pueden cambiar desde Dot. No se modifica su configuración para habilitarlos automáticamente.
+Las sesiones que comparten una ventana Kitty sin listener de control remoto no permiten cambiar su ambiente desde Dot. No se modifica su configuración para habilitar ese canal automáticamente.
 
 ## Alcance y restauración
 

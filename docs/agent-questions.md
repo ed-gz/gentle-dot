@@ -31,9 +31,9 @@ Los textos de entrada y editor se validan en el equipo: hasta 64 KiB UTF-8, sin 
 
 Sólo los formularios de las extensiones originales verificadas de Gentle Pi se adaptan desde `ui.custom()`. Se reconocen tanto la distribución incluida como las versiones verificadas de Gentle Shell que registran las respuestas del usuario: esa instrumentación antes hacía que los formularios aparecieran como incompatibles. Las versiones compatibles se identifican por el contenido exacto del archivo; una herramienta con el mismo nombre o título, pero otro código, no obtiene ese canal. Las restricciones de identidad, conexión, permisos y vencimiento siguen aplicándose a todas las respuestas.
 
-Los permisos de revisión requieren el puente cooperativo del proveedor. El adaptador ampliado conserva tres decisiones independientes: revisar este cambio, rechazarlo o permitir revisiones posteriores en esa sesión y repositorio. La tercera opción muestra el alcance y el efecto originales del permiso; sólo la selección explícita de esa opción puede activar el permiso de sesión. El proveedor conserva sus comprobaciones del candidato, sesión, repositorio y revocación.
+Los permisos de revisión requieren el puente cooperativo del proveedor. La versión `gentle-pi` empaquetada transmite las dos decisiones del candidato: revisar o rechazar. El puente adicional para una versión verificada de Gentle Shell puede publicar una tercera decisión: permitir revisiones posteriores en esa sesión y repositorio. Sólo se muestra cuando la fuente verificada ofrece su alcance y efecto; sólo su selección explícita activa ese permiso. El proveedor conserva sus comprobaciones del candidato, sesión, repositorio y revocación. Consulta [RDD](rdd-consent.md) para distinguir ambas variantes.
 
-## Compatibilidad con la instalación actual de Gentle Shell
+## Compatibilidad del puente con Gentle Shell
 
 El instalador preparado en `scripts/orchestration/install-review-bridge.mjs` verifica las huellas exactas de los tres archivos del proveedor antes de preparar el puente de revisión. Por defecto sólo comprueba: no toca fuentes ni procesos. `--apply` instala el puente y conserva copias originales; no reinicia sesiones. Si la versión de Gentle Shell cambió, rechaza la instalación y deja los archivos intactos.
 
@@ -43,6 +43,6 @@ node scripts/orchestration/install-review-bridge.mjs /ruta/a/gentle-pi --check
 node scripts/orchestration/install-review-bridge.mjs /ruta/a/gentle-pi --apply
 ```
 
-La instalación referencia el módulo del puente en este checkout de Gentle Dot; conserva esa ubicación mientras lo uses. Después de instalar, recarga Gentle Shell cuando no haya una pregunta pendiente. Los adaptadores cargados en procesos existentes mantienen su código hasta una recarga o un nuevo inicio; actualizar archivos no cambia una solicitud ya abierta.
+La instalación referencia el módulo del puente en este checkout de Gentle Dot; conserva esa ubicación mientras lo uses. Después de instalar, abre una sesión nueva o recarga Gentle Shell cuando no haya trabajo, preguntas, envíos, subagentes ni monitores que deban continuar. Los adaptadores cargados en procesos existentes mantienen su código hasta una recarga o un nuevo inicio; actualizar archivos no cambia una solicitud ya abierta.
 
 Una pantalla personalizada sin puente sigue visible en la app con su título, estado de espera e instrucciones para responder en la terminal. **Actualizar solicitud** permite comprobar si ya se resolvió. No se oculta ni se transforma en una aceptación genérica.

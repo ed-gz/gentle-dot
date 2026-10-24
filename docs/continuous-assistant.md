@@ -6,8 +6,8 @@ Gentle Dot conserva una conversación visible y mantiene por separado el histori
 
 | Situación | Comportamiento |
 | --- | --- |
-| Ayer hablamos de fiestas en Monterrey; hoy pregunto por Odoo | Dot atiende Odoo con el contexto reciente. Si vuelves a las fiestas, puede buscar los fragmentos anteriores con fecha y origen. |
-| Una sesión trabaja en clientes B2B mientras converso sobre otro tema | Su objetivo y sus identificadores quedan guardados fuera del chat. Un resultado nuevo despierta la continuación correspondiente. |
+| Ayer hablamos de un viaje; hoy pregunto por un proyecto | Dot atiende el proyecto con el contexto reciente. Si vuelves al viaje, puede buscar los fragmentos anteriores con fecha y origen. |
+| Una sesión trabaja en una aplicación mientras converso sobre otro tema | Su objetivo y sus identificadores quedan guardados fuera del chat. Un resultado nuevo despierta la continuación correspondiente. |
 | Una sesión pide un permiso que delegué explícitamente para todas sus solicitudes | Las confirmaciones operativas reconocidas pueden resolverse en el servicio, sin esperar a que el modelo quede libre ni generar una respuesta de relleno. |
 | La autorización tiene condiciones o la pregunta necesita una decisión personal | Se conserva la revisión normal del alcance; Dot no inventa la respuesta. El permiso sigue disponible en Sesiones. |
 | Dejo el chat abierto durante muchas horas | Se muestran bloques del historial y se renueva la caché al estar al final y en reposo. Leer mensajes anteriores no debe mover la pantalla. |
