@@ -50,6 +50,10 @@ describe("host target", () => {
 });
 
 describe("versions and asset names", () => {
+	it("stages Node 24.22.1 by default when .nvmrc selects Node 24", () => {
+		expect(nodeVersion("24\n")).toBe("24.22.1");
+	});
+
 	it("uses an exact .nvmrc, else the pinned release of the same major", () => {
 		expect(nodeVersion("24.9.0\n")).toBe("24.9.0");
 		expect(nodeVersion("v24", "24.14.1")).toBe("24.14.1");

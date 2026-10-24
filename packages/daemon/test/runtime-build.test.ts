@@ -233,6 +233,7 @@ describe("build:runtime", () => {
 		expect(manifest).toMatchObject({ private: true, type: "module" });
 		expect(manifest.dependencies).toEqual({
 			"@earendil-works/pi-ai": "1.0.4",
+			"@earendil-works/pi-codemode": "1.0.4",
 			"@earendil-works/pi-coding-agent": "1.0.4",
 			"@earendil-works/pi-mcp": "1.0.4",
 			"@earendil-works/pi-tui": "1.0.4",
@@ -241,6 +242,21 @@ describe("build:runtime", () => {
 			"playwright-core": "1.63.0",
 			ws: "8.22.0",
 		});
+	});
+
+	it("keeps the codemode compatibility export required by the pinned engine", () => {
+		const check = spawnSync(
+			process.execPath,
+			[
+				"--input-type=module",
+				"--eval",
+				'import { MCP_TYPESCRIPT_PREAMBLE } from "@earendil-works/pi-codemode"; ' +
+					'if (typeof MCP_TYPESCRIPT_PREAMBLE !== "string" || !MCP_TYPESCRIPT_PREAMBLE.length) process.exit(1);',
+			],
+			{ cwd: PACKAGE, encoding: "utf8" },
+		);
+		expect(check.stderr).toBe("");
+		expect(check.status).toBe(0);
 	});
 
 	it("runs its self-check from the output with the engine resolved inside it", () => {

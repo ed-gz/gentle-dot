@@ -159,6 +159,8 @@ function installDaemonModules(out) {
 	writeFileSync(npmrc, "");
 	say("Daemon dependencies (npm install --omit=dev)");
 	// A clean npm setup: no user npmrc, a cache of its own, and a scratch HOME for install scripts.
+	// The runtime manifest includes pi-codemode as an exact direct dependency, so npm's
+	// fresh install keeps the compatibility exports required by the pinned engine.
 	const result = spawnSync(
 		join(out, "node", "bin", "node"),
 		[
