@@ -1,0 +1,6 @@
+# Historical synthetic computer_register token in a protocol parsing test.
+# Two exact occurrences: introduction and its upstream merge, not two secrets.
+# The exact fixture was verified; the current test uses "fixture-token".
+# Do not broaden this to a path, directory, rule or future commits.
+8ac11aa001a40fc922b591ebad80ee63f9bb7bbc:packages/protocol/test/protocol.test.ts:generic-api-key:338
+ed14f2d69840e6838fbcea5c166820e5680be225:packages/protocol/test/protocol.test.ts:generic-api-key:338

@@ -366,7 +366,11 @@ describe("app-only commands (S25.2)", () => {
 			{ type: "connector_mode", connectorId: "notion", mode: "read_write" },
 			{ type: "connector_draft_reply", draftId: "d1", approve: true },
 			{ type: "connector_import", ids: ["claude:x"] },
-			{ type: "computer_register", url: "http://127.0.0.1:51234/mcp", token: "k3Y_0123456789abcdef" },
+			{
+				type: "computer_register",
+				url: "http://127.0.0.1:51234/mcp",
+				token: "fixture-token".repeat(2),
+			},
 			{ type: "computer_unregister" },
 		]) {
 			const parsed = parse(message);

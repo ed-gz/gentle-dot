@@ -23,7 +23,11 @@
 		"package:linux:check": "node scripts/package/linux-check.mjs",
 		"mobile:connect": "node scripts/mobile/connect.mjs",
 		"android:apk": "node scripts/mobile/build-android.mjs",
-		"sessions:launch": "node scripts/orchestration/session.mjs"
+		"sessions:launch": "node scripts/orchestration/session.mjs",
+		"security:check": "node scripts/security/check-repository.mjs",
+		"security:history": "node scripts/security/check-repository.mjs --history",
+		"security:secrets": "sh scripts/security/check-secrets.sh",
+		"security:test": "node --test scripts/security/*.test.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.15",
