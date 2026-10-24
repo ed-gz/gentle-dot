@@ -62,6 +62,16 @@ function setup(state = connected, api?: OrchestrationClient, watchers?: Watchers
 }
 
 describe("compact phone layout", () => {
+	it("groups settings into five human sections", async () => {
+		setup();
+		await userEvent.click(screen.getByRole("button", { name: "Ajustes" }));
+		for (const title of ["Capri", "Avisos", "Personalización", "Cuenta y equipo", "Avanzado"]) {
+			expect(screen.getByText(title, { selector: "summary" })).toBeVisible();
+		}
+		expect(screen.queryByText("Avisos y teléfono")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByText("Avisos", { selector: "summary" }));
+		expect(screen.getByRole("button", { name: "Activar avisos" })).toBeVisible();
+	});
 	it("places settings left, Dot in the middle and sessions right before the conversation", () => {
 		const api: OrchestrationClient = {
 			snapshot: vi.fn(async () => ({
@@ -217,8 +227,10 @@ describe("compact phone layout", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Ajustes" }));
 		const menu = screen.getByRole("main", { name: "Ajustes" });
 		expect(menu).toBeVisible();
-		expect(within(menu).getByText("Avisos y teléfono").closest("details")).not.toHaveAttribute("open");
-		await userEvent.click(within(menu).getByText("Avisos y teléfono"));
+		expect(within(menu).getByText("Avisos", { selector: "summary" }).closest("details")).not.toHaveAttribute("open");
+		await userEvent.click(within(menu).getByText("Avisos", { selector: "summary" }));
+		await userEvent.click(within(menu).getByText("Cuenta y equipo", { selector: "summary" }));
+		await userEvent.click(within(menu).getByText("Personalización", { selector: "summary" }));
 		expect(within(menu).getByRole("button", { name: "Activar avisos" })).toBeInTheDocument();
 		expect(within(menu).getByRole("button", { name: "Cuentas de IA" })).toBeInTheDocument();
 		expect(within(menu).getByRole("button", { name: /Respuestas en voz alta/ })).toBeInTheDocument();

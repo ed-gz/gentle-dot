@@ -1,5 +1,63 @@
 /* A stable top bar leaves the conversation and its draft mounted while screens change. */
 
+.chat-mobile .mobile-settings-group {
+	border-bottom: 1px solid var(--line);
+	padding-block: 8px;
+}
+.chat-mobile .mobile-settings-group > summary {
+	min-height: 48px;
+	padding: 12px 8px;
+	font-weight: 650;
+	cursor: pointer;
+}
+.chat-mobile .mobile-settings-group > .mobile-tool-list {
+	padding: 8px;
+}
+.chat-mobile .mobile-settings-group > summary:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+.chat-mobile .mobile-settings-group > summary:active {
+	background: var(--surface-2);
+}
+/* The shared character component keeps its desktop copy; the phone uses controls only. */
+.chat-mobile .mobile-settings-group .capri-preferences-header p,
+.chat-mobile .mobile-settings-group .capri-preference-row small {
+	display: none;
+}
+.agent-session-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+.agent-session-row > .agent-session {
+	flex: 1;
+	min-width: 0;
+}
+.agent-session-state {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	color: var(--muted);
+}
+.session-recent-folders {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.session-recent-folders > button {
+	min-height: 48px;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+	text-align: left;
+}
+.session-recent-folders > button[aria-pressed="true"] {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+
 .chat.chat-mobile > [hidden] {
 	display: none;
 }
@@ -310,10 +368,6 @@
 .mobile-settings-screen .mobile-tool-list > button > svg {
 	flex: none;
 	color: var(--muted);
-}
-.mobile-settings-screen .mobile-usage-link > .mobile-menu-arrow {
-	flex: 0 0 auto;
-	font-size: 24px;
 }
 .chat-mobile .orchestration .agent-sessions {
 	gap: 0;

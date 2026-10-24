@@ -493,6 +493,8 @@ export function SessionDetails({
 						</>
 					) : null}
 				</dl>
+				<details className="session-info-disclosure">
+					<summary>Detalles técnicos</summary>
 				{metadata ? (
 					<>
 						{context ? (
@@ -606,6 +608,7 @@ export function SessionDetails({
 						</div>
 					) : null}
 					{copyStatus ? <p role="status">{copyStatus}</p> : null}
+				</details>
 				</details>
 			</div>
 		</SessionDialog>

@@ -175,7 +175,6 @@ export function NotificationSettings({
 				<>
 					<AlertSwitch
 						title="Con la app cerrada"
-						detail="Recibe avisos con la pantalla apagada. Se reconecta al recuperar la red."
 						checked={monitoring}
 						disabled={monitorBusy}
 						onChange={onToggleMonitor}
@@ -187,41 +186,21 @@ export function NotificationSettings({
 								? delivery?.connected
 									? "Avisos conectados con tu equipo."
 									: "Reconectando avisos. Comprueba que Tailscale esté activo y el equipo encendido."
-								: "Activa esta opción para recibir respuestas fuera de la app."}
+								: "Avisos desactivados."}
 					</p>
-					{toggle("inApp", "Mientras uso Dot", "Avisos breves que desaparecen solos.")}
-					<p className="mobile-setting-hint">
-						Esto cambia tus avisos. Dot sigue trabajando en el equipo según las instrucciones que le des.
-					</p>
+					{toggle("dotReplies", "Respuestas de Dot")}
+					{toggle("agentCompleted", "Nuevas respuestas")}
+					{toggle("permissions", "Solicitudes de permiso")}
 					<details className="mobile-alert-group">
-						<summary>Dot</summary>
-						{toggle("dotReplies", "Respuestas de Dot")}
-						{toggle("dotErrors", "Problemas de Dot", "Cuando necesita que intervengas.")}
-						{toggle(
-							"permissions",
-							"Solicitudes de permiso",
-							"De Dot y tus sesiones. Si lo silencias, podrás resolverlas desde sus tarjetas.",
-						)}
-					</details>
-					<details className="mobile-alert-group">
-						<summary>Sesiones</summary>
-						{toggle("agentCompleted", "Nuevas respuestas", "Cuando un agente termina su turno.")}
+						<summary>Más opciones</summary>
+						{toggle("inApp", "Mientras uso Dot")}
+						{toggle("dotErrors", "Problemas de Dot")}
 						{toggle("agentAttention", "Necesita tu atención")}
 						{toggle("agentErrors", "Errores de conexión")}
-						{toggle(
-							"agentAvailable",
-							"Cambios de disponibilidad",
-							"Avisos de estado sin una nueva respuesta.",
-						)}
-					</details>
-					<details className="mobile-alert-group">
-						<summary>Sonido y privacidad</summary>
+						{toggle("agentAvailable", "Cambios de disponibilidad")}
 						{toggle("sound", "Sonido")}
 						{toggle("vibration", "Vibración")}
 						{toggle("preview", "Contenido en pantalla bloqueada")}
-						<p className="mobile-setting-hint">
-							Android y el modo No molestar tienen la última palabra sobre sonido y vibración.
-						</p>
 						<button
 							type="button"
 							className="mobile-alert-system"
@@ -240,15 +219,10 @@ export function NotificationSettings({
 				<summary>Resúmenes de sesiones</summary>
 				<AlertSwitch
 					title="Resúmenes en Dot"
-					detail="Dot revisa las respuestas de tus agentes y te propone cómo seguir."
 					checked={enabled === true}
 					disabled={busy || enabled === undefined}
 					onChange={() => void changeReports()}
 				/>
-				<p className="mobile-setting-hint">
-					Se aplica al equipo y usa el modelo de Dot. La continuación automática depende del objetivo y de lo
-					que hayas autorizado.
-				</p>
 				{reportError ? (
 					<p role="alert" className="mobile-error">
 						{reportError}

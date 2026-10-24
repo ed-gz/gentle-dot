@@ -640,6 +640,11 @@ export function OrchestrationPanel({
 								</select>
 							</>
 						) : null}
+						<div className="session-recent-folders" role="group" aria-label="Carpetas recientes">
+							{[...new Set(snapshot?.sessions.map(entry => entry.cwd?.trim()).filter((folder): folder is string => Boolean(folder)))].slice(0, 6).map(folder => (
+								<button type="button" key={folder} aria-pressed={cwd === folder} onClick={() => setCwd(folder)}>{folder}</button>
+							))}
+						</div>
 						<label htmlFor={`${id}-cwd`}>Carpeta del proyecto en tu equipo</label>
 						<input
 							id={`${id}-cwd`}
@@ -671,8 +676,8 @@ export function OrchestrationPanel({
 				) : null}
 				<div className="agent-sessions">
 					{activeSessions.map((entry) => (
+						<div className="agent-session-row" key={`${entry.paneId}:${entry.sessionId}`}>
 						<button
-							key={entry.paneId}
 							type="button"
 							className="agent-session"
 							aria-label={`${entry.label || "Sesión sin nombre"} · ${entry.connected ? STATES[entry.state] : "Sin conexión"}`}
@@ -681,13 +686,15 @@ export function OrchestrationPanel({
 						>
 							<span className="agent-session-top">
 								<strong>{entry.label || "Sesión sin nombre"}</strong>
-								<SessionStatus session={entry} />
+								<span className="agent-session-state"><SessionStatus session={entry} /><span aria-hidden="true">{entry.connected ? STATES[entry.state] : "Sin conexión"}</span></span>
 							</span>
 							<span className="agent-preview">
 								{entry.lastMessage ||
 									((entry.capabilities?.prompt ?? entry.managed) ? "Abre la conversación" : "Sólo lectura")}
 							</span>
 						</button>
+						<SessionMenu session={entry} controls={controls} connected={connected} active={active} onClosed={() => setSelected(undefined)} />
+						</div>
 					))}
 				</div>
 			</section>

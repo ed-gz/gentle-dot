@@ -962,37 +962,18 @@
 	}
 }
 
-/* Primary routes are easy to find; less frequent phone controls unfold in place. */
-.mobile-tools-sheet .mobile-quick-tools:empty {
-	display: none;
-}
-.mobile-tools-sheet .mobile-tool-list > .mobile-usage-link {
-	background: var(--accent-soft);
-	border-color: var(--accent-line, var(--line));
-	padding: 12px;
-}
-.mobile-tools-sheet .mobile-tool-list > .mobile-usage-link > svg {
-	color: var(--accent);
-}
-.mobile-usage-link strong,
 .mobile-device-settings strong {
 	display: block;
 	font-size: 15px;
 	font-weight: 600;
 	line-height: 1.5;
 }
-.mobile-usage-link small,
 .mobile-device-settings small {
 	display: block;
 	margin-top: 2px;
 	color: var(--muted);
 	font-size: 12px;
 	line-height: 1.5;
-}
-.mobile-tools-sheet .mobile-usage-link > .mobile-menu-arrow {
-	flex: 0 0 auto;
-	font-size: 24px;
-	color: var(--muted);
 }
 .mobile-menu-model:has(.model-popover) {
 	display: block;
@@ -1024,14 +1005,6 @@
 .mobile-device-settings > summary > span:first-child {
 	min-width: 0;
 }
-.mobile-tools-sheet .mobile-device-settings > summary .mobile-menu-arrow {
-	flex: none;
-	color: var(--muted);
-	font-size: 24px;
-}
-.mobile-device-settings[open] > summary .mobile-menu-arrow {
-	transform: rotate(90deg);
-}
 .mobile-device-settings > summary:focus-visible {
 	outline: 2px solid var(--accent);
 	outline-offset: -2px;
@@ -1046,9 +1019,4 @@
 	.mobile-tools-heading {
 		padding-block: 8px;
 	}
-}
-
-.mobile-menu-hint {
-	display: block;
-	margin-top: 2px;
 }

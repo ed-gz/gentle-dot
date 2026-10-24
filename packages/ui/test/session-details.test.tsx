@@ -73,6 +73,27 @@ async function openMenu() {
 }
 
 describe("session information", () => {
+	it("keeps technical information collapsed until requested", async () => {
+		render(<SessionDetails session={session} conversation={conversation} stale={false} close={() => {}} />);
+		const summary = screen.getByText("Detalles técnicos", { selector: "summary" });
+		expect(summary.closest("details")).not.toHaveAttribute("open");
+		expect(screen.getByRole("progressbar")).not.toBeVisible();
+		await userEvent.click(summary);
+		expect(screen.getByRole("progressbar")).toBeVisible();
+	});
+	it("offers recent folders and close directly from a session row", async () => {
+		const control = controls();
+		control.snapshot!.providers = [{ id: "herdr", available: true, canCreate: true }];
+		const client: OrchestrationClient = { snapshot: vi.fn(), act: vi.fn(), inspect: vi.fn() };
+		render(<OrchestrationPanel controls={control} client={client} />);
+		await userEvent.click(screen.getByRole("button", { name: "Nueva sesión" }));
+		await userEvent.click(screen.getByRole("button", { name: "/work/project" }));
+		expect(screen.getByLabelText("Carpeta del proyecto en tu equipo")).toHaveValue("/work/project");
+		await openMenu();
+		await userEvent.click(screen.getByRole("button", { name: "Cerrar sesión" }));
+		expect(screen.getByRole("dialog", { name: /Cerrar/ })).toBeVisible();
+		expect(control.act).not.toHaveBeenCalled();
+	});
 	it("opens model, reasoning, profile and MCP directly from the compact context strip", async () => {
 		const control = controls();
 		const client: OrchestrationClient = {
@@ -91,6 +112,7 @@ describe("session information", () => {
 		const dialog = screen.getByRole("dialog");
 		expect(within(dialog).getByText("Modelo principal")).toBeVisible();
 		expect(within(dialog).getByText("Trabajo")).toBeVisible();
+		await userEvent.click(within(dialog).getByText("Detalles técnicos"));
 		await userEvent.click(within(dialog).getByText("Conexiones MCP"));
 		expect(within(dialog).getByText("Servidor disponible")).toBeVisible();
 		fireEvent(window, new Event("gentledot-back", { cancelable: true }));
@@ -146,6 +168,7 @@ describe("session information", () => {
 		expect(screen.getByText("Modelo de prueba")).toBeVisible();
 		expect(screen.getByText("Perfil configurado")).toBeVisible();
 		expect(screen.queryByText(/Perfil activo/)).not.toBeInTheDocument();
+		await userEvent.click(screen.getByText("Detalles técnicos"));
 		expect(screen.getByRole("progressbar", { name: "Contexto utilizado" })).toHaveAttribute("value", "6");
 		await userEvent.click(screen.getByText("Conexiones MCP"));
 		expect(screen.getByText("Configurado · 0 herramientas")).toBeVisible();
@@ -166,6 +189,7 @@ describe("session information", () => {
 				close={() => {}}
 			/>,
 		);
+		fireEvent.click(screen.getByText("Detalles técnicos"));
 		expect(screen.getByText("Sin lectura")).toBeVisible();
 		expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
 		expect(screen.getByText(/últimos datos recibidos/i)).toBeVisible();

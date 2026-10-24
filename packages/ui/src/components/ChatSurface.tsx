@@ -59,8 +59,9 @@ import { ModelPicker } from "./ModelPicker.tsx";
 import { describePinCommand, PinForm } from "./PinForm.tsx";
 import { ProfilesPanel } from "./ProfilesPanel.tsx";
 import { RemoteComputerCard } from "./RemoteComputerCard.tsx";
-import { RequestPresentation, RequestPresentationSetting } from "./RequestPresentation.tsx";
+import { RequestPresentation } from "./RequestPresentation.tsx";
 import { SettingsPanel } from "./SettingsPanel.tsx";
+import { SettingsGroups } from "./SettingsGroups.tsx";
 import { type AnswerAppApproval, newRequestId, type Send } from "./types.ts";
 import { UsageBadgeSettings } from "./UsageBadgeSettings.tsx";
 import { UsageBadges } from "./UsageBadges.tsx";
@@ -727,174 +728,31 @@ function ChatSurfaceView({
 						</Suspense>
 					) : (
 						<>
-							<CompanionSettings controls={companion} />
-							<div className="mobile-tool-list mobile-quick-tools">
-								{usage ? (
-									<button
-										type="button"
-										className="mobile-usage-link"
-										aria-label="Consumo"
-										onClick={() => {
-											setUsageFromChat(false);
-											setShowUsage(true);
-										}}
-									>
-										<UsageIcon />
-										<span>
-											<strong>Consumo</strong>
-											<small>Disponible y próximos reinicios</small>
-										</span>
-										<span className="mobile-menu-arrow" aria-hidden="true">
-											›
-										</span>
-									</button>
-								) : null}
-								{watchers ? (
-									<button
-										type="button"
-										className="mobile-usage-link"
-										aria-label="Dot 24/7"
-										onClick={() => setShowWatchers(true)}
-									>
-										<svg
-											width="18"
-											height="18"
-											viewBox="0 0 24 24"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="1.8"
-											strokeLinecap="round"
-											strokeLinejoin="round"
-											aria-hidden="true"
-										>
-											<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
-										</svg>
-										<span>
-											<strong>Dot 24/7</strong>
-											<small>Qué revisa y hace por ti</small>
-										</span>
-										<span className="mobile-menu-arrow" aria-hidden="true">
-											›
-										</span>
-									</button>
-								) : null}
-							</div>
-							<details className="mobile-device-settings">
-								<summary>
-									<span>
-										<strong>Avisos y teléfono</strong>
-										<small>Resúmenes, conexión y acceso</small>
-									</span>
-									<span className="mobile-menu-arrow" aria-hidden="true">
-										›
-									</span>
-								</summary>
-								{mobileControls}
-							</details>
-							<section className="mobile-menu-model" aria-label="Modelo de IA">
-								<h3>Modelo</h3>
-								<ModelPicker
-									models={state.models}
-									send={send}
-									dispatch={dispatch}
-									disabled={!ready}
-									{...(state.model ? { model: state.model } : {})}
-								/>
-							</section>
-							{usage ? <UsageBadgeSettings /> : null}
-							<RequestPresentationSetting />
-							<div className="mobile-tool-list">
-								<button type="button" onClick={() => setShowAppearance(true)}>
-									<svg
-										width="18"
-										height="18"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										strokeWidth="1.8"
-										strokeLinecap="round"
-										strokeLinejoin="round"
-										aria-hidden="true"
-									>
-										<circle cx="12" cy="12" r="9" />
-										<path d="M12 3v18a9 9 0 0 0 0-18Z" fill="currentColor" stroke="none" />
-									</svg>
-									<span>Apariencia del chat</span>
-								</button>
-								<button type="button" onClick={openAccounts}>
-									<AccountsIcon />
-									<span>Cuentas de IA</span>
-								</button>
-
-								<button type="button" onClick={openProfiles}>
-									<ProfilesIcon />
-									<span>Perfiles</span>
-								</button>
-								<button type="button" onClick={openConnectors}>
-									<ConnectorsIcon />
-									<span>
-										Conexiones
-										{state.connectors.issue ? (
-											<small className="mobile-menu-hint">Revisar acceso</small>
-										) : null}
-									</span>
-								</button>
-								{voice.mic ? (
-									<button
-										type="button"
-										aria-pressed={!voice.muted}
-										onClick={() => voice.setMuted(!voice.muted)}
-									>
-										{voice.muted ? <SpeakerOffIcon /> : <SpeakerIcon />}
-										<span>Respuestas en voz alta</span>
-										<small>{voice.muted ? "Desactivadas" : "Activadas"}</small>
-									</button>
-								) : null}
-								{conversations ? (
+							<SettingsGroups controls={companion} mobileControls={mobileControls}
+								state={state} send={send} dispatch={dispatch} ready={ready} voice={voice}
+								usage={Boolean(usage)} watchers={Boolean(watchers)} conversations={Boolean(conversations)} settings={Boolean(settings)}
+								openUsage={() => { setUsageFromChat(false); setShowUsage(true); }}
+								openWatchers={() => setShowWatchers(true)} openAppearance={() => setShowAppearance(true)}
+								openAccounts={openAccounts} openProfiles={openProfiles} openConnectors={openConnectors}
+								openConversations={() => { setShowTools(false); send({ type: "list_conversations" }); setShowConversations(true); }}
+								newConversation={() => switchTo({ type: "new_conversation" })} openSettings={openSettings}
+								advanced={
 									<>
-										<button
-											type="button"
-											onClick={() => {
-												setShowTools(false);
-												send({ type: "list_conversations" });
-												setShowConversations(true);
-											}}
-										>
-											<ConversationsIcon />
-											<span>Conversaciones</span>
-										</button>
-										<button
-											type="button"
-											disabled={!ready}
-											onClick={() => switchTo({ type: "new_conversation" })}
-										>
-											<PlusIcon />
-											<span>Nueva conversación</span>
-										</button>
+										{orchestration ? (
+											<SettingsDisclosure title="Trabajo en segundo plano">
+												<FollowedWorkPanel client={orchestration}
+													connected={agents.snapshot?.available === true && !agents.error} />
+											</SettingsDisclosure>
+										) : null}
+										{orchestration?.browserStatus && orchestration.browserAction ? (
+											<SettingsDisclosure title="Aplicaciones y navegador">
+												{orchestration.computerStatus ? <RemoteComputerCard client={orchestration} /> : null}
+												<BrowserCard client={orchestration} />
+											</SettingsDisclosure>
+										) : null}
 									</>
-								) : null}
-								{settings ? (
-									<button type="button" onClick={openSettings}>
-										<SettingsIcon />
-										<span>Ajustes del asistente</span>
-									</button>
-								) : null}
-							</div>
-
-							{orchestration ? (
-								<SettingsDisclosure title="Trabajo en segundo plano">
-									<FollowedWorkPanel
-										client={orchestration}
-										connected={agents.snapshot?.available === true && !agents.error}
-									/>
-								</SettingsDisclosure>
-							) : null}
-							{orchestration?.browserStatus && orchestration.browserAction ? (
-								<SettingsDisclosure title="Aplicaciones y navegador">
-									{orchestration.computerStatus ? <RemoteComputerCard client={orchestration} /> : null}
-									<BrowserCard client={orchestration} />
-								</SettingsDisclosure>
-							) : null}
+								}
+							/>
 						</>
 					)}
 				</MobileTools>

@@ -147,11 +147,7 @@ export function CompanionSettings({ themeControls }: { themeControls: NativeComp
 			>
 				<span>
 					<strong>Sobre otras apps</strong>
-					<small>
-						{state.permission
-							? "Tu personaje aparece al salir de la app. Tócalo para conversar."
-							: "Android te pedirá permitir Mostrar sobre otras apps."}
-					</small>
+					{!state.permission ? <small>Android te pedirá permiso.</small> : null}
 				</span>
 				<span className="mobile-switch-track" aria-hidden="true">
 					<span />
@@ -162,10 +158,7 @@ export function CompanionSettings({ themeControls }: { themeControls: NativeComp
 					Aplicando el personaje en Android…
 				</p>
 			) : ready && !nativeError && state.theme === themeControls.theme ? (
-				<p className="mobile-setting-hint" role="status">
-					{state.theme === "capri" ? "Capri está lista." : "Gentle Dot está listo."} Pulsa Inicio para ver el
-					personaje sobre otras apps.
-				</p>
+				<p className="mobile-setting-hint" role="status">{state.theme === "capri" ? "Capri está lista." : "Gentle Dot está listo."}</p>
 			) : null}
 			{ready && state.motionPausedReason && (
 				<p className="mobile-setting-hint" role="status">
@@ -222,17 +215,12 @@ export function CompanionSettings({ themeControls }: { themeControls: NativeComp
 				>
 					<span>
 						<strong>Fijar posición</strong>
-						<small>También puedes mantener pulsado el personaje.</small>
 					</span>
 					<span className="mobile-switch-track" aria-hidden="true">
 						<span />
 					</span>
 				</button>
 			)}
-			<p className="mobile-setting-hint">
-				Arrástralo para colocarlo; tócalo para conversar. Se oculta al abrir la app y al bloquear el teléfono.
-				En ahorro de batería permanece quieto. No lee otras aplicaciones.
-			</p>
 			{nativeError && (
 				<p className="mobile-error" role="alert">
 					{nativeError}

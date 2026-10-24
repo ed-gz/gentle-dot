@@ -2,6 +2,7 @@ import { App as NativeApp } from "@capacitor/app";
 import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "../../../packages/ui/src/App.tsx";
+import { PhoneSettings } from "../../../packages/ui/src/components/SettingsGroups.tsx";
 import { RoseGlyph } from "../../../packages/ui/src/components/icons.tsx";
 import { CompanionSettings } from "./CompanionSettings.tsx";
 import { NotificationSettings } from "./NotificationSettings.tsx";
@@ -262,20 +263,15 @@ function MobileApp() {
 					mobileDraftScope={JSON.stringify([connection.url, connection.deviceId])}
 					onCollapseMobile={partialChat ? () => void GentleMobile.closeCompanionChat() : undefined}
 					mobileControls={
-						<section className="mobile-device" aria-label="Este teléfono">
+						<PhoneSettings
+							capri={<CompanionSettings themeControls={companionTheme} />}
+							avisos={<NotificationSettings connection={connection} monitoring={monitoring} monitorBusy={busy} onToggleMonitor={() => void toggleMonitor()} />}
+							equipo={<section className="mobile-device" aria-label="Este teléfono">
 							<h3>Tu equipo</h3>
 							<p className="mobile-device-host">{new URL(connection.url).hostname}</p>
-							<CompanionSettings themeControls={companionTheme} />
-							<NotificationSettings
-								connection={connection}
-								monitoring={monitoring}
-								monitorBusy={busy}
-								onToggleMonitor={() => void toggleMonitor()}
-							/>
 							{confirmDisconnect ? (
 								<div className="mobile-disconnect-confirm">
 									<p>¿Desvincular este teléfono?</p>
-									<p className="mobile-setting-hint">Necesitarás otro QR para volver a conectarte.</p>
 									<div className="mobile-disconnect-actions">
 										<button type="button" onClick={() => setConfirmDisconnect(false)} disabled={busy}>
 											Cancelar
@@ -305,7 +301,7 @@ function MobileApp() {
 									{error}
 								</p>
 							)}
-						</section>
+						</section>} />
 					}
 				/>
 			) : (
