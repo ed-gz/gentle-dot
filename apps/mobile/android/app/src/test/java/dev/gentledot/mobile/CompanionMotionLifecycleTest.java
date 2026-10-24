@@ -46,7 +46,7 @@ public class CompanionMotionLifecycleTest {
         Field field=CompanionOverlayService.class.getDeclaredField("sprite");field.setAccessible(true);sprite=(CompanionSpriteView)field.get(controller.get());
         Shadows.shadowOf(Looper.getMainLooper()).idle();assertTrue(sprite.isAttachedToWindow());
     }
-    @After public void cleanup() { if(controller!=null)controller.destroy(); }
+    @After public void cleanup() { CompanionOverlayService.activity("test","idle"); if(controller!=null)controller.destroy(); }
     private Bitmap draw() {
         sprite.layout(0,0,224,224);Bitmap bitmap=Bitmap.createBitmap(224,224,Bitmap.Config.ARGB_8888);sprite.draw(new Canvas(bitmap));return bitmap;
     }
@@ -73,6 +73,64 @@ public class CompanionMotionLifecycleTest {
         Shadows.shadowOf(power).setIsInteractive(true);event(Intent.ACTION_SCREEN_ON);assertFalse(CompanionOverlayService.presenting());
         Shadows.shadowOf(context.getSystemService(KeyguardManager.class)).setKeyguardLocked(false);event(Intent.ACTION_USER_PRESENT);
         assertTrue(CompanionOverlayService.presenting());Bitmap awake=draw();advance(1700);assertFalse(awake.sameAs(draw()));
+    }
+    @Test public void stickyNullIntentRestoresEnabledOverlay() {
+        assertEquals(android.app.Service.START_STICKY,controller.get().onStartCommand(null,0,2));
+        assertTrue(CompanionOverlayService.running());
+        assertTrue(CompanionOverlayService.presenting());
+    }
+    @Test public void userPresentRechecksWhenKeyguardDismissalIsLate() {
+        Shadows.shadowOf(context.getSystemService(KeyguardManager.class)).setKeyguardLocked(true);
+        event(Intent.ACTION_SCREEN_ON);event(Intent.ACTION_USER_PRESENT);
+        assertFalse(CompanionOverlayService.presenting());
+        Shadows.shadowOf(context.getSystemService(KeyguardManager.class)).setKeyguardLocked(false);
+        advance(600);assertTrue(CompanionOverlayService.presenting());
+    }
+    @Test public void workingLoopsAndReturnsAfterTemporaryReaction() throws Exception {
+        CompanionOverlayService.activity("test","working");Shadows.shadowOf(Looper.getMainLooper()).idle();
+        Field action=CompanionSpriteView.class.getDeclaredField("action");action.setAccessible(true);
+        advance(12_000);assertEquals("working",action.get(sprite));
+        CompanionOverlayService.react("agentAvailable");Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertEquals("An available agent cannot cancel another working agent","working",action.get(sprite));
+        CompanionOverlayService.react("agentCompleted");Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertEquals("greeting",action.get(sprite));
+        advance(12_000);assertEquals("working",action.get(sprite));
+        CompanionOverlayService.activity("test","idle");Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertEquals("idle",action.get(sprite));
+    }
+    @Test public void socketAgentStateAndPermissionReachSpriteWithoutJavaScript() throws Exception {
+        DotMonitorSocket socket=new DotMonitorSocket(context,"https://test.example.ts.net","unused",()->true,()->{},notice->{});
+        okhttp3.WebSocket wire=(okhttp3.WebSocket)java.lang.reflect.Proxy.newProxyInstance(
+            getClass().getClassLoader(),new Class<?>[]{okhttp3.WebSocket.class},(proxy,method,args)->"send".equals(method.getName())?true:null);
+        java.lang.reflect.Method receive=DotMonitorSocket.class.getDeclaredMethod("receive",okhttp3.WebSocket.class,long.class,org.json.JSONObject.class);
+        receive.setAccessible(true);
+        Field action=CompanionSpriteView.class.getDeclaredField("action");action.setAccessible(true);
+        try {
+            receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"ready\",\"agentState\":\"thinking\"}"));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("working",action.get(sprite));
+            receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"agent_state\",\"state\":\"working\"}"));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("working",action.get(sprite));
+            receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"ask\",\"ask\":{\"requestId\":\"q1\",\"method\":\"confirm\"}}"));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("perch",action.get(sprite));
+            receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"ask_resolved\",\"requestId\":\"q1\"}"));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("working",action.get(sprite));
+            receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"agent_state\",\"state\":\"idle\"}"));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("idle",action.get(sprite));
+            receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"agent_state\",\"state\":\"needs_you\"}"));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("perch",action.get(sprite));
+            receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"agent_state\",\"state\":\"error\"}"));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("step-aside",action.get(sprite));
+            advance(12_000);assertEquals("idle",action.get(sprite));
+        } finally { socket.close(); }
+    }
+    @Test public void transientRendererFailureKeepsOptInAndRetries() throws Exception {
+        sprite.release();
+        java.lang.reflect.Method changed=CompanionOverlayService.class.getDeclaredMethod("rendererChanged",CompanionSpriteView.RenderState.class);
+        changed.setAccessible(true);changed.invoke(controller.get(),new CompanionSpriteView.RenderState(null,false,"temporary"));
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertTrue(CompanionOverlayService.prefs(context).getBoolean("enabled",false));
+        assertFalse(CompanionOverlayService.presenting());
+        advance(3100);assertTrue(CompanionOverlayService.presenting());
     }
     @Test public void touchAndDragTriggerActionsAndReturnToLiveIdle() {
         Bitmap idle=draw();long time=SystemClock.uptimeMillis();

@@ -178,8 +178,6 @@ public class GentleMobilePlugin extends Plugin {
                             }
                             CompanionSpriteView.RenderState render = CompanionOverlayService.renderState();
                             if (render.error != null) {
-                                CompanionOverlayService.prefs(getContext()).edit().putBoolean("enabled", false).apply();
-                                getContext().stopService(new Intent(getContext(), CompanionOverlayService.class));
                                 call.reject(render.error);return;
                             }
                             if (!CompanionOverlayService.prefs(getContext()).getBoolean("enabled", false)) {
@@ -188,16 +186,12 @@ public class GentleMobilePlugin extends Plugin {
                             if (CompanionOverlayService.running() && render.ready && requestedTheme.equals(render.appliedTheme)) call.resolve(companionStateValue());
                             else if (android.os.SystemClock.uptimeMillis() < deadline) handler.postDelayed(this, 50);
                             else {
-                                CompanionOverlayService.prefs(getContext()).edit().putBoolean("enabled", false).apply();
-                                getContext().stopService(new Intent(getContext(), CompanionOverlayService.class));
                                 call.reject("Android no confirmó el personaje del acompañante. Vuelve a intentarlo con la app abierta.");
                             }
                         }
                     });
                 } else call.resolve(companionStateValue());
             } catch (RuntimeException error) {
-                CompanionOverlayService.prefs(getContext()).edit().putBoolean("enabled", false).apply();
-                getContext().stopService(new Intent(getContext(), CompanionOverlayService.class));
                 call.reject("Android no pudo activar el acompañante. Inténtalo con la app abierta.");
             }
         });
@@ -338,6 +332,7 @@ public class GentleMobilePlugin extends Plugin {
     @PluginMethod
     public void monitorState(PluginCall call) {
         JSObject result = new JSObject();
+        result.put("status", AgentMonitorService.monitorStatus(getContext()));
         result.put("active", AgentMonitorService.isActive());
         result.put("connected", AgentMonitorService.isConnected());
         result.put("notificationsEnabled", NotificationManagerCompat.from(getContext()).areNotificationsEnabled());

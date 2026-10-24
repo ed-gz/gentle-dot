@@ -35,6 +35,14 @@ final class DotMonitorSocket implements AutoCloseable {
     private WebSocket socket;
     private long generation;
     private int failures;
+    private String agentState = "idle";
+    private final LinkedHashSet<String> questions = new LinkedHashSet<>();
+    private void activity(String state) {
+        boolean failed = "error".equals(state) && !state.equals(agentState);
+        agentState = state;
+        CompanionOverlayService.activity("dot", questions.isEmpty() ? state : "permission");
+        if (failed) CompanionOverlayService.react("dotError");
+    }
 
     DotMonitorSocket(Context context, String origin, String token, BooleanSupplier ownerActive, Runnable revoked, Consumer<JSONObject> sessionNotice) {
         this.context = context;
@@ -91,6 +99,7 @@ final class DotMonitorSocket implements AutoCloseable {
         // Invalidate every callback from the old socket before scheduling its replacement.
         generation++;
         connected = false;
+        questions.clear(); activity("idle");
         failures = Math.min(failures + 1, 12);
         retry.schedule(this::start, Math.min(60, failures * 5), TimeUnit.SECONDS);
     }
@@ -104,11 +113,13 @@ final class DotMonitorSocket implements AutoCloseable {
         if ("ready".equals(type)) {
             connected = true;
             failures = 0;
+            questions.clear(); activity(message.optString("agentState", "idle"));
             catchup.ready(message.optString("conversationId"), "idle".equals(message.optString("agentState")));
             webSocket.send("{\"type\":\"get_history\"}");
             return;
         }
         if ("agent_state".equals(type)) {
+            activity(message.optString("state", "idle"));
             boolean idle = "idle".equals(message.optString("state"));
             catchup.state(idle);
             if (idle) webSocket.send("{\"type\":\"get_history\"}");
@@ -126,11 +137,13 @@ final class DotMonitorSocket implements AutoCloseable {
                 }
             }
             if (catchup.history(message.optString("conversationId"), latest)) {
+                CompanionOverlayService.react("dotReply");
                 AgentMonitorService.notifyUser(context, "dot-catchup", "Gentle Dot tiene respuestas nuevas", "La conexión volvió. Abre la conversación para revisar las respuestas recibidas mientras estabas sin red.");
             }
             return;
         }
         if ("ask_resolved".equals(type)) {
+            questions.remove(message.optString("requestId")); activity(agentState);
             NotificationManagerCompat.from(context).cancel("gentledot:dot-ask:" + message.optString("requestId"), 2);
             return;
         }
@@ -139,6 +152,7 @@ final class DotMonitorSocket implements AutoCloseable {
         if ("ask".equals(type)) {
             JSONObject ask = message.optJSONObject("ask");
             if (ask == null || ask.optString("requestId").isEmpty() || !NotificationPreferences.socketQuestion(ask.optString("method"))) return;
+            questions.add(ask.optString("requestId")); activity(agentState);
             id = "dot-ask:" + ask.optString("requestId");
             event = "permission";
             title = "Gentle Dot necesita tu respuesta";
@@ -163,6 +177,7 @@ final class DotMonitorSocket implements AutoCloseable {
         if (stopped) return;
         stopped = true;
         connected = false;
+        questions.clear(); activity("idle");
         generation++;
         token = null;
         retry.shutdownNow();

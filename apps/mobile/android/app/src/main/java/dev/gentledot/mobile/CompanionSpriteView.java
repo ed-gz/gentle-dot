@@ -40,7 +40,7 @@ final class CompanionSpriteView extends View {
     private Animation animation;
     private int frame;
     private boolean capri, animate, attachedToWindow;
-    private String sheet="", action="idle";
+    private String sheet="", action="idle", sustained="idle";
     private volatile RenderState state=RenderState.unavailable();
     private Consumer<RenderState> stateListener;
     private final Runnable advance=()->{
@@ -48,7 +48,7 @@ final class CompanionSpriteView extends View {
         if(++frame>=animation.frames.length){
             frame=0;
             // Idle already contains a 3.6 s breath/blink cycle. Keep its decoded frames resident.
-            if(!"idle".equals(action))loadOrIdle("idle");
+            if(!CompanionPolicy.loop(action,sustained))loadOrIdle(sustained);
         }
         invalidate();schedule();
     };
@@ -64,18 +64,23 @@ final class CompanionSpriteView extends View {
     private void state(RenderState value) { state=value;if(stateListener!=null)stateListener.accept(value); }
     RenderState theme(String name) {
         release();capri="capri".equals(name);frame=0;
-        if(capri)loadOrIdle("idle");else state(new RenderState("gentle-dot",true,null));
+        if(capri)loadOrIdle(sustained);else state(new RenderState("gentle-dot",true,null));
         invalidate();schedule();return state;
     }
     void active(boolean value) {
         boolean changed=animate!=value;animate=value;
         if(!value){cancelFrames();return;}
-        if(changed&&state.ready)play("idle");else schedule();
+        if(changed&&state.ready)play(sustained);else schedule();
+    }
+    void sustain(String kind) {
+        String next=CompanionPolicy.action(kind);
+        if(next.equals(sustained))return;
+        sustained=next;play(next);
     }
     void play(String value) {
         cancelFrames();frame=0;
-        // A failed activation stays failed until the user explicitly retries it.
-        if(capri&&state.ready)loadOrIdle(value);
+        // Recovery reloads the theme; never paint an unvalidated atlas.
+        if(capri&&state.ready)loadOrIdle("idle".equals(value)?sustained:value);
         invalidate();schedule();
     }
     private boolean canAnimate() { return animate&&attachedToWindow&&capri&&state.ready&&animation!=null; }

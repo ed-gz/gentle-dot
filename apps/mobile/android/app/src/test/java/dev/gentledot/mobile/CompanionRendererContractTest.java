@@ -73,7 +73,7 @@ public class CompanionRendererContractTest {
         Call call=new Call(new JSObject().put("theme","capri"));plugin.setCompanion(call);
         Shadows.shadowOf(Looper.getMainLooper()).idle();
         assertNull(call.result);assertNotNull(call.error);assertTrue(call.error.contains("Reintenta"));assertFalse(call.error.contains("private internal"));
-        assertFalse(CompanionOverlayService.prefs(context).getBoolean("enabled",true));
+        assertTrue("Transient activation failure preserves the user's opt-in",CompanionOverlayService.prefs(context).getBoolean("enabled",false));
         controller.destroy();controller=null;
         Call state=new Call(new JSObject());plugin.companionState(state);
         assertFalse(state.result.getBoolean("active",true));assertFalse(state.result.getBoolean("renderReady",true));assertEquals(call.error,state.result.getString("renderError"));

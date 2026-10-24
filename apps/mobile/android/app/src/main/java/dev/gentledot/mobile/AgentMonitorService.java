@@ -89,13 +89,17 @@ public class AgentMonitorService extends Service {
     }
 
     static void resumeSaved(Context context) {
-        if (isActive() || !NotificationManagerCompat.from(context).areNotificationsEnabled()) return;
         JSONObject saved = MonitorCredentials.load(context);
-        if (saved == null) return;
+        if (!MonitorStartPolicy.shouldStart(saved != null, NotificationManagerCompat.from(context).areNotificationsEnabled(), isActive())) return;
         try {
             ContextCompat.startForegroundService(context, new Intent(context, AgentMonitorService.class)
                 .putExtra("url", saved.optString("url")).putExtra("token", saved.optString("token")));
         } catch (Exception ignored) { /* The settings screen exposes an inactive monitor for manual retry. */ }
+    }
+
+    static String monitorStatus(Context context) {
+        return MonitorStartPolicy.status(MonitorCredentials.load(context) != null,
+            NotificationManagerCompat.from(context).areNotificationsEnabled(), isActive(), isConnected());
     }
 
     public static boolean isConnected() {
@@ -117,6 +121,9 @@ public class AgentMonitorService extends Service {
         session = null;
         if (current == this) current = null;
         if (previous != null) previous.close();
+        CompanionOverlayService.activity("dot", "idle");
+        CompanionOverlayService.activity("sessions", "idle");
+        CompanionOverlayService.activity("dotApprovals", "idle");
     }
 
     public static boolean validOrigin(String input) {
@@ -177,6 +184,7 @@ public class AgentMonitorService extends Service {
     }
     private static void deliver(Context context, String event, String id, String title, String body,
             String paneId, String sessionId, String conversationId, boolean monitorEvent) {
+        CompanionOverlayService.react(event);
         NotificationPreferences preferences = preferences(context);
         NotificationDelivery.Route route = NotificationDelivery.route(preferences, event, MainActivity.isVisible(), monitorEvent);
         if (route == NotificationDelivery.Route.NONE) return;
@@ -233,6 +241,9 @@ public class AgentMonitorService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && STOP.equals(intent.getAction())) {
             MonitorCredentials.clear(this); stopMonitoring(); stopSelf(); return START_NOT_STICKY;
+        }
+        if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) {
+            stopMonitoring(); stopSelf(); return START_NOT_STICKY;
         }
         // Android can reclaim the process while the phone sleeps. Restore only a
         // previously opted-in monitor, never a new pairing or revoked token.
@@ -306,7 +317,7 @@ public class AgentMonitorService extends Service {
             if (!ownsMonitor() || executor.isShutdown()) return;
             String event = notice.optString("notificationEvent");
             String id = notice.optString("notificationId");
-            if (id.isEmpty() || !preferences(AgentMonitorService.this).allows(event)) return;
+            if (id.isEmpty()) return;
             if (!"permission".equals(event)) {
                 // The socket must not wait behind a slow HTTP request to deliver a reply.
                 if (notices.live(id)) {
@@ -317,6 +328,7 @@ public class AgentMonitorService extends Service {
                 }
                 return;
             }
+            CompanionOverlayService.react(event);
             try { executor.execute(() -> {
                 if (!ownsMonitor()) return;
                 // Fetch the concrete request id so its notification is removed
@@ -339,7 +351,7 @@ public class AgentMonitorService extends Service {
         private void poll() {
             if (!ownsMonitor()) return;
             NotificationPreferences preferences = preferences(AgentMonitorService.this);
-            if (!MonitorPollPolicy.needsSessions(preferences)) {
+            if (!MonitorPollPolicy.needsSessions(preferences) && !CompanionOverlayService.prefs(AgentMonitorService.this).getBoolean("enabled", false)) {
                 // If the source is enabled later, start from a fresh baseline instead of replaying muted events.
                 notices.resetBaseline();
                 failures = 0;
@@ -438,11 +450,20 @@ public class AgentMonitorService extends Service {
                 }
                 for (String id : dotApprovals) if (!next.contains(id)) NotificationManagerCompat.from(AgentMonitorService.this).cancel("gentledot:dot-approval:" + id, 2);
                 dotApprovals = next;
+                CompanionOverlayService.activity("dotApprovals", next.isEmpty() ? "idle" : "permission");
             } finally { request = null; connection.disconnect(); }
         }
 
         private void process(JSONObject snapshot) {
+            java.util.List<String> states = new java.util.ArrayList<>();
+            JSONArray sessions = snapshot.optJSONArray("sessions");
+            if (sessions != null) for (int i = 0; i < sessions.length(); i++) {
+                JSONObject item = sessions.optJSONObject(i);
+                if (item != null && item.optBoolean("connected")) states.add(item.optString("state"));
+            }
             JSONArray pending = snapshot.optJSONArray("approvals");
+            if (pending != null && pending.length() > 0) states.add("permission");
+            CompanionOverlayService.activity("sessions", CompanionPolicy.aggregate(states));
             Set<String> currentApprovals = new HashSet<>();
             if (pending != null) for (int i = 0; i < pending.length(); i++) {
                 JSONObject item = pending.optJSONObject(i); if (item == null) continue;

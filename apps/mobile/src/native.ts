@@ -72,6 +72,8 @@ interface NativePlugin {
 	startMonitor(options: { url: string; token: string; mode?: NotificationMode }): Promise<void>;
 	stopMonitor(): Promise<void>;
 	monitorState(): Promise<{
+		/** Single display state; disconnected includes a rejected or pending service start. */
+		status: "on" | "needs_permission" | "not_paired" | "disconnected";
 		active: boolean;
 		connected?: boolean;
 		notificationsEnabled?: boolean;

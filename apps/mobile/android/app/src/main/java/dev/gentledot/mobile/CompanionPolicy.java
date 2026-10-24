@@ -17,10 +17,30 @@ final class CompanionPolicy {
     static int bound(int value, int extent, int size, int inset) {
         return Math.max(inset, Math.min(value, Math.max(inset, extent - size - inset)));
     }
+    static boolean shouldStart(boolean enabled, boolean permission, boolean running) {
+        return retry(enabled, permission) && !running;
+    }
+    static boolean retry(boolean enabled, boolean permission) { return enabled && permission; }
+    /** Attention takes priority; one idle agent must never cancel another working agent. */
+    static String aggregate(Iterable<String> states) {
+        boolean working = false;
+        for (String state : states) {
+            if ("blocked".equals(state) || "needs_you".equals(state) || "permission".equals(state) || "agentAttention".equals(state)) return "permission";
+            working |= "working".equals(state) || "thinking".equals(state) || "typing".equals(state);
+        }
+        return working ? "working" : "idle";
+    }
+    static boolean loop(String action, String sustained) { return action.equals(sustained); }
+    /** Only names present in the shipped core/actions atlases. */
     static String action(String kind) {
-        if ("download".equals(kind) || "capture".equals(kind)) return "file-away";
-        if ("permission".equals(kind) || "agentAttention".equals(kind)) return "greeting";
-        if ("typing".equals(kind) || "working".equals(kind)) return "working";
-        return "greeting";
+        if (kind == null) return "idle";
+        switch (kind) {
+            case "download": case "capture": return "file-away";
+            case "permission": case "agentAttention": case "blocked": case "needs_you": return "perch";
+            case "typing": case "working": case "thinking": return "working";
+            case "agentCompleted": case "dotReply": case "done": case "success": return "greeting";
+            case "agentError": case "dotError": case "error": case "failed": return "step-aside";
+            case "agentAvailable": case "idle": default: return "idle";
+        }
     }
 }
