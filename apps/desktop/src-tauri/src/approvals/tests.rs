@@ -236,3 +236,36 @@ fn a_given_title_and_sentence_are_made_safe_too() {
     assert!(dialog.message.starts_with("It reads\\u{200b} Notion. sss"), "{}", dialog.message);
     assert!(dialog.message.contains("more characters)"), "{}", dialog.message);
 }
+
+
+#[test]
+fn a_remote_answer_cancels_the_visible_dialog_and_late_allow_does_not_approve() {
+    let prompt = Arc::new(FakePrompt::new([Answer::Hang, Answer::After(Duration::ZERO, true)]));
+    let approvals = Arc::new(approvals(&prompt, LONG));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let showing = {
+        let approvals = approvals.clone(); let cancelled = cancelled.clone();
+        std::thread::spawn(move || approvals.confirm_cancellable(&request(vec![]), cancelled))
+    };
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while prompt.shown_titles().is_empty() && Instant::now() < deadline { std::thread::sleep(Duration::from_millis(1)); }
+    assert_eq!(prompt.shown_titles().len(), 1);
+    cancelled.store(true, Ordering::SeqCst);
+    assert_eq!(showing.join().unwrap(), Decision::Declined);
+    assert_eq!(prompt.dismissals(), 1);
+    assert_eq!(approvals.confirm(&request(vec![])), Decision::Approved);
+    assert_eq!(prompt.dismissals(), 1, "cancelling the old request must not close the next dialog");
+}
+
+#[test]
+fn cancellation_before_acquiring_screen_never_shows_or_dismisses_another_dialog() {
+    let prompt = Arc::new(FakePrompt::new([Answer::After(Duration::from_millis(120), true)]));
+    let approvals = Arc::new(approvals(&prompt, LONG));
+    let first = { let approvals = approvals.clone(); std::thread::spawn(move || approvals.confirm(&request(vec![]))) };
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while prompt.shown_titles().is_empty() && Instant::now() < deadline { std::thread::sleep(Duration::from_millis(1)); }
+    assert_eq!(approvals.confirm_cancellable(&request(vec![]), Arc::new(AtomicBool::new(true))), Decision::Declined);
+    assert_eq!(prompt.shown_titles().len(), 1);
+    assert_eq!(prompt.dismissals(), 0);
+    assert_eq!(first.join().unwrap(), Decision::Approved);
+}

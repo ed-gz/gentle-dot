@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-companion-menu"
+description = "Enables the desktop_companion_menu command without any pre-configured scope."
+commands.allow = ["desktop_companion_menu"]
+
+[[permission]]
+identifier = "deny-desktop-companion-menu"
+description = "Denies the desktop_companion_menu command without any pre-configured scope."
+commands.deny = ["desktop_companion_menu"]

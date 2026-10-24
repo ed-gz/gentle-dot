@@ -1,0 +1,133 @@
+Capri life and partial-view animation prompts — 2026-10-23
+
+Built-in image_gen tool, transparent_background=true. Reference assets are approved Capri artwork.
+Final PNG files are copied unmodified from generated outputs; scripts inspect pixels and produce metadata only.
+
+LIFE ATLAS
+
+undefined
+
+GLIMPSES ATLAS
+
+undefined
+
+
+
+FINAL OUTPUTS AND VALIDATION
+
+{
+  "image": "capri-motion-life-v1.png",
+  "source": "generated-artifacts/exec-0557b812-0d7f-4a4f-a076-840f5647610e.png",
+  "sourceUnmodified": true,
+  "sha256": "7ee204d96059372608438ba5d6885956febcb25ca5ae144cee5c5b0e3d4bf91e",
+  "mode": "RGBA",
+  "width": 1536,
+  "height": 1024,
+  "fullyTransparentPixels": 802200,
+  "opaquePixelsAtOuterBorder": 0,
+  "animations": [
+    {
+      "action": "snack",
+      "frames": 6,
+      "uniqueSourceCrops": 6,
+      "playback": "loop",
+      "canvas": {
+        "width": 275,
+        "height": 256
+      }
+    },
+    {
+      "action": "stretch",
+      "frames": 6,
+      "uniqueSourceCrops": 6,
+      "playback": "loop",
+      "canvas": {
+        "width": 247,
+        "height": 270
+      }
+    },
+    {
+      "action": "curious",
+      "frames": 6,
+      "uniqueSourceCrops": 6,
+      "playback": "loop",
+      "canvas": {
+        "width": 257,
+        "height": 267
+      }
+    },
+    {
+      "action": "attentive",
+      "frames": 6,
+      "uniqueSourceCrops": 6,
+      "playback": "loop",
+      "canvas": {
+        "width": 241,
+        "height": 266
+      }
+    }
+  ]
+}
+
+{
+  "image": "capri-motion-glimpses-v1.png",
+  "source": "generated-artifacts/exec-8cc8e2d4-be2f-415f-9175-756801ea0eba.png",
+  "sourceUnmodified": true,
+  "sha256": "20c46fded4881fac5be2527475759a0619badc9f9f32f36f6de386414440ba16",
+  "mode": "RGBA",
+  "width": 1536,
+  "height": 1024,
+  "fullyTransparentPixels": 1000707,
+  "opaquePixelsAtOuterBorder": 0,
+  "animations": [
+    {
+      "action": "eyes",
+      "frames": 6,
+      "uniqueSourceCrops": 6,
+      "playback": "loop",
+      "canvas": {
+        "width": 241,
+        "height": 159
+      }
+    },
+    {
+      "action": "face",
+      "frames": 6,
+      "uniqueSourceCrops": 6,
+      "playback": "loop",
+      "canvas": {
+        "width": 275,
+        "height": 230
+      }
+    },
+    {
+      "action": "point-left",
+      "frames": 6,
+      "uniqueSourceCrops": 6,
+      "playback": "loop",
+      "canvas": {
+        "width": 259,
+        "height": 173
+      }
+    },
+    {
+      "action": "point-right",
+      "frames": 6,
+      "uniqueSourceCrops": 6,
+      "playback": "loop",
+      "canvas": {
+        "width": 263,
+        "height": 173
+      }
+    }
+  ]
+}
+
+All original generated PNGs are copied byte-for-byte. No raster editing was performed.
+Measured source crops use absolute alpha-derived clip polygons, with a common canvas and offsets per action.
+Standing/seated cycles register the feet/base; eyes use the outer eye region; faces use the pink hair geometry; hands register the wrist end.
+The face row uses six separate connected alpha components so close neighboring hair spikes remain isolated.
+All eight actions loop, with no terminal held frame. Each action contains six unique source crops.
+Browser alpha QA: .cache/capri-motion/life-raw.png
+Registered 48-frame contact sheet: .cache/capri-motion/life-contact.png
+Metadata evidence: .cache/capri-motion/registration-life.json and validation-life.json

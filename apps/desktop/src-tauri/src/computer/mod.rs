@@ -1,9 +1,9 @@
 //! Computer control (S24): a native helper inside the app that serves MCP on loopback so the
-//! agent can see and drive the Mac. Every rule (session grant, blocklist, rate limit, risky
+//! agent can see and control the desktop. Every rule (session grant, blocklist, rate limit, risky
 //! action confirmation, panic stop) lives here, outside the agent's reach.
 //!
-//! The rules are pure modules tested on every OS. `Desktop` is the seam to the real Mac
-//! (`macos`), and `fake` records events for the tests. Off macOS the helper does not start.
+//! The rules are pure modules tested on every OS. `Desktop` is the seam to the native
+//! macOS or Linux adapter; `fake` records events for the tests.
 
 pub mod app;
 pub mod blocklist;
@@ -16,6 +16,8 @@ mod fake;
 pub mod keys;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "linux")]
+pub(crate) mod linux;
 pub mod mcp;
 pub mod rate;
 pub mod risk;
@@ -32,6 +34,8 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
 pub use macos::{request_permission, MacDesktop};
+#[cfg(target_os = "linux")]
+pub use linux::{request_permission, LinuxDesktop};
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +71,23 @@ pub struct AppInfo {
     pub name: String,
     pub bundle_id: Option<String>,
     pub active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows: Option<Vec<AppWindow>>,
+}
+
+/// Public window identity. Workspace names are supplied by the compositor when available.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppWindow {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<i64>,
+    pub active: bool,
+    pub visible: bool,
 }
 
 /// The `computer_permissions` reply (L60), plus `screenshotsSupported` (false before macOS 14,
@@ -87,8 +108,14 @@ pub enum PermissionKind {
     ScreenRecording,
 }
 
-/// The Mac, as the helper sees it.
+/// The desktop session, as the helper sees it.
 pub trait Desktop: Send + Sync {
+    /// Diagnostics only: no screenshot, input or authorization is performed here.
+    fn capabilities(&self) -> serde_json::Value {
+        serde_json::json!({"platform": std::env::consts::OS, "backend": "native", "supported": true,
+            "permissions": self.permissions(), "missingDependencies": [], "limitations": []})
+    }
+    fn text_chunk_units(&self) -> usize { 20 }
     fn permissions(&self) -> Permissions;
     /// A screenshot of the display under the pointer, downscaled to `coords::MAX_LONG_EDGE`.
     fn capture(&self) -> Result<Capture, String>;
@@ -96,6 +123,10 @@ pub trait Desktop: Send + Sync {
     fn list_apps(&self) -> Result<Vec<AppInfo>, String>;
     /// Opens (or activates) an app by name or bundle id.
     fn open_app(&self, name: &str) -> Result<(), String>;
+    /// Activate exactly one previously listed window without moving it between workspaces.
+    fn open_window(&self, _id: &str) -> Result<(), String> {
+        Err("This desktop backend cannot select individual windows. Open the application by name instead.".into())
+    }
     /// The Accessibility element at a point, then its ancestors; empty when unknown.
     fn element_at(&self, at: Point) -> Vec<AxElement>;
     fn focused_element(&self) -> Option<Focus>;

@@ -1,0 +1,24 @@
+{
+  "image": "capri-atlas-v2.png",
+  "width": 1254,
+  "height": 1254,
+  "transparent": true,
+  "frames": {
+    "idle": { "x": 20, "y": 40, "width": 280, "height": 325 },
+    "greeting": { "x": 340, "y": 40, "width": 290, "height": 325 },
+    "typing": { "x": 645, "y": 60, "width": 290, "height": 305 },
+    "thinking": { "x": 975, "y": 40, "width": 260, "height": 325 },
+    "reading": { "x": 20, "y": 385, "width": 300, "height": 320 },
+    "lounging": { "x": 320, "y": 425, "width": 350, "height": 245 },
+    "success": { "x": 670, "y": 375, "width": 285, "height": 330 },
+    "alert": { "x": 970, "y": 375, "width": 270, "height": 330 },
+    "eyes": { "x": 30, "y": 770, "width": 255, "height": 155 },
+    "eyes-blink": { "x": 340, "y": 770, "width": 270, "height": 155 },
+    "face": { "x": 645, "y": 705, "width": 300, "height": 250 },
+    "face-talk": { "x": 950, "y": 705, "width": 300, "height": 250 },
+    "point-left": { "x": 30, "y": 1010, "width": 280, "height": 185 },
+    "point-right": { "x": 340, "y": 1010, "width": 280, "height": 170 },
+    "sleep": { "x": 640, "y": 965, "width": 300, "height": 235 },
+    "peek": { "x": 950, "y": 995, "width": 300, "height": 210 }
+  }
+}

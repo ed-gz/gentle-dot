@@ -1,0 +1,21 @@
+{
+	"purpose": "Provider identification in subscription usage; assets retain their original geometry and colors.",
+	"assets": [
+		{
+			"file": "codex.svg",
+			"source": "/usr/lib/chatgpt/resources/app.asar",
+			"resource": "webview/assets/codex_new-f14177b03534.svg; OpenAI desktop 26.928.20755",
+			"sha256": "0b490f33f9c5b62c7db578f5101497efb87b774720f91b9e878243e761952c52",
+			"modifications": "None; original SVG bytes",
+			"trademarkOwner": "OpenAI"
+		},
+		{
+			"file": "claude.svg",
+			"source": "https://anthropic.com/press-kit",
+			"resource": "Anthropic media resources/Anthropic logos/Claude logos/3 Claude Spark/SVG/Claude Spark - Clay.svg",
+			"sha256": "6d53db4be375e899c937c26cf16684a80d6e869b1928d72b37748bef2560e219",
+			"modifications": "None; original SVG bytes",
+			"trademarkOwner": "Anthropic"
+		}
+	]
+}

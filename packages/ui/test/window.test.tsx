@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DotState, initialState } from "../src/store.ts";
+import { openDesktopOptions } from "./desktop-options.ts";
 
 /** Hide the rose and full-screen chat (S26), through the panel and its mocked Tauri commands. */
 const h = vi.hoisted(() => ({
@@ -84,23 +85,28 @@ describe("hide the rose (S26.1)", () => {
 	it("the panel header hides the rose and then offers to show it again", async () => {
 		await renderApp("?surface=panel");
 		await waitFor(() => expect(invoked("rose_hidden")).toHaveLength(1));
+		openDesktopOptions();
 		await userEvent.click(await screen.findByRole("button", { name: "Hide the rose" }));
 		expect(h.invoke).toHaveBeenCalledWith("set_rose_hidden", { hidden: true });
 
+		openDesktopOptions();
 		const show = await screen.findByRole("button", { name: "Show the rose" });
 		expect(show).toHaveAttribute("title", "Show the rose");
 		await userEvent.click(show);
 		expect(lastArgs("set_rose_hidden")).toEqual({ hidden: false });
+		openDesktopOptions();
 		await screen.findByRole("button", { name: "Hide the rose" });
 	});
 
 	it("starts from the remembered choice and follows the tray", async () => {
 		h.roseHidden = true;
 		await renderApp("?surface=panel");
+		openDesktopOptions();
 		await screen.findByRole("button", { name: "Show the rose" });
 
 		await waitFor(() => expect(h.listeners.has("dot://rose")).toBe(true));
 		await act(async () => h.listeners.get("dot://rose")?.({ payload: { hidden: false } }));
+		openDesktopOptions();
 		await screen.findByRole("button", { name: "Hide the rose" });
 	});
 
@@ -108,6 +114,7 @@ describe("hide the rose (S26.1)", () => {
 		h.roseHidden = true;
 		h.computer = { active: true, endsAt: Date.now() + 60_000, yolo: true };
 		await renderApp("?surface=panel");
+		openDesktopOptions();
 		await screen.findByRole("button", { name: "Show the rose" });
 		const banner = await screen.findByRole("region", { name: "Computer control" });
 		expect(banner).toHaveTextContent(/yolo/i);

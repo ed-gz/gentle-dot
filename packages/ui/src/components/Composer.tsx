@@ -1,8 +1,10 @@
+import type { AttachmentRef } from "@gentle-dot/protocol";
+import { publishCompanionActivity } from "../companion-activity.ts";
 import { type ClipboardEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { formatSize } from "../uploads.ts";
 import type { AttachmentControls, PendingFile } from "../useAttachments.ts";
 import type { VoiceControls } from "../useVoice.ts";
-import { MicIcon, PaperclipIcon, SendIcon } from "./icons.tsx";
+import { MicIcon, PaperclipIcon, SendIcon, StopIcon } from "./icons.tsx";
 import { newRequestId, type Send } from "./types.ts";
 
 interface ComposerProps {
@@ -17,6 +19,14 @@ interface ComposerProps {
 	voice?: VoiceControls;
 	/** Files for the message (S31.1); without it there is no attach button. */
 	attachments?: AttachmentControls;
+	/** Compact phone copy; desktop keeps its existing labels and behavior. */
+	mobile?: boolean;
+	/** Optional acknowledged, controlled input; the default Dot transport is unchanged. */
+	text?: string;
+	onText?(text: string): void;
+	onSubmitText?(text: string, refs?: AttachmentRef[]): Promise<boolean>;
+	inputOnly?: boolean;
+	labels?: { text: string; send: string; files: string; remove: string };
 }
 
 export function Composer({
@@ -27,20 +37,41 @@ export function Composer({
 	onStartTyping,
 	voice,
 	attachments,
+	mobile = false,
+	text: controlledText,
+	onText,
+	onSubmitText,
+	inputOnly = false,
+	labels,
 }: ComposerProps) {
-	const [text, setText] = useState("");
+	const copy = (english: string, spanish: string) => (mobile ? spanish : english);
+	const [localText, setLocalText] = useState("");
+	const text = controlledText ?? localText;
+	const textNow = useRef(text);
+	textNow.current = text;
+	const setText = (value: string) => { setLocalText(value); onText?.(value); };
+	const onTextNow = useRef(onText);
+	onTextNow.current = onText;
+	const submitting = useRef(false);
+	const [pending, setPending] = useState(false);
+	const mounted = useRef(true);
+	useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 	/** The last message could not go out; its text and files stay for another try (#21). */
 	const [refused, setRefused] = useState(false);
 	const box = useRef<HTMLTextAreaElement>(null);
 	const recording = voice?.phase === "recording";
-	const voiceStatus = voice?.phase === "transcribing" ? "Transcribing…" : voice?.note;
+	const voiceStatus =
+		voice?.phase === "transcribing" ? copy("Transcribing…", "Transcribiendo…") : voice?.note;
 
 	// A dictation to review joins what was already typed, and the cursor waits at its end.
 	const draft = voice?.draft;
 	const draftTaken = voice?.draftTaken;
 	useEffect(() => {
 		if (!draft || !draftTaken) return;
-		setText((current) => (current.trim() ? `${current.trimEnd()} ${draft.text}` : draft.text));
+		const current = textNow.current;
+		const next = current.trim() ? `${current.trimEnd()} ${draft.text}` : draft.text;
+		setLocalText(next);
+		onTextNow.current?.(next);
 		draftTaken(draft.id);
 		requestAnimationFrame(() => {
 			const input = box.current;
@@ -57,19 +88,41 @@ export function Composer({
 	const files = attachments?.files ?? [];
 	const uploading = attachments?.uploading === true;
 	const blocked = files.some((f) => f.refused);
+	// One stable action slot: Stop while working, Send when there is a follow-up draft.
+	const showStop = !recording && (busy || voice?.speaking) && !text.trim() && files.length === 0;
+	const stopLabel = busy ? copy("Stop", "Detener respuesta") : copy("Stop", "Detener lectura");
 
 	async function submit() {
 		const value = text.trim();
-		if ((!value && files.length === 0) || disabled || uploading || blocked) return;
+		if ((!value && files.length === 0) || disabled || uploading || blocked || submitting.current) return;
+		if (onSubmitText) {
+			submitting.current = true;
+			setPending(true);
+			publishCompanionActivity("sending", box.current);
+			try {
+				const refs = files.length ? await attachments?.upload() : undefined;
+				if (!mounted.current) return;
+				if (files.length && !refs) { publishCompanionActivity("failed", box.current); return; }
+				const accepted = await onSubmitText(value, refs);
+				if (!mounted.current) return;
+				setRefused(!accepted);
+				publishCompanionActivity(accepted ? "submitted" : "failed", box.current);
+				if (accepted) { attachments?.clear(); voice?.sent(); setText(""); }
+			} catch { if (mounted.current) { setRefused(true); publishCompanionActivity("failed", box.current); } }
+			finally { submitting.current = false; if (mounted.current) setPending(false); }
+			return;
+		}
 		// Files upload on send; a failed one keeps the message so sending again retries it.
 		const refs = files.length > 0 ? await attachments?.upload() : undefined;
-		if (files.length > 0 && !refs) return;
+		if (files.length > 0 && !refs) { publishCompanionActivity("failed", box.current); return; }
 		const message = { type: "send", text: value, requestId: newRequestId() } as const;
 		if (send(refs ? { ...message, attachments: refs } : message) === false) {
 			setRefused(true);
+			publishCompanionActivity("failed", box.current);
 			return;
 		}
 		setRefused(false);
+		publishCompanionActivity("submitted", box.current);
 		attachments?.clear();
 		voice?.sent();
 		setText("");
@@ -94,12 +147,15 @@ export function Composer({
 	return (
 		<>
 			{refused ? (
-				<p className="voice-status" role="alert" aria-label="Not sent">
-					Not connected, so the message was not sent. It is kept here to send again.
+				<p className="voice-status" role="alert" aria-label={copy("Not sent", "No enviado")}>
+					{inputOnly ? "No se confirmó el envío." : copy(
+						"Not connected, so the message was not sent. It is kept here to send again.",
+						"No hay conexión. Tu mensaje sigue aquí para enviarlo cuando vuelvas a conectar.",
+					)}
 				</p>
 			) : null}
 			{voiceStatus ? (
-				<p className="voice-status" role="status" aria-label="Voice">
+				<p className="voice-status" role="status" aria-label={copy("Voice", "Voz")}>
 					{voiceStatus}
 				</p>
 			) : null}
@@ -109,6 +165,7 @@ export function Composer({
 						<FileChip
 							key={file.id}
 							file={file}
+							removeLabel={labels?.remove}
 							locked={uploading}
 							remove={() => attachments.remove(file.id)}
 						/>
@@ -123,14 +180,14 @@ export function Composer({
 				}}
 			>
 				{attachments && !recording ? (
-					<label className="composer-attach" title="Attach files">
+					<label className="composer-attach" title={copy("Attach files", "Adjuntar archivos")}>
 						<PaperclipIcon />
 						<input
 							type="file"
 							multiple
-							aria-label="Attach files"
+							aria-label={labels?.files ?? copy("Attach files", "Adjuntar archivos")}
 							className="visually-hidden"
-							disabled={disabled || uploading}
+							disabled={disabled || uploading || pending}
 							onChange={(event) => {
 								attachments.add(Array.from(event.target.files ?? []));
 								// The same file can be picked again after removing it.
@@ -141,31 +198,35 @@ export function Composer({
 				) : null}
 				{recording ? (
 					<div className="voice-recording">
-						<span className="voice-time" role="timer" aria-label="Recording time">
+						<span
+							className="voice-time"
+							role="timer"
+							aria-label={copy("Recording time", "Tiempo de grabación")}
+						>
 							{formatElapsed(voice.elapsed)}
 						</span>
 						<meter
 							className="voice-meter"
-							aria-label="Microphone level"
+							aria-label={copy("Microphone level", "Nivel del micrófono")}
 							min={0}
 							max={1}
 							value={voice.level}
 						/>
-						<span className="voice-partial">{voice.partial || "Listening…"}</span>
-						<button
+						<span className="voice-partial">{voice.partial || copy("Listening…", "Escuchando…")}</span>
+						{!inputOnly ? <button
 							type="button"
 							role="switch"
 							aria-checked={voice.sendOnStop}
 							className={`voice-send-option${voice.sendOnStop ? " on" : ""}`}
 							onClick={() => voice.setSendOnStop(!voice.sendOnStop)}
 						>
-							Send when I stop
-						</button>
+							{copy("Send when I stop", "Enviar al terminar")}
+						</button> : null}
 						<button
 							type="button"
 							className="voice-cancel"
-							aria-label="Cancel recording"
-							title="Cancel (Esc)"
+							aria-label={copy("Cancel recording", "Cancelar grabación")}
+							title={copy("Cancel (Esc)", "Cancelar (Esc)")}
 							onClick={voice.cancel}
 						>
 							✕
@@ -174,11 +235,15 @@ export function Composer({
 				) : (
 					<textarea
 						ref={box}
-						aria-label="Message"
-						placeholder={busy ? "Add to what I'm doing…" : "Ask me anything…"}
+						aria-label={labels?.text ?? copy("Message", "Mensaje")}
+						placeholder={
+							busy
+								? copy("Add to what I'm doing…", "Añade una indicación…")
+								: copy("Ask me anything…", "Escribe un mensaje…")
+						}
 						rows={1}
 						value={text}
-						disabled={disabled}
+						disabled={disabled || pending}
 						onChange={(event) => {
 							if (text === "" && event.target.value !== "") onStartTyping?.();
 							setText(event.target.value);
@@ -187,43 +252,53 @@ export function Composer({
 						onPaste={onPaste}
 					/>
 				)}
-				{busy || voice?.speaking ? (
-					<button
-						type="button"
-						className="composer-stop"
-						onClick={() => {
-							if (busy) send({ type: "abort" });
-							voice?.stopSpeaking();
-						}}
-					>
-						Stop
-					</button>
-				) : null}
 				{voice?.mic ? (
 					<button
 						type="button"
 						className={`composer-mic${recording ? " composer-mic-on" : ""}`}
-						aria-label={recording ? (voice.sendOnStop ? "Stop and send" : "Stop and review") : "Talk"}
+						aria-label={
+							recording
+								? voice.sendOnStop
+									? copy("Stop and send", "Terminar y enviar")
+									: copy("Stop and review", "Terminar y revisar")
+								: copy("Talk", "Dictar mensaje")
+						}
 						title={
 							voice.mic.available
 								? voice.sendOnStop
-									? "Tap to talk, tap again to send"
-									: "Tap to talk, tap again to review before sending"
+									? copy("Tap to talk, tap again to send", "Toca para hablar y otra vez para enviar")
+									: copy(
+											"Tap to talk, tap again to review before sending",
+											"Toca para dictar y revisar antes de enviar",
+										)
 								: voice.mic.reason
 						}
-						disabled={disabled || !voice.mic.available || voice.phase === "transcribing"}
+						disabled={disabled || pending || !voice.mic.available || voice.phase === "transcribing"}
 						onClick={recording ? voice.stop : voice.start}
 					>
 						<MicIcon />
 					</button>
 				) : null}
-				{recording ? null : (
+				{showStop ? (
+					<button
+						type="button"
+						className="composer-send composer-stop"
+						aria-label={stopLabel}
+						title={stopLabel}
+						onClick={() => {
+							if (busy) send({ type: "abort" });
+							voice?.stopSpeaking();
+						}}
+					>
+						<StopIcon />
+					</button>
+				) : recording ? null : (
 					<button
 						type="submit"
 						className="composer-send"
-						disabled={disabled || uploading || blocked || (text.trim() === "" && files.length === 0)}
-						aria-label="Send"
-						title="Send"
+						disabled={disabled || pending || uploading || blocked || (text.trim() === "" && files.length === 0)}
+						aria-label={labels?.send ?? copy("Send", "Enviar mensaje")}
+						title={copy("Send", "Enviar mensaje")}
 					>
 						<SendIcon />
 					</button>
@@ -234,7 +309,7 @@ export function Composer({
 }
 
 /** One attached file: name, size, upload progress, and why it cannot be sent. */
-function FileChip({ file, locked, remove }: { file: PendingFile; locked: boolean; remove: () => void }) {
+function FileChip({ file, locked, remove, removeLabel = "Remove" }: { file: PendingFile; locked: boolean; remove: () => void; removeLabel?: string }) {
 	const name = file.file.name;
 	const problem = file.refused ?? file.error;
 	return (
@@ -254,7 +329,7 @@ function FileChip({ file, locked, remove }: { file: PendingFile; locked: boolean
 			<button
 				type="button"
 				className="chip-remove"
-				aria-label={`Remove ${name}`}
+				aria-label={`${removeLabel} ${name}`}
 				disabled={locked}
 				onClick={remove}
 			>

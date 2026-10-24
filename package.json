@@ -13,13 +13,17 @@
 		"start": "node packages/daemon/src/cli.ts",
 		"test": "vitest run",
 		"e2e": "playwright test",
-		"typecheck": "tsc -b",
+		"e2e:mobile": "playwright test -c playwright.mobile.config.ts",
+		"typecheck": "tsc -b && pnpm --filter @gentle-dot/mobile typecheck",
 		"lint": "biome check .",
 		"format": "biome format --write .",
 		"test:real": "GENTLE_DOT_REAL_AGENT=1 vitest run packages/daemon/test/real-agent.test.ts",
 		"package:mac": "node scripts/package/package-mac.mjs",
 		"package:linux": "node scripts/package/package-linux.mjs",
-		"package:linux:check": "node scripts/package/linux-check.mjs"
+		"package:linux:check": "node scripts/package/linux-check.mjs",
+		"mobile:connect": "node scripts/mobile/connect.mjs",
+		"android:apk": "node scripts/mobile/build-android.mjs",
+		"sessions:launch": "node scripts/orchestration/session.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.15",

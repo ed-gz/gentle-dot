@@ -13,16 +13,21 @@ interface ClientHandlers {
 	WebSocketImpl?: typeof WebSocket;
 }
 
-const BACKOFF_MS = [500, 1000, 2000, 5000];
+const BACKOFF_MS = [500, 1000, 2000, 5000, 10_000, 30_000];
+const CONNECT_TIMEOUT_MS = 12_000;
+const RESUME_STALE_MS = 15_000;
 const TOKEN_KEY = "gentle-dot-token";
 
 /** One WebSocket session with the daemon: hello, reconnect with backoff, and history refresh. */
 export class DotClient {
 	private socket: WebSocket | undefined;
 	private ready = false;
-	private stopped = false;
+	private stopped = true;
+	private rejected = false;
 	private attempts = 0;
+	private lastReceived = 0;
 	private retryTimer: ReturnType<typeof setTimeout> | undefined;
+	private connectTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly info: ConnectionInfo;
 	private readonly handlers: ClientHandlers;
 
@@ -32,40 +37,96 @@ export class DotClient {
 	}
 
 	start(): void {
+		if (!this.stopped) return;
 		this.stopped = false;
+		this.rejected = false;
+		this.attempts = 0;
 		this.connect();
 	}
 
 	stop(): void {
 		this.stopped = true;
-		clearTimeout(this.retryTimer);
-		this.socket?.close();
+		this.clearConnection();
+	}
+
+	/** A resumed phone refreshes a possibly half-open socket, never replays a prompt. */
+	resume(networkChanged = false): void {
+		if (this.stopped || this.rejected) return;
+		if (!networkChanged && this.socket && Date.now() - this.lastReceived < RESUME_STALE_MS) return;
+		this.clearConnection();
+		this.attempts = 0;
+		this.connect();
 	}
 
 	send(message: ClientMessage): boolean {
 		if (!this.ready || !this.socket || this.socket.readyState !== 1) return false;
-		this.socket.send(JSON.stringify(message));
-		return true;
+		try {
+			this.socket.send(JSON.stringify(message));
+			return true;
+		} catch {
+			this.retry();
+			return false;
+		}
+	}
+
+	private clearConnection(): void {
+		clearTimeout(this.retryTimer);
+		clearTimeout(this.connectTimer);
+		const old = this.socket;
+		this.socket = undefined;
+		this.ready = false;
+		// Invalidate handlers before closing: queued events from an old host cannot reach the chat.
+		old?.close();
+	}
+
+	private retry(): void {
+		this.clearConnection();
+		if (this.stopped || this.rejected) return;
+		this.handlers.onStatus("closed");
+		const delay = BACKOFF_MS[Math.min(this.attempts, BACKOFF_MS.length - 1)] ?? 30_000;
+		this.attempts += 1;
+		this.retryTimer = setTimeout(() => this.connect(), delay);
 	}
 
 	private connect(): void {
+		if (this.stopped || this.rejected) return;
 		const Impl = this.handlers.WebSocketImpl ?? WebSocket;
-		const socket = new Impl(this.info.url);
-		this.socket = socket;
 		this.ready = false;
 		this.handlers.onStatus("connecting");
+		let socket: WebSocket;
+		try {
+			socket = new Impl(this.info.url);
+		} catch {
+			this.retry();
+			return;
+		}
+		this.socket = socket;
+		this.lastReceived = Date.now();
+		const current = () => !this.stopped && socket === this.socket;
+		this.connectTimer = setTimeout(() => {
+			if (current() && !this.ready) this.retry();
+		}, CONNECT_TIMEOUT_MS);
 		socket.onopen = () => {
-			socket.send(JSON.stringify({ type: "hello", token: this.info.token, protocol: PROTOCOL_VERSION }));
+			if (!current()) return;
+			try {
+				socket.send(JSON.stringify({ type: "hello", token: this.info.token, protocol: PROTOCOL_VERSION }));
+			} catch {
+				this.retry();
+			}
 		};
 		socket.onmessage = (event: MessageEvent) => {
+			if (!current()) return;
 			let message: ServerMessage;
 			try {
 				message = JSON.parse(String(event.data)) as ServerMessage;
 			} catch {
 				return;
 			}
+			if (!message || typeof message !== "object") return;
+			this.lastReceived = Date.now();
 			this.handlers.onMessage(message);
-			if (message.type === "ready") {
+			if (message.type === "ready" && !this.ready && current()) {
+				clearTimeout(this.connectTimer);
 				this.ready = true;
 				this.attempts = 0;
 				this.handlers.onStatus("open");
@@ -75,17 +136,14 @@ export class DotClient {
 			}
 		};
 		socket.onclose = (event: CloseEvent) => {
-			if (socket !== this.socket) return;
-			this.ready = false;
-			if (event.code === CloseCode.unauthorized) {
-				this.handlers.onStatus("unauthorized");
+			if (!current()) return;
+			if (event.code === CloseCode.unauthorized || event.code === CloseCode.badProtocol) {
+				this.rejected = true;
+				this.clearConnection();
+				this.handlers.onStatus(event.code === CloseCode.unauthorized ? "unauthorized" : "closed");
 				return;
 			}
-			this.handlers.onStatus("closed");
-			if (this.stopped) return;
-			const delay = BACKOFF_MS[Math.min(this.attempts, BACKOFF_MS.length - 1)] ?? 5000;
-			this.attempts += 1;
-			this.retryTimer = setTimeout(() => this.connect(), delay);
+			this.retry();
 		};
 	}
 }

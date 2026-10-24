@@ -15,6 +15,7 @@ import { AskCard } from "../src/components/AskCard.tsx";
 import { ChatSurface } from "../src/components/ChatSurface.tsx";
 import { ConnectorsPanel } from "../src/components/ConnectorsPanel.tsx";
 import { type DotState, initialState, reduce } from "../src/store.ts";
+import { openDesktopOptions } from "./desktop-options.ts";
 
 const connector = (overrides: Partial<ConnectorInfo>): ConnectorInfo => ({
 	id: "notion",
@@ -221,6 +222,7 @@ describe("Connectors in the panel", () => {
 	it("opens from a header icon with a name and tooltip, and typing closes it", async () => {
 		const send = vi.fn();
 		render(<Harness initial={apply(ready, { type: "connectors", connectors: list })} send={send} />);
+		openDesktopOptions();
 		const button = screen.getByRole("button", { name: "Connectors" });
 		expect(button).toHaveAttribute("title", "Connectors");
 		expect(button.querySelectorAll("svg")).toHaveLength(1);

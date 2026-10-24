@@ -23,7 +23,7 @@ use super::coords::{Point, ScreenshotGeometry};
 use super::glow::Mark;
 use super::keys::{parse_combo, KeyCombo};
 use super::rate::{RateLimiter, MAX_ACTIONS_PER_SECOND};
-use super::risk::{assess, Act};
+use super::risk::{assess, Act, AxElement};
 use super::working::{NoPreparation, Preparation};
 use super::{Clock, Desktop, Dialogs, InputEvent, MouseButton};
 use base64::Engine as _;
@@ -42,8 +42,6 @@ const BATCH_TOOLS: &[&str] = &["click", "move", "drag", "scroll", "type", "key",
 const STEP_PAUSE_MS: u64 = 100;
 const MAX_WAIT_MS: u64 = 5000;
 const WAIT_SLICE_MS: u64 = 100;
-/// macOS posts at most 20 UTF-16 units of text per keyboard event.
-const TEXT_CHUNK_UNITS: usize = 20;
 
 const STOPPED: &str = "Computer control was stopped; this action was dropped.";
 const NOT_ALLOWED: &str = "Computer control was not allowed by the user. Nothing was done.";
@@ -53,10 +51,14 @@ const NEEDS_SCREENSHOT: &str = "Take a screenshot first: coordinates are pixels 
 const UNKNOWN_TARGET: &str = "Cannot tell which app is under that point, so the action was refused. \
 Take a new screenshot and try again.";
 
-const INSTRUCTIONS: &str = "Controls this Mac. Take a screenshot first; x and y are pixels of the latest \
+const INSTRUCTIONS: &str = "Controls this computer through its native desktop backend. Start with `capabilities` \
+to check the current platform, backend, permissions and missing dependencies without accessing the screen. \
+Use these tools for desktop applications and the visible personal browser, including its existing login or \
+workspace; Dot's separate browser has a different profile. Take a screenshot first; x and y are pixels of the latest \
 screenshot. Every action returns a fresh screenshot. Use `batch` for a predictable sequence (click a field, \
 type, press tab, type, press return) so it runs in one call; end the batch whenever you must see the screen \
-before deciding the next step. The user must allow a session, risky actions ask the user to confirm, and \
+before deciding the next step. The user must allow a session; ordinary clicks, typing and navigation are \
+covered while it is active, including apps without accessibility metadata. Detected risky actions still ask the user to confirm, and \
 some apps (System Settings, password managers) are off limits.";
 
 pub struct HttpRequest<'a> {
@@ -73,6 +75,7 @@ pub struct HttpReply {
 }
 
 enum Tool {
+    Capabilities,
     Screenshot,
     Click { x: f64, y: f64, button: MouseButton, count: u8 },
     Move { x: f64, y: f64 },
@@ -80,7 +83,7 @@ enum Tool {
     Scroll { x: f64, y: f64, dx: i32, dy: i32 },
     Type { text: String },
     Key { combo: KeyCombo },
-    OpenApp { name: String },
+    OpenApp { name: String, window_id: Option<String> },
     ListApps,
     Wait { ms: u64 },
     /// Steps with their tool names, checked one by one when they run.
@@ -159,6 +162,9 @@ fn tools() -> Value {
     let x = coordinate("Pixels from the left edge of the latest screenshot.");
     let y = coordinate("Pixels from the top edge of the latest screenshot.");
     json!([
+        {"name": "capabilities", "description": "Check the actual desktop backend, operating-system permissions, missing dependencies and control-session status. Does not capture, list apps, request permission, or perform an action.",
+         "annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+         "inputSchema": schema(json!({}), &[])},
         {"name": "screenshot", "description": "Take a screenshot of the display under the pointer. Returns the image and its size.",
          "inputSchema": schema(json!({}), &[])},
         {"name": "click", "description": "Click at a point of the latest screenshot.",
@@ -175,9 +181,9 @@ fn tools() -> Value {
          "inputSchema": schema(json!({"text": {"type": "string"}}), &["text"])},
         {"name": "key", "description": "Press a key combo in the frontmost app, for example `cmd+shift+t`, `return`, or `esc`.",
          "inputSchema": schema(json!({"combo": {"type": "string"}}), &["combo"])},
-        {"name": "open_app", "description": "Open or bring forward an app by name or bundle id.",
-         "inputSchema": schema(json!({"name": {"type": "string"}}), &["name"])},
-        {"name": "list_apps", "description": "List the running apps.",
+        {"name": "open_app", "description": "Open or bring forward an app by name or bundle id. To activate one specific existing window, pass its exact windowId returned by list_apps, including windows on another workspace. Reuse an existing window before launching another copy.",
+         "inputSchema": schema(json!({"name": {"type": "string"}, "windowId": {"type": "string", "maxLength": 200, "description": "Exact existing window id returned by list_apps, when the desktop supports selecting windows."}}), &["name"])},
+        {"name": "list_apps", "description": "List running apps across workspaces, including windows outside the currently visible workspace when the desktop exposes them. A nonvisible window can still be open. Use returned window ids with open_app to select an existing window; do not infer an app is closed from a screenshot alone.",
          "inputSchema": schema(json!({}), &[])},
         {"name": "wait", "description": "Wait, then take a screenshot.",
          "inputSchema": schema(json!({"ms": {"type": "integer", "minimum": 0, "maximum": MAX_WAIT_MS}}), &["ms"])},
@@ -215,6 +221,7 @@ fn parse_call(name: &str, args: &Value) -> Option<Result<Call, String>> {
     let point = |kx: &str, ky: &str| -> Result<(f64, f64), String> { Ok((number(args, kx)?, number(args, ky)?)) };
     let tool = || -> Result<Tool, String> {
         Ok(match name {
+            "capabilities" => Tool::Capabilities,
             "screenshot" => Tool::Screenshot,
             "click" => {
                 let (x, y) = point("x", "y")?;
@@ -259,7 +266,14 @@ fn parse_call(name: &str, args: &Value) -> Option<Result<Call, String>> {
                 if name.is_empty() {
                     return Err("`name` must not be empty".into());
                 }
-                Tool::OpenApp { name }
+                let window_id = args.get("windowId").map(|value| {
+                    let id = value.as_str().ok_or("`windowId` must be an exact returned window id")?;
+                    if id.is_empty() || id.len() > 200 || id.chars().any(char::is_control) {
+                        return Err("`windowId` must be an exact returned window id");
+                    }
+                    Ok(id.to_string())
+                }).transpose()?;
+                Tool::OpenApp { name, window_id }
             }
             "list_apps" => Tool::ListApps,
             "batch" => Tool::Batch { steps: batch_steps(args)? },
@@ -274,7 +288,7 @@ fn parse_call(name: &str, args: &Value) -> Option<Result<Call, String>> {
         })
     };
     const NAMES: &[&str] =
-        &["screenshot", "click", "move", "drag", "scroll", "type", "key", "open_app", "list_apps", "wait", "batch"];
+        &["capabilities", "screenshot", "click", "move", "drag", "scroll", "type", "key", "open_app", "list_apps", "wait", "batch"];
     if !NAMES.contains(&name) {
         return None;
     }
@@ -304,12 +318,14 @@ fn batch_steps(args: &Map<String, Value>) -> Result<Vec<(&'static str, Call)>, S
     steps.iter().enumerate().map(|(i, s)| step(i + 1, s)).collect()
 }
 
-/// Splits text into chunks of at most `TEXT_CHUNK_UNITS` UTF-16 units, never inside a character.
-fn chunks(text: &str) -> Vec<String> {
+/// macOS posts at most 20 UTF-16 units per keyboard event. Other backends can accept
+/// larger chunks without launching a subprocess for each handful of characters.
+fn chunks(text: &str, max_units: usize) -> Vec<String> {
+    let max_units = max_units.clamp(2, 4096);
     let mut out = Vec::new();
     let mut current = String::new();
     for c in text.chars() {
-        if current.encode_utf16().count() + c.len_utf16() > TEXT_CHUNK_UNITS {
+        if current.encode_utf16().count() + c.len_utf16() > max_units {
             out.push(std::mem::take(&mut current));
         }
         current.push(c);
@@ -443,6 +459,14 @@ impl Helper {
         if counted && !lock(&self.limiter).try_acquire(self.clock.now_ms()) {
             return Err(format!("Too many actions: at most {MAX_ACTIONS_PER_SECOND} per second. Wait a moment.").into());
         }
+        // Diagnosing unavailable permissions must never need those same permissions or a
+        // session grant. It also does not wait for another call's open approval dialog.
+        if matches!(call.tool, Tool::Capabilities) {
+            return Ok(vec![text(json!({
+                "desktop": self.desktop.capabilities(),
+                "session": self.control.status(self.clock.now_ms()),
+            }).to_string())]);
+        }
         self.check_permissions(&call.tool)?;
         let mut latest = lock(&self.actions);
         self.control.expire(self.clock.now_ms());
@@ -455,7 +479,9 @@ impl Helper {
             if !self.with_dialog(|| self.dialogs.ask_grant()) {
                 return Err(NOT_ALLOWED.into());
             }
-            self.control.grant(self.clock.now_ms());
+            if !self.control.grant_if_epoch(epoch, self.clock.now_ms()) {
+                return Err(STOPPED.into());
+            }
         }
         // Until the call ends, however it ends, the rings show and the Dot and panel are hidden.
         let _prepared = match call.tool {
@@ -493,7 +519,7 @@ impl Helper {
                 | Tool::Key { .. }
         );
         if sees && !permissions.screenshots_supported {
-            return Err("Screenshots need macOS 14 or later, so computer control is unavailable on this Mac.".into());
+            return Err("Screen capture is unavailable in this desktop backend. Check `capabilities` for the actual environment and missing dependencies; macOS requires version 14 or later.".into());
         }
         if sees && !permissions.screen_recording {
             return Err(format!("{NEEDS_PERMISSION} Screen Recording permission. {GRANT_IT}"));
@@ -536,22 +562,43 @@ impl Helper {
     }
 
     /// The app owning the window under `at`, refused when blocked or unknown. Its name, for messages.
-    fn pointer_target(&self, at: Point) -> Result<String, String> {
+    fn pointer_target(&self, at: Point) -> Result<AppIdentity, String> {
         let app = self.desktop.window_owner_at(at).ok_or(UNKNOWN_TARGET)?;
-        self.refuse_blocked(&app).map(|()| app.name)
+        self.refuse_blocked(&app).map(|()| app)
     }
 
     /// The frontmost app and the app owning the focused element (they differ for a
     /// non-activating panel), each refused when blocked. The one receiving the keys, for messages.
-    fn keyboard_target(&self) -> Result<String, String> {
+    fn keyboard_target(&self) -> Result<AppIdentity, String> {
         let front = self.desktop.frontmost_app().ok_or("Cannot tell which app is in front.")?;
         self.refuse_blocked(&front)?;
         match self.desktop.focused_app().filter(|focused| focused.pid != front.pid) {
-            Some(focused) => self.refuse_blocked(&focused).map(|()| focused.name),
-            None => Ok(front.name),
+            Some(focused) => self.refuse_blocked(&focused).map(|()| focused),
+            None => Ok(front),
         }
     }
 
+    fn same_target(&self, expected: &AppIdentity, actual: &AppIdentity) -> Result<(), String> {
+        if expected.pid != actual.pid || expected.bundle_id != actual.bundle_id {
+            return Err("The target app changed while the action was being confirmed. Take a fresh screenshot before trying again.".into());
+        }
+        Ok(())
+    }
+
+    fn refuse_secure_element(&self, element: &AxElement) -> Result<(), String> {
+        if element.role == "AXSecureTextField" {
+            return Err("This is a protected password field. Enter the secret directly on the computer; Gentle Dot cannot control this field.".into());
+        }
+        Ok(())
+    }
+
+    fn unknown_control(element: Option<&AxElement>) -> bool {
+        element.is_none_or(|element| matches!(element.role.as_str(), "" | "AXUnknown" | "AXWindow" | "AXApplication" | "AXGroup"))
+    }
+
+    /// The active session covers ordinary input even when an app exposes no accessibility
+    /// metadata. Known control risks and declared risky intent still require a separate answer.
+    /// Session, target and protected-field checks remain independent of this classification.
     fn confirm_if_risky(&self, risk: Option<String>, action: &str, target: &str) -> Result<(), String> {
         let Some(reason) = risk else {
             return Ok(());
@@ -596,6 +643,7 @@ impl Helper {
 
     fn act(&self, epoch: u64, latest: &mut Option<ScreenshotGeometry>, call: Call) -> Result<Content, Failed> {
         match call.tool {
+            Tool::Capabilities => unreachable!("capabilities is handled without screen access in run"),
             Tool::Screenshot => Ok(self.screenshot(latest)?),
             Tool::ListApps => {
                 let apps = self.desktop.list_apps()?;
@@ -682,27 +730,35 @@ impl Helper {
             latest.ok_or(NEEDS_SCREENSHOT)?.to_point(x, y).map_err(|e| e.to_string())
         };
         match tool {
-            Tool::Screenshot | Tool::ListApps | Tool::Batch { .. } => Err("Not an action.".into()),
+            Tool::Capabilities | Tool::Screenshot | Tool::ListApps | Tool::Batch { .. } => Err("Not an action.".into()),
             Tool::Click { x, y, button, count } => {
                 let at = map(latest, (x, y))?;
                 let target = self.pointer_target(at)?;
                 let chain = self.desktop.element_at(at);
+                for element in &chain {
+                    self.refuse_secure_element(element)?;
+                }
                 let action = match (button, count) {
                     (MouseButton::Right, _) => format!("Right-click at ({x}, {y})"),
                     (_, 2) => format!("Double-click at ({x}, {y})"),
                     (_, 3) => format!("Triple-click at ({x}, {y})"),
                     _ => format!("Click at ({x}, {y})"),
                 };
-                self.confirm_if_risky(assess(Act::Click(&chain), intent), &action, &target)?;
+                self.confirm_if_risky(assess(Act::Click(&chain), intent), &action, &target.name)?;
+                self.same_target(&target, &self.pointer_target(at)?)?;
+                for element in self.desktop.element_at(at) {
+                    self.refuse_secure_element(&element)?;
+                }
                 self.post(epoch, InputEvent::Click { at, button, count })?;
                 (self.glow)(Mark::Click(at));
-                Ok((format!("{action} in {target}: done."), SETTLE_MS))
+                Ok((format!("{action} in {}: done.", target.name), SETTLE_MS))
             }
             Tool::Move { x, y } => {
                 let at = map(latest, (x, y))?;
                 let target = self.pointer_target(at)?;
                 let action = format!("Move the pointer to ({x}, {y})");
-                self.confirm_if_risky(assess(Act::Other, intent), &action, &target)?;
+                self.confirm_if_risky(assess(Act::Other, intent), &action, &target.name)?;
+                self.same_target(&target, &self.pointer_target(at)?)?;
                 self.post(epoch, InputEvent::Move(at))?;
                 (self.glow)(Mark::Move(at));
                 Ok((format!("{action}: done."), SETTLE_MS))
@@ -712,9 +768,17 @@ impl Helper {
                 let source = self.pointer_target(start)?;
                 let destination = self.pointer_target(end)?;
                 let action = format!("Drag from ({}, {}) to ({}, {})", from.0, from.1, to.0, to.1);
-                let target = if source == destination { source } else { format!("{source} and {destination}") };
+                let target = if source == destination { source.name.clone() } else { format!("{} and {}", source.name, destination.name) };
                 let (from_chain, to_chain) = (self.desktop.element_at(start), self.desktop.element_at(end));
+                for element in from_chain.iter().chain(&to_chain) {
+                    self.refuse_secure_element(element)?;
+                }
                 self.confirm_if_risky(assess(Act::Drag(&from_chain, &to_chain), intent), &action, &target)?;
+                self.same_target(&source, &self.pointer_target(start)?)?;
+                self.same_target(&destination, &self.pointer_target(end)?)?;
+                for element in self.desktop.element_at(start).iter().chain(self.desktop.element_at(end).iter()) {
+                    self.refuse_secure_element(element)?;
+                }
                 self.post(epoch, InputEvent::Drag { from: start, to: end })?;
                 (self.glow)(Mark::Drag { from: start, to: end });
                 Ok((format!("{action}: done."), SETTLE_MS))
@@ -723,7 +787,8 @@ impl Helper {
                 let at = map(latest, (x, y))?;
                 let target = self.pointer_target(at)?;
                 let action = format!("Scroll by ({dx}, {dy}) at ({x}, {y})");
-                self.confirm_if_risky(assess(Act::Other, intent), &action, &target)?;
+                self.confirm_if_risky(assess(Act::Other, intent), &action, &target.name)?;
+                self.same_target(&target, &self.pointer_target(at)?)?;
                 self.post(epoch, InputEvent::Scroll { at, dx, dy })?;
                 (self.glow)(Mark::Scroll(at));
                 Ok((format!("{action}: done."), SETTLE_MS))
@@ -732,14 +797,38 @@ impl Helper {
                 let target = self.keyboard_target()?;
                 let typed = typed.replace("\r\n", "\n").replace('\r', "\n");
                 let focus = self.desktop.focused_element();
-                let action = format!("Type {} characters", typed.chars().count());
-                self.confirm_if_risky(assess(Act::Type(&typed, focus.as_ref()), intent), &action, &target)?;
+                if let Some(focus) = &focus {
+                    self.refuse_secure_element(&focus.element)?;
+                }
+                let unknown = Self::unknown_control(focus.as_ref().map(|focus| &focus.element));
+                let risk = assess(Act::Type(&typed, focus.as_ref()), intent);
+                let action = if risk.is_some() && unknown {
+                    if typed.chars().count() > 1000 {
+                        return Err("The target field cannot be inspected. Keep each requested text below 1000 characters so the user can review the entire action.".into());
+                    }
+                    format!("Type {} characters: {typed:?}", typed.chars().count())
+                } else {
+                    format!("Type {} characters", typed.chars().count())
+                };
+                self.confirm_if_risky(risk, &action, &target.name)?;
+                self.same_target(&target, &self.keyboard_target()?)?;
+                if let Some(current) = self.desktop.focused_element() {
+                    self.refuse_secure_element(&current.element)?;
+                }
                 let return_key = parse_combo("return")?;
                 for (i, line) in typed.split('\n').enumerate() {
                     if i > 0 {
+                        self.same_target(&target, &self.keyboard_target()?)?;
+                        if let Some(current) = self.desktop.focused_element() {
+                            self.refuse_secure_element(&current.element)?;
+                        }
                         self.post(epoch, InputEvent::Key(return_key))?;
                     }
-                    for chunk in chunks(line) {
+                    for chunk in chunks(line, self.desktop.text_chunk_units()) {
+                        self.same_target(&target, &self.keyboard_target()?)?;
+                        if let Some(current) = self.desktop.focused_element() {
+                            self.refuse_secure_element(&current.element)?;
+                        }
                         self.post(epoch, InputEvent::Text(chunk))?;
                     }
                 }
@@ -747,11 +836,14 @@ impl Helper {
                 if !typed.is_empty() {
                     (self.glow)(Mark::Key);
                 }
-                Ok((format!("{action} in {target}: done."), SETTLE_MS))
+                Ok((format!("Type {} characters in {}: done.", typed.chars().count(), target.name), SETTLE_MS))
             }
             Tool::Key { combo } => {
                 let target = self.keyboard_target()?;
                 let focus = self.desktop.focused_element();
+                if let Some(focus) = &focus {
+                    self.refuse_secure_element(&focus.element)?;
+                }
                 let act = if combo.is_return() {
                     Act::Return(focus.as_ref())
                 } else if combo.is_space() {
@@ -759,20 +851,46 @@ impl Helper {
                 } else {
                     Act::Other
                 };
-                let action = format!("Press {}", combo.key);
-                self.confirm_if_risky(assess(act, intent), &action, &target)?;
+                let modifiers: Vec<&str> = [
+                    (combo.modifiers.cmd, "cmd"), (combo.modifiers.ctrl, "ctrl"),
+                    (combo.modifiers.alt, "alt"), (combo.modifiers.shift, "shift"),
+                    (combo.modifiers.fn_key, "fn"),
+                ].into_iter().filter_map(|(active, name)| active.then_some(name)).chain(std::iter::once(combo.key)).collect();
+                let action = format!("Press {}", modifiers.join("+"));
+                self.confirm_if_risky(assess(act, intent), &action, &target.name)?;
+                self.same_target(&target, &self.keyboard_target()?)?;
+                if let Some(current) = self.desktop.focused_element() {
+                    self.refuse_secure_element(&current.element)?;
+                }
                 self.post(epoch, InputEvent::Key(combo))?;
                 (self.glow)(Mark::Key);
-                Ok((format!("{action} in {target}: done."), SETTLE_MS))
+                Ok((format!("{action} in {}: done.", target.name), SETTLE_MS))
             }
-            Tool::OpenApp { name } => {
+            Tool::OpenApp { name, window_id } => {
                 if let Some(label) = blocked_name(&name) {
                     return Err(format!("Gentle Dot does not control {label}. The app was not opened."));
                 }
-                let action = format!("Open {name}");
-                self.confirm_if_risky(assess(Act::Other, intent), &action, "macOS")?;
+                let action = if let Some(id) = &window_id {
+                    let apps = self.desktop.list_apps()?;
+                    let app = apps.iter().find(|app| app.windows.as_ref().is_some_and(|windows| windows.iter().any(|window| &window.id == id)))
+                        .ok_or("That window is no longer listed. List the running apps again before selecting a window.")?;
+                    if !app.name.eq_ignore_ascii_case(&name) && !app.bundle_id.as_ref().is_some_and(|bundle| bundle.eq_ignore_ascii_case(&name)) {
+                        return Err("That window belongs to a different app. Use the app name and exact window id returned together by list_apps.".into());
+                    }
+                    if let Some(label) = blocked_name(&app.name).or_else(|| app.bundle_id.as_ref().and_then(|id| blocked_name(id))) {
+                        return Err(format!("Gentle Dot does not control {label}. The window was not activated."));
+                    }
+                    format!("Activate the selected window of {}", app.name)
+                } else {
+                    format!("Open {name}")
+                };
+                self.confirm_if_risky(assess(Act::Other, intent), &action, "the desktop")?;
                 self.still_running(epoch)?;
-                self.desktop.open_app(&name)?;
+                if let Some(id) = &window_id {
+                    self.desktop.open_window(id)?;
+                } else {
+                    self.desktop.open_app(&name)?;
+                }
                 Ok((format!("{action}: done."), OPEN_APP_SETTLE_MS))
             }
             Tool::Wait { ms } => {
@@ -1005,7 +1123,7 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
-            ["screenshot", "click", "move", "drag", "scroll", "type", "key", "open_app", "list_apps", "wait", "batch"]
+            ["capabilities", "screenshot", "click", "move", "drag", "scroll", "type", "key", "open_app", "list_apps", "wait", "batch"]
         );
         for tool in tools {
             let schema = &tool["inputSchema"];
@@ -1026,6 +1144,296 @@ mod tests {
         let body = rig.rpc("tools/call", json!({"name": "format_disk", "arguments": {}}));
         assert_eq!(body["error"]["code"], -32602);
         assert_eq!(rig.dialogs.grants.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn capabilities_diagnoses_missing_permissions_without_grant_capture_or_window_changes() {
+        let rig = rig_with(false, false);
+        *rig.desktop.permissions.lock().unwrap() = super::super::Permissions {
+            accessibility: false, screen_recording: false, screenshots_supported: false,
+        };
+        let result = rig.call("capabilities", json!({}));
+        assert!(!is_error(&result), "{result}");
+        let details: Value = serde_json::from_str(&first_text(&result)).unwrap();
+        assert_eq!(details["desktop"]["permissions"]["accessibility"], false);
+        assert_eq!(details["desktop"]["permissions"]["screenRecording"], false);
+        assert_eq!(details["session"]["active"], false);
+        assert_eq!(rig.dialogs.grants.load(Ordering::SeqCst), 0);
+        assert!(rig.dialogs.confirmations.lock().unwrap().is_empty());
+        assert!(rig.desktop.events().is_empty());
+        assert!(rig.desktop.opened.lock().unwrap().is_empty());
+        assert!(rig.desktop.activated.lock().unwrap().is_empty());
+        assert_eq!(rig.desktop.captures.load(Ordering::SeqCst), 0);
+        assert!(rig.working.steps.lock().unwrap().is_empty());
+        assert!(!rig.control.is_active(NOW));
+    }
+
+    #[test]
+    fn capabilities_cannot_be_used_to_register_a_grant_or_as_a_batch_step() {
+        let rig = rig();
+        let result = rig.call("capabilities", json!({"grant": true, "yolo": true}));
+        assert!(!is_error(&result));
+        assert!(!rig.control.is_active(NOW));
+        assert!(!rig.control.yolo(NOW));
+        let result = rig.call("batch", json!({"steps": [{"tool": "capabilities"}]}));
+        assert!(is_error(&result));
+        assert_eq!(rig.dialogs.grants.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_late_session_allow_after_stop_cannot_start_control() {
+        let rig = rig();
+        let control = rig.control.clone();
+        *rig.dialogs.during.lock().unwrap() = Some(Box::new(move || control.end(Reason::Stopped)));
+        let result = rig.call("screenshot", json!({}));
+        assert!(is_error(&result), "{result}");
+        assert!(first_text(&result).contains("stopped"));
+        assert!(!rig.control.is_active(NOW));
+        assert_eq!(rig.desktop.captures.load(Ordering::SeqCst), 0);
+        assert!(rig.working.steps.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_active_session_covers_ordinary_unknown_controls_without_yolo_or_repeated_prompts() {
+        for role in [None, Some("AXUnknown"), Some("AXGroup")] {
+            let rig = rig_with(true, false);
+            if let Some(role) = role {
+                let element = AxElement { role: role.into(), ..AxElement::default() };
+                *rig.desktop.elements.lock().unwrap() = vec![element.clone()];
+                *rig.desktop.focus.lock().unwrap() = Some(Focus { element, ..Focus::default() });
+            }
+            rig.ready();
+            let ends_at = rig.control.status(rig.clock.now_ms()).ends_at;
+            let result = rig.call("batch", batch(json!([
+                {"tool": "click", "x": 10, "y": 10},
+                {"tool": "key", "combo": "ctrl+l"},
+                {"tool": "type", "text": "https://example.org"},
+                {"tool": "key", "combo": "return"},
+                {"tool": "key", "combo": "tab"},
+                {"tool": "type", "text": "hello"},
+                {"tool": "drag", "fromX": 10, "fromY": 10, "toX": 20, "toY": 20},
+            ])));
+            assert!(!is_error(&result), "{role:?}: {result}");
+            assert_eq!(rig.desktop.events().len(), 7);
+            assert_eq!(rig.dialogs.grants.load(Ordering::SeqCst), 1);
+            assert!(rig.dialogs.confirmations.lock().unwrap().is_empty());
+            assert!(!rig.control.yolo(rig.clock.now_ms()));
+            assert_eq!(rig.dialogs.yolo_asks.load(Ordering::SeqCst), 0);
+            assert_eq!(rig.control.status(rig.clock.now_ms()).ends_at, ends_at);
+        }
+    }
+
+    #[test]
+    fn ordinary_unknown_input_still_requires_an_explicit_session_grant() {
+        for (tool, args) in [
+            ("click", json!({"x": 10, "y": 10})),
+            ("type", json!({"text": "hello"})),
+            ("key", json!({"combo": "return"})),
+        ] {
+            let rig = rig_with(false, true);
+            let result = rig.call(tool, args);
+            assert!(is_error(&result), "{tool}: {result}");
+            assert!(first_text(&result).contains("not allowed"));
+            assert_eq!(rig.dialogs.grants.load(Ordering::SeqCst), 1);
+            assert!(rig.desktop.events().is_empty());
+            assert!(rig.dialogs.confirmations.lock().unwrap().is_empty());
+            assert!(!rig.control.is_active(rig.clock.now_ms()));
+        }
+    }
+
+    #[test]
+    fn unknown_controls_with_risky_intent_still_require_a_specific_confirmation() {
+        for (tool, args, preview) in [
+            ("click", json!({"x": 10, "y": 10, "intent": "send the message"}), "Click at (10, 10)"),
+            ("type", json!({"text": "hello", "intent": "send the message"}), "Type 5 characters: \"hello\""),
+            ("key", json!({"combo": "return", "intent": "submit the form"}), "Press return"),
+        ] {
+            let rig = rig_with(true, false);
+            rig.ready();
+            let result = rig.call(tool, args);
+            assert!(is_error(&result), "{tool}: {result}");
+            assert!(rig.desktop.events().is_empty());
+            let asked = rig.dialogs.confirmations.lock().unwrap();
+            assert_eq!(asked.len(), 1);
+            assert!(asked[0].contains(preview) && asked[0].contains("Safari"), "{asked:?}");
+        }
+    }
+
+    #[test]
+    fn an_ordinary_long_unknown_field_write_is_covered_by_the_session() {
+        let rig = rig_with(true, false);
+        rig.ready();
+        let typed = "x".repeat(1201);
+        let result = rig.call("type", json!({"text": typed}));
+        assert!(!is_error(&result), "{result}");
+        assert!(rig.dialogs.confirmations.lock().unwrap().is_empty());
+        let posted: String = rig.desktop.events().into_iter().map(|event| match event {
+            InputEvent::Text(text) => text,
+            other => panic!("unexpected event: {other:?}"),
+        }).collect();
+        assert_eq!(posted, typed);
+    }
+
+    #[test]
+    fn an_unreviewably_long_risky_unknown_field_write_is_refused_without_truncating_approval() {
+        let rig = rig();
+        rig.ready();
+        let result = rig.call("type", json!({"text": "x".repeat(1001), "intent": "send the message"}));
+        assert!(is_error(&result), "{result}");
+        assert!(first_text(&result).contains("review the entire action"));
+        assert!(rig.dialogs.confirmations.lock().unwrap().is_empty());
+        assert!(rig.desktop.events().is_empty());
+    }
+
+    #[test]
+    fn protected_password_fields_are_refused_even_when_confirmations_would_allow() {
+        for tool in ["type", "key", "click"] {
+            let rig = rig();
+            rig.ready();
+            rig.control.set_yolo(true, NOW, rig.dialogs.as_ref());
+            let element = AxElement { role: "AXSecureTextField".into(), ..AxElement::default() };
+            *rig.desktop.focus.lock().unwrap() = Some(super::super::risk::Focus {
+                element: element.clone(), ..Default::default()
+            });
+            *rig.desktop.elements.lock().unwrap() = vec![element];
+            let args = match tool {
+                "type" => json!({"text": "not-a-password"}),
+                "key" => json!({"combo": "ctrl+v"}),
+                _ => json!({"x": 10, "y": 10}),
+            };
+            let result = rig.call(tool, args);
+            assert!(is_error(&result), "{tool}: {result}");
+            assert!(first_text(&result).contains("protected password field"));
+            assert!(rig.desktop.events().is_empty());
+            assert!(rig.dialogs.confirmations.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_changed_app_after_confirmation_does_not_receive_the_approved_click() {
+        let rig = rig();
+        rig.ready();
+        *rig.desktop.elements.lock().unwrap() = send_button();
+        let desktop = rig.desktop.clone();
+        *rig.dialogs.during.lock().unwrap() = Some(Box::new(move || {
+            *desktop.owner_at.lock().unwrap() = Box::new(|_| Some(app(201, "org.other.App", "Other App")));
+        }));
+        let result = rig.call("click", json!({"x": 10, "y": 10}));
+        assert!(is_error(&result), "{result}");
+        assert!(first_text(&result).contains("target app changed"));
+        assert!(rig.desktop.events().is_empty());
+    }
+
+    #[test]
+    fn ending_or_expiring_a_session_requires_a_new_grant_before_ordinary_unknown_input() {
+        for end in ["stop", "timeout"] {
+            let rig = rig();
+            rig.ready();
+            *rig.dialogs.allow.lock().unwrap() = false;
+            if end == "stop" {
+                rig.control.end(Reason::Stopped);
+            } else {
+                rig.clock.advance(SESSION_MS);
+            }
+            let result = rig.call("type", json!({"text": "hello"}));
+            assert!(is_error(&result), "{end}: {result}");
+            assert!(first_text(&result).contains("not allowed"));
+            assert_eq!(rig.dialogs.grants.load(Ordering::SeqCst), 2);
+            assert!(rig.desktop.events().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_sensitive_confirmation_cannot_outlive_the_session_that_requested_it() {
+        for end in ["stop", "timeout"] {
+            let rig = rig();
+            rig.ready();
+            let (control, clock) = (rig.control.clone(), rig.clock.clone());
+            *rig.dialogs.during.lock().unwrap() = Some(Box::new(move || {
+                if end == "stop" {
+                    control.end(Reason::Stopped);
+                    // Even a new authorization must not revive an operation from the old epoch.
+                    control.grant(clock.now_ms());
+                } else {
+                    clock.advance(SESSION_MS);
+                }
+            }));
+            let result = rig.call("click", json!({"x": 10, "y": 10, "intent": "send the message"}));
+            assert!(is_error(&result), "{end}: {result}");
+            assert!(first_text(&result).contains("stopped"));
+            assert_eq!(rig.dialogs.confirmations.lock().unwrap().len(), 1);
+            assert!(rig.desktop.events().is_empty());
+        }
+    }
+
+    #[test]
+    fn text_chunks_keep_unicode_whole_and_allow_larger_linux_writes() {
+        let text = "á😀 ".repeat(300);
+        let small = chunks(&text, 20);
+        let large = chunks(&text, 4096);
+        assert!(small.iter().all(|chunk| chunk.encode_utf16().count() <= 20));
+        assert_eq!(large.len(), 1);
+        assert_eq!(small.concat(), text);
+        assert_eq!(large.concat(), text);
+    }
+
+    fn cross_workspace_apps() -> Vec<super::super::AppInfo> {
+        vec![super::super::AppInfo {
+            name: "Zen".into(), bundle_id: Some("app.zen_browser.zen".into()), active: true,
+            windows: Some(vec![
+                super::super::AppWindow {
+                    id: "0x100".into(), title: Some("Personal".into()), workspace: Some("1".into()),
+                    workspace_id: Some(1), active: true, visible: true,
+                },
+                super::super::AppWindow {
+                    id: "0x200".into(), title: Some("Work".into()), workspace: Some("3".into()),
+                    workspace_id: Some(3), active: false, visible: false,
+                },
+            ]),
+        }]
+    }
+
+    #[test]
+    fn list_apps_keeps_other_workspaces_and_open_app_selects_the_existing_window() {
+        let rig = rig();
+        *rig.desktop.listed_apps.lock().unwrap() = Some(cross_workspace_apps());
+        let result = rig.call("list_apps", json!({}));
+        assert!(!is_error(&result), "{result}");
+        let apps: Value = serde_json::from_str(&first_text(&result)).unwrap();
+        assert_eq!(apps[0]["windows"][1]["workspaceId"], 3);
+        assert_eq!(apps[0]["windows"][1]["visible"], false);
+        let result = rig.call("open_app", json!({"name": "Zen", "windowId": "0x200"}));
+        assert!(!is_error(&result), "{result}");
+        assert_eq!(*rig.desktop.opened_windows.lock().unwrap(), vec!["0x200"]);
+        assert!(rig.desktop.opened.lock().unwrap().is_empty(), "must not launch a second browser");
+    }
+
+    #[test]
+    fn stale_or_mismatched_window_ids_do_not_open_any_app() {
+        let rig = rig();
+        *rig.desktop.listed_apps.lock().unwrap() = Some(cross_workspace_apps());
+        for args in [
+            json!({"name": "Zen", "windowId": "0xdead"}),
+            json!({"name": "Safari", "windowId": "0x200"}),
+            json!({"name": "Zen", "windowId": ""}),
+            json!({"name": "Zen", "windowId": 42}),
+        ] {
+            assert!(is_error(&rig.call("open_app", args)));
+        }
+        assert!(rig.desktop.opened_windows.lock().unwrap().is_empty());
+        assert!(rig.desktop.opened.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_window_id_cannot_bypass_the_blocklist_with_a_different_label() {
+        let rig = rig();
+        let mut apps = cross_workspace_apps();
+        apps[0].bundle_id = Some("org.keepassxc.KeePassXC".into());
+        *rig.desktop.listed_apps.lock().unwrap() = Some(apps);
+        let result = rig.call("open_app", json!({"name": "Zen", "windowId": "0x200"}));
+        assert!(is_error(&result), "{result}");
+        assert!(first_text(&result).contains("KeePassXC"));
+        assert!(rig.desktop.opened_windows.lock().unwrap().is_empty());
     }
 
     // --- Session grant (S24.3) ---
@@ -1216,7 +1624,8 @@ mod tests {
         rig.desktop.permissions.lock().unwrap().screenshots_supported = false;
         let result = rig.call("screenshot", json!({}));
         assert!(is_error(&result));
-        assert!(first_text(&result).contains("macOS 14"), "{result}");
+        assert!(first_text(&result).contains("capabilities"), "{result}");
+        assert!(first_text(&result).contains("macOS requires version 14"), "{result}");
     }
 
     // --- Blocklist and rate limit (S24.4) ---

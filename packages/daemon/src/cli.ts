@@ -3,13 +3,17 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { inheritedAppSocket } from "./app-channel.ts";
 import { serveAuthHelper } from "./auth-helper.ts";
+import { BROWSER_EXTENSION_PATH } from "./browser.ts";
 import { loadConfig } from "./config.ts";
 import { APPROVAL_GUARD, bundledMcpCli } from "./connectors.ts";
 import { startDaemon, startupMessage } from "./daemon.ts";
+import { ORCHESTRATOR_EXTENSION_PATH, SESSION_EXTENSION_PATH } from "./orchestration/index.ts";
 import { resolveEngramBin, runtimeDir } from "./runtime.ts";
 import { SECRETS_KEY_VAR } from "./secret-file.ts";
+import { SHARE_FILE_EXTENSION_PATH } from "./shared-files.ts";
 import { loadVpsOptions } from "./vps.ts";
 import { IDENTITY_SOURCE } from "./white-label.ts";
+import { WORKFLOWS_EXTENSION_PATH } from "./workflows.ts";
 
 /** This file (or the bundled `cli.mjs`), which the sign-in helper runs again. */
 const ENTRY = fileURLToPath(import.meta.url);
@@ -28,10 +32,25 @@ function selfCheck(): void {
 		gentleShell: config.agentArgs[0],
 		engineCli: bundledMcpCli().args[0],
 		approvalGuard: APPROVAL_GUARD,
+		orchestrationExtension: ORCHESTRATOR_EXTENSION_PATH,
+		sessionExtension: SESSION_EXTENSION_PATH,
+		browserExtension: BROWSER_EXTENSION_PATH,
+		shareFileExtension: SHARE_FILE_EXTENSION_PATH,
+		workflowsExtension: WORKFLOWS_EXTENSION_PATH,
 		identity: fileURLToPath(IDENTITY_SOURCE),
 		engramBin: runtime ? resolveEngramBin(process.env, runtime) : undefined,
 	};
-	const required = [report.gentleShell, report.engineCli, report.approvalGuard, report.identity];
+	const required = [
+		report.gentleShell,
+		report.engineCli,
+		report.approvalGuard,
+		report.orchestrationExtension,
+		report.sessionExtension,
+		report.browserExtension,
+		report.shareFileExtension,
+		report.workflowsExtension,
+		report.identity,
+	];
 	const ok = required.every((path) => path !== undefined && existsSync(path));
 	process.stdout.write(`${JSON.stringify({ ok, ...report }, null, 2)}\n`);
 	process.exit(ok ? 0 : 1);

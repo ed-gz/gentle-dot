@@ -49,6 +49,7 @@ body {
 	background: radial-gradient(900px 480px at 12% -12%, rgba(240, 149, 200, 0.1), transparent 70%), var(--bg);
 }
 
+html[data-surface="companion-launcher"] body,
 html[data-surface="dot"] body,
 html[data-surface="panel"] body {
 	background: transparent;
@@ -847,21 +848,10 @@ html[data-effects="none"] .chat-panel {
 	color: var(--text);
 }
 
-/* Sent while the assistant works; waiting to be taken. */
-.message-queued {
-	opacity: 0.6;
-}
-
-.message-queued .message-body {
-	border-style: dashed;
-	background: transparent;
-}
-
-.queued-label {
-	margin: 0 4px 4px 0;
-	font: 600 10px / 14px var(--font-mono);
-	letter-spacing: 0.12em;
-	text-transform: uppercase;
+/* An engine receipt, never an optimistic claim that the model has read it. */
+.received-label {
+	margin: 4px 4px 0 0;
+	font: 400 11px / 16px var(--font-text);
 	color: var(--muted);
 }
 
@@ -905,57 +895,6 @@ html[data-effects="none"] .chat-panel {
 
 .message-body a {
 	color: var(--accent);
-}
-
-.caret {
-	display: inline-block;
-	width: 7px;
-	height: 14px;
-	margin-left: 2px;
-	background: var(--accent);
-	animation: blink 1s steps(2) infinite;
-	vertical-align: text-bottom;
-}
-
-@keyframes blink {
-	50% {
-		opacity: 0;
-	}
-}
-
-.activities {
-	margin-bottom: 6px;
-}
-
-.activities-summary {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	padding: 3px 11px;
-	border-radius: var(--radius-pill);
-	color: var(--muted);
-	font-size: 12px;
-	font-weight: 500;
-	line-height: 16px;
-}
-
-.activities-summary .pulse {
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: var(--accent);
-	animation: pulse 1s var(--ease) infinite;
-}
-
-.activities ul {
-	margin: 6px 0 0;
-	padding-left: 18px;
-	color: var(--muted);
-	font-size: 12px;
-}
-
-.activity-failed {
-	color: var(--red);
 }
 
 .ask-card,
@@ -1011,6 +950,17 @@ html[data-effects="none"] .chat-panel {
 
 .ask-card .ask-options button:not(.primary) {
 	border-radius: var(--radius-pill);
+}
+
+.ask-app-approval :where(button) {
+	min-height: 44px;
+}
+
+.ask-approval-error {
+	color: var(--chat-error, var(--red));
+	font-size: 0.9em;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
 }
 
 .ask-form input,
@@ -1170,17 +1120,6 @@ html[data-effects="none"] .chat-panel {
 	background: var(--surface-2);
 	border-color: var(--line);
 	color: var(--muted);
-}
-
-/* A fixed height with the global button padding left the text low; center it instead. */
-.composer-stop {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	height: 32px;
-	padding: 0 14px;
-	line-height: 1;
-	border-radius: var(--radius-pill);
 }
 
 /* ---------- Voice (S30.4) ---------- */
@@ -1613,7 +1552,6 @@ html[data-surface="glow"] body {
 	flex: none;
 	width: 32px;
 	height: 32px;
-	margin-left: -8px;
 	border-radius: 50%;
 	color: var(--muted);
 	cursor: pointer;
@@ -1877,4 +1815,47 @@ html[data-surface="glow"] body {
 .voice-send-option.on {
 	border-color: var(--accent);
 	color: var(--accent);
+}
+
+/* A single options menu keeps the compact desktop panel focused on its conversation. */
+.desktop-options {
+	flex: none;
+}
+.desktop-options-panel {
+	margin: 0;
+	min-width: 0;
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 8px;
+	width: min(258px, calc(100vw - 32px));
+	max-height: min(65dvh, 480px);
+	overflow-y: auto;
+	padding: 6px;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-lg);
+	background: var(--surface);
+	box-shadow: 0 14px 40px #0005;
+}
+.desktop-options-panel .icon {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 12px;
+	width: 100%;
+	min-height: 42px;
+	padding: 10px 12px;
+	font-size: 13px;
+	line-height: 20px;
+	border-radius: var(--radius-sm);
+	text-align: left;
+}
+.desktop-options-panel svg {
+	flex: none;
+}
+.chat-header h1 {
+	min-width: 0;
+}
+.chat-header > .icon,
+.desktop-options > .icon {
+	flex: none;
 }

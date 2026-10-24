@@ -86,12 +86,13 @@ impl Session {
 
     /// Ends the session for `reason`. `None` when there was none to end.
     pub fn end(&mut self, reason: Reason) -> Option<StateEvent> {
+        // Also fence an unanswered first grant when no session is active yet.
+        self.epoch += 1;
         // The panic shortcut is the emergency stop, so it also turns yolo mode off (L74).
         let yolo_off = matches!(reason, Reason::Panic) && self.yolo_ends_at.take().is_some();
         if self.ends_at.take().is_none() {
             return yolo_off.then(|| self.event(None));
         }
-        self.epoch += 1;
         Some(self.event(Some(reason)))
     }
 
@@ -126,14 +127,25 @@ mod tests {
     fn a_new_session_is_idle() {
         let session = Session::default();
         assert!(!session.is_active(NOW));
-        assert_eq!(session.status(NOW), StateEvent { active: false, ends_at: None, reason: None, ..StateEvent::default() });
+        assert_eq!(
+            session.status(NOW),
+            StateEvent { active: false, ends_at: None, reason: None, ..StateEvent::default() }
+        );
     }
 
     #[test]
     fn granting_starts_thirty_minutes() {
         let mut session = Session::default();
         let event = session.grant(NOW);
-        assert_eq!(event, StateEvent { active: true, ends_at: Some(NOW + SESSION_MS), reason: Some(Reason::Granted), ..StateEvent::default() });
+        assert_eq!(
+            event,
+            StateEvent {
+                active: true,
+                ends_at: Some(NOW + SESSION_MS),
+                reason: Some(Reason::Granted),
+                ..StateEvent::default()
+            }
+        );
         assert!(session.is_active(NOW + SESSION_MS - 1));
         assert_eq!(session.status(NOW + 5).ends_at, Some(NOW + SESSION_MS));
     }
@@ -144,17 +156,20 @@ mod tests {
             let mut session = Session::default();
             session.grant(NOW);
             let epoch = session.epoch();
-            assert_eq!(session.end(reason), Some(StateEvent { active: false, ends_at: None, reason: Some(reason), ..StateEvent::default() }));
+            assert_eq!(
+                session.end(reason),
+                Some(StateEvent { active: false, ends_at: None, reason: Some(reason), ..StateEvent::default() })
+            );
             assert!(!session.is_active(NOW));
             assert_eq!(session.epoch(), epoch + 1);
         }
     }
 
     #[test]
-    fn ending_an_idle_session_reports_nothing() {
+    fn ending_an_idle_session_fences_pending_grants_without_a_spurious_event() {
         let mut session = Session::default();
         assert_eq!(session.end(Reason::Stopped), None);
-        assert_eq!(session.epoch(), 0);
+        assert_eq!(session.epoch(), 1);
     }
 
     #[test]
@@ -175,10 +190,16 @@ mod tests {
     fn the_event_serializes_like_the_l60_contract() {
         let mut session = Session::default();
         let granted = serde_json::to_value(session.grant(NOW)).unwrap();
-        assert_eq!(granted, serde_json::json!({"active": true, "endsAt": NOW + SESSION_MS, "reason": "granted", "yolo": false}));
+        assert_eq!(
+            granted,
+            serde_json::json!({"active": true, "endsAt": NOW + SESSION_MS, "reason": "granted", "yolo": false})
+        );
         let panic = serde_json::to_value(session.end(Reason::Panic).unwrap()).unwrap();
         assert_eq!(panic, serde_json::json!({"active": false, "reason": "panic", "yolo": false}));
-        assert_eq!(serde_json::to_value(session.status(NOW)).unwrap(), serde_json::json!({"active": false, "yolo": false}));
+        assert_eq!(
+            serde_json::to_value(session.status(NOW)).unwrap(),
+            serde_json::json!({"active": false, "yolo": false})
+        );
     }
 
     // --- Yolo mode (S24.9) ---

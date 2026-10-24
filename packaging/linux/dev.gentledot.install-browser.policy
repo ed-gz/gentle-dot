@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Gentle Dot</vendor>
+  <action id="dev.gentledot.install-browser">
+    <description>Install Chromium for Gentle Dot</description>
+    <description xml:lang="es">Instalar Chromium para Gentle Dot</description>
+    <message>Authentication is required to install Chromium using your system package manager.</message>
+    <message xml:lang="es">Autentícate para instalar Chromium con el gestor de paquetes del equipo.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/gentle-dot/privileged-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">install_browser</annotate>
+  </action>
+</policyconfig>

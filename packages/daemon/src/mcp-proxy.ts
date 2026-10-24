@@ -23,9 +23,11 @@ import {
 	type AuthProvider,
 	JSON_RPC_ERROR_CODES,
 	LATEST_PROTOCOL_VERSION,
+	McpAbortError,
 	McpAuthRequiredError,
 	McpClient,
 	McpError,
+	McpTimeoutError,
 	type McpTransport,
 	StdioTransport,
 	StreamableHttpTransport,
@@ -114,8 +116,18 @@ interface Upstream {
 	client: McpClient;
 	revision: string;
 	connecting: Promise<void>;
+	waiters: Set<{ signal: AbortSignal }>;
 	/** The tools from the last list, for their annotations. */
 	tools?: Tool[];
+}
+
+/** Safe errors for daemon-owned readers; upstream errors may contain credentials or mail content. */
+export class McpReadError extends Error {
+	readonly code: string;
+	constructor(code: string, message: string) {
+		super(message);
+		this.code = code;
+	}
 }
 
 type Message = { jsonrpc?: unknown; id?: unknown; method?: unknown; params?: unknown };
@@ -126,6 +138,8 @@ export class McpProxy {
 	/** Requests being answered, by connector and request id, so a `notifications/cancelled` stops them. */
 	private readonly running = new Map<string, AbortController>();
 	private readonly options: McpProxyOptions;
+	private readonly readers = new Map<string, { controller: AbortController; revision?: string }>();
+	private closed = false;
 
 	constructor(options: McpProxyOptions) {
 		this.options = options;
@@ -147,6 +161,11 @@ export class McpProxy {
 
 	/** Closes the connection of every connector that is gone, turned off, or whose server changed. */
 	sync(): void {
+		for (const [id, reader] of this.readers) {
+			const current = this.options.connector(id);
+			if (!current?.enabled || (reader.revision !== undefined && current.revision !== reader.revision))
+				reader.controller.abort();
+		}
 		for (const [id, upstream] of this.upstreams) {
 			const connector = this.options.connector(id);
 			if (!connector?.enabled || connector.revision !== upstream.revision) this.drop(id, upstream);
@@ -154,10 +173,129 @@ export class McpProxy {
 	}
 
 	async close(): Promise<void> {
+		this.closed = true;
+		for (const reader of this.readers.values()) reader.controller.abort();
 		for (const controller of this.running.values()) controller.abort();
 		const closing = [...this.upstreams.values()].map((upstream) => upstream.client.close().catch(() => {}));
 		this.upstreams.clear();
 		await Promise.all(closing);
+	}
+
+	/** Load existing protected values only when an authorized watcher runs, never from status. */
+	async prepareRead(id: string, signal: AbortSignal): Promise<void> {
+		await this.readOperation(id, signal, async () => {});
+	}
+
+	/** Curated, server-declared read tools, including their real schemas. Does not expose credentials. */
+	async readOnlyTools(id: string, signal: AbortSignal): Promise<Tool[]> {
+		return this.readOperation(id, signal, async (connector, combined, check) => {
+			const upstream = await abortable(this.upstream(connector, combined), combined);
+			check();
+			const tools = await upstream.client.listTools({ signal: combined, timeoutMs: 20_000 });
+			check();
+			upstream.tools = tools;
+			return tools.filter(
+				(tool) =>
+					isReadOnlyTool(tool.name, tool.annotations?.readOnlyHint, connector.readOnlyTools) &&
+					tool.annotations?.destructiveHint !== true,
+			);
+		});
+	}
+
+	/** Internal polling path: never asks approval and never falls back to a writing tool. */
+	async readOnly(
+		id: string,
+		name: string,
+		args: Record<string, unknown>,
+		signal: AbortSignal,
+	): Promise<unknown> {
+		const initial = this.options.connector(id);
+		if (!initial?.readOnlyTools.includes(name))
+			throw new McpReadError(
+				"READ_FORBIDDEN",
+				"Esta herramienta no está autorizada para consultar en segundo plano.",
+			);
+		return this.readOperation(id, signal, async (connector, combined, check) => {
+			const upstream = await abortable(this.upstream(connector, combined), combined);
+			check();
+			// Re-list before execution: a cached annotation alone cannot authorize a background operation.
+			const tools = await upstream.client.listTools({ signal: combined, timeoutMs: 20_000 });
+			check();
+			upstream.tools = tools;
+			const tool = tools.find((entry) => entry.name === name);
+			if (
+				!tool ||
+				!isReadOnlyTool(name, tool.annotations?.readOnlyHint, connector.readOnlyTools) ||
+				tool.annotations?.destructiveHint === true
+			)
+				throw new McpReadError(
+					"READ_FORBIDDEN",
+					"El conector no confirma que esta herramienta sea de sólo lectura.",
+				);
+			const current = this.options.connector(id);
+			if (!current?.readOnlyTools.includes(name))
+				throw new McpReadError("READ_CHANGED", "El acceso al conector cambió durante la consulta.");
+			const result = await upstream.client.callTool(name, args, { signal: combined, timeoutMs: 20_000 });
+			check();
+			return result;
+		});
+	}
+
+	private async readOperation<T>(
+		id: string,
+		signal: AbortSignal,
+		operation: (connector: ProxiedConnector, signal: AbortSignal, check: () => void) => Promise<T>,
+	): Promise<T> {
+		if (this.closed || signal.aborted) throw new McpReadError("READ_CANCELLED", "Consulta cancelada.");
+		if (this.readers.has(id))
+			throw new McpReadError("READ_BUSY", "El conector ya está atendiendo otra consulta.");
+		const initial = this.options.connector(id);
+		if (!initial?.enabled || initial.readOnlyTools.length === 0)
+			throw new McpReadError(
+				"READ_UNAVAILABLE",
+				"Activa un conector compatible en Conectores para consultar el correo.",
+			);
+		const reader: { controller: AbortController; revision?: string } = { controller: new AbortController() };
+		this.readers.set(id, reader);
+		const deadline = AbortSignal.timeout(25_000);
+		const combined = AbortSignal.any([signal, reader.controller.signal, deadline]);
+		const check = () => {
+			if (this.closed || combined.aborted) throw new McpReadError("READ_CANCELLED", "Consulta cancelada.");
+			const current = this.options.connector(id);
+			if (
+				!current?.enabled ||
+				current.unavailable ||
+				current.readOnlyTools.length === 0 ||
+				(reader.revision !== undefined && current.revision !== reader.revision)
+			)
+				throw new McpReadError(
+					"READ_CHANGED",
+					"El conector cambió o ya no está disponible. Revisa Conectores.",
+				);
+		};
+		try {
+			if (this.options.prepare) await abortable(this.options.prepare(id), combined);
+			check();
+			const connector = this.options.connector(id);
+			if (!connector) throw new McpReadError("READ_UNAVAILABLE", "El conector ya no está disponible.");
+			reader.revision = connector.revision;
+			return await abortable(operation(connector, combined, check), combined);
+		} catch (error) {
+			if (signal.aborted || reader.controller.signal.aborted || this.closed)
+				throw new McpReadError("READ_CANCELLED", "Consulta cancelada.");
+			if (deadline.aborted)
+				throw new McpReadError("READ_TIMEOUT", "El conector tardó demasiado en responder.");
+			check();
+			if (error instanceof McpReadError) throw error;
+			if (error instanceof McpOAuthAuthorizationRequiredError || error instanceof McpAuthRequiredError)
+				throw new McpReadError("READ_AUTH_REQUIRED", "Vuelve a iniciar sesión en el conector de correo.");
+			throw new McpReadError(
+				"READ_FAILED",
+				"No se pudo consultar el conector de correo. Revisa su conexión.",
+			);
+		} finally {
+			if (this.readers.get(id) === reader) this.readers.delete(id);
+		}
 	}
 
 	private async serve(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -189,34 +327,51 @@ export class McpProxy {
 		if (typeof message.method !== "string" || (typeof rpcId !== "string" && typeof rpcId !== "number")) {
 			if (message.method === "notifications/cancelled") {
 				const cancelled = (message.params as { requestId?: unknown } | undefined)?.requestId;
-				this.running.get(`${id}\u0000${String(cancelled)}`)?.abort();
+				if (typeof cancelled === "string" || typeof cancelled === "number")
+					this.running.get(requestKey(id, cancelled))?.abort();
 			}
 			return this.empty(req, res, 202);
 		}
-		await this.options.prepare?.(id).catch(() => {});
-		const connector = this.options.connector(id);
+		let connector = this.options.connector(id);
 		if (!connector)
 			return this.reply(req, res, 404, rpcId, {
 				error: { code: REFUSED, message: "That connector does not exist." },
 			});
 		const controller = new AbortController();
-		const key = `${id}\u0000${String(rpcId)}`;
+		const key = requestKey(id, rpcId);
+		if (this.running.has(key))
+			return this.reply(req, res, 200, rpcId, {
+				error: {
+					code: JSON_RPC_ERROR_CODES.invalidRequest,
+					message: "That request id is already active. Nothing was sent.",
+				},
+			});
 		this.running.set(key, controller);
 		// The engine gave up (its timeout, or the user stopped the answer): nothing is forwarded after that.
-		res.on("close", () => {
+		const disconnected = () => {
 			if (!res.writableFinished) controller.abort();
-		});
+		};
+		res.on("close", disconnected);
+		if (res.destroyed) controller.abort();
 		try {
-			const result = await this.dispatch(
-				connector,
-				message.method,
-				asRecord(message.params),
+			if (this.closed) throw new ProxyError(REFUSED, "The connector proxy is closing. Nothing was sent.");
+			// Register cancellation before credential preparation can wait for the desktop app.
+			await abortable(this.options.prepare?.(id).catch(() => {}) ?? Promise.resolve(), controller.signal);
+			if (controller.signal.aborted) throw new McpAbortError();
+			const current = this.options.connector(id);
+			if (!current) throw new ProxyError(REFUSED, "That connector no longer exists. Nothing was sent.");
+			connector = current;
+			const result = await abortable(
+				this.dispatch(connector, message.method, asRecord(message.params), controller.signal),
 				controller.signal,
 			);
 			this.reply(req, res, 200, rpcId, { result });
 		} catch (error) {
-			this.reply(req, res, 200, rpcId, { error: this.rpcError(connector, error) });
+			this.reply(req, res, 200, rpcId, {
+				error: this.rpcError(connector, controller.signal.aborted ? new McpAbortError() : error),
+			});
 		} finally {
+			res.removeListener("close", disconnected);
 			if (this.running.get(key) === controller) this.running.delete(key);
 		}
 	}
@@ -258,19 +413,19 @@ export class McpProxy {
 				return this.callTool(connector, params, signal);
 			case "resources/list":
 				if (!reads) return { resources: [] };
-				return { resources: await this.all(connector, (c) => c.listResources({ signal })) };
+				return { resources: await this.all(connector, signal, (c) => c.listResources({ signal })) };
 			case "resources/templates/list":
 				if (!reads) return { resourceTemplates: [] };
 				return {
-					resourceTemplates: await this.all(connector, (c) => c.listResourceTemplates({ signal })),
+					resourceTemplates: await this.all(connector, signal, (c) => c.listResourceTemplates({ signal })),
 				};
 			case "prompts/list":
 				if (!reads) return { prompts: [] };
-				return { prompts: await this.all(connector, (c) => listPrompts(c, signal)) };
+				return { prompts: await this.all(connector, signal, (c) => listPrompts(c, signal)) };
 			case "resources/read":
 			case "prompts/get": {
 				if (!reads) throw new ProxyError(JSON_RPC_ERROR_CODES.invalidParams, notAvailable(connector));
-				const upstream = await this.upstream(connector);
+				const upstream = await this.upstream(connector, signal);
 				return await upstream.client.request(method, params, { signal, timeoutMs: REQUEST_TIMEOUT_MS });
 			}
 			default:
@@ -287,7 +442,7 @@ export class McpProxy {
 		if (typeof name !== "string")
 			throw new ProxyError(JSON_RPC_ERROR_CODES.invalidParams, "Invalid params: `name` is required");
 		const args = asRecord(params.arguments);
-		const upstream = await this.upstream(connector);
+		const upstream = await this.upstream(connector, signal);
 		// The annotations come from the server's own list, never from the caller.
 		let tool = upstream.tools?.find((t) => t.name === name);
 		if (!tool) tool = (await this.listTools(connector, signal)).find((t) => t.name === name);
@@ -325,20 +480,25 @@ export class McpProxy {
 				);
 			refuseHidden(now, tool);
 		}
-		const current = await this.upstream(connector);
+		const current = await this.upstream(connector, signal);
+		refuseHidden(this.currentConnector(connector), tool);
 		return await current.client.callTool(name, args, { signal, timeoutMs: CALL_TIMEOUT_MS });
 	}
 
 	private async listTools(connector: ProxiedConnector, signal: AbortSignal): Promise<Tool[]> {
-		const upstream = await this.upstream(connector);
+		const upstream = await this.upstream(connector, signal);
 		const tools = await upstream.client.listTools({ signal, timeoutMs: REQUEST_TIMEOUT_MS });
 		upstream.tools = tools;
 		return tools;
 	}
 
 	/** A list method; a server that does not have it has an empty list. */
-	private async all<T>(connector: ProxiedConnector, list: (client: McpClient) => Promise<T[]>): Promise<T[]> {
-		const upstream = await this.upstream(connector);
+	private async all<T>(
+		connector: ProxiedConnector,
+		signal: AbortSignal,
+		list: (client: McpClient) => Promise<T[]>,
+	): Promise<T[]> {
+		const upstream = await this.upstream(connector, signal);
 		try {
 			return await list(upstream.client);
 		} catch (error) {
@@ -348,7 +508,16 @@ export class McpProxy {
 	}
 
 	/** The connection to the connector's server, made when it is first needed and again after it failed. */
-	private async upstream(connector: ProxiedConnector): Promise<Upstream> {
+	private currentConnector(connector: ProxiedConnector): ProxiedConnector {
+		const current = this.options.connector(connector.id);
+		if (this.closed || !current?.enabled || current.unavailable || current.revision !== connector.revision)
+			throw new ProxyError(REFUSED, "The connector changed or is no longer available. Nothing was sent.");
+		return current;
+	}
+
+	private async upstream(connector: ProxiedConnector, signal: AbortSignal): Promise<Upstream> {
+		this.currentConnector(connector);
+		if (signal.aborted) throw new McpAbortError();
 		let upstream = this.upstreams.get(connector.id);
 		if (
 			upstream &&
@@ -366,23 +535,39 @@ export class McpProxy {
 			const created: Upstream = {
 				client,
 				revision: connector.revision,
-				connecting: (async () => {
-					const credentials = await this.options.credentials(connector.id);
-					await client.connect(this.transport(connector, credentials));
-				})(),
+				waiters: new Set(),
+				connecting: Promise.resolve(),
 			};
+			created.connecting = (async () => {
+				const credentials = await this.options.credentials(connector.id);
+				// Connecting is shared across callers. One reader cancelling must not cancel
+				// another caller, but a revoked/replaced connector must never connect late.
+				this.currentConnector(connector);
+				if (this.upstreams.get(connector.id) !== created)
+					throw new ProxyError(REFUSED, "The connector connection was replaced. Nothing was sent.");
+				if (![...created.waiters].some((waiter) => !waiter.signal.aborted)) throw new McpAbortError();
+				await client.connect(this.transport(connector, credentials));
+			})();
 			client.onClose(() => {
 				if (this.upstreams.get(connector.id) === created) this.upstreams.delete(connector.id);
 			});
 			this.upstreams.set(connector.id, created);
 			upstream = created;
 		}
+		const waiter = { signal };
+		upstream.waiters.add(waiter);
 		try {
 			await upstream.connecting;
+			this.currentConnector(connector);
+			if (this.upstreams.get(connector.id) !== upstream)
+				throw new ProxyError(REFUSED, "The connector connection was replaced. Nothing was sent.");
 		} catch (error) {
 			this.drop(connector.id, upstream);
 			throw error;
+		} finally {
+			upstream.waiters.delete(waiter);
 		}
+		if (signal.aborted) throw new McpAbortError();
 		return upstream;
 	}
 
@@ -427,6 +612,17 @@ export class McpProxy {
 
 	private rpcError(connector: ProxiedConnector, error: unknown): { code: number; message: string } {
 		if (error instanceof ProxyError) return { code: error.code, message: error.message };
+		// A request ending locally must not disconnect other simultaneous calls to this server.
+		if (error instanceof McpAbortError)
+			return {
+				code: REFUSED,
+				message: "The request was cancelled. Check the action's status before retrying.",
+			};
+		if (error instanceof McpTimeoutError)
+			return {
+				code: REFUSED,
+				message: "The connector timed out on this request. Check the action's status before retrying.",
+			};
 		if (error instanceof SecretsUnavailableError) {
 			if (error.message !== NO_APP)
 				this.log(`connector ${connector.id} cannot get its secrets: ${error.message}`);
@@ -480,9 +676,26 @@ export class McpProxy {
 	}
 }
 
+function requestKey(connector: string, id: string | number): string {
+	return `${connector}\u0000${typeof id}\u0000${String(id)}`;
+}
+
 /** Reads like resources and prompts: in "read and send", or in read only for a connector with a curated list. */
 function readsAllowed(connector: ProxiedConnector): boolean {
 	return connector.enabled && (connector.mode === "read_write" || connector.readOnlyTools.length > 0);
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const abort = () => reject(new McpReadError("READ_CANCELLED", "Consulta cancelada."));
+		if (signal.aborted) {
+			void promise.catch(() => {});
+			abort();
+			return;
+		}
+		signal.addEventListener("abort", abort, { once: true });
+		promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+	});
 }
 
 /** Read only shows only read-only tools; "read and send" shows all of them. */

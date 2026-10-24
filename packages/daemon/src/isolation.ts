@@ -92,7 +92,7 @@ export function subagentsEnabled(base: NodeJS.ProcessEnv): boolean {
 	return !(value === "off" || value === "0" || value === "false");
 }
 
-/** The memory project every memory the assistant saves or searches belongs to. */
+/** Default write project for Dot; explicit recall can search across the user's projects. */
 export const MEMORY_PROJECT = "gentle-dot";
 
 /** The memory server port of the private memory (`GENTLE_DOT_ENGRAM=private`). */
@@ -163,6 +163,10 @@ export function isolatedAgentEnv(
 		const rest = (base.PATH ?? "").split(delimiter).filter((part) => part && part !== bin);
 		env.PATH = [bin, ...rest].join(delimiter);
 	}
+	// A project override inherited from another terminal outranks workspace detection
+	// in Engram CLI/MCP. Dot's own workspace identifies its write project instead;
+	// do not force a server-wide default onto the shared memory used by other agents.
+	delete env.ENGRAM_PROJECT;
 	// The user's own Gentle Shell setting is not the assistant's.
 	env.GENTLE_PI_AGENTS = subagentsEnabled(base) ? "1" : "0";
 	if (base.GENTLE_DOT_ENGRAM === "private") {

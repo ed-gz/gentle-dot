@@ -487,3 +487,19 @@ describe("with the desktop app's channel, server mode changes nothing (S25.2)", 
 		expect(s.handedOver).toEqual([]);
 	});
 });
+
+// Local desktop adapters cannot cross the server's daemon/engine user boundary.
+it("keeps local shell and browser controls disabled in VPS mode", async () => {
+	const { d, engineProcess } = await setup();
+	for (const path of ["/orchestration", "/browser"]) {
+		const response = await fetch(`http://127.0.0.1:${d.port}${path}`, {
+			headers: { Authorization: `Bearer ${d.token}` },
+		});
+		expect(response.status).toBe(503);
+	}
+	const process = engineProcess();
+	expect(process.env.GENTLE_DOT_ORCHESTRATION_KEY).toBeUndefined();
+	expect(process.env.GENTLE_DOT_BROWSER_KEY).toBeUndefined();
+	expect(process.argv.join(" ")).not.toContain("dot-orchestrator.ts");
+	expect(process.argv.join(" ")).not.toContain("dot-browser.ts");
+});

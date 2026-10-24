@@ -1,0 +1,274 @@
+.shared-file {
+	display: block;
+	max-width: 420px;
+	min-width: 0;
+	margin-block: 12px;
+	padding: 14px;
+	border: 1px solid var(--line);
+	border-radius: 18px;
+	background: var(--surface);
+	color: var(--text);
+	font-size: 14px;
+	line-height: 1.5;
+	text-align: left;
+}
+.shared-file-heading {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+.shared-file-heading > svg {
+	flex: none;
+	color: var(--accent);
+}
+.shared-file-heading > span {
+	min-width: 0;
+}
+.shared-file-heading strong {
+	display: block;
+	overflow-wrap: anywhere;
+}
+.shared-file-heading small {
+	display: block;
+	color: var(--muted);
+	font-size: 12px;
+	margin-top: 2px;
+}
+.shared-file-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 14px;
+}
+.shared-file-actions button {
+	flex: 1 1 100px;
+	min-height: 48px;
+	padding: 10px 12px;
+	border-radius: 12px;
+}
+.shared-file-actions button:first-child {
+	color: var(--accent-ink);
+	background: var(--accent);
+	border-color: var(--accent);
+}
+.shared-file button:focus-visible {
+	outline: 3px solid var(--accent);
+	outline-offset: 3px;
+}
+.shared-file button:active:not(:disabled) {
+	filter: brightness(0.9);
+}
+.shared-file-status,
+.shared-file-error {
+	display: block;
+	margin-top: 10px;
+	overflow-wrap: anywhere;
+}
+.shared-file-status {
+	color: var(--muted);
+}
+.shared-file-error {
+	color: var(--chat-error, #ef8fa0);
+}
+.shared-file-error button {
+	display: block;
+	min-height: 48px;
+	margin-top: 10px;
+}
+.shared-file-preview {
+	display: block;
+	margin: -4px -4px 12px;
+}
+.shared-image-open {
+	display: block;
+	width: 100%;
+	padding: 0;
+	overflow: hidden;
+	border: 0;
+	background: var(--surface-2);
+	border-radius: 12px;
+}
+.shared-image-open img {
+	display: block;
+	width: 100%;
+	max-height: 320px;
+	object-fit: contain;
+	margin: 0;
+}
+.shared-image-placeholder {
+	display: grid;
+	place-items: center;
+	min-height: 160px;
+	padding: 20px;
+	border-radius: 12px;
+	background: var(--surface-2);
+	color: var(--muted);
+	text-align: center;
+}
+
+/* Images are the attachment. File names and actions belong to the viewer. */
+.shared-file.shared-file-image {
+	padding: 0;
+	border: 0;
+	background: transparent;
+	max-width: 560px;
+}
+.shared-file-image .shared-file-preview {
+	margin: 0;
+}
+.shared-image-placeholder {
+	width: 100%;
+}
+.shared-image-open img {
+	max-height: 440px;
+}
+.shared-image-viewer {
+	position: fixed;
+	inset: 0;
+	width: 100%;
+	height: 100dvh;
+	max-width: none;
+	max-height: none;
+	margin: 0;
+	padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+		max(8px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+	border: 0;
+	border-radius: 0;
+	background: var(--bg);
+	color: var(--text);
+	overflow: hidden;
+	box-sizing: border-box;
+}
+.shared-image-viewer[open] {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.shared-image-viewer::backdrop {
+	background: rgba(0, 0, 0, 0.88);
+}
+.shared-image-viewer header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: none;
+	min-width: 0;
+}
+.shared-image-viewer header strong {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 14px;
+	font-weight: 500;
+}
+.image-viewer-actions,
+.image-viewer-zoom {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex: none;
+}
+.shared-image-viewer button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 48px;
+	min-height: 48px;
+	padding: 8px;
+	border: 1px solid transparent;
+	border-radius: 14px;
+	background: transparent;
+	color: var(--text);
+	flex: none;
+	touch-action: manipulation;
+}
+.shared-image-viewer button:hover:not(:disabled) {
+	background: var(--surface-2);
+}
+.shared-image-viewer button:active:not(:disabled) {
+	background: var(--surface-2);
+}
+.shared-image-viewer button:disabled {
+	opacity: 0.4;
+}
+.shared-image-viewer :focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+.image-viewer-viewport {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	overflow: auto;
+	overscroll-behavior: contain;
+	touch-action: none;
+	border-radius: 8px;
+	scrollbar-width: thin;
+	scrollbar-color: var(--muted) transparent;
+}
+.image-viewer-viewport[data-zoomed="true"] {
+	cursor: grab;
+}
+.image-viewer-viewport[data-zoomed="true"]:active {
+	cursor: grabbing;
+}
+.image-viewer-canvas {
+	display: grid;
+	place-items: center;
+}
+.shared-image-viewer .image-viewer-canvas img {
+	display: block;
+	max-width: none;
+	max-height: none;
+	margin: 0;
+	object-fit: contain;
+	user-select: none;
+	pointer-events: none;
+}
+.shared-image-viewer footer {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+	flex: none;
+}
+.image-viewer-zoom {
+	padding: 0;
+	margin: 0;
+	border: 1px solid var(--line);
+	border-radius: 18px;
+	background: var(--surface);
+}
+.image-viewer-zoom button:nth-child(2) {
+	min-width: 68px;
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+}
+.image-viewer-hint {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+}
+.image-viewer-status,
+.image-viewer-unavailable {
+	color: var(--muted);
+	font-size: 14px;
+	text-align: center;
+	overflow-wrap: anywhere;
+}
+.image-viewer-status,
+.shared-image-viewer .shared-file-error {
+	margin: 0;
+}
+.image-viewer-unavailable {
+	max-width: 34ch;
+	margin: 40px auto;
+}
+.shared-image-viewer .image-viewer-cancel {
+	min-height: 44px;
+	font-size: 14px;
+}

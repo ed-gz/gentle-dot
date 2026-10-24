@@ -1,148 +1,144 @@
-import type { Activity, ActivityKind } from "@gentle-dot/protocol";
-import { Fragment, useEffect, useRef, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Fragment, memo } from "react";
 import type { ChatMessage } from "../store.ts";
 import { formatSize } from "../uploads.ts";
-
-const VERBS: Record<ActivityKind, [string, string, string]> = {
-	read: ["Read", "file", "files"],
-	edit: ["Edited", "file", "files"],
-	run: ["Ran", "command", "commands"],
-	search: ["Searched", "time", "times"],
-	memory: ["Used memory", "time", "times"],
-	delegate: ["Asked", "helper", "helpers"],
-	other: ["Did", "step", "steps"],
-};
-
-/** "Read 2 files · Ran 1 command" */
-export function summarize(activities: Activity[]): string {
-	const counts = new Map<ActivityKind, number>();
-	for (const activity of activities) counts.set(activity.kind, (counts.get(activity.kind) ?? 0) + 1);
-	return [...counts]
-		.map(([kind, count]) => {
-			const [verb, one, many] = VERBS[kind];
-			return `${verb} ${count} ${count === 1 ? one : many}`;
-		})
-		.join(" · ");
-}
-
-function Activities({ activities }: { activities: Activity[] }) {
-	const [open, setOpen] = useState(false);
-	const running = activities.find((a) => a.status === "running");
-	return (
-		<div className="activities">
-			<button
-				type="button"
-				className="activities-summary"
-				aria-expanded={open}
-				onClick={() => setOpen(!open)}
-			>
-				<span className={running ? "pulse" : ""} aria-hidden="true" />
-				{running ? running.title : summarize(activities)}
-			</button>
-			{open ? (
-				<ul>
-					{activities.map((a) => (
-						<li key={a.id} className={`activity activity-${a.status}`}>
-							{a.title}
-						</li>
-					))}
-				</ul>
-			) : null}
-		</div>
-	);
-}
+import { SharedMarkdown } from "./SharedMarkdown.tsx";
+import "../chat-progress.css";
 
 interface MessageListProps {
 	messages: ChatMessage[];
-	/** Messages waiting for the assistant, shown after the running answer. */
+	/** Messages already received by the engine, to apply at its next safe checkpoint. */
 	queued?: string[];
 	/** Offers "Show earlier" at the top, which calls `onShowEarlier`. */
 	hasEarlier?: boolean;
 	onShowEarlier?: () => void;
+	loadingEarlier?: boolean;
+	hasNewer?: boolean;
+	onShowNewer?: () => void;
+	mobile?: boolean;
+	/** One transient status for the whole turn; tool-only records never become chat bubbles. */
+	working?: boolean;
 }
 
-export function MessageList({ messages, queued = [], hasEarlier = false, onShowEarlier }: MessageListProps) {
-	const end = useRef<HTMLDivElement>(null);
-	const last = messages.at(-1);
-	const lastEarlier = messages.findLastIndex((m) => m.earlier);
-	// Earlier pages are added on top, so only the newest message moves the view.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll whenever the newest content grows
-	useEffect(() => {
-		end.current?.scrollIntoView?.({ block: "end" });
-	}, [last?.id, last?.text, last?.activities.length, last?.note, queued.length]);
+export function MessageList({
+	messages,
+	queued = [],
+	hasEarlier = false,
+	onShowEarlier,
+	loadingEarlier = false,
+	hasNewer = false,
+	onShowNewer,
+	mobile = false,
+	working = messages.at(-1)?.streaming ?? false,
+}: MessageListProps) {
+	const visibleMessages = messages.filter(
+		(message) => message.text.trim() || message.attachments?.length || message.note,
+	);
+	const lastEarlier = visibleMessages.findLastIndex((m) => m.earlier);
 
-	if (messages.length === 0 && queued.length === 0) {
+	if (messages.length === 0 && queued.length === 0 && !working) {
 		return (
 			<div className="empty">
-				<p>Hi! What can I do for you?</p>
+				<p>{mobile ? "¿En qué te ayudo?" : "Hi! What can I do for you?"}</p>
 			</div>
 		);
 	}
 	return (
 		<div className="messages" aria-live="polite">
 			{hasEarlier ? (
-				<button type="button" className="show-earlier" onClick={onShowEarlier}>
-					Show earlier
+				<button type="button" className="show-earlier" onClick={onShowEarlier} disabled={loadingEarlier}>
+					{loadingEarlier
+						? mobile
+							? "Cargando…"
+							: "Loading…"
+						: mobile
+							? "Ver mensajes anteriores"
+							: "Show earlier"}
 				</button>
 			) : null}
-			{messages.map((message, index) => (
+			{visibleMessages.map((message, index) => (
 				<Fragment key={message.id}>
-					<article className={`message message-${message.role}`}>
-						{message.activities.length > 0 ? <Activities activities={message.activities} /> : null}
-						{message.text && message.role === "user" ? (
-							<div className="message-body message-plain">{message.text}</div>
-						) : null}
-						{message.attachments && message.attachments.length > 0 ? (
-							<ul className="message-attachments" aria-label="Attached files">
-								{message.attachments.map((file, i) => (
-									// biome-ignore lint/suspicious/noArrayIndexKey: two files may share a name across folders
-									<li key={i} className="attachment-chip">
-										<span className="chip-name" title={file.name}>
-											{file.name}
-										</span>
-										<span className="chip-size">{formatSize(file.size)}</span>
-									</li>
-								))}
-							</ul>
-						) : null}
-						{message.text && message.role === "assistant" ? (
-							<div className="message-body">
-								<Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown>
-							</div>
-						) : null}
-						{message.streaming ? <span className="caret" aria-hidden="true" /> : null}
-						{message.note ? (
-							<p
-								className={`message-note message-note-${message.note.kind}`}
-								role={message.note.kind === "error" ? "alert" : undefined}
-							>
-								{message.note.text}
-							</p>
-						) : null}
-					</article>
+					<Message message={message} />
 					{index === lastEarlier ? (
 						<div className="earlier-divider">
-							<hr aria-label="Earlier messages" />
-							<span aria-hidden="true">Earlier messages</span>
+							<hr aria-label={mobile ? "Mensajes anteriores" : "Earlier messages"} />
+							<span aria-hidden="true">{mobile ? "Mensajes anteriores" : "Earlier messages"}</span>
 							<span className="earlier-line" />
 						</div>
 					) : null}
 				</Fragment>
 			))}
+			{hasNewer ? (
+				<button type="button" className="show-earlier show-newer" onClick={onShowNewer}>
+					{mobile ? "Ver mensajes siguientes" : "Show newer"}
+				</button>
+			) : null}
 			{queued.map((text, i) => (
 				<article
 					// biome-ignore lint/suspicious/noArrayIndexKey: the same text can be queued twice
 					key={`${i}-${text}`}
-					className="message message-user message-queued"
-					aria-label="Queued message"
+					className="message message-user message-received"
+					aria-label={mobile ? "Mensaje recibido" : "Received message"}
 				>
-					<span className="queued-label">Queued</span>
 					<div className="message-body message-plain">{text}</div>
+					<span
+						className="received-label"
+						title={mobile ? "Se incorpora al próximo paso seguro." : "Applied at the next safe checkpoint."}
+					>
+						{mobile ? "Recibido" : "Received"}
+					</span>
 				</article>
 			))}
-			<div ref={end} />
+			{working ? (
+				<div className="chat-working" role="status" aria-atomic="true">
+					<span className="chat-working-dot" aria-hidden="true" />
+					{mobile ? "Trabajando…" : "Working…"}
+				</div>
+			) : null}
 		</div>
 	);
 }
+
+/** Completed Markdown/images keep their DOM when only another message streams. */
+const Message = memo(
+	function Message({ message }: { message: ChatMessage }) {
+		return (
+			<article className={`message message-${message.role}`} data-message-id={message.id}>
+				{message.text && message.role === "user" ? (
+					<div className="message-body message-plain">{message.text}</div>
+				) : null}
+				{message.attachments && message.attachments.length > 0 ? (
+					<ul className="message-attachments" aria-label="Attached files">
+						{message.attachments.map((file, i) => (
+							// biome-ignore lint/suspicious/noArrayIndexKey: two files may share a name across folders
+							<li key={i} className="attachment-chip">
+								<span className="chip-name" title={file.name}>
+									{file.name}
+								</span>
+								<span className="chip-size">{formatSize(file.size)}</span>
+							</li>
+						))}
+					</ul>
+				) : null}
+				{message.text && message.role === "assistant" ? (
+					<div className="message-body">
+						<SharedMarkdown>{message.text}</SharedMarkdown>
+					</div>
+				) : null}
+				{message.note ? (
+					<p
+						className={`message-note message-note-${message.note.kind}`}
+						role={message.note.kind === "error" ? "alert" : undefined}
+					>
+						{message.note.text}
+					</p>
+				) : null}
+			</article>
+		);
+	},
+	(previous, next) =>
+		previous.message.text === next.message.text &&
+		previous.message.id === next.message.id &&
+		previous.message.role === next.message.role &&
+		previous.message.attachments === next.message.attachments &&
+		previous.message.note === next.message.note,
+);

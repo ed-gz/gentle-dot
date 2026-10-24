@@ -51,8 +51,51 @@ describe("reduce", () => {
 		const ask = { requestId: "q1", method: "confirm" as const, title: "Proceed?" };
 		let s = apply(initialState, { type: "ask", ask }, { type: "ask", ask });
 		expect(s.asks).toEqual([ask]);
+		expect(s.notices).toHaveLength(1);
+		expect(s.notices[0]?.notificationEvent).toBe("permission");
 		s = apply(s, { type: "ask_resolved", requestId: "q1" });
 		expect(s.asks).toEqual([]);
+		expect(s.notices).toHaveLength(0);
+	});
+
+	it("uses the same permission id as the broker and avoids duplicate reply alerts", () => {
+		const app = apply(initialState, {
+			type: "ask",
+			ask: { requestId: "app-id", method: "app", title: "Navegador" },
+		});
+		expect(app.notices[0]?.notificationId).toBe("dot-approval:app-id");
+		const payload = { type: "message_done" as const, messageId: "reply", text: "Terminé" };
+		const done = apply(initialState, payload, payload);
+		expect(done.notices).toHaveLength(1);
+		expect(done.notices[0]?.notificationEvent).toBe("dotReply");
+	});
+
+	it("announces an error after a tool-only turn even when the final text is empty", () => {
+		const current = apply(initialState, {
+			type: "activity",
+			messageId: "tool-only",
+			activity: { id: "tool", kind: "read", title: "Reading", status: "running" },
+		});
+		const done = apply(current, {
+			type: "message_done",
+			messageId: "tool-only",
+			text: "",
+			error: "Connection failed",
+		});
+		expect(done.notices[0]?.notificationEvent).toBe("dotError");
+	});
+
+	it("keeps tool progress in the conversation without announcing a completed reply", () => {
+		const progress = apply(initialState, {
+			type: "message_done",
+			messageId: "tools",
+			text: "Voy a revisar los archivos",
+			intermediate: true,
+		});
+		expect(progress.messages[0]?.text).toBe("Voy a revisar los archivos");
+		expect(progress.notices).toHaveLength(0);
+		const done = apply(progress, { type: "message_done", messageId: "final", text: "El informe está listo" });
+		expect(done.notices).toHaveLength(1);
 	});
 
 	it("replaces messages with history and clears the interruption", () => {
@@ -147,6 +190,21 @@ describe("reduce", () => {
 		]);
 		s = reduce(s, { type: "dismiss", id: s.notices[0]?.id ?? -1 });
 		expect(s.notices.map((n) => n.message)).toEqual(["Nope"]);
+	});
+	it("keeps connector access issues out of the chat and collapses repeated toasts", () => {
+		const issue = "Gentle Dot could not check your connectors, so the ones that need a secret stay locked.";
+		const state = apply(
+			initialState,
+			{ type: "toast", level: "warning", message: issue, code: "connectors_unchecked" },
+			{ type: "toast", level: "warning", message: issue },
+			{ type: "toast", level: "warning", message: "A task needs attention" },
+			{ type: "toast", level: "warning", message: "A task needs attention" },
+		);
+		expect(state.connectors.issue).toBe(issue);
+		expect(state.notices).toHaveLength(1);
+		expect(state.notices[0]?.message).toBe("A task needs attention");
+		const reconnected = apply(state, { type: "ready", agentState: "idle" });
+		expect(reconnected.connectors.issue).toBeUndefined();
 	});
 
 	it("stops streaming when the connection drops", () => {

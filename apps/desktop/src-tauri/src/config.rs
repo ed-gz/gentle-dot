@@ -100,7 +100,7 @@ pub fn save_shortcut(path: &Path, shortcut: &str) -> Result<(), String> {
     write_private(path, &text).map_err(|error| format!("Gentle Dot cannot save config.json ({error})."))
 }
 
-fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;

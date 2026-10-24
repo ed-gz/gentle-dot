@@ -30,6 +30,22 @@ pnpm --filter @gentle-dot/desktop build                                # release
 
 The bundle is written to `src-tauri/target/{debug,release}/bundle/macos/Gentle Dot.app`. Run the Rust unit tests with `cargo test` inside `src-tauri`.
 
+For a direct Cargo distribution, build the frontend first and explicitly enable its embedded protocol:
+
+```sh
+cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --release --features custom-protocol
+```
+
+Run that command from the repository root after building `packages/ui/dist/app`. A release without `custom-protocol` is rejected: optimization alone otherwise leaves Tauri opening `http://127.0.0.1:5173`, which produces a native WebKit connection error when Vite is absent. The daemon's readiness and WebSocket reconnection are separate from the embedded document; restarting the daemon must not navigate the page.
+
+On Linux, the opt-in native test loads the bundled React UI and sprites in real WebKit, then starts, stops and restarts an isolated loopback daemon fixture. It briefly shows its own unfocused windows with temporary browser storage, never the installed service or existing sessions. The native display test currently requires Hyprland:
+
+```sh
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --features custom-protocol bundled_frontend_cold_start_and_daemon_reconnect_keep_the_real_document -- --ignored --test-threads=1
+```
+
+It saves snapshots of its fixture UI to `.cache/native-frontend-panel.png` and `.cache/native-frontend-companion-launcher.png` and `.cache/native-frontend-dot.png`; screenshots of other applications are unnecessary.
+
 ## The daemon and `PATH`
 
 On launch, the app checks `GET http://127.0.0.1:<port>/health`. If nothing answers, it spawns `<node> <repo>/packages/daemon/src/cli.ts` and writes its output to `~/.gentle-dot/daemon.log`.
@@ -103,4 +119,3 @@ What differs from macOS (decided in `src/platform.rs`, unit-tested on both syste
 `gentle-dot --toggle` reaches the running app through `tauri-plugin-single-instance` (D-Bus on Linux), which toggles the panel; any other second launch shows it. Started with `--toggle` while not running, the app opens the panel once it is up.
 
 macOS-only calls (`accept_first_mouse`, the `HudWindow` effect, the accessory activation policy) are behind `cfg(target_os = "macos")`; the template flag follows `status::is_template`. The `macos-private-api` feature and `macOSPrivateApi: true` stay on every platform: tauri-build checks the `tauri` features in `Cargo.toml` against the merged `tauri.conf.json`, every `tauri` dependency entry including target-specific ones, so splitting them per target fails the build. They only change macOS code; the Linux build in a Debian container compiles with them. `Info.plist` (`LSUIElement`) is read only by the macOS bundle.
-

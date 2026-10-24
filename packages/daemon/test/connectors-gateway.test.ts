@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { ServerMessage } from "@gentle-dot/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { COMPLETIONS_EXTENSION_PATH } from "../src/completion-reports.ts";
 import { type DotDaemon, startDaemon } from "../src/daemon.ts";
 import { fakeApp, sendLikeThePanel } from "./fake-app.ts";
 import { fakeAuthRuntime } from "./fake-auth-runtime.ts";
@@ -223,7 +224,11 @@ describe("connectors over the protocol", () => {
 	it("loads the approval guard into the assistant's own engine", async () => {
 		const { agentArgs, agentEnv } = await setup({ home: true });
 		const args = agentArgs();
-		expect(args[args.indexOf("-e") + 1]).toBe(GUARD);
+		const extensions = args.filter((_arg, index) => args[index - 1] === "-e");
+		expect(extensions).toContain(GUARD);
+		// A report-only turn is blocked before connector approvals can open a permission dialog.
+		expect(extensions.indexOf(COMPLETIONS_EXTENSION_PATH)).toBeGreaterThanOrEqual(0);
+		expect(extensions.indexOf(COMPLETIONS_EXTENSION_PATH)).toBeLessThan(extensions.indexOf(GUARD));
 		expect(JSON.parse(agentEnv().GENTLE_DOT_CONNECTOR_POLICY ?? "{}")).toMatchObject({
 			connectors: {},
 			protectedPaths: expect.arrayContaining([GUARD]),

@@ -16,5 +16,5 @@
 			"path": "../protocol"
 		}
 	],
-	"include": ["src", "test", "vite.config.ts"]
+	"include": ["src", "src/**/*.json", "test", "vite.config.ts"]
 }

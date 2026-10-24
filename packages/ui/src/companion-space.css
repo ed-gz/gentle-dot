@@ -1,0 +1,408 @@
+.companion-space-editor,
+.companion-space-presets,
+.companion-space-size,
+.capri-preferences-mode,
+.capri-monitor-list {
+	border: 0;
+	padding: 0;
+	margin: 0;
+	min-width: 0;
+}
+.companion-space-editor {
+	min-width: 0;
+	display: grid;
+	gap: 12px;
+	color: var(--text);
+}
+.companion-space-presets {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.companion-space-editor button,
+.capri-preferences button {
+	min-width: 0;
+	min-height: 48px;
+	font: inherit;
+	line-height: 1.3;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	touch-action: manipulation;
+	transition:
+		background-color 120ms ease,
+		border-color 120ms ease;
+}
+.companion-space-presets button {
+	flex: 1 1 max-content;
+	padding: 8px;
+	font-size: 13px;
+	border-radius: 12px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	color: var(--text);
+}
+.companion-space-presets button[aria-pressed="true"],
+.companion-space-presets button[aria-pressed="true"]:hover:not(:disabled) {
+	background: var(--accent-soft);
+	border-color: var(--accent);
+	color: var(--text);
+}
+.companion-space-map {
+	position: relative;
+	width: 100%;
+	min-height: 0;
+	max-height: 320px;
+	margin-inline: auto;
+	border: 1px solid var(--line);
+	border-radius: 16px;
+	background: var(--surface);
+	box-sizing: border-box;
+}
+.companion-space-map .companion-space-target {
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	padding: 0;
+	border: 0;
+	border-radius: inherit;
+	background: radial-gradient(circle, var(--line) 1px, transparent 1px) 0 0 / 14px 14px;
+	cursor: crosshair;
+}
+.companion-space-map .companion-space-target:hover:not(:disabled) {
+	background-color: var(--surface-2);
+}
+.companion-space-selection {
+	position: absolute;
+	border: 2px solid var(--accent);
+	border-radius: 12px;
+	background: var(--accent-soft);
+	box-sizing: border-box;
+	box-shadow: 0 0 0 1px var(--surface);
+}
+.companion-space-selection .companion-space-drag {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 4px;
+	position: absolute;
+	inset: 0;
+	width: 100%;
+	height: 100%;
+	min-height: 0;
+	padding: 4px;
+	border: 0;
+	border-radius: 10px;
+	background: transparent;
+	color: var(--text);
+	cursor: grab;
+	touch-action: none;
+}
+.companion-space-zone-label {
+	font-size: 12px;
+	line-height: 1.2;
+}
+.companion-space-mark {
+	flex: none;
+	color: var(--accent);
+	pointer-events: none;
+}
+.companion-space-selection .companion-space-resize {
+	position: absolute;
+	right: -2px;
+	bottom: -2px;
+	display: grid;
+	place-items: center;
+	width: 48px;
+	height: 48px;
+	padding: 0;
+	border: 0;
+	border-radius: 8px 0 12px 0;
+	background: transparent;
+	color: var(--text);
+	cursor: nwse-resize;
+	touch-action: none;
+}
+.companion-space-selection button:hover:not(:disabled),
+.companion-space-map[data-dragging="true"] .companion-space-drag {
+	background: var(--accent-soft);
+}
+.companion-space-map[data-dragging="true"] .companion-space-drag {
+	cursor: grabbing;
+}
+.companion-space-footer {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+}
+.companion-space-footer p {
+	flex: 1;
+	min-width: 0;
+	margin: 0;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.5;
+}
+.companion-space-size {
+	display: flex;
+	gap: 8px;
+	flex: none;
+}
+.companion-space-size button {
+	width: 48px;
+	padding: 0;
+	font-size: 22px;
+	border-radius: 12px;
+}
+.companion-space-editor button:focus-visible,
+.capri-preferences button:focus-visible,
+.capri-preferences input:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 3px;
+}
+.companion-space-editor[data-disabled="true"] {
+	opacity: 0.58;
+}
+
+.capri-preferences {
+	padding: 20px;
+	display: grid;
+	gap: 20px;
+	border: 1px solid var(--line);
+	border-radius: 20px;
+	background: var(--surface);
+	color: var(--text);
+	min-width: 0;
+}
+.capri-preferences-header {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	justify-content: space-between;
+}
+.capri-preferences-header > div {
+	min-width: 0;
+	flex: 1 1 180px;
+}
+.capri-preferences h3,
+.capri-preferences h4 {
+	margin: 0;
+	color: var(--text);
+	font-size: 16px;
+}
+.capri-preferences h3 {
+	font-size: 20px;
+}
+.capri-preferences p {
+	margin: 6px 0 0;
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--muted);
+}
+.capri-preferences-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+.capri-preferences-status::before {
+	content: "";
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--muted);
+	flex: none;
+}
+.capri-preferences-status[data-active="true"]::before {
+	background: var(--accent);
+}
+.capri-preferences .capri-activation {
+	flex: none;
+	border: 1px solid var(--line);
+	background: var(--surface-2);
+	border-radius: 999px;
+	padding: 8px 12px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.capri-activation[aria-checked="true"] {
+	border-color: var(--accent);
+}
+.capri-activation .companion-switch-track {
+	width: 32px;
+	height: 20px;
+}
+.capri-activation[aria-checked="true"] .companion-switch-track {
+	background: var(--accent);
+}
+.capri-preferences-mode {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px;
+	padding: 4px;
+	border-radius: 16px;
+	background: var(--surface-2);
+}
+.capri-preferences-mode button {
+	border: 1px solid transparent;
+	border-radius: 12px;
+	background: transparent;
+	color: var(--muted);
+	padding: 10px;
+}
+.capri-preferences-mode button[aria-pressed="true"] {
+	color: var(--text);
+	border-color: var(--line);
+	background: var(--surface);
+	box-shadow: 0 1px 3px #0002;
+}
+.capri-preferences-block {
+	display: grid;
+	gap: 12px;
+	min-width: 0;
+}
+.capri-monitor-map {
+	position: relative;
+	width: 100%;
+	min-height: 100px;
+	max-height: 220px;
+	border: 1px solid var(--line);
+	border-radius: 14px;
+	background: var(--surface-2);
+	overflow: hidden;
+}
+.capri-monitor-map svg {
+	width: 100%;
+	height: 100%;
+	position: absolute;
+	inset: 0;
+}
+.capri-monitor-map rect {
+	fill: var(--surface);
+	stroke: var(--line);
+	stroke-width: 2;
+	vector-effect: non-scaling-stroke;
+}
+.capri-monitor-map rect[data-selected="true"] {
+	stroke: var(--accent);
+}
+.capri-monitor-map rect[data-allowed="false"] {
+	stroke-dasharray: 5 4;
+	opacity: 0.55;
+}
+.capri-monitor-map .capri-monitor-zone {
+	fill: var(--accent-soft);
+	stroke: var(--accent);
+	stroke-width: 1;
+}
+.capri-monitor-map text {
+	fill: var(--text);
+	font: 500 14px system-ui;
+	text-anchor: middle;
+	dominant-baseline: middle;
+}
+.capri-monitor-list {
+	display: grid;
+	gap: 8px;
+}
+.capri-monitor-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 4px 4px 12px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: var(--surface);
+}
+.capri-monitor-row[data-selected="true"] {
+	border-color: var(--accent);
+}
+.capri-monitor-row label {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 1 1 180px;
+	min-width: 0;
+	min-height: 48px;
+	cursor: pointer;
+}
+.capri-monitor-row label span {
+	overflow-wrap: anywhere;
+	font-size: 13px;
+}
+.capri-activation[aria-checked="true"] .companion-switch-track > span {
+	background: var(--accent-ink, var(--bg));
+	transform: translateX(12px);
+}
+.capri-monitor-row input {
+	width: 18px;
+	height: 18px;
+	margin: 0;
+	accent-color: var(--accent);
+	flex: none;
+}
+.capri-monitor-row button {
+	padding: 8px 12px;
+	border: 0;
+	background: transparent;
+	border-radius: 8px;
+	color: var(--text);
+	font-size: 13px;
+}
+.capri-preferences .capri-preferences-error {
+	color: var(--red, var(--chat-error));
+}
+.capri-preferences-secondary {
+	border-top: 1px solid var(--line);
+	padding-top: 16px;
+	display: grid;
+	gap: 12px;
+}
+.capri-preferences-secondary label {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	min-height: 48px;
+	font-size: 13px;
+}
+.capri-preferences-secondary input {
+	width: 18px;
+	height: 18px;
+	accent-color: var(--accent);
+	flex: none;
+}
+.capri-preferences-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.capri-preferences-actions button {
+	flex: 1;
+	padding: 10px 14px;
+	border-radius: 12px;
+}
+.settings-companion {
+	margin: 20px 0;
+}
+@media (max-width: 420px) {
+	.capri-preferences {
+		padding: 16px;
+		gap: 16px;
+	}
+	.companion-space-footer {
+		flex-wrap: wrap;
+	}
+	.companion-space-footer p {
+		flex-basis: 180px;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.companion-space-editor button,
+	.capri-preferences button {
+		transition: none;
+	}
+}

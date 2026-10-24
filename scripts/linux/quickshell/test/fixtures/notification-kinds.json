@@ -1,0 +1,105 @@
+[
+	{
+		"source": { "appName": "Screenshot" },
+		"summary": "Screenshot Saved",
+		"body": "File: Screenshot_123.png",
+		"kind": "capture"
+	},
+	{
+		"source": { "appName": "Screenshot" },
+		"summary": "Screenshot Saved",
+		"body": "Failed to save file",
+		"kind": "notification"
+	},
+	{
+		"source": { "appName": "Screenshot", "urgency": 2 },
+		"summary": "Screenshot Saved",
+		"body": "",
+		"kind": "notification"
+	},
+	{
+		"source": { "appName": "Screenshot System" },
+		"summary": "Missing Dependencies",
+		"body": "Cannot start",
+		"kind": "notification"
+	},
+	{
+		"source": { "appName": "Screenshot" },
+		"summary": "Authentication required",
+		"body": "",
+		"kind": "notification"
+	},
+	{
+		"source": { "appName": "Slack" },
+		"summary": "Nuevo mensaje en General",
+		"body": "Alex Rivera: Screenshot Saved",
+		"kind": "notification"
+	},
+	{
+		"source": { "appName": "Slack", "category": "transfer.complete" },
+		"summary": "Download complete",
+		"body": "Can you check the screenshot?",
+		"kind": "notification"
+	},
+	{
+		"source": { "appName": "ChatGPT" },
+		"summary": "Screenshot Saved",
+		"body": "Done",
+		"kind": "notification"
+	},
+	{
+		"source": { "appName": "Herdr" },
+		"summary": "Download complete",
+		"body": "The session has a question",
+		"kind": "notification"
+	},
+	{
+		"source": { "appName": "Firefox", "category": "im.received" },
+		"summary": "Download complete",
+		"body": "Ana: thanks",
+		"kind": "notification"
+	},
+	{ "source": { "appName": "Firefox" }, "summary": "Download complete", "body": "", "kind": "notification" },
+	{
+		"source": { "appName": "Firefox", "category": "transfer.complete" },
+		"summary": "report.pdf",
+		"body": "Download complete",
+		"kind": "download"
+	},
+	{
+		"source": { "appName": "Firefox", "category": "transfer.complete" },
+		"summary": "Download complete",
+		"body": "Permission denied",
+		"kind": "notification"
+	},
+	{
+		"source": { "appName": "Firefox", "category": "transfer.error" },
+		"summary": "Download complete",
+		"body": "",
+		"kind": "notification"
+	},
+	{
+		"source": { "desktopEntry": "org.qbittorrent.qBittorrent.desktop" },
+		"summary": "Download complete",
+		"body": "report.pdf",
+		"kind": "download"
+	},
+	{
+		"source": { "appName": "Motrix" },
+		"summary": "Descarga completada",
+		"body": "report.pdf",
+		"kind": "download"
+	},
+	{
+		"source": { "appName": "Motrix" },
+		"summary": "Descarga completada",
+		"body": "Se necesita contraseña",
+		"kind": "notification"
+	},
+	{
+		"source": { "appName": "Other" },
+		"summary": "Screenshot Saved",
+		"body": "Download complete",
+		"kind": "notification"
+	}
+]

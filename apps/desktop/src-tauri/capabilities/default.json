@@ -57,6 +57,61 @@
 			"description": "What the computer-control glow overlay (S28) may call: listening to the glow, working, and session events, and acknowledging that the working rings are on screen; nothing else.",
 			"windows": ["glow"],
 			"permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "allow-computer-working-ready"]
+		},
+		{
+			"identifier": "desktop-companion-read",
+			"description": "Local desktop companion state independent of shared assistant persona.",
+			"windows": ["dot", "panel"],
+			"permissions": ["allow-desktop-companion-get"]
+		},
+		{
+			"identifier": "desktop-companion-settings",
+			"description": "Only settings can enable, disable or recall the desktop companion.",
+			"windows": ["panel"],
+			"permissions": [
+				"allow-desktop-companion-set",
+				"allow-desktop-companion-recall",
+				"allow-desktop-companion-hide",
+				"allow-desktop-companion-context"
+			]
+		},
+		{
+			"identifier": "desktop-companion-motion",
+			"description": "Only the traveler can pause its own motion and request bounded movement.",
+			"windows": ["dot"],
+			"permissions": [
+				"allow-desktop-companion-interaction",
+				"allow-desktop-companion-move",
+				"allow-desktop-companion-menu",
+				"allow-desktop-companion-context-dismiss",
+				"allow-desktop-companion-context-ready",
+				"allow-desktop-companion-context-open",
+				"allow-desktop-companion-context"
+			]
+		},
+		{
+			"identifier": "companion-launcher",
+			"description": "Access to chat and the native companion menu only. No daemon connection, files, voice or computer control.",
+			"windows": ["companion-launcher"],
+			"permissions": [
+				"allow-toggle-panel",
+				"allow-desktop-companion-menu",
+				"core:event:allow-listen",
+				"core:event:allow-unlisten"
+			]
+		},
+		{
+			"identifier": "companion-bubble",
+			"description": "Local transient context only. No daemon connection, files, voice, computer control or arbitrary window operations.",
+			"windows": ["companion-bubble"],
+			"permissions": [
+				"core:event:allow-listen",
+				"core:event:allow-unlisten",
+				"allow-desktop-companion-get",
+				"allow-desktop-companion-context-dismiss",
+				"allow-desktop-companion-context-ready",
+				"allow-desktop-companion-context-open"
+			]
 		}
 	]
 }

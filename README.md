@@ -104,6 +104,10 @@ Attach files with the paperclip, drag and drop, or paste. Images go straight to 
 
 <div align="center"><img src="docs/assets/brand/rose.png" width="28" alt="" /></div>
 
+## Android and remote sessions
+
+Build an installable Android companion with `pnpm android:apk`, then run `pnpm mobile:connect` to pair over private Tailscale HTTPS. The app shares the desktop chat, supports Android dictation, and adds HERDR session controls with explicit, expiring approvals. See [the mobile guide](docs/mobile-orchestration.md).
+
 ## Get started
 
 There are no published releases yet: build the installer for your system. You need Node.js 24 and pnpm; the macOS app also needs Rust and the Xcode command line tools, and the Linux packages need Docker.

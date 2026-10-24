@@ -7,13 +7,15 @@
 			"!**/dist",
 			"!apps/desktop/src-tauri/target",
 			"!apps/desktop/src-tauri/gen",
+			"!apps/mobile/android",
 			"!odd",
 			"!build",
 			"!.cache",
 			"!.vitest",
 			"!docs",
 			"!test-results",
-			"!playwright-report"
+			"!playwright-report",
+			"!.atl"
 		]
 	},
 	"formatter": {

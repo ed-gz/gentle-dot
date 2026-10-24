@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatSurface } from "../src/components/ChatSurface.tsx";
 import { type DotState, initialState, reduce } from "../src/store.ts";
+import { openDesktopOptions } from "./desktop-options.ts";
 
 function apply(state: DotState, ...payloads: ServerPayload[]): DotState {
 	return payloads.reduce(
@@ -41,6 +42,7 @@ describe("one continuous chat", () => {
 		expect(screen.queryByRole("button", { name: "Conversations" })).not.toBeInTheDocument();
 		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Gentle Dot");
 		expect(container.querySelector(".chat-header .rose-glyph")).not.toBeNull();
+		openDesktopOptions();
 		for (const name of ["Accounts", "Profiles", "Hide"]) {
 			expect(screen.getByRole("button", { name })).toBeInTheDocument();
 		}
@@ -48,6 +50,7 @@ describe("one continuous chat", () => {
 
 	it("brings the conversations back when the flag is on", () => {
 		render(<ChatSurface variant="web" state={withList} send={vi.fn()} dismiss={vi.fn()} />);
+		openDesktopOptions();
 		expect(screen.getByRole("button", { name: "New conversation" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Conversations" })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("New conversation");

@@ -197,7 +197,12 @@ describe("built-in computer server (S24.7)", () => {
 	const withComputer = (): ConnectorPolicy => ({ ...policy("read_only"), builtin: ["computer"] });
 
 	it("runs its tools without approval cards, since the desktop app enforces its own checks", () => {
-		for (const tool of ["mcp__computer__screenshot", "mcp__computer__click", "mcp__computer__type"]) {
+		for (const tool of [
+			"mcp__computer__capabilities",
+			"mcp__computer__screenshot",
+			"mcp__computer__click",
+			"mcp__computer__type",
+		]) {
 			expect(decide(call(tool, { x: 1, y: 2, text: "send" }), withComputer()), tool).toEqual({
 				action: "pass",
 			});

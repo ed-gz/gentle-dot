@@ -45,6 +45,15 @@ impl Control {
         self.report(Some(event));
     }
 
+    /// A human approval belongs to the operation that asked for it. Stop/panic while the
+    /// dialog was open invalidates that answer, including the first grant of a session.
+    pub fn grant_if_epoch(&self, epoch: u64, now_ms: u64) -> bool {
+        let event = self.with(|s| (s.epoch() == epoch).then(|| s.grant(now_ms)));
+        let granted = event.is_some();
+        self.report(event);
+        granted
+    }
+
     pub fn end(&self, reason: Reason) {
         let event = self.with(|s| s.end(reason));
         self.report(event);
@@ -62,8 +71,10 @@ impl Control {
     /// Turns yolo mode on after the user confirms it natively, or off without asking. The
     /// result is always reported, so a switch that flipped before the answer flips back.
     pub fn set_yolo(&self, enabled: bool, now_ms: u64, dialogs: &dyn Dialogs) -> StateEvent {
+        let epoch = self.epoch();
         let on = enabled && dialogs.ask_yolo();
-        let event = self.with(|s| s.set_yolo(on, now_ms));
+        let event =
+            self.with(|s| if enabled && s.epoch() != epoch { s.status(now_ms) } else { s.set_yolo(on, now_ms) });
         self.report(Some(event.clone()));
         event
     }
@@ -83,6 +94,48 @@ mod tests {
         let states = Arc::new(Mutex::new(Vec::new()));
         let sink = states.clone();
         (Control::new(move |event| sink.lock().unwrap().push(event.clone())), states)
+    }
+
+    #[test]
+    fn stop_invalidates_an_approval_even_before_the_first_grant() {
+        let (control, states) = control();
+        let asked_at = control.epoch();
+        control.end(Reason::Panic);
+        assert!(!control.grant_if_epoch(asked_at, NOW));
+        assert!(!control.is_active(NOW));
+        assert!(!states.lock().unwrap().iter().any(|event| event.active));
+        assert!(control.grant_if_epoch(control.epoch(), NOW));
+        assert!(control.is_active(NOW));
+    }
+
+    #[test]
+    fn stopping_an_existing_session_rejects_a_delayed_grant() {
+        let (control, _) = control();
+        control.grant(NOW);
+        let asked_at = control.epoch();
+        control.end(Reason::Stopped);
+        assert!(!control.grant_if_epoch(asked_at, NOW + 1));
+        assert!(!control.is_active(NOW + 1));
+    }
+
+    #[test]
+    fn panic_during_yolo_confirmation_cannot_be_undone_by_late_allow() {
+        struct PanicThenAllow<'a>(&'a Control);
+        impl Dialogs for PanicThenAllow<'_> {
+            fn ask_grant(&self) -> bool {
+                false
+            }
+            fn confirm(&self, _: &str) -> bool {
+                false
+            }
+            fn ask_yolo(&self) -> bool {
+                self.0.end(Reason::Panic);
+                true
+            }
+        }
+        let (control, _) = control();
+        let state = control.set_yolo(true, NOW, &PanicThenAllow(&control));
+        assert!(!state.yolo && !control.yolo(NOW));
     }
 
     #[test]

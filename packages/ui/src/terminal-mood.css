@@ -1,0 +1,28 @@
+.terminal-mood { min-width: 0; border-top: 1px solid var(--line); }
+.orchestration .terminal-mood-trigger {
+	display: flex; align-items: center; gap: 8px; width: 100%; min-height: 48px;
+	padding: 8px 0; border: 0; background: transparent; box-shadow: none;
+	font-weight: 400; text-align: left;
+}
+.terminal-mood-trigger span:first-of-type { flex: 1; }
+.terminal-mood-trigger svg { flex: none; }
+.terminal-mood-settings { display: grid; gap: 12px; min-width: 0; padding: 0 0 16px; }
+.terminal-mood-settings p { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.terminal-mood-panels { color: var(--muted); font-size: 13px; }
+.terminal-mood-confirm { display: flex; gap: 10px; align-items: center; min-height: 48px; line-height: 1.5; cursor: pointer; }
+.terminal-mood-confirm input { width: 20px; height: 20px; flex: none; margin: 0; accent-color: var(--accent); }
+.terminal-mood-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.terminal-mood-presets button { display: grid; gap: 5px; justify-items: start; min-height: 80px; min-width: 0; padding: 10px; text-align: left; }
+.terminal-mood-presets strong, .terminal-mood-presets button > span:last-child { max-width: 100%; overflow-wrap: anywhere; }
+.terminal-mood-presets button > span:last-child { font-size: 12px; font-weight: 400; }
+.terminal-mood-presets button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.terminal-mood-swatch { width: 28px; height: 5px; border-radius: 3px; background: var(--terminal-swatch); }
+.terminal-mood-presets [data-mood="hacker"] { --terminal-swatch: #6cf7a4; }
+.terminal-mood-presets [data-mood="afterlife"] { --terminal-swatch: #d5a6ff; }
+.terminal-mood-presets [data-mood="sunset"] { --terminal-swatch: #ffbd7c; }
+.terminal-mood-settings > button { min-height: 48px; }
+.terminal-mood-error { color: var(--red); }
+.terminal-mood button:focus-visible, .terminal-mood input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.terminal-mood button:active:not(:disabled) { background: var(--surface-2); }
+@media (max-width: 359px) { .terminal-mood-presets { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { .terminal-mood button { transition: none; } }

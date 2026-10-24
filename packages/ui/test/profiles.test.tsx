@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatSurface } from "../src/components/ChatSurface.tsx";
 import { ProfilesPanel } from "../src/components/ProfilesPanel.tsx";
 import { type DotState, initialState, reduce } from "../src/store.ts";
+import { openDesktopOptions } from "./desktop-options.ts";
 
 const roles = [
 	{ id: "orchestrator", label: "Main assistant" },
@@ -253,6 +254,7 @@ describe("ChatSurface profiles", () => {
 		const send = vi.fn();
 		const dispatch = vi.fn();
 		render(<ChatSurface variant="web" state={base()} send={send} dismiss={vi.fn()} dispatch={dispatch} />);
+		openDesktopOptions();
 		await userEvent.click(screen.getByRole("button", { name: "Profiles" }));
 		expect(send).toHaveBeenCalledWith({ type: "profiles_list" });
 		expect(dispatch).toHaveBeenCalledWith({ type: "profiles", open: true });

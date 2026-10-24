@@ -1,11 +1,24 @@
 import type { ClientMessage } from "@gentle-dot/protocol";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ConnectionInfo, tokenFromLocation } from "./client.ts";
-import { ChatSurface } from "./components/ChatSurface.tsx";
+import { createCompanionClient } from "./companion.ts";
+import { focusCompanionSession, useDesktopSessionContext } from "./companion-sessions.ts";
+import { CapriCompanion } from "./components/CapriCompanion.tsx";
+import { ChatSurface, type CompanionActivity } from "./components/ChatSurface.tsx";
 import type { ComputerControls } from "./components/Computer.tsx";
+import { DesktopCompanionBubble } from "./components/DesktopCompanionBubble.tsx";
+import { DesktopCompanionLauncher } from "./components/DesktopCompanionSurface.tsx";
 import { DotSurface } from "./components/DotSurface.tsx";
 import { GlowSurface } from "./components/GlowSurface.tsx";
-import { computerPermissions, requestComputerPermission, setComputerYolo, stopComputer } from "./computer.ts";
+import { SharedFileContext } from "./components/SharedMarkdown.tsx";
+import type { AnswerAppApproval } from "./components/types.ts";
+import {
+	computerCapabilities,
+	computerPermissions,
+	requestComputerPermission,
+	setComputerYolo,
+	stopComputer,
+} from "./computer.ts";
 import {
 	connectionInfo,
 	connectorCommand,
@@ -16,16 +29,29 @@ import {
 	startDragging,
 	togglePanel,
 } from "./desktop.ts";
+import { createOrchestrationClient } from "./orchestration.ts";
+import { createSharedFileClient } from "./shared-files.ts";
 import { createUploader } from "./uploads.ts";
+import { createUsageClient } from "./usage.ts";
+import { useCompanion } from "./useCompanion.ts";
+import { useCompanionLayer } from "./useCompanionLayer.ts";
 import { useComputerAvailable, useComputerState } from "./useComputer.ts";
+import { useDesktopCompanion } from "./useDesktopCompanion.ts";
 import { useDot } from "./useDot.ts";
 import { usePanelWindow } from "./usePanelWindow.ts";
+import { createWatchersClient } from "./watchers.ts";
 
 type Surface = "dot" | "panel" | "web";
 
-function currentSurface(): Surface | "glow" {
+function currentSurface(): Surface | "glow" | "companion-launcher" | "companion-bubble" {
 	const surface = new URLSearchParams(window.location.search).get("surface");
-	return surface === "dot" || surface === "panel" || surface === "glow" ? surface : "web";
+	return surface === "dot" ||
+		surface === "panel" ||
+		surface === "glow" ||
+		surface === "companion-launcher" ||
+		surface === "companion-bubble"
+		? surface
+		: "web";
 }
 
 /**
@@ -55,28 +81,161 @@ function isFullscreenShortcut(event: KeyboardEvent): boolean {
 }
 
 /** The desktop's glow overlay (S28) is its own surface: it never connects to the assistant. */
-export function App() {
-	const surface = currentSurface();
-	return surface === "glow" ? <GlowSurface /> : <Assistant surface={surface} />;
+export interface AppProps {
+	connection?: ConnectionInfo;
+	/** Device controls rendered inside the mobile tools sheet; enables the compact mobile layout. */
+	mobileControls?: ReactNode;
 }
 
-function Assistant({ surface }: { surface: Surface }) {
+export function App({ connection, mobileControls }: AppProps = {}) {
+	const surface = currentSurface();
+	return surface === "companion-launcher" ? (
+		<CompanionLauncher />
+	) : surface === "companion-bubble" ? (
+		<CompanionBubble />
+	) : surface === "glow" ? (
+		<GlowSurface />
+	) : (
+		<Assistant surface={surface} connection={connection} mobileControls={mobileControls} />
+	);
+}
+
+function CompanionBubble() {
+	const controls = useDesktopCompanion(inDesktop());
+	useEffect(() => {
+		document.documentElement.dataset.surface = "companion-bubble";
+	}, []);
+	return <DesktopCompanionBubble controls={controls} />;
+}
+
+/** The fixed desktop entry point has no assistant connection or chat history. */
+function CompanionLauncher() {
+	useEffect(() => {
+		document.documentElement.dataset.surface = "companion-launcher";
+	}, []);
+	return <DesktopCompanionLauncher toggle={togglePanel} />;
+}
+
+function Assistant({ surface, connection, mobileControls }: AppProps & { surface: Surface }) {
 	const [info, setInfo] = useState<ConnectionInfo | undefined>(undefined);
 	const [missingToken, setMissingToken] = useState(false);
 	/** Why the desktop app could not reach its assistant, in the app's own words (S35.2). */
 	const [unreachable, setUnreachable] = useState<string>();
 	const [focusKey, setFocusKey] = useState(0);
-	const { state, send, dismiss, dispatch } = useDot(info);
+	const { state, send, dismiss, dispatch, refreshHistory } = useDot(info);
 	// Files go to the daemon over HTTP, with the same access key as the WebSocket (S31.2).
+	const sharedFiles = useMemo(() => (info ? createSharedFileClient(info) : undefined), [info]);
 	const upload = useMemo(() => (info ? createUploader(info) : undefined), [info]);
+	const companion = useMemo(() => (info ? createCompanionClient(info) : undefined), [info]);
+	const companionControls = useCompanion(companion, state.connection === "open");
+	const [companionActivity, setCompanionActivity] = useState<CompanionActivity>({
+		sessions: false,
+		working: false,
+		needsYou: false,
+		speaking: false,
+	});
+	const usage = useMemo(() => (info ? createUsageClient(info) : undefined), [info]);
+	const watchers = useMemo(() => (info ? createWatchersClient(info) : undefined), [info]);
+	const orchestration = useMemo(
+		() => (info && surface !== "dot" ? createOrchestrationClient(info) : undefined),
+		[info, surface],
+	);
 	const conversations = useRef(state.features.conversations);
 	conversations.current = state.features.conversations;
 	// Computer control lives in the desktop app only (S24.7); the panel registers the helper.
 	const desktop = inDesktop();
+	const desktopCompanion = useDesktopCompanion(desktop && surface !== "web");
+	useDesktopSessionContext(
+		info,
+		desktopCompanion,
+		desktop && surface === "dot" && desktopCompanion.state.enabled,
+	);
+	useEffect(() => {
+		if (!desktop || surface !== "dot" || !info) return;
+		let live = true,
+			stop: (() => void) | undefined;
+		void import("@tauri-apps/api/event").then(async ({ listen }) => {
+			const unlisten = await listen<{ kind: string; paneId?: string; sessionId?: string }>(
+				"dot://capri-open-context",
+				(event) => {
+					const { kind, paneId, sessionId } = event.payload;
+					if (kind === "question" && paneId && sessionId)
+						void focusCompanionSession(info, { paneId, sessionId }).then(
+							() =>
+								desktopCompanion.context?.({
+									id: `focused:${paneId}:${Date.now()}`,
+									kind: "notification",
+									summary: "Sesión seleccionada en Herdr",
+									body: "Abre su ventana para responder.",
+								}),
+							() =>
+								desktopCompanion.context?.({
+									id: `focus-failed:${Date.now()}`,
+									kind: "notification",
+									summary: "Esa sesión ya no está disponible",
+									body: "Actualiza las sesiones para verla.",
+								}),
+						);
+				},
+			);
+			if (live) stop = unlisten;
+			else unlisten();
+		});
+		return () => {
+			live = false;
+			stop?.();
+		};
+	}, [desktop, surface, info, desktopCompanion.context]);
+	useEffect(() => {
+		if (!desktop || surface !== "panel") return;
+		const unsubscribe = onDesktopEvent("dot://capri-settings", () => {
+			window.dispatchEvent(new Event("gentle-dot-companion-settings"));
+		});
+		return () => {
+			void unsubscribe.then((stop) => stop());
+		};
+	}, [desktop, surface]);
+	const companionVisible =
+		surface !== "dot" &&
+		companionControls.settings.mode === "capri" &&
+		companionControls.settings.visible &&
+		!desktop;
+	const companionHost = useCompanionLayer(companionVisible);
+	const companionOverlay = companionVisible ? (
+		<CapriCompanion
+			portalHost={companionHost}
+			controls={companionControls}
+			state={companionActivity.working ? "working" : state.agentState}
+			connected={state.connection === "open"}
+			sessions={companionActivity.sessions}
+			needsYou={state.asks.length > 0 || companionActivity.needsYou}
+			attentionLabel={companionActivity.attentionLabel}
+			onAttention={
+				companionActivity.needsYou
+					? () => window.dispatchEvent(new Event("gentle-dot-companion-question"))
+					: undefined
+			}
+			speaking={companionActivity.speaking}
+			onSettings={() => window.dispatchEvent(new Event("gentle-dot-companion-settings"))}
+		/>
+	) : null;
 	const { session: computerSession, yolo } = useComputerState(desktop && surface !== "web");
 	const computerAvailable = useComputerAvailable(desktop && surface === "panel", state.connection === "open");
 	// Connector changes go through the app, on behalf of this window (S25.2); the web page has none.
 	const clientId = state.clientId;
+	const approvalState = useRef(state);
+	approvalState.current = state;
+	const answerAppApproval = useCallback<AnswerAppApproval>(
+		async (requestId, approved) => {
+			const current = approvalState.current;
+			if (!desktop || surface !== "panel" || current.connection !== "open" || !current.clientId)
+				throw new Error("No hay conexión segura con Gentle Dot. Espera a que vuelva a conectarse.");
+			const ask = current.asks.find((entry) => entry.requestId === requestId && entry.method === "app");
+			if (!ask) throw new Error("Esta solicitud ya no está pendiente.");
+			await connectorCommand(current.clientId, { type: "app_approval_reply", requestId, approved });
+		},
+		[desktop, surface],
+	);
 	const appSend = useCallback(
 		(message: ClientMessage) => {
 			if (!clientId) return;
@@ -99,11 +258,17 @@ function Assistant({ surface }: { surface: Surface }) {
 					stop: stopComputer,
 					setYolo: setComputerYolo,
 					permissions: computerPermissions,
+					capabilities: computerCapabilities,
 					requestPermission: requestComputerPermission,
 				}
 			: undefined;
 
 	useEffect(() => {
+		if (connection) {
+			setInfo(connection);
+			setMissingToken(false);
+			return;
+		}
 		if (inDesktop()) {
 			let live = true;
 			const connect = () =>
@@ -136,7 +301,7 @@ function Assistant({ surface }: { surface: Surface }) {
 		const found = browserConnection();
 		if (found) setInfo(found);
 		else setMissingToken(true);
-	}, []);
+	}, [connection]);
 
 	useEffect(() => {
 		if (surface === "dot") setDotState(state.agentState);
@@ -185,35 +350,50 @@ function Assistant({ surface }: { surface: Surface }) {
 				inControl={computerSession !== undefined}
 				yolo={yolo !== undefined}
 				toggle={togglePanel}
-				startDrag={() => void startDragging()}
+				startDrag={startDragging}
+				{...(desktop ? { desktopCompanion } : {})}
 			/>
 		);
 	}
 	if (unreachable !== undefined || missingToken) {
 		return (
-			<div className="chat chat-web">
-				<div className="status" role="status">
-					{unreachable ??
-						"This page needs your access key. Open it from the Gentle Dot menu (Open in browser)."}
+			<>
+				<div className="chat chat-web">
+					<div className="status" role="status">
+						{unreachable ??
+							"This page needs your access key. Open it from the Gentle Dot menu (Open in browser)."}
+					</div>
 				</div>
-			</div>
+				{companionOverlay}
+			</>
 		);
 	}
 	return (
-		<ChatSurface
-			variant={surface === "panel" ? "panel" : "web"}
-			state={state}
-			send={send}
-			dismiss={dismiss}
-			dispatch={dispatch}
-			focusKey={focusKey}
-			{...(surface === "panel" ? { onHide: hidePanel } : {})}
-			{...(desktop && surface === "panel" ? { appSend } : {})}
-			{...(computer ? { computer } : {})}
-			{...(desktop && surface === "panel" ? { voiceModel: true } : {})}
-			{...(desktop && surface === "panel" ? { panelWindow: panel.controls } : {})}
-			{...(desktop && surface === "panel" ? { settings: true } : {})}
-			{...(upload ? { upload } : {})}
-		/>
+		<SharedFileContext value={sharedFiles}>
+			<ChatSurface
+				variant={surface === "panel" ? "panel" : "web"}
+				companionControls={companionControls}
+				onCompanionActivity={setCompanionActivity}
+				{...(desktop && surface === "panel" ? { desktopCompanion } : {})}
+				state={state}
+				send={send}
+				refreshHistory={refreshHistory}
+				dismiss={dismiss}
+				dispatch={dispatch}
+				focusKey={focusKey}
+				{...(surface === "panel" ? { onHide: hidePanel } : {})}
+				{...(desktop && surface === "panel" ? { appSend, answerAppApproval } : {})}
+				{...(computer ? { computer } : {})}
+				{...(desktop && surface === "panel" ? { voiceModel: true } : {})}
+				{...(desktop && surface === "panel" ? { panelWindow: panel.controls } : {})}
+				{...(desktop && surface === "panel" ? { settings: true } : {})}
+				{...(upload ? { upload } : {})}
+				{...(orchestration ? { orchestration } : {})}
+				{...(usage ? { usage } : {})}
+				{...(watchers ? { watchers } : {})}
+				{...(mobileControls !== undefined ? { mobileControls } : {})}
+			/>
+			{companionOverlay}
+		</SharedFileContext>
 	);
 }

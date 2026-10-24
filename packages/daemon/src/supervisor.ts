@@ -49,6 +49,10 @@ export interface SupervisorOptions {
 	startTimeoutMs?: number;
 	/** Grace period after closing stdin before SIGTERM. Default 5s. */
 	stopTimeoutMs?: number;
+	/** Consume every new human instruction at the next checkpoint instead of one per model turn. */
+	steeringMode?: "all" | "one-at-a-time";
+	/** The bundled live-input extension can yield inference without aborting a tool. */
+	liveInput?: boolean;
 	log?: (line: string) => void;
 }
 
@@ -75,9 +79,17 @@ export class AgentSupervisor {
 	modelImages: boolean | undefined;
 
 	private child: ChildProcess | undefined;
+	/** One initialization owns the child and its RPC handshake at a time. */
+	private initialization: Promise<void> | undefined;
+	/** Concurrent intentional restarts share one close/spawn operation. */
+	private restartOperation: Promise<void> | undefined;
 	private readonly pending = new Map<string, Pending>();
 	private readonly listeners = new Set<(event: SupervisorEvent) => void>();
 	private nextId = 0;
+	private liveInputReady = false;
+	private inputHandoff = false;
+	private inputEpoch = 0;
+	private steeringPending = 0;
 	/** Count of `agent_settled` records seen, to order them against prompt responses. */
 	private settledRuns = 0;
 	private attempts = 0;
@@ -122,17 +134,52 @@ export class AgentSupervisor {
 
 	/** Spawns the agent and resolves once it answered `get_state`. */
 	async start(): Promise<void> {
+		if (this.restartOperation) return this.restartOperation;
+		if (this.initialization) return this.initialization;
+		if (this.child && this.state === "ready") return;
 		this.stopping = false;
+		clearTimeout(this.restartTimer);
+		this.restartTimer = undefined;
 		mkdirSync(this.sessionDir, { recursive: true });
 		this.setState("starting");
-		await this.spawnAndInitialize();
+		await this.initialize();
 	}
 
 	/** Sends a command and resolves with its successful response. */
 	async request(command: AgentRecord): Promise<RpcResponse> {
 		if (this.state !== "ready") throw new Error("Agent is not ready");
+		if (["abort", "new_session", "switch_session"].includes(command.type)) this.inputEpoch++;
+		const inputEpoch = this.inputEpoch;
+		// Cancel any automatic inference handoff before an explicit Stop or session
+		// switch. Both commands travel down the same private engine stdin, in order.
+		if (command.type === "abort" && this.liveInputReady) {
+			await this.rawRequest({ type: "prompt", message: "/dot-live-input cancel" }, 30_000);
+		}
 		const settledBefore = this.settledRuns;
-		const response = await this.rawRequest(command, this.options.requestTimeoutMs ?? 300_000);
+		// Pi defers `prompt` during settlement, potentially putting a later human
+		// message ahead of the one already in steering. Use its native steer RPC
+		// throughout the handoff so text and images keep their arrival order.
+		const delivered =
+			this.liveInputReady &&
+			this.inputHandoff &&
+			command.type === "prompt" &&
+			command.streamingBehavior === "steer"
+				? { ...command, type: "steer" }
+				: command;
+		const response = await this.rawRequest(delivered, this.options.requestTimeoutMs ?? 300_000);
+		if (
+			this.liveInputReady &&
+			inputEpoch === this.inputEpoch &&
+			this.steeringPending > 0 &&
+			((command.type === "prompt" && command.streamingBehavior === "steer") || command.type === "steer") &&
+			(response.data as { disposition?: string } | undefined)?.disposition === "queued"
+		) {
+			// Only after the engine acknowledges the real message. The extension checks
+			// its own phase atomically, so a tool that started since our last event is safe.
+			void this.rawRequest({ type: "prompt", message: "/dot-live-input interrupt" }, 300_000).catch(
+				(error: Error) => this.log(`live input handoff failed: ${error.message}`),
+			);
+		}
 		// The run may already have settled before this response was handled.
 		if (
 			command.type === "prompt" &&
@@ -158,27 +205,51 @@ export class AgentSupervisor {
 	 * Replaces the agent process on purpose (for example after new credentials),
 	 * reopening the same conversation. Not reported as an interruption.
 	 */
-	async restart(): Promise<void> {
+	restart(): Promise<void> {
+		if (this.restartOperation) return this.restartOperation;
+		this.inputEpoch++;
+		const operation = this.restartOnce().finally(() => {
+			if (this.restartOperation === operation) this.restartOperation = undefined;
+		});
+		this.restartOperation = operation;
+		return operation;
+	}
+
+	private async restartOnce(): Promise<void> {
+		// Registering the native computer helper can change the tools while the first
+		// RPC handshake is still starting. Let that handshake settle before replacing
+		// its child; otherwise both startup paths can spawn and overwrite each other.
+		if (this.initialization) await this.initialization.catch(() => {});
 		const child = this.child;
 		if (!child || this.stopping) return;
+		clearTimeout(this.restartTimer);
+		this.restartTimer = undefined;
 		this.restarting = true;
+		this.setState("restarting");
 		const closed = new Promise<void>((resolve) => this.closeWaiters.push(resolve));
 		child.stdin?.end();
 		const term = setTimeout(() => child.kill("SIGTERM"), this.options.stopTimeoutMs ?? 5000);
-		await closed;
-		clearTimeout(term);
+		const kill = setTimeout(() => child.kill("SIGKILL"), (this.options.stopTimeoutMs ?? 5000) + 2000);
+		try {
+			await closed;
+		} finally {
+			clearTimeout(term);
+			clearTimeout(kill);
+		}
 		// Stopped while the old process was closing: nothing is started again.
 		if (this.stopping) {
 			this.setState("stopped");
 			return;
 		}
 		this.setState("restarting");
-		await this.spawnAndInitialize();
+		await this.initialize();
 	}
 
 	async stop(): Promise<void> {
+		this.inputEpoch++;
 		this.stopping = true;
 		clearTimeout(this.restartTimer);
+		this.restartTimer = undefined;
 		const child = this.child;
 		if (!child) {
 			this.setState("stopped");
@@ -193,18 +264,44 @@ export class AgentSupervisor {
 		clearTimeout(kill);
 	}
 
+	private initialize(): Promise<void> {
+		if (this.initialization) return this.initialization;
+		const operation = this.spawnAndInitialize().finally(() => {
+			if (this.initialization === operation) this.initialization = undefined;
+		});
+		this.initialization = operation;
+		return operation;
+	}
+
 	private async spawnAndInitialize(): Promise<void> {
+		this.inputEpoch++;
+		this.liveInputReady = false;
+		this.inputHandoff = false;
+		this.steeringPending = 0;
 		const wanted = this.sessionFile;
-		const child = this.spawnChild();
+		let child: ChildProcess | undefined;
 		try {
+			child = this.spawnChild();
 			const state = await this.rawRequest({ type: "get_state" }, this.options.startTimeoutMs ?? 60_000);
 			const current = (state.data as { sessionFile?: string } | undefined)?.sessionFile;
 			if (wanted && wanted !== current && existsSync(wanted)) {
 				await this.rawRequest({ type: "switch_session", sessionPath: wanted }, 30_000);
 			}
+			if (this.options.steeringMode) {
+				await this.rawRequest({ type: "set_steering_mode", mode: this.options.steeringMode }, 30_000);
+			}
+			if (this.options.liveInput) {
+				const commands = await this.rawRequest({ type: "get_commands" }, 30_000);
+				const list = (commands.data as { commands?: { name?: string }[] } | undefined)?.commands;
+				this.liveInputReady = Array.isArray(list) && list.some((entry) => entry.name === "dot-live-input");
+				if (!this.liveInputReady)
+					this.log("live input extension unavailable; using native steering checkpoints");
+			}
 			await this.refreshSession();
 		} catch (error) {
-			if (this.child === child) child.kill("SIGKILL");
+			if (child && this.child === child) child.kill("SIGKILL");
+			// Preparation/spawn can fail before any child exists to emit close and retry.
+			else if (!child && !this.child && !this.stopping) this.scheduleRestart();
 			throw error;
 		}
 		if (this.child !== child) throw new Error("Agent exited during startup");
@@ -252,6 +349,16 @@ export class AgentSupervisor {
 	}
 
 	private handleRecord(record: AgentRecord): void {
+		if (record.type === "queue_update" && Array.isArray(record.steering)) {
+			this.steeringPending = record.steering.length;
+		}
+		if (
+			record.type === "extension_ui_request" &&
+			record.method === "setStatus" &&
+			record.statusKey === "gentle-dot-live-input"
+		) {
+			this.inputHandoff = record.statusText === "interrupting";
+		}
 		if (record.type === "response") {
 			const response = record as unknown as RpcResponse;
 			const pending = response.id === undefined ? undefined : this.pending.get(response.id);
@@ -298,14 +405,19 @@ export class AgentSupervisor {
 	}
 
 	private scheduleRestart(): void {
+		// close and a rejected initialization can both request a retry for the same child.
+		if (this.stopping || this.restartTimer) return;
 		const backoff = this.options.backoffMs ?? DEFAULT_BACKOFF_MS;
 		if (this.spawnedAt && Date.now() - this.spawnedAt > (this.options.stableMs ?? 30_000)) this.attempts = 0;
+		// A healthy run earns one reset. Failed starts cannot keep reusing its old uptime.
+		this.spawnedAt = 0;
 		const delay = backoff[Math.min(this.attempts, backoff.length - 1)] ?? 1000;
 		this.attempts += 1;
 		this.setState("restarting");
 		this.restartTimer = setTimeout(() => {
+			this.restartTimer = undefined;
 			if (this.stopping) return;
-			this.spawnAndInitialize().catch((error: Error) => {
+			this.initialize().catch((error: Error) => {
 				this.log(`agent restart failed: ${error.message}`);
 				// A child that is still alive will close and schedule the next attempt.
 				if (!this.child && !this.stopping) this.scheduleRestart();

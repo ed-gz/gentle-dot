@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	APP_REQUIRED,
 	isAppCommand,
+	isPinCommand,
 	isValidProfileName,
 	PROTOCOL_VERSION,
 	parseClientMessage,
@@ -10,6 +11,36 @@ import {
 } from "../src/index.ts";
 
 describe("protocol", () => {
+	it("correlates optional history refresh requests without changing legacy history commands", () => {
+		expect(parseClientMessage('{"type":"get_history"}')).toEqual({ type: "get_history" });
+		expect(parseClientMessage('{"type":"get_history","requestId":"refresh-123"}')).toEqual({
+			type: "get_history",
+			requestId: "refresh-123",
+		});
+		for (const requestId of ["", 12, null, "r".repeat(300)])
+			expect(parseClientMessage(JSON.stringify({ type: "get_history", requestId }))).toBeUndefined();
+	});
+	it("allows exact app approval replies only as native commands, never as a PIN command", () => {
+		for (const approved of [true, false]) {
+			const command = { type: "app_approval_reply", requestId: "app-fixture", approved };
+			const parsed = parseClientMessage(JSON.stringify(command));
+			expect(parsed).toEqual(command);
+			if (!parsed) throw new Error("Missing parsed command");
+			expect(isAppCommand(parsed)).toBe(true);
+			expect(isPinCommand(parsed)).toBe(false);
+			expect(
+				parseClientMessage(JSON.stringify({ type: "pin_command", pin: "123456", command })),
+			).toBeUndefined();
+		}
+		for (const value of [
+			{ requestId: "app-fixture", approved: "true" },
+			{ requestId: "app-fixture", approved: 1 },
+			{ requestId: "app-fixture" },
+			{ requestId: "pin-fixture", approved: true },
+			{ requestId: `app-${"a".repeat(200)}`, approved: true },
+		])
+			expect(parseClientMessage(JSON.stringify({ type: "app_approval_reply", ...value }))).toBeUndefined();
+	});
 	it("exposes version 1", () => {
 		expect(PROTOCOL_VERSION).toBe(1);
 	});

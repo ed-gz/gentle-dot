@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-companion-context-dismiss"
+description = "Enables the desktop_companion_context_dismiss command without any pre-configured scope."
+commands.allow = ["desktop_companion_context_dismiss"]
+
+[[permission]]
+identifier = "deny-desktop-companion-context-dismiss"
+description = "Denies the desktop_companion_context_dismiss command without any pre-configured scope."
+commands.deny = ["desktop_companion_context_dismiss"]

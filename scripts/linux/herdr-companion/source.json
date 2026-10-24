@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "upstream": "https://github.com/herdrdev/herdr.git",
+  "tag": "v0.9.3",
+  "baseCommit": "7b116c05bfda646af39d2524c54e70c751f57ee8",
+  "patchSha256": "fd954301415c48efe85351b2fa16ad03070228e17711fab1bf0a7d8d0bacdef3",
+  "files": {
+    "src/client/mod.rs": "1a2b209390eb4a2484ebbc92d4238f562d2e286589df49570bd84bc18564b9c2",
+    "src/client/shell.rs": "8cf11780b6104d1664ca94e08bc2ac62bc015dcb06a1783052a75cb0498a36da",
+    "src/client/shell/tests/mod.rs": "2d8cb69dba46073c30b7b43aa283f3a71a73ce4bda5a647f8d7ca5427c15e650",
+    "src/client/state.rs": "9ef00201730ff6705c3cdd4636efbf9f736f95970644e6c75c8d86375155f4fb",
+    "src/platform/linux.rs": "3ec2764f5c77dea5b28a008423c7d19868d6e8c599de748d147903b4b86f4304",
+    "src/platform/mod.rs": "8bbab273aac03d3fec8bb68fcf02798ebcb93ba1973d21104be8c28b031873c5",
+    "src/client/shell/companion_layout.rs": "e9a65e0fd6950c2cb5b36ec3f6ea56053cba37162b78efc4f03651b561586578",
+    "src/platform/companion_layout.rs": "7a4ad5ca4a8818c1b838c9a4407da9f9cf883097053edc7469f34d8f86385303",
+    "src/platform/linux/companion_layout.rs": "fda9f9c03187e536b5dccc7385c7f586661e4e36f57d7ffa117653f7f59f66f2",
+    "Cargo.lock": "bb3ab17351af496a2cc316a11c81a97f90959cd37c3d5625f2f8028c0133ffca",
+    "Cargo.toml": "7bda0afdbc5eaa3db2f46d7b97480b4bfa816de4e0d7babe2df9af61391472cf",
+    "src/protocol/wire.rs": "024b0f9d3816cbc8313d83fce7b846c48cccc0379a59d46240816a3b9536d948",
+    "src/protocol/endpoint.rs": "f1748b5dd647bed8a167c03160543fbc5069a86960d8c1d7929330e81dda2262",
+    "tests/fixtures/endpoint-snapshot-v1.json": "a1e4b57f593e4e37d8c2089ea51a3a16ab958201780b714d96ff5d3beeb1163f",
+    "tests/fixtures/endpoint-method-shapes-v1.json": "a1691c44ed8fd5a3cee213ea9bf8d2ee777169a945bcbcc5ec77d273fd713f01"
+  }
+}
