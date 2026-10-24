@@ -18,6 +18,10 @@ pub enum Kind {
     Submitted,
     Working,
     Question,
+    Attention,
+    Done,
+    Error,
+    Reading,
     Capture,
     Download,
     Notification,
@@ -209,6 +213,20 @@ impl NotificationSource {
     }
 }
 impl Kind {
+    /// Native cue precedence (higher wins while unexpired): question/attention >
+    /// done/error > typing > working > reading/submitted > idle. Existing wire kinds
+    /// retain Notification as attention, Capture/Download as completion, and
+    /// Rest as idle. Explicit Done/Error/Reading/Attention are additive wire aliases.
+    pub fn priority(self) -> u8 {
+        match self {
+            Self::Question | Self::Attention | Self::Notification => 5,
+            Self::Done | Self::Error | Self::Capture | Self::Download => 4,
+            Self::Typing | Self::InputReady => 3,
+            Self::Working => 2,
+            Self::Reading | Self::Submitted => 1,
+            Self::Music | Self::Rest => 0,
+        }
+    }
     pub fn visual_only(self) -> bool {
         matches!(self, Self::Capture | Self::Download)
     }
@@ -331,6 +349,11 @@ impl Request {
     }
 }
 impl Context {
+    pub fn accepts(&self, kind: Kind, now: u64) -> bool {
+        self.cue.iter().chain(self.notification.iter()).all(|current| {
+            current.expires_at <= now || kind.priority() >= current.kind.priority()
+        })
+    }
     pub fn bubble(&self) -> Option<&Cue> {
         self.notification.iter().chain(self.cue.iter()).find(|c| {
             !c.kind.visual_only()

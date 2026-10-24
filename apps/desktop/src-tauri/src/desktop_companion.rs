@@ -36,7 +36,6 @@ pub const LAUNCHER_TITLE: &str = "Gentle Dot Launcher";
 const EVENT: &str = "dot://desktop-companion";
 const SIZE: i32 = 156;
 const LAUNCHER_SIZE: i32 = 56;
-const MOVE_EVERY: Duration = Duration::from_secs(20);
 const VISIBLE_FOR: Duration = Duration::from_secs(45);
 const HIDDEN_FOR: Duration = Duration::from_secs(10);
 // A short signal around the compositor's existing move animation, not frame-rate IPC.
@@ -679,7 +678,6 @@ fn automatic_actions(
     visible: bool,
     manually_hidden: bool,
     appearance_elapsed: Duration,
-    move_elapsed: Duration,
 ) -> (bool, bool) {
     if prefs.pinned {
         return (false, false);
@@ -688,7 +686,8 @@ fn automatic_actions(
         prefs.appearances
             && !manually_hidden
             && appearance_elapsed >= if visible { VISIBLE_FOR } else { HIDDEN_FOR },
-        prefs.motion && visible && move_elapsed >= MOVE_EVERY,
+        // Timers may change visibility, never position. Moves only follow accepted cues.
+        false,
     )
 }
 #[derive(Default)]
@@ -787,6 +786,82 @@ fn bubble_position(
             && *y + height <= zone.y + zone.height
     })
 }
+// Small, intentional allow-list; only window metadata is inspected, never terminal cells.
+const TERMINAL_CLASSES: &[&str] = &["kitty", "herdr"];
+const TERMINAL_TITLES: &[&str] = &["gentle shell"];
+
+fn terminal_target(active: &Value, clients: &Value) -> Option<Target> {
+    let address = active["address"].as_str().filter(|address| !address.is_empty())?;
+    let client = clients.as_array()?.iter().find(|c| {
+        c["address"].as_str() == Some(address)
+            && c["mapped"].as_bool() == Some(true)
+            && c["title"] == active["title"]
+            && c["class"] == active["class"]
+            && c["at"] == active["at"]
+            && c["size"] == active["size"]
+    })?;
+    let class = client["class"].as_str()?.to_lowercase();
+    let title = client["title"].as_str()?.to_lowercase();
+    if !TERMINAL_CLASSES.contains(&class.as_str())
+        && !TERMINAL_TITLES.iter().any(|allowed| title.contains(allowed))
+    {
+        return None;
+    }
+    let target = Target {
+        x: client["at"][0].as_f64()?,
+        y: client["at"][1].as_f64()?,
+        width: client["size"][0].as_f64()?,
+        height: client["size"][1].as_f64()?,
+    };
+    ([target.x, target.y, target.width, target.height]
+        .iter()
+        .all(|v| v.is_finite())
+        && target.x.abs() <= 100_000.
+        && target.y.abs() <= 100_000.
+        && (1. ..=32_768.).contains(&target.width)
+        && (1. ..=32_768.).contains(&target.height))
+    .then_some(target)
+}
+fn focused_terminal_target() -> Option<Target> {
+    let active = query("activewindow").ok()?;
+    let target = terminal_target(&active, &query("clients").ok()?)?;
+    // Revalidate identity after reading the client list; never move toward a stale focus.
+    let fresh = query("activewindow").ok()?;
+    (fresh["address"] == active["address"]
+        && fresh["title"] == active["title"]
+        && fresh["class"] == active["class"]
+        && fresh["at"] == active["at"]
+        && fresh["size"] == active["size"])
+    .then_some(target)
+}
+fn target_zone(prefs: &Preferences, monitors: &[Monitor], target: &Target) -> Option<Area> {
+    let cx = target.x + target.width / 2.;
+    let cy = target.y + target.height / 2.;
+    allowed_areas(prefs, monitors).into_iter().find_map(|(_, a)| {
+        (cx >= a.x as f64
+            && cx < (a.x + a.width) as f64
+            && cy >= a.y as f64
+            && cy < (a.y + a.height) as f64)
+            .then_some(a)
+    })
+}
+/// Bottom-aligned aside, or below the bottom border. Never clamp into input rows.
+/// If the terminal fills the permitted area, staying put is safer than covering it.
+fn terminal_destination(target: &Target, zone: Area, size: i32) -> Option<(i32, i32)> {
+    let right = (target.x + target.width).ceil() as i32;
+    let left = target.x.floor() as i32;
+    let bottom = (target.y + target.height).ceil() as i32;
+    let y = (bottom - size).clamp(zone.y, zone.y + (zone.height - size).max(0));
+    let x = (right - size).clamp(zone.x, zone.x + (zone.width - size).max(0));
+    [(right, y), (left - size, y), (x, bottom)]
+        .into_iter()
+        .find(|(x, y)| {
+            *x >= zone.x
+                && *y >= zone.y
+                && *x + size <= zone.x + zone.width
+                && *y + size <= zone.y + zone.height
+        })
+}
 fn context_destination(
     prefs: &Preferences,
     monitors: &[Monitor],
@@ -797,15 +872,9 @@ fn context_destination(
     if prefs.pinned || !prefs.motion {
         return None;
     }
-    let cx = target.x + target.width / 2.;
     let cy = target.y + target.height / 2.;
     // No fallback to a different monitor/zone when the indicated target is excluded.
-    let (_, zone) = allowed_areas(prefs, monitors).into_iter().find(|(_, a)| {
-        cx >= a.x as f64
-            && cx < (a.x + a.width) as f64
-            && cy >= a.y as f64
-            && cy < (a.y + a.height) as f64
-    })?;
+    let zone = target_zone(prefs, monitors, target)?;
     let fits = |x: i32, y: i32| {
         x >= zone.x
             && y >= zone.y
@@ -852,9 +921,7 @@ struct Runtime {
     visible: bool,
     reason: Option<String>,
     baseline: Option<Client>,
-    last_move: Instant,
     last_appearance: Instant,
-    step: usize,
     travel: TravelPulse,
     monitors: Vec<Monitor>,
     last_topology: Instant,
@@ -1069,6 +1136,7 @@ impl Controller {
         &self,
         target: &Target,
         placement: Option<Placement>,
+        terminal_fallback: bool,
     ) -> Result<bool, String> {
         let s = self.state();
         if !s.enabled || !s.visible || s.pinned || s.paused || !s.motion {
@@ -1079,7 +1147,13 @@ impl Controller {
             let i = self.inner.lock().unwrap();
             (i.prefs.clone(), i.monitors.clone())
         };
-        let Some((x, y)) = context_destination(&prefs, &monitors, &dot, target, placement) else {
+        let destination = if terminal_fallback {
+            target_zone(&prefs, &monitors, target)
+                .and_then(|zone| terminal_destination(target, zone, SIZE))
+        } else {
+            context_destination(&prefs, &monitors, &dot, target, placement)
+        };
+        let Some((x, y)) = destination else {
             return Ok(false);
         };
         if (dot.x, dot.y) == (x, y) {
@@ -1102,7 +1176,6 @@ impl Controller {
             self.cancel_travel();
         }
         moved?;
-        self.inner.lock().unwrap().last_move = Instant::now();
         Ok(true)
     }
     fn context(&self, request: ContextRequest) -> Result<State, String> {
@@ -1114,7 +1187,10 @@ impl Controller {
                 if i.context
                     .cue
                     .as_ref()
-                    .is_some_and(|c| request.id.as_ref().is_none_or(|id| *id == c.id))
+                    .is_some_and(|c| request.id.as_ref().map_or(
+                        c.expires_at <= crate::desktop_context::now_ms(),
+                        |id| *id == c.id,
+                    ))
                 {
                     i.context.cue = None;
                 }
@@ -1135,34 +1211,23 @@ impl Controller {
                 drop(i);
                 return Ok(self.state());
             }
-            let mut cue = request.cue();
-            cue.placement = None;
-            if let Some(current) = i.context.cue.as_mut().filter(|c| c.id == cue.id) {
-                current.expires_at = cue.expires_at;
-                if request.target.is_none() || request.placement.is_none() {
-                    current.placement = None;
-                    drop(i);
-                    self.emit();
-                    return Ok(self.state());
-                }
-                // Fresh measured geometry can change while a session remains idle/typing.
-                // Revalidate placement; a pin, drag, excluded area or failed move clears it.
-                current.placement = None;
-            }
-            if i.context.cue.as_ref().is_some_and(|c| {
-                c.kind == Kind::Question && c.expires_at > crate::desktop_context::now_ms()
-            }) && matches!(
-                cue.kind,
-                Kind::Typing | Kind::Submitted | Kind::Working | Kind::InputReady
-            ) {
+            if !i.context.accepts(request.kind, crate::desktop_context::now_ms()) {
                 drop(i);
                 return Ok(self.state());
             }
+            let mut cue = request.cue();
+            // Placement is recomputed even for repeated cue IDs: focus/geometry can change.
+            cue.placement = None;
             i.context.cue = Some(cue);
         }
         if matches!(
             request.kind,
-            Kind::Question | Kind::Capture | Kind::Notification
+            Kind::Question
+                | Kind::Attention
+                | Kind::Error
+                | Kind::Done
+                | Kind::Capture
+                | Kind::Notification
         ) {
             let show = {
                 let i = self.inner.lock().unwrap();
@@ -1172,11 +1237,23 @@ impl Controller {
                 self.paint(true)?;
             }
         }
-        if let Some(target) = request.target.as_ref() {
-            let placed = self.contextual_move(target, request.placement)?;
+        // Supplied verified editor geometry always wins. Failure to fit is not permission
+        // to move somewhere else. Only target-less typing cues use window metadata.
+        let fallback = request.target.is_none()
+            && matches!(request.kind, Kind::Typing | Kind::InputReady);
+        let target = request
+            .target
+            .clone()
+            .or_else(|| fallback.then(focused_terminal_target).flatten());
+        if let Some(target) = target.as_ref() {
+            let placed = self.contextual_move(target, request.placement, fallback)?;
             if placed {
                 if let Some(cue) = self.inner.lock().unwrap().context.cue.as_mut() {
-                    cue.placement = request.placement;
+                    cue.placement = if fallback {
+                        Some(Placement::Aside)
+                    } else {
+                        request.placement
+                    };
                 }
             }
         }
@@ -1627,7 +1704,6 @@ impl Controller {
                 i.baseline = None;
             }
             i.reason = None;
-            i.last_move = Instant::now();
             i.last_appearance = Instant::now();
         }
         if next.enabled && next.pinned && next.pin_position.is_none() {
@@ -1640,10 +1716,8 @@ impl Controller {
         self.emit();
         Ok(self.state())
     }
-    fn move_by(&self, dx: i32, dy: i32, automatic: bool) -> Result<(), String> {
-        if !automatic {
-            self.cancel_travel();
-        }
+    fn move_by(&self, dx: i32, dy: i32) -> Result<(), String> {
+        self.cancel_travel();
         if !self.state().enabled || self.control.active() {
             return Err("Capri no está disponible para moverse ahora".into());
         }
@@ -1660,21 +1734,9 @@ impl Controller {
         };
         let (x, y) = a.clamp(base_x.saturating_add(dx), base_y.saturating_add(dy), SIZE);
         if (x, y) == (dot.x, dot.y) {
-            self.inner.lock().unwrap().last_move = Instant::now();
             return Ok(());
         }
-        if automatic {
-            // Pointer/focus/control signals can arrive while resolving geometry. Recheck before
-            // starting travel; manual dragging never enters this branch.
-            let state = self.state();
-            if state.paused || state.pinned || !state.motion || !state.visible {
-                return Ok(());
-            }
-            self.inner.lock().unwrap().travel.start(Instant::now());
-            self.emit();
-        }
-        if automatic && self.state().paused {
-            self.cancel_travel();
+        if self.control.active() {
             return Ok(());
         }
         self.programmatic_position(x, y);
@@ -1689,12 +1751,9 @@ impl Controller {
             self.cancel_travel();
         }
         moved?;
-        self.inner.lock().unwrap().last_move = Instant::now();
         self.sync_bubble()?;
-        if !automatic {
-            self.save_pinned_position()?;
-            self.emit();
-        }
+        self.save_pinned_position()?;
+        self.emit();
         Ok(())
     }
     fn recall(&self) -> Result<State, String> {
@@ -1714,11 +1773,7 @@ impl Controller {
         }
         self.inner.lock().unwrap().manual_hidden = false;
         self.paint(true)?;
-        {
-            let mut i = self.inner.lock().unwrap();
-            i.last_move = Instant::now();
-            i.reason = None;
-        }
+        self.inner.lock().unwrap().reason = None;
         self.emit();
         Ok(self.state())
     }
@@ -1793,14 +1848,13 @@ impl Controller {
             let cancelled = self.inner.lock().unwrap().travel.cancel();
             return Ok(finished || cancelled || changed);
         }
-        let (appearance, movement) = {
+        let (appearance, _) = {
             let i = self.inner.lock().unwrap();
             automatic_actions(
                 &i.prefs,
                 s.visible,
                 i.manual_hidden,
                 i.last_appearance.elapsed(),
-                i.last_move.elapsed(),
             )
         };
         let contextual = {
@@ -1814,16 +1868,6 @@ impl Controller {
         if appearance && !contextual {
             self.paint(!s.visible)?;
             return Ok(true);
-        }
-        if movement && !contextual {
-            let step = {
-                let mut i = self.inner.lock().unwrap();
-                let s = i.step;
-                i.step = (s + 1) % 4;
-                s
-            };
-            let (dx, dy) = [(-140, -80), (140, -80), (140, 80), (-140, 80)][step];
-            self.move_by(dx, dy, true)?;
         }
         Ok(finished || changed)
     }
@@ -1859,9 +1903,7 @@ pub fn init(app: &AppHandle, data: &std::path::Path) {
             visible: false,
             reason: None,
             baseline: None,
-            last_move: Instant::now(),
             last_appearance: Instant::now(),
-            step: 0,
             travel: TravelPulse::default(),
             monitors: Vec::new(),
             last_topology: Instant::now() - Duration::from_secs(5),
@@ -2072,6 +2114,7 @@ pub(crate) fn offer_notification_with_source(
             || i.manual_hidden
             || i.zone_unavailable
             || i.context.notification.is_some()
+            || !i.context.accepts(kind, crate::desktop_context::now_ms())
             || i.pending_offer.is_some()
         {
             return false;
@@ -2131,7 +2174,6 @@ pub fn movement_observed(app: &AppHandle) {
     if let Some(c) = app.try_state::<Arc<Controller>>() {
         let mut i = c.inner.lock().unwrap();
         if i.prefs.enabled {
-            i.last_move = Instant::now();
             if i.position_settle.movement(Instant::now()) {
                 c.settle_position.store(true, Ordering::SeqCst);
             }
@@ -2185,11 +2227,7 @@ pub fn restore_control(app: &AppHandle, operation: u64) {
             let _serial = worker.operations.lock().unwrap();
             let _ = worker.sync_bubble();
         });
-        {
-            let mut i = c.inner.lock().unwrap();
-            i.last_move = Instant::now();
-            i.last_appearance = Instant::now();
-        }
+        c.inner.lock().unwrap().last_appearance = Instant::now();
         c.emit();
     }
 }
@@ -2440,7 +2478,6 @@ pub fn desktop_companion_interaction(app: AppHandle, active: bool) -> State {
     {
         let mut i = c.inner.lock().unwrap();
         i.travel.cancel();
-        i.last_move = Instant::now();
         i.last_appearance = Instant::now();
     }
     c.emit();
@@ -2474,11 +2511,7 @@ pub fn desktop_companion_menu(
         return Err("Capri no está disponible ahora".into());
     }
     c.cancel_travel();
-    {
-        let mut i = c.inner.lock().unwrap();
-        i.last_move = Instant::now();
-        i.last_appearance = Instant::now();
-    }
+    c.inner.lock().unwrap().last_appearance = Instant::now();
     use tauri::menu::{Menu, MenuItem};
     let menu = Menu::new(&app).map_err(|e| e.to_string())?;
     for (id, text) in [
@@ -2547,7 +2580,7 @@ pub async fn desktop_companion_move(app: AppHandle, dx: i32, dy: i32) -> Result<
     let c = app.state::<Arc<Controller>>().inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _serial = c.operations.lock().unwrap();
-        c.move_by(dx, dy, false)?;
+        c.move_by(dx, dy)?;
         Ok(c.state())
     })
     .await
@@ -2981,6 +3014,88 @@ mod tests {
         assert!(destination(&restored, &resized[..1], &current, true).is_none());
     }
     #[test]
+    fn idle_never_schedules_a_move() {
+        let prefs = Preferences {
+            enabled: true,
+            ..Preferences::default()
+        };
+        assert!(!automatic_actions(&prefs, true, false, Duration::from_secs(3600)).1);
+    }
+    #[test]
+    fn cue_priority_is_ordered_and_equal_priority_can_refresh() {
+        let tiers: &[&[Kind]] = &[
+            &[Kind::Question, Kind::Attention, Kind::Notification],
+            &[Kind::Done, Kind::Error, Kind::Capture, Kind::Download],
+            &[Kind::Typing, Kind::InputReady],
+            &[Kind::Working],
+            &[Kind::Reading, Kind::Submitted],
+            &[Kind::Rest, Kind::Music],
+        ];
+        for (index, tier) in tiers.iter().enumerate() {
+            for kind in *tier {
+                assert_eq!(kind.priority(), (tiers.len() - index - 1) as u8);
+                let request: ContextRequest = serde_json::from_value(serde_json::json!({
+                    "kind": kind, "id": "same-id"
+                })).unwrap();
+                let mut cue = request.cue();
+                cue.expires_at = 100;
+                for incoming in tiers.iter().flat_map(|tier| tier.iter()) {
+                    let expected = incoming.priority() >= kind.priority();
+                    let context = Context { cue: Some(cue.clone()), ..Context::default() };
+                    assert_eq!(context.accepts(*incoming, 99), expected);
+                    assert!(context.accepts(*incoming, 100));
+                    let notification = Context { notification: Some(cue.clone()), ..Context::default() };
+                    assert_eq!(notification.accepts(*incoming, 99), expected);
+                }
+            }
+        }
+    }
+    #[test]
+    fn fallback_only_accepts_mapped_terminal_metadata_with_matching_identity() {
+        let active = serde_json::json!({
+            "address": "0x123", "class": "herdr", "title": "Herdr",
+            "at": [-800, 0], "size": [600, 700], "mapped": true
+        });
+        let clients = serde_json::json!([active.clone()]);
+        assert_eq!(terminal_target(&active, &clients).unwrap().x, -800.);
+        let mut other = active.clone();
+        other["class"] = serde_json::json!("browser");
+        assert!(terminal_target(&other, &serde_json::json!([other.clone()])).is_none());
+        other["title"] = serde_json::json!("Gentle Shell — session");
+        assert!(terminal_target(&other, &serde_json::json!([other.clone()])).is_some());
+        other["mapped"] = serde_json::json!(false);
+        assert!(terminal_target(&other, &serde_json::json!([other.clone()])).is_none());
+        other = active.clone();
+        other["title"] = serde_json::json!("changed");
+        assert!(terminal_target(&other, &clients).is_none());
+        other = active.clone();
+        other["address"] = serde_json::json!("0x456");
+        assert!(terminal_target(&other, &clients).is_none());
+        other = active.clone();
+        other["at"] = serde_json::json!([-700, 0]);
+        assert!(terminal_target(&other, &clients).is_none());
+        other = active.clone();
+        other["size"] = serde_json::json!([0, 700]);
+        assert!(terminal_target(&other, &serde_json::json!([other.clone()])).is_none());
+    }
+    #[test]
+    fn terminal_fallback_stays_outside_bottom_input_rows() {
+        let zone = Area { x: 0, y: 0, width: 1200, height: 900 };
+        let rect = Target { x: 200., y: 100., width: 600., height: 600. };
+        assert_eq!(terminal_destination(&rect, zone, 156), Some((800, 544)));
+        let right = Target { x: 600., ..rect.clone() };
+        assert_eq!(terminal_destination(&right, zone, 156), Some((444, 544)));
+        let full = Target { x: 0., y: 0., width: 1200., height: 900. };
+        assert_eq!(terminal_destination(&full, zone, 156), None);
+        let below = Target { x: 0., y: 0., width: 1200., height: 600. };
+        assert_eq!(terminal_destination(&below, zone, 156), Some((1044, 600)));
+        let excluded = Area { x: 0, y: 0, width: 100, height: 100 };
+        assert_eq!(terminal_destination(&rect, excluded, 156), None);
+        let negative_zone = Area { x: -1200, ..zone };
+        let negative_rect = Target { x: -1000., ..rect };
+        assert_eq!(terminal_destination(&negative_rect, negative_zone, 156), Some((-400, 544)));
+    }
+    #[test]
     fn pin_prevents_automatic_walk_and_hide_without_changing_gesture_preferences() {
         let prefs = Preferences {
             enabled: true,
@@ -2992,7 +3107,6 @@ mod tests {
                 &prefs,
                 true,
                 false,
-                Duration::from_secs(100),
                 Duration::from_secs(100)
             ),
             (false, false)
@@ -3011,17 +3125,15 @@ mod tests {
                 &free,
                 true,
                 false,
-                Duration::from_secs(100),
                 Duration::from_secs(100)
             ),
-            (true, true)
+            (true, false)
         );
         assert_eq!(
             automatic_actions(
                 &free,
                 false,
                 true,
-                Duration::from_secs(100),
                 Duration::from_secs(100)
             ),
             (false, false)
