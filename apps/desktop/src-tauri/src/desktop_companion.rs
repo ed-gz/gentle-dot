@@ -423,18 +423,17 @@ impl MappingRule {
         }
         let name = format!("gentle-dot-map-{}-{nonce}-{role}", std::process::id());
         let title = format!("Gentle Dot Bootstrap {} {nonce} {role}", std::process::id());
-        let rule = Self {
-            name: name.clone(),
-            title: title.clone(),
-        };
-        let style = if matches!(role, "dot" | "bubble") {
-            format!(",{SILHOUETTE_EFFECTS}")
-        } else {
-            String::new()
-        };
-        eval(&format!("hl.window_rule({{name='{name}',enabled=true,match={{initial_title='^{title}$'}},float=true,no_initial_focus=true{style}}})"))?;
-        Ok(rule)
+        eval(&mapping_rule(&name, &title, role))?;
+        Ok(Self { name, title })
     }
+}
+fn mapping_rule(name: &str, title: &str, role: &str) -> String {
+    let style = if role == "fixture" {
+        String::new()
+    } else {
+        format!(",{SILHOUETTE_EFFECTS}")
+    };
+    format!("hl.window_rule({{name='{name}',enabled=true,match={{initial_title='^{title}$'}},float=true,no_initial_focus=true{style}}})")
 }
 impl Drop for MappingRule {
     fn drop(&mut self) {
@@ -447,10 +446,10 @@ impl Drop for MappingRule {
     }
 }
 // A transparent WebKit buffer can still acquire Hyprland's rectangular blur and shadow.
-// A private tag gives only this window a removable rule, without overwriting SET_PROP
-// overrides or changing the launcher. Removing it reveals the user's original rules.
+// A private tag gives each companion window a removable rule, without overwriting SET_PROP
+// overrides. The UI draws its own circles. Removing it reveals the user's original rules.
 const SILHOUETTE_EFFECTS: &str =
-    "no_blur=true,no_shadow=true,no_dim=true,border_size=0,rounding=0,opaque=true";
+    "no_blur=true,no_shadow=true,no_dim=true,border_size=0,rounding=0,opaque=true,decorate=false";
 const SILHOUETTE_PROPERTIES: &[(&str, bool)] = &[
     ("no_blur", true),
     ("no_shadow", true),
@@ -468,11 +467,6 @@ fn style_identity(nonce: &str) -> Result<String, String> {
 fn style_rule(name: &str) -> String {
     format!("hl.window_rule({{name='{name}',enabled=true,match={{tag='{name}'}},{SILHOUETTE_EFFECTS}}})")
 }
-fn launcher_rule(name: &str) -> String {
-    // GTK decorations(false) does not control Hyprland's compositor border.
-    // Preserve the profile circle's blur, shadow, rounding and alpha settings.
-    format!("hl.window_rule({{name='{name}',enabled=true,match={{tag='{name}'}},border_size=0,decorate=false}})")
-}
 struct SilhouetteRule {
     name: String,
     title: String,
@@ -481,17 +475,6 @@ struct SilhouetteRule {
 }
 impl SilhouetteRule {
     fn install(title: &str, address: &str, nonce: &str) -> Result<Self, String> {
-        Self::install_profile(title, address, nonce, false)
-    }
-    fn install_launcher(address: &str, nonce: &str) -> Result<Self, String> {
-        Self::install_profile(LAUNCHER_TITLE, address, nonce, true)
-    }
-    fn install_profile(
-        title: &str,
-        address: &str,
-        nonce: &str,
-        launcher: bool,
-    ) -> Result<Self, String> {
         let name = style_identity(nonce)?;
         let clients = query("clients")?;
         let own = own_client(&clients, std::process::id(), title)?;
@@ -512,29 +495,15 @@ impl SilhouetteRule {
             address: address.into(),
             active: true,
         };
-        eval(&if launcher {
-            launcher_rule(&rule.name)
-        } else {
-            style_rule(&rule.name)
-        })?;
+        eval(&style_rule(&rule.name))?;
         // Every mutation resolves PID/title/address again, never the active window.
         if let Err(error) = dispatch(title, address, "tag", &format!("tag='+{}'", rule.name))
-            .and_then(|_| {
-                if launcher {
-                    verify_launcher(address)
-                } else {
-                    verify_silhouette(title, address)
-                }
-            })
+            .and_then(|_| verify_silhouette(title, address))
         {
             let _ = rule.remove();
             return Err(error);
         }
-        if launcher {
-            eprintln!("gentle-dot desktop companion launcher border verified");
-        } else {
-            eprintln!("gentle-dot desktop companion silhouette verified");
-        }
+        eprintln!("gentle-dot desktop companion silhouette verified: {title}");
         Ok(rule)
     }
     fn remove(&mut self) -> Result<(), String> {
@@ -572,10 +541,9 @@ impl Drop for SilhouetteRule {
 }
 fn window_property(title: &str, address: &str, property: &str) -> Result<Value, String> {
     if resolve(title)?.address != address
-        || (!SILHOUETTE_PROPERTIES
+        || !SILHOUETTE_PROPERTIES
             .iter()
             .any(|(key, _)| *key == property)
-            && property != "decorate")
     {
         return Err("La ventana o propiedad de Capri cambió".into());
     }
@@ -594,14 +562,6 @@ fn window_property(title: &str, address: &str, property: &str) -> Result<Value, 
     {
         Err("Escritorio no compatible".into())
     }
-}
-fn verify_launcher(address: &str) -> Result<(), String> {
-    if window_property(LAUNCHER_TITLE, address, "border_size")?.as_i64() != Some(0)
-        || window_property(LAUNCHER_TITLE, address, "decorate")?.as_bool() != Some(false)
-    {
-        return Err("Hyprland no confirmó el borde del acceso a Capri".into());
-    }
-    Ok(())
 }
 fn verify_silhouette(title: &str, address: &str) -> Result<(), String> {
     for (key, boolean) in SILHOUETTE_PROPERTIES {
@@ -1491,7 +1451,8 @@ impl Controller {
                 style.take();
             }
             if style.is_none() {
-                *style = Some(SilhouetteRule::install_launcher(
+                *style = Some(SilhouetteRule::install(
+                    LAUNCHER_TITLE,
                     &launcher.address,
                     &format!("{}c", self.map_nonce),
                 )?);
@@ -3108,20 +3069,12 @@ mod tests {
         );
     }
     #[test]
-    fn launcher_rule_only_removes_workspace_dependent_native_border() {
-        let name = style_identity("abc3").unwrap();
-        assert_eq!(launcher_rule(&name),format!("hl.window_rule({{name='{name}',enabled=true,match={{tag='{name}'}},border_size=0,decorate=false}})"));
-        for untouched in [
-            "no_blur",
-            "no_shadow",
-            "no_dim",
-            "rounding",
-            "opacity",
-            "opaque",
-            "force_rgbx",
-        ] {
-            assert!(!launcher_rule(&name).contains(untouched));
+    fn every_companion_window_maps_without_compositor_effects() {
+        // A transparent launcher with profile blur/shadow paints a ghost square while hidden.
+        for role in ["dot", "launcher", "bubble"] {
+            assert!(mapping_rule("n", "t", role).ends_with(&format!(",{SILHOUETTE_EFFECTS}}})")));
         }
+        assert!(!mapping_rule("n", "t", "fixture").contains("no_blur"));
     }
     #[cfg(target_os = "linux")]
     #[test]

@@ -98,7 +98,7 @@ pub fn launch_request(args: &[String]) -> LaunchRequest {
 mod tests {
     use super::*;
 
-    fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+    fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |key| pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string())
     }
 

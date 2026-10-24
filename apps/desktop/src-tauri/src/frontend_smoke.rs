@@ -452,6 +452,8 @@ fn native_context_bubble_ack_timeout_pin_and_mpris_are_real() {
     for (key, expected) in [
         ("border_size", serde_json::json!(0)),
         ("decorate", serde_json::json!(false)),
+        ("no_blur", serde_json::json!(true)),
+        ("no_shadow", serde_json::json!(true)),
     ] {
         let out = crate::computer::linux::run(
             "hyprctl",
