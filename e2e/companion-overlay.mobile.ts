@@ -80,6 +80,13 @@ test("partial chat reuses the composer, hides the duplicate sprite and collapses
 	await page.setViewportSize({ width: 375, height: 700 });
 	await mount(page, true);
 	await expect(page.getByRole("button", { name: "Volver a la burbuja" })).toBeVisible();
+	await expect(page.locator(".companion-chat-bar")).toHaveCount(0);
+	await expect(page.getByRole("navigation", { name: "Navegación principal" })).toHaveCount(1);
+	const header = await page.locator(".mobile-top-nav").boundingBox();
+	expect(header?.height).toBeLessThanOrEqual(64);
+	const collapse = await page.getByRole("button", { name: "Volver a la burbuja" }).boundingBox();
+	expect(collapse?.width).toBeGreaterThanOrEqual(48);
+	expect(collapse?.height).toBeGreaterThanOrEqual(48);
 	await expect(page.locator(".capri-overlay")).not.toBeVisible();
 	const editor = page.locator(".composer textarea");
 	await editor.fill("Borrador que quiero conservar al volver");

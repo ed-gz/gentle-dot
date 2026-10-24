@@ -87,9 +87,11 @@ export interface AppProps {
 	mobileControls?: ReactNode;
 	/** Non-secret endpoint + pairing identity supplied by the native shell. */
 	mobileDraftScope?: string;
+	/** Collapse the Android companion conversation back to its character. */
+	onCollapseMobile?: () => void;
 }
 
-export function App({ connection, mobileControls, mobileDraftScope }: AppProps = {}) {
+export function App({ connection, mobileControls, mobileDraftScope, onCollapseMobile }: AppProps = {}) {
 	const surface = currentSurface();
 	return surface === "companion-launcher" ? (
 		<CompanionLauncher />
@@ -98,7 +100,13 @@ export function App({ connection, mobileControls, mobileDraftScope }: AppProps =
 	) : surface === "glow" ? (
 		<GlowSurface />
 	) : (
-		<Assistant surface={surface} connection={connection} mobileControls={mobileControls} mobileDraftScope={mobileDraftScope} />
+		<Assistant
+			surface={surface}
+			connection={connection}
+			mobileControls={mobileControls}
+			mobileDraftScope={mobileDraftScope}
+			onCollapseMobile={onCollapseMobile}
+		/>
 	);
 }
 
@@ -118,7 +126,13 @@ function CompanionLauncher() {
 	return <DesktopCompanionLauncher toggle={togglePanel} />;
 }
 
-function Assistant({ surface, connection, mobileControls, mobileDraftScope }: AppProps & { surface: Surface }) {
+function Assistant({
+	surface,
+	connection,
+	mobileControls,
+	mobileDraftScope,
+	onCollapseMobile,
+}: AppProps & { surface: Surface }) {
 	const [info, setInfo] = useState<ConnectionInfo | undefined>(undefined);
 	const [missingToken, setMissingToken] = useState(false);
 	/** Why the desktop app could not reach its assistant, in the app's own words (S35.2). */
@@ -393,7 +407,7 @@ function Assistant({ surface, connection, mobileControls, mobileDraftScope }: Ap
 				{...(orchestration ? { orchestration } : {})}
 				{...(usage ? { usage } : {})}
 				{...(watchers ? { watchers } : {})}
-				{...(mobileControls !== undefined ? { mobileControls, mobileDraftScope } : {})}
+				{...(mobileControls !== undefined ? { mobileControls, mobileDraftScope, onCollapseMobile } : {})}
 			/>
 			{companionOverlay}
 		</SharedFileContext>

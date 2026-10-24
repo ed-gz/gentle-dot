@@ -116,6 +116,7 @@ interface ChatSurfaceProps {
 	watchers?: WatchersClient;
 	/** Present only in the Android shell: one header and a tools sheet containing these device controls. */
 	mobileControls?: ReactNode;
+	onCollapseMobile?: () => void;
 }
 
 export interface CompanionActivity {
@@ -183,6 +184,7 @@ function ChatSurfaceView({
 	usage,
 	watchers,
 	mobileControls,
+	onCollapseMobile,
 	mobileDraftScope,
 }: ChatSurfaceProps & { companionControls: CompanionControls }) {
 	// The Android shell supplies these controls. A narrow desktop window remains the desktop chat.
@@ -532,9 +534,14 @@ function ChatSurfaceView({
 				)
 			) : null}
 			{mobile ? (
-				<nav className="mobile-top-nav" aria-label="Navegación principal">
+				<nav
+					className="mobile-top-nav"
+					data-collapsible={onCollapseMobile ? "true" : undefined}
+					aria-label="Navegación principal"
+				>
 					<button
 						type="button"
+						aria-label="Ajustes"
 						aria-pressed={showTools || covered || settingsShown}
 						onClick={() => {
 							closeOptions();
@@ -573,6 +580,17 @@ function ChatSurfaceView({
 							) : null}
 						</button>
 					) : null}
+					{onCollapseMobile && (
+						<button
+							type="button"
+							className="mobile-collapse-chat"
+							aria-label="Volver a la burbuja"
+							title="Volver a la burbuja"
+							onClick={onCollapseMobile}
+						>
+							<MinusIcon />
+						</button>
+					)}
 				</nav>
 			) : null}
 			{!mobile ? (

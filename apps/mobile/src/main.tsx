@@ -243,7 +243,7 @@ function MobileApp() {
 		);
 	return (
 		<div className={connection && !invitation ? "mobile-shell" : "pairing"}>
-			{partialChat && (
+			{partialChat && (!connection || invitation) && (
 				<div className="companion-chat-bar">
 					<span>Conversación</span>
 					<button
@@ -260,6 +260,7 @@ function MobileApp() {
 					key={connection.deviceId}
 					connection={info}
 					mobileDraftScope={JSON.stringify([connection.url, connection.deviceId])}
+					onCollapseMobile={partialChat ? () => void GentleMobile.closeCompanionChat() : undefined}
 					mobileControls={
 						<section className="mobile-device" aria-label="Este teléfono">
 							<h3>Tu equipo</h3>

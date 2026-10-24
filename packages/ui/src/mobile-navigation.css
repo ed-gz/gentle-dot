@@ -57,6 +57,18 @@
 .mobile-top-nav > .mobile-sessions-tab {
 	grid-column: 3;
 }
+.mobile-top-nav[data-collapsible="true"] {
+	grid-template-columns: 48px minmax(0, 1fr) minmax(0, 1fr) 48px;
+	gap: 4px;
+	padding-inline: 8px;
+}
+.mobile-top-nav:where([data-collapsible="true"]) > button:where(:first-child) > span {
+	display: none;
+}
+.mobile-top-nav > .mobile-collapse-chat {
+	grid-column: 4;
+	padding: 0;
+}
 .mobile-top-nav > button[aria-pressed="true"] {
 	background: var(--accent-soft);
 	color: var(--accent);
