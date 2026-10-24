@@ -8,6 +8,7 @@ const native = vi.hoisted(() => ({
 	set: vi.fn(),
 	permission: vi.fn(),
 	appSettings: vi.fn(),
+	retryTheme: vi.fn(),
 }));
 vi.mock("../src/native.ts", () => ({
 	nativeAndroid: true,
@@ -20,6 +21,7 @@ vi.mock("../src/native.ts", () => ({
 }));
 
 import { CompanionSettings } from "../src/CompanionSettings.tsx";
+import type { NativeCompanionThemeControls } from "../src/useNativeCompanionTheme.ts";
 
 let host: HTMLDivElement, root: Root;
 const initial = {
@@ -37,6 +39,7 @@ beforeEach(() => {
 	native.set.mockResolvedValue(undefined);
 	native.permission.mockResolvedValue(undefined);
 	native.appSettings.mockResolvedValue(undefined);
+	native.retryTheme.mockResolvedValue(undefined);
 	host = document.createElement("div");
 	document.body.append(host);
 	root = createRoot(host);
@@ -46,8 +49,21 @@ afterEach(async () => {
 	host.remove();
 	vi.clearAllMocks();
 });
-async function render() {
-	await act(() => root.render(createElement(CompanionSettings)));
+async function render(overrides: Partial<NativeCompanionThemeControls> = {}) {
+	await act(() =>
+		root.render(
+			createElement(CompanionSettings, {
+				themeControls: {
+					theme: "gentle-dot",
+					error: "",
+					pending: false,
+					setCompanion: native.set,
+					retry: native.retryTheme,
+					...overrides,
+				},
+			}),
+		),
+	);
 }
 async function click(index = 0) {
 	await act(() => host.querySelectorAll<HTMLButtonElement>("button")[index]?.click());
@@ -221,4 +237,39 @@ it("clears a failed refresh once Android answers again", async () => {
 	expect(host.querySelector('[role="alert"]')).not.toBeNull();
 	await act(() => window.dispatchEvent(new Event("gentledot-resume")));
 	expect(host.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("does not call a running service ready when its selected sprites failed to load", async () => {
+	native.state.mockResolvedValue({
+		...initial,
+		permission: true,
+		enabled: true,
+		active: true,
+		theme: "capri",
+		renderReady: false,
+		renderError: "No se pudieron cargar los sprites de Capri.",
+	});
+	await render({ theme: "capri" });
+	expect(host.querySelector('button[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
+	expect(host.textContent).not.toContain("Capri está lista");
+	expect(host.querySelector('[role="alert"]')?.textContent).toContain("sprites de Capri");
+	await clickNamed("Reintentar personaje");
+	expect(native.set).toHaveBeenCalledExactlyOnceWith({ enabled: true });
+});
+
+it("shows the confirmed character and reports synchronization failures beside the control", async () => {
+	native.state.mockResolvedValue({
+		...initial,
+		permission: true,
+		enabled: true,
+		active: true,
+		theme: "capri",
+		appliedTheme: "capri",
+		renderReady: true,
+	});
+	await render({ theme: "capri" });
+	expect(host.textContent).toContain("Capri está lista");
+	await render({ theme: "capri", error: "Android no confirmó el personaje seleccionado." });
+	expect(host.textContent).not.toContain("Capri está lista");
+	expect(host.querySelector('[role="alert"]')?.textContent).toContain("no confirmó");
 });

@@ -2,6 +2,7 @@
  * The APK entry point, storage validation, pairing, and shared UI remain real.
  */
 interface NativeFixture {
+	companionStateError?: string;
 	companion?: {
 		permission?: boolean;
 		enabled?: boolean;
@@ -9,6 +10,9 @@ interface NativeFixture {
 		pinned?: boolean;
 		partialChat?: boolean;
 		theme?: string;
+		appliedTheme?: string;
+		renderReady?: boolean;
+		renderError?: string;
 	};
 	connection?: unknown;
 	monitoring: boolean;
@@ -59,6 +63,7 @@ export function registerPlugin() {
 		},
 		addListener: (name: string, callback: (value: unknown) => void) => App.addListener(name, callback),
 		async companionState() {
+			if (fixture().companionStateError) throw new Error(fixture().companionStateError);
 			return {
 				supported: true,
 				permission: true,
@@ -72,10 +77,13 @@ export function registerPlugin() {
 		},
 		async setCompanion(options: { enabled?: boolean; pinned?: boolean; theme?: string }) {
 			record("setCompanion", options);
+			const active = options.enabled ?? fixture().companion?.active ?? false;
 			fixture().companion = {
 				...fixture().companion,
 				...options,
 				...(options.enabled !== undefined ? { active: options.enabled } : {}),
+				renderReady: active,
+				appliedTheme: active ? (options.theme ?? fixture().companion?.theme ?? "gentle-dot") : undefined,
 			};
 		},
 		async requestCompanionPermission() {

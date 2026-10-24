@@ -768,7 +768,9 @@ test("companion permission recovery explains denial and enables once after an ex
 	});
 	await expect(toggle).toBeChecked();
 	await expect(help).toHaveCount(0);
-	await expect.poll(() => enabledCalls()).toEqual([{ method: "setCompanion", options: { enabled: true } }]);
+	await expect
+		.poll(() => enabledCalls())
+		.toEqual([{ method: "setCompanion", options: { enabled: true, theme: "gentle-dot" } }]);
 	await page.evaluate(() => window.__mobileShellNativeEvent("appStateChange", { isActive: true }));
 	await expect(toggle).toBeEnabled();
 	expect(await enabledCalls()).toHaveLength(1);

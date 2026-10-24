@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { GentleMobile, type NativeCompanionState, nativeAndroid } from "./native.ts";
+import type { NativeCompanionThemeControls } from "./useNativeCompanionTheme.ts";
 
-export function CompanionSettings() {
+export function CompanionSettings({ themeControls }: { themeControls: NativeCompanionThemeControls }) {
 	const [state, setState] = useState<NativeCompanionState>();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
@@ -12,6 +13,9 @@ export function CompanionSettings() {
 	const latestRead = useRef(0);
 	const refreshPending = useRef(false);
 	const refreshState = useRef(() => {});
+	const theme = useRef(themeControls);
+	theme.current = themeControls;
+	const lastThemeStatus = useRef([themeControls.theme, themeControls.pending, themeControls.error]);
 	useEffect(() => {
 		if (!nativeAndroid) return;
 		let alive = true;
@@ -38,7 +42,7 @@ export function CompanionSettings() {
 					setBusy(true);
 					setError("");
 					try {
-						await GentleMobile.setCompanion({ enabled: true });
+						await theme.current.setCompanion({ enabled: true });
 						const confirmed = await GentleMobile.companionState();
 						if (alive) setState(confirmed);
 					} catch (cause) {
@@ -64,6 +68,12 @@ export function CompanionSettings() {
 			window.removeEventListener("gentledot-resume", refresh);
 		};
 	}, []);
+	useEffect(() => {
+		const status = [themeControls.theme, themeControls.pending, themeControls.error];
+		const changed = status.some((value, index) => value !== lastThemeStatus.current[index]);
+		lastThemeStatus.current = status;
+		if (changed && !themeControls.pending) refreshState.current();
+	}, [themeControls.theme, themeControls.pending, themeControls.error]);
 	if (!nativeAndroid || state?.supported === false) return null;
 	if (!state)
 		return stateError ? (
@@ -93,7 +103,7 @@ export function CompanionSettings() {
 				await GentleMobile.requestCompanionPermission();
 				return;
 			}
-			await GentleMobile.setCompanion(options);
+			await theme.current.setCompanion(options);
 			setState(await GentleMobile.companionState());
 		} catch (cause) {
 			permissionIntent.current = false;
@@ -123,15 +133,17 @@ export function CompanionSettings() {
 			if (refreshPending.current) refreshState.current();
 		}
 	};
+	const nativeError = error || themeControls.error || state.renderError || stateError;
+	const ready = state.enabled && state.active && state.renderReady !== false;
 	return (
 		<section className="mobile-companion-settings" aria-label="Acompañante en Android">
 			<button
 				type="button"
 				className="mobile-alert-switch"
 				role="switch"
-				aria-checked={state.enabled && state.active}
-				disabled={busy}
-				onClick={() => void change({ enabled: !(state.enabled && state.active) })}
+				aria-checked={ready}
+				disabled={busy || themeControls.pending || themeControls.theme === undefined}
+				onClick={() => void change({ enabled: !ready })}
 			>
 				<span>
 					<strong>Sobre otras apps</strong>
@@ -145,6 +157,16 @@ export function CompanionSettings() {
 					<span />
 				</span>
 			</button>
+			{themeControls.pending ? (
+				<p className="mobile-setting-hint" role="status">
+					Aplicando el personaje en Android…
+				</p>
+			) : ready && !nativeError && state.theme === themeControls.theme ? (
+				<p className="mobile-setting-hint" role="status">
+					{state.theme === "capri" ? "Capri está lista." : "Gentle Dot está listo."} Pulsa Inicio para ver el
+					personaje sobre otras apps.
+				</p>
+			) : null}
 			{!state.permission &&
 				(permissionHelp ? (
 					<div className="mobile-companion-permission">
@@ -182,7 +204,7 @@ export function CompanionSettings() {
 						¿Android no te deja activarlo?
 					</button>
 				))}
-			{state.enabled && state.active && (
+			{ready && (
 				<button
 					type="button"
 					className="mobile-alert-switch"
@@ -204,10 +226,28 @@ export function CompanionSettings() {
 				Arrástralo para colocarlo; tócalo para conversar. Se oculta al abrir la app y al bloquear el teléfono.
 				En ahorro de batería permanece quieto. No lee otras aplicaciones.
 			</p>
-			{(error || stateError) && (
+			{nativeError && (
 				<p className="mobile-error" role="alert">
-					{error || stateError}
+					{nativeError}
 				</p>
+			)}
+			{(themeControls.error || state.renderError) && (
+				<button
+					type="button"
+					className="mobile-companion-permission-help"
+					disabled={busy || themeControls.pending}
+					onClick={() => {
+						setError("");
+						if (state.renderError) void change({ enabled: true });
+						else
+							void themeControls
+								.retry()
+								.then(() => refreshState.current())
+								.catch(() => {});
+					}}
+				>
+					Reintentar personaje
+				</button>
 			)}
 		</section>
 	);

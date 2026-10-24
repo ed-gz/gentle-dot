@@ -15,6 +15,7 @@ import {
 } from "./pairing.ts";
 import { scanPairingQr } from "./scanner.ts";
 import { clearConnection, loadConnection, saveConnection } from "./storage.ts";
+import { useNativeCompanionTheme } from "./useNativeCompanionTheme.ts";
 import "../../../packages/ui/src/styles.css";
 import "./mobile.css";
 
@@ -31,6 +32,8 @@ function MobileApp() {
 	const [error, setError] = useState("");
 	const [monitoring, setMonitoring] = useState(false);
 	const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+	const companionTheme = useNativeCompanionTheme(!loading && Boolean(connection) && !invitation);
+	const appearanceLoading = nativeAndroid && companionTheme.theme === undefined;
 	const info = useMemo(
 		() =>
 			connection
@@ -44,16 +47,6 @@ function MobileApp() {
 	);
 	useEffect(() => {
 		if (!nativeAndroid) return;
-		const theme = () => {
-			try {
-				const value = JSON.parse(localStorage.getItem("gentle-dot-companion-v1") ?? "{}");
-				void GentleMobile.setCompanion({ theme: value.mode === "capri" ? "capri" : "gentle-dot" }).catch(
-					() => {},
-				);
-			} catch {
-				/* Keep native selection if storage is unavailable. */
-			}
-		};
 		const refresh = () => {
 			void GentleMobile.companionState()
 				.then((state) => {
@@ -61,18 +54,15 @@ function MobileApp() {
 					document.documentElement.dataset.companionChat = String(state.partialChat);
 				})
 				.catch(() => {});
-			theme();
 		};
 		refresh();
 		window.addEventListener("gentledot-resume", refresh);
-		window.addEventListener("gentle-dot-companion-change", theme);
 		return () => {
 			window.removeEventListener("gentledot-resume", refresh);
-			window.removeEventListener("gentle-dot-companion-change", theme);
 		};
 	}, []);
 	useEffect(() => {
-		if (!nativeAndroid || !connection) return;
+		if (!nativeAndroid || !connection || appearanceLoading) return;
 		const receive = () =>
 			void GentleMobile.companionLaunchContext()
 				.then((context) => {
@@ -91,7 +81,7 @@ function MobileApp() {
 			window.clearTimeout(timer);
 			window.removeEventListener("gentledot-resume", receive);
 		};
-	}, [connection]);
+	}, [connection, appearanceLoading]);
 	const fail = useCallback(
 		(cause: unknown) =>
 			setError(cause instanceof Error ? cause.message : "No se pudo completar la operación."),
@@ -231,10 +221,24 @@ function MobileApp() {
 			setBusy(false);
 		}
 	};
-	if (loading)
+	// Restore Android's appearance before the shared UI can persist its defaults.
+	if (loading || appearanceLoading)
 		return (
 			<main className="pairing">
-				<p role="status">Abriendo Gentle Dot…</p>
+				{companionTheme.error ? (
+					<>
+						<p role="alert">{companionTheme.error}</p>
+						<button
+							type="button"
+							disabled={companionTheme.pending}
+							onClick={() => void companionTheme.retry().catch(() => {})}
+						>
+							Reintentar personaje
+						</button>
+					</>
+				) : (
+					<p role="status">Abriendo Gentle Dot…</p>
+				)}
 			</main>
 		);
 	return (
@@ -260,7 +264,7 @@ function MobileApp() {
 						<section className="mobile-device" aria-label="Este teléfono">
 							<h3>Tu equipo</h3>
 							<p className="mobile-device-host">{new URL(connection.url).hostname}</p>
-							<CompanionSettings />
+							<CompanionSettings themeControls={companionTheme} />
 							<NotificationSettings
 								connection={connection}
 								monitoring={monitoring}

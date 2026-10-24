@@ -2,10 +2,11 @@ import { expect, type Page, test } from "@playwright/test";
 import type {} from "./mobile-shell-native.ts";
 
 const host = "https://overlay-fixture.test.ts.net";
-async function mount(page: Page, partialChat: boolean) {
+async function mount(page: Page, partialChat: boolean, restoreNative = false, failNativeRead = false) {
 	await page.addInitScript(
-		({ host, partialChat }) => {
+		({ host, partialChat, restoreNative, failNativeRead }) => {
 			window.__mobileShellFixture = {
+				companionStateError: failNativeRead ? "No se pudo recuperar el personaje de Android." : undefined,
 				connection: {
 					url: host,
 					token: "fixture_overlay_token_0123456789abcdef",
@@ -14,11 +15,12 @@ async function mount(page: Page, partialChat: boolean) {
 				},
 				monitoring: false,
 				calls: [],
-				companion: { partialChat, permission: true },
+				companion: { partialChat, permission: true, theme: restoreNative ? "capri" : "gentle-dot" },
 			};
-			localStorage.setItem("gentle-dot-companion-v1", JSON.stringify({ mode: "capri", visible: true }));
+			if (restoreNative) localStorage.removeItem("gentle-dot-companion-v1");
+			else localStorage.setItem("gentle-dot-companion-v1", JSON.stringify({ mode: "capri", visible: true }));
 		},
-		{ host, partialChat },
+		{ host, partialChat, restoreNative, failNativeRead },
 	);
 	await page.route(`${host}/**`, (route) => {
 		const path = new URL(route.request().url()).pathname;
@@ -66,6 +68,7 @@ async function mount(page: Page, partialChat: boolean) {
 		});
 	});
 	await page.goto("/");
+	if (failNativeRead) return;
 	await expect(
 		page.getByText("Aquí está tu conversación. Tus sesiones siguen disponibles en el equipo."),
 	).toBeVisible();
@@ -102,4 +105,70 @@ test("partial chat reuses the composer, hides the duplicate sprite and collapses
 	await expect(editor).toBeVisible();
 	await expect(page.getByRole("button", { name: "Volver a la burbuja" })).toBeVisible();
 	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("restores Capri from Android and starts that exact character only on an explicit activation", async ({
+	page,
+}) => {
+	await mount(page, false, true);
+	await page.getByRole("button", { name: "Ajustes", exact: true }).click();
+	await expect(page.getByRole("switch", { name: "Tema Capri", exact: true })).toHaveAttribute(
+		"aria-checked",
+		"true",
+	);
+	const enabledCalls = () =>
+		page.evaluate(() =>
+			window.__mobileShellFixture.calls.filter(
+				(call) => call.method === "setCompanion" && (call.options as { enabled?: boolean })?.enabled === true,
+			),
+		);
+	expect(await enabledCalls()).toHaveLength(0);
+	await page.locator("summary").filter({ hasText: "Avisos y teléfono" }).click();
+	await page.getByRole("switch", { name: /Sobre otras apps/ }).click();
+	await expect
+		.poll(enabledCalls)
+		.toEqual([{ method: "setCompanion", options: { enabled: true, theme: "capri" } }]);
+	await expect(page.getByText(/Capri está lista\./)).toBeVisible();
+	expect(await page.evaluate(() => window.__mobileShellFixture.companion?.appliedTheme)).toBe("capri");
+});
+
+test("a theme changed in another window reaches both the settings and Android overlay", async ({ page }) => {
+	await mount(page, false);
+	await page.getByRole("button", { name: "Ajustes", exact: true }).click();
+	await expect.poll(() => page.evaluate(() => window.__mobileShellFixture.companion?.theme)).toBe("capri");
+	await page.evaluate(() => {
+		const key = "gentle-dot-companion-v1";
+		localStorage.setItem(key, JSON.stringify({ mode: "gentle", persona: "gentle" }));
+		window.dispatchEvent(new StorageEvent("storage", { key }));
+	});
+	await expect(page.getByRole("switch", { name: "Tema Capri", exact: true })).toHaveAttribute(
+		"aria-checked",
+		"false",
+	);
+	await expect
+		.poll(() => page.evaluate(() => window.__mobileShellFixture.companion?.theme))
+		.toBe("gentle-dot");
+	expect(await page.evaluate(() => window.__mobileShellFixture.companion?.enabled)).not.toBe(true);
+});
+
+test("failed startup recovers native Capri without persisting the shared UI defaults", async ({ page }) => {
+	await mount(page, false, true, true);
+	await expect(page.getByRole("alert")).toHaveText("No se pudo recuperar el personaje de Android.");
+	await expect(page.getByRole("button", { name: "Ajustes", exact: true })).toHaveCount(0);
+	expect(await page.evaluate(() => localStorage.getItem("gentle-dot-companion-v1"))).toBeNull();
+	await page.evaluate(() => {
+		window.__mobileShellFixture.companionStateError = undefined;
+	});
+	await page.getByRole("button", { name: "Reintentar personaje" }).click();
+	await page.getByRole("button", { name: "Ajustes", exact: true }).click();
+	await expect(page.getByRole("switch", { name: "Tema Capri", exact: true })).toHaveAttribute(
+		"aria-checked",
+		"true",
+	);
+	expect(await page.evaluate(() => window.__mobileShellFixture.companion?.theme)).toBe("capri");
+	expect(
+		await page.evaluate(() =>
+			window.__mobileShellFixture.calls.filter((call) => call.method === "setCompanion"),
+		),
+	).toEqual([]);
 });

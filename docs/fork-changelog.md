@@ -25,6 +25,16 @@ La actualización documental que contiene este registro reorganiza el onboarding
 
 La [matriz de integración](upstream-2026-10-23.md) incorpora correcciones de Node empaquetado, codemode, lecturas de Notion, WebKit/Wayland, enlaces del chat y preferencia de voz nativa. Registra la procedencia de cada PR abierta, las adaptaciones necesarias para Linux/Android/Capri y las propuestas aplazadas. También distingue los fallos previos del baseline, la reparación de las fixtures y los resultados finales de pruebas, incluido Android 0.21.2; el lint completo continúa pendiente.
 
+## Parche Android 0.21.3: sincronización de Capri
+
+Android **0.21.3 / código 37** corrige desajustes reproducidos entre la selección de Capri y el acompañante nativo: se respeta el valor del evento aunque falle el almacenamiento web, se recupera la apariencia nativa cuando falta la preferencia web y se atienden cambios de almacenamiento de otra ventana. El estado compartido también evita que un cambio de ánimo inmediatamente posterior revierta una selección reciente.
+
+La activación y el tema se envían juntos, las operaciones nativas se ordenan y su resultado se vuelve a consultar. Recuperar la apariencia no activa la personalidad Capri. Android informa el tema aplicado, la carga del renderizador y los errores; no confirma el acompañante activo sólo porque exista una preferencia guardada. Un fallo fatal de los sprites detiene el servicio y conserva un error para **Reintentar personaje**, sin dibujar un sustituto genérico.
+
+Validación del parche: 58 pruebas de estado e interfaz, 48 escenarios móviles de navegador y 70 pruebas JVM de Android, incluidas pruebas del Canvas con los atlas reales. Typecheck pasa; lint Android no tiene errores y conserva seis advertencias previas. La lectura inicial fallida permite reintentar antes de montar la interfaz, evitando guardar el tema predeterminado sobre Capri. No hubo validación en un teléfono físico.
+
+La corrección conserva la interfaz y el icono de Android. No se atribuye una causa exacta al comportamiento observado en el teléfono ni se afirma una verificación física del parche. El repositorio sigue distribuyendo fuentes; el APK se genera y conserva en privado. [Activación y recuperación](android-companion.md#si-elegiste-capri-pero-aparece-gentle).
+
 ## Parche Android 0.21.1
 
 Al regresar de los ajustes sin permiso para mostrarse sobre otras apps, la interfaz explica cómo revisarlo y ofrece **Abrir información de la app** y **Volver al permiso**. La guía incluye la ruta oficial de Android para ajustes restringidos cuando está disponible y la persona confía en su APK. No se atribuye toda denegación a esa restricción: la aplicación sólo conoce el estado del permiso y no puede levantar un bloqueo del sistema.
