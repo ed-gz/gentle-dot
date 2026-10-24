@@ -453,3 +453,31 @@ html[data-companion-chat="true"] .mobile-shell > .chat-mobile { flex: 1; min-hei
 .companion-chat-bar { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 16px; background: var(--bg, #17151b); color: var(--text, #eee); border-bottom: 1px solid var(--line, #37313e); }
 .companion-chat-bar button { min-height: 44px; padding: 0 12px; border: 0; color: inherit; background: transparent; }
 .mobile-companion-settings { margin-block: 16px; }
+.mobile-companion-permission {
+	margin-block: 8px 16px;
+	padding: 16px;
+	border-radius: 14px;
+	background: var(--surface-2);
+	color: var(--text);
+	font-size: 14px;
+	line-height: 1.5;
+}
+.mobile-companion-permission p { margin: 0 0 12px; }
+.mobile-companion-permission ol { margin: 0 0 16px; padding-inline-start: 22px; }
+.mobile-companion-permission li + li { margin-top: 8px; }
+.mobile-companion-permission li strong { display: inline; font-size: inherit; }
+.mobile-companion-permission-actions { display: grid; gap: 8px; margin-bottom: 16px; }
+.mobile-companion-permission-actions button,
+.mobile-companion-permission-help {
+	min-height: 48px;
+	padding: 10px 12px;
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	background: var(--surface);
+	color: var(--text);
+	font: inherit;
+	cursor: pointer;
+}
+.mobile-companion-permission-actions button:disabled { opacity: 0.5; cursor: default; }
+.mobile-companion-permission-help { border: 0; background: transparent; font-size: 13px; text-align: start; }
+.mobile-companion-permission .mobile-setting-hint { margin-bottom: 0; }

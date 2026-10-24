@@ -34,6 +34,7 @@ interface NativePlugin {
 		theme?: "gentle-dot" | "capri";
 	}): Promise<void>;
 	requestCompanionPermission(): Promise<void>;
+	openCompanionAppSettings(): Promise<void>;
 	closeCompanionChat(): Promise<void>;
 	companionLaunchContext(): Promise<{
 		openChat?: boolean;

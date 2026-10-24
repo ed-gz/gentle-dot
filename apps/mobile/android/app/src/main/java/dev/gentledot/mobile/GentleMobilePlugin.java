@@ -111,6 +111,25 @@ public class GentleMobilePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void openCompanionAppSettings(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null) { call.reject("Abre Gentle Dot e inténtalo de nuevo para ver sus ajustes."); return; }
+        activity.runOnUiThread(() -> {
+            if (activity.isFinishing() || activity.isDestroyed()) {
+                call.reject("Abre Gentle Dot e inténtalo de nuevo para ver sus ajustes."); return;
+            }
+            try {
+                Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", getContext().getPackageName(), null));
+                activity.startActivity(intent);
+                call.resolve();
+            } catch (RuntimeException error) {
+                call.reject("No se pudieron abrir los ajustes de Gentle Dot. Abre Ajustes de Android, Aplicaciones y Gentle Dot.");
+            }
+        });
+    }
+
+    @PluginMethod
     public void setCompanion(PluginCall call) {
         getActivity().runOnUiThread(() -> {
             Boolean enabled = call.getBoolean("enabled");

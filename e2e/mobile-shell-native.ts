@@ -81,6 +81,9 @@ export function registerPlugin() {
 		async requestCompanionPermission() {
 			record("requestCompanionPermission");
 		},
+		async openCompanionAppSettings() {
+			record("openCompanionAppSettings");
+		},
 		async closeCompanionChat() {
 			record("closeCompanionChat");
 		},

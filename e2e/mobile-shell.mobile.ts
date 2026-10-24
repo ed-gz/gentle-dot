@@ -442,6 +442,7 @@ async function mountShell(
 				capabilities: { backend: "hyprland", supported: true, missingDependencies: [], limitations: [] },
 			},
 			"/api/mobile/approvals": { approvals: [] },
+			"/api/mobile/companion": { mode: "gentle" },
 			"/api/mobile/usage": usage,
 			"/api/mobile/workflows": {
 				workflows: options.followedGoal
@@ -681,6 +682,96 @@ test("APK controls live in the tools menu, native back closes it, and unlink nee
 	await expect(page.getByRole("heading", { name: "Tu equipo, a una conversación." })).toBeVisible();
 	expect(traffic.http.filter((request) => request.path.endsWith("/disconnect"))).toHaveLength(1);
 	expect(await page.evaluate(() => window.__mobileShellFixture.connection)).toBeUndefined();
+	expect(errors).toEqual([]);
+});
+
+test("companion permission recovery explains denial and enables once after an explicit retry", async ({
+	page,
+}, info) => {
+	await page.setViewportSize({ width: 375, height: 812 });
+	const { errors } = await mountShell(page);
+	await page.evaluate(() => {
+		window.__mobileShellFixture.companion = { permission: false, enabled: false, active: false };
+	});
+	const nativeCalls = (method: string) =>
+		page.evaluate((name) => window.__mobileShellFixture.calls.filter((call) => call.method === name), method);
+	const enabledCalls = () =>
+		page.evaluate(() =>
+			window.__mobileShellFixture.calls.filter(
+				(call) => call.method === "setCompanion" && (call.options as { enabled?: boolean })?.enabled,
+			),
+		);
+	await page.getByRole("button", { name: "Ajustes", exact: true }).click();
+	await page.getByText("Avisos y teléfono", { exact: true }).click();
+	const companion = page.getByRole("region", { name: "Acompañante en Android", exact: true });
+	const toggle = companion.getByRole("switch", { name: /^Sobre otras apps/ });
+	await expect(toggle).not.toBeChecked();
+	await toggle.click();
+	await expect.poll(() => nativeCalls("requestCompanionPermission")).toHaveLength(1);
+	await expect(toggle).toBeEnabled();
+	await page.evaluate(() => window.__mobileShellNativeEvent("appStateChange", { isActive: true }));
+	await expect(companion.getByText("Permitir ajustes restringidos", { exact: true })).toBeVisible();
+	await expect(companion.getByRole("status")).toHaveText(
+		"Falta el permiso de Android para aparecer sobre otras apps.",
+	);
+	expect(await enabledCalls()).toHaveLength(0);
+
+	const help = companion.locator(".mobile-companion-permission");
+	const appSettings = companion.getByRole("button", { name: "Abrir información de la app", exact: true });
+	const retry = companion.getByRole("button", { name: "Volver al permiso", exact: true });
+	for (const viewport of [
+		{ width: 375, height: 812 },
+		{ width: 812, height: 375 },
+	]) {
+		await page.setViewportSize(viewport);
+		await help.scrollIntoViewIfNeeded();
+		const geometry = await help.evaluate((element) => {
+			const rect = element.getBoundingClientRect();
+			return {
+				left: rect.left,
+				right: rect.right,
+				width: innerWidth,
+				pageOverflow: document.documentElement.scrollWidth - innerWidth,
+				panelOverflow: element.scrollWidth - element.clientWidth,
+			};
+		});
+		expect(geometry.left).toBeGreaterThanOrEqual(0);
+		expect(geometry.right).toBeLessThanOrEqual(geometry.width);
+		expect(geometry.pageOverflow).toBeLessThanOrEqual(1);
+		expect(geometry.panelOverflow).toBeLessThanOrEqual(1);
+		await help.screenshot({ path: info.outputPath(`companion-permission-help-${viewport.width}.png`) });
+		for (const button of [appSettings, retry]) {
+			await button.scrollIntoViewIfNeeded();
+			await expect(button).toBeInViewport();
+		}
+		await page.screenshot({ path: info.outputPath(`companion-permission-actions-${viewport.width}.png`) });
+	}
+
+	await appSettings.click();
+	await expect.poll(() => nativeCalls("openCompanionAppSettings")).toHaveLength(1);
+	await expect(appSettings).toBeEnabled();
+	await page.evaluate(() => window.__mobileShellNativeEvent("appStateChange", { isActive: true }));
+	await expect(toggle).not.toBeChecked();
+	expect(await enabledCalls()).toHaveLength(0);
+	expect(await nativeCalls("requestCompanionPermission")).toHaveLength(1);
+
+	await retry.click();
+	await expect.poll(() => nativeCalls("requestCompanionPermission")).toHaveLength(2);
+	await expect(retry).toBeEnabled();
+	expect(await enabledCalls()).toHaveLength(0);
+	await page.evaluate(() => {
+		window.__mobileShellFixture.companion = {
+			...window.__mobileShellFixture.companion,
+			permission: true,
+		};
+		window.__mobileShellNativeEvent("appStateChange", { isActive: true });
+	});
+	await expect(toggle).toBeChecked();
+	await expect(help).toHaveCount(0);
+	await expect.poll(() => enabledCalls()).toEqual([{ method: "setCompanion", options: { enabled: true } }]);
+	await page.evaluate(() => window.__mobileShellNativeEvent("appStateChange", { isActive: true }));
+	await expect(toggle).toBeEnabled();
+	expect(await enabledCalls()).toHaveLength(1);
 	expect(errors).toEqual([]);
 });
 

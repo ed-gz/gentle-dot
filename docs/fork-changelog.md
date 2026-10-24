@@ -21,6 +21,12 @@ El primer commit reúne un desarrollo previo extenso. Las secciones siguientes a
 
 La actualización documental que contiene este registro reorganiza el onboarding, corrige descripciones anteriores y enlaza las reglas de seguridad e higiene. No cambia por sí misma el comportamiento del producto.
 
+## Parche Android 0.21.1
+
+Al regresar de los ajustes sin permiso para mostrarse sobre otras apps, la interfaz explica cómo revisarlo y ofrece **Abrir información de la app** y **Volver al permiso**. La guía incluye la ruta oficial de Android para ajustes restringidos cuando está disponible y la persona confía en su APK. No se atribuye toda denegación a esa restricción: la aplicación sólo conoce el estado del permiso y no puede levantar un bloqueo del sistema.
+
+La documentación distingue los iconos o ventanas flotantes del sistema del sprite nativo, sin atribuir a una captura un mecanismo concreto del fabricante. El sprite aparece fuera de la app únicamente con el permiso concedido y el servicio activo. La comprobación física depende del teléfono y sus políticas; este parche no garantiza que todos los fabricantes permitan habilitarlo. El APK se conserva como artefacto privado y no se publica en GitHub. [Pasos y límites](android-companion.md#si-android-muestra-a-la-app-se-le-negó-el-acceso).
+
 ## 1. Android conectado al equipo
 
 Se incorpora `apps/mobile`, una aplicación Capacitor con proyecto Android nativo y scripts de compilación/vinculación. Comparte el chat del PC mediante HTTPS/WSS privado de Tailscale; el QR usa una invitación de un solo uso con caducidad. Los teléfonos tienen credenciales individuales, almacenamiento seguro y revocación. El escritorio debe confirmar la autorización adicional para responder sus permisos.
