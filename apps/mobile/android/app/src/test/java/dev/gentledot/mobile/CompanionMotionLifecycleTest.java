@@ -153,4 +153,17 @@ public class CompanionMotionLifecycleTest {
         MotionEvent up=MotionEvent.obtain(time,time+200,MotionEvent.ACTION_UP,100,80,0);sprite.dispatchTouchEvent(up);up.recycle();
         advance(1600);Bitmap rested=draw();advance(1700);assertFalse("Reaction returns to blinking idle",rested.sameAs(draw()));
     }
+    @Test public void dragMovesAPinnedCompanionAndReleasesThePin() {
+        CompanionOverlayService.prefs(context).edit().putBoolean("pinned",true).putInt("x",200).putInt("y",400).apply();
+        long time=SystemClock.uptimeMillis();
+        MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,20,20,0);sprite.dispatchTouchEvent(down);down.recycle();
+        MotionEvent drag=MotionEvent.obtain(time,time+20,MotionEvent.ACTION_MOVE,140,90,0);sprite.dispatchTouchEvent(drag);drag.recycle();
+        MotionEvent up=MotionEvent.obtain(time,time+200,MotionEvent.ACTION_UP,140,90,0);sprite.dispatchTouchEvent(up);up.recycle();
+        assertFalse("Dragging is an explicit move request",CompanionOverlayService.prefs(context).getBoolean("pinned",true));
+        assertTrue("The new position is saved",CompanionOverlayService.prefs(context).getInt("x",200)!=200);
+    }
+    @Test public void longPressNeverPinsSilently() {
+        sprite.performLongClick();
+        assertFalse(CompanionOverlayService.prefs(context).getBoolean("pinned",false));
+    }
 }

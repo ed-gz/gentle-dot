@@ -142,7 +142,6 @@ public final class CompanionOverlayService extends Service {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT);
         position.gravity=Gravity.TOP|Gravity.LEFT;position.x=prefs(this).getInt("x",dp(12));position.y=prefs(this).getInt("y",dp(160));
         sprite.setOnClickListener(v->openChat());
-        sprite.setOnLongClickListener(v->{togglePin();return true;});
         sprite.setAccessibilityDelegate(new View.AccessibilityDelegate(){
             @Override public void onInitializeAccessibilityNodeInfo(View view,AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(view,info);
                 info.addAction(new AccessibilityNodeInfo.AccessibilityAction(PIN,prefs(CompanionOverlayService.this).getBoolean("pinned",false)?"Soltar posición":"Fijar posición"));
@@ -152,12 +151,12 @@ public final class CompanionOverlayService extends Service {
                 if(action==HIDE){stopEnabled();return true;}return super.performAccessibilityAction(view,action,args);}
         });
         sprite.setOnTouchListener(new View.OnTouchListener(){float x,y;int sx,sy;boolean moved;final int slop=ViewConfiguration.get(CompanionOverlayService.this).getScaledTouchSlop();
-            @SuppressLint("ClickableViewAccessibility") // Taps/long presses return false to View's native performClick handling; only actual drags are consumed.
+            @SuppressLint("ClickableViewAccessibility") // Taps return false to View's native performClick handling; only actual drags are consumed.
             @Override public boolean onTouch(View view,MotionEvent event){
                 if(event.getActionMasked()==MotionEvent.ACTION_DOWN)sprite.play("greeting");
-                if(prefs(CompanionOverlayService.this).getBoolean("pinned",false))return false;
                 if(event.getActionMasked()==MotionEvent.ACTION_DOWN){x=event.getRawX();y=event.getRawY();sx=position.x;sy=position.y;moved=false;return false;}
-                if(event.getActionMasked()==MotionEvent.ACTION_MOVE){float dx=event.getRawX()-x,dy=event.getRawY()-y;if(!moved&&Math.abs(dx)+Math.abs(dy)>slop){moved=true;sprite.play("walk");}
+                // Dragging is an explicit move request: it releases a pin instead of being ignored.
+                if(event.getActionMasked()==MotionEvent.ACTION_MOVE){float dx=event.getRawX()-x,dy=event.getRawY()-y;if(!moved&&Math.abs(dx)+Math.abs(dy)>slop){moved=true;prefs(CompanionOverlayService.this).edit().putBoolean("pinned",false).apply();sprite.play("walk");}
                     if(moved){view.cancelLongPress();hideSpeech();position.x=sx+(int)dx;position.y=sy+(int)dy;move();return true;}}
                 if(event.getActionMasked()==MotionEvent.ACTION_UP&&moved){view.setPressed(false);savePosition();sprite.play("greeting");moved=false;return true;}
                 if(event.getActionMasked()==MotionEvent.ACTION_CANCEL&&moved){view.setPressed(false);sprite.play("idle");moved=false;return true;}return false;
