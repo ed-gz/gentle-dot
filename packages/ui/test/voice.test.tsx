@@ -360,9 +360,50 @@ describe("talking on the desktop", () => {
 		expect(talk()).toBeDisabled();
 	});
 
-	it("prefers the daemon when an OpenAI key is connected", async () => {
+	it("prefers the available local recognizer even when daemon transcription is configured", async () => {
 		desktop({ available: true });
 		render(<Harness initial={withVoice(true)} />);
+		await waitFor(() => expect(talk()).toBeEnabled());
+		await userEvent.click(talk());
+		expect(getUserMedia).not.toHaveBeenCalled();
+		expect(invoked("voice_start")).toHaveLength(1);
+	});
+
+	it("waits for native capability discovery before offering daemon recording", async () => {
+		h.tauri = true;
+		let resolveStatus!: (status: { available: boolean }) => void;
+		h.invoke = vi.fn(async (command: string) =>
+			command === "voice_status"
+				? new Promise((resolve) => {
+						resolveStatus = resolve;
+					})
+				: undefined,
+		);
+		render(<Harness initial={withVoice(true)} />);
+		expect(talk()).toBeDisabled();
+		expect(getUserMedia).not.toHaveBeenCalled();
+		await act(async () => resolveStatus({ available: true }));
+		await userEvent.click(talk());
+		expect(invoked("voice_start")).toHaveLength(1);
+		expect(getUserMedia).not.toHaveBeenCalled();
+	});
+
+	it("keeps daemon transcription available when the local model is unavailable", async () => {
+		desktop({ available: false, reason: "Local model not installed" });
+		render(<Harness initial={withVoice(true)} />);
+		await waitFor(() => expect(talk()).toBeEnabled());
+		await userEvent.click(talk());
+		expect(getUserMedia).toHaveBeenCalled();
+		expect(invoked("voice_start")).toHaveLength(0);
+	});
+
+	it("falls back to the daemon when reading native voice status fails", async () => {
+		h.tauri = true;
+		h.invoke = vi.fn(async () => {
+			throw new Error("Native bridge unavailable");
+		});
+		render(<Harness initial={withVoice(true)} />);
+		await waitFor(() => expect(talk()).toBeEnabled());
 		await userEvent.click(talk());
 		expect(getUserMedia).toHaveBeenCalled();
 		expect(invoked("voice_start")).toHaveLength(0);

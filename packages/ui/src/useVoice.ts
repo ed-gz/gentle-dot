@@ -62,6 +62,7 @@ const MUTED_KEY = "gentle-dot-voice-muted";
 const SEND_KEY = "gentle-dot-voice-send";
 const RECORDING_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
 const REASONS = {
+	checking: "Checking local voice availability.",
 	insecure: "Voice needs a secure page (HTTPS or localhost).",
 	noRecorder: "This browser cannot record audio.",
 	denied: "Microphone access was denied. Allow it to talk to the assistant.",
@@ -72,11 +73,14 @@ const REASONS = {
 type Source = { kind: "daemon" | "native" | "mobile" } | { kind: "none"; reason?: string };
 
 /**
- * Where speech becomes text: the daemon (an OpenAI key) when it can and the page may record,
- * else the desktop recognizer. The web offers only the daemon, over HTTPS or localhost.
+ * Android uses its own recognizer. Desktop prefers the available local recognizer, with
+ * daemon transcription as a fallback. The web offers the daemon over HTTPS or localhost.
  */
 function chooseSource(desktop: boolean, transcribe: boolean, native: NativeVoiceStatus | undefined): Source {
 	if (mobileBridge()) return { kind: "mobile" };
+	// Wait for local capability discovery before offering a remote recording path.
+	if (desktop && !native) return { kind: "none", reason: REASONS.checking };
+	if (desktop && native?.available) return { kind: "native" };
 	const secure = desktop || window.isSecureContext === true;
 	const recorder = typeof MediaRecorder !== "undefined" && navigator.mediaDevices?.getUserMedia !== undefined;
 	if (transcribe && secure && recorder) return { kind: "daemon" };
@@ -106,7 +110,11 @@ function stopTimers(entry: Recording): void {
 	entry.stopMeter?.();
 }
 
-export function useVoice(state: DotState, send: Send, options?: { inputOnly: true; enabled: boolean }): VoiceControls {
+export function useVoice(
+	state: DotState,
+	send: Send,
+	options?: { inputOnly: true; enabled: boolean },
+): VoiceControls {
 	const inputOnly = options?.inputOnly === true;
 	const enabled = options?.enabled ?? true;
 	const allowed = useRef(enabled);
@@ -279,9 +287,14 @@ export function useVoice(state: DotState, send: Send, options?: { inputOnly: tru
 		}
 		setPhase("transcribing");
 		const attempt = generation.current;
-		stopNativeVoice().then(text => {
-			if (attempt === generation.current && allowed.current) sendTranscript(text);
-		}, (error: unknown) => { if (attempt === generation.current) finish(startRefusal(error)); });
+		stopNativeVoice().then(
+			(text) => {
+				if (attempt === generation.current && allowed.current) sendTranscript(text);
+			},
+			(error: unknown) => {
+				if (attempt === generation.current) finish(startRefusal(error));
+			},
+		);
 	}, [finish, sendTranscript, setPhase]);
 
 	const startDaemon = useCallback(async () => {
@@ -325,7 +338,10 @@ export function useVoice(state: DotState, send: Send, options?: { inputOnly: tru
 			if (attempt === generation.current) finish(startRefusal(error));
 			return;
 		}
-		if (attempt !== generation.current || !allowed.current) { void cancelNativeVoice().catch(() => {}); return; }
+		if (attempt !== generation.current || !allowed.current) {
+			void cancelNativeVoice().catch(() => {});
+			return;
+		}
 		begin({ kind: "native", cancelled: false });
 	}, [begin, finish]);
 
@@ -361,7 +377,10 @@ export function useVoice(state: DotState, send: Send, options?: { inputOnly: tru
 		generation.current += 1;
 		setDraft(undefined);
 		const current = recording.current;
-		if (!current) { finish(); return; }
+		if (!current) {
+			finish();
+			return;
+		}
 		current.cancelled = true;
 		if (current.kind === "daemon") current.recorder?.stop();
 		else void cancelNativeVoice().catch(() => {});
@@ -472,7 +491,9 @@ export function useVoice(state: DotState, send: Send, options?: { inputOnly: tru
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [phase, cancel]);
 
-	useEffect(() => { if (!enabled) cancel(); }, [enabled, cancel]);
+	useEffect(() => {
+		if (!enabled) cancel();
+	}, [enabled, cancel]);
 
 	// Leaving the chat drops a recording and silences the voice.
 	const cancelNow = useRef(cancel);
