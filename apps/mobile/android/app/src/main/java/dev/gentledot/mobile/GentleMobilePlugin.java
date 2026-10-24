@@ -90,16 +90,24 @@ public class GentleMobilePlugin extends Plugin {
     }
 
     @PluginMethod
-    public void companionState(PluginCall call) {
+    public void companionState(PluginCall call) { call.resolve(companionStateValue()); }
+
+    private JSObject companionStateValue() {
         JSObject value = new JSObject();
         value.put("supported", Build.VERSION.SDK_INT >= 26);
         value.put("permission", CompanionOverlayService.permitted(getContext()));
-        value.put("enabled", CompanionOverlayService.prefs(getContext()).getBoolean("enabled", false));
-        value.put("active", CompanionOverlayService.running());
+        boolean enabled = CompanionOverlayService.prefs(getContext()).getBoolean("enabled", false);
+        value.put("enabled", enabled);
+        CompanionSpriteView.RenderState render = CompanionOverlayService.renderState();
+        boolean ready = enabled && CompanionOverlayService.running() && render.ready;
+        value.put("active", ready);
+        value.put("renderReady", ready);
+        if (ready && render.appliedTheme != null) value.put("appliedTheme", render.appliedTheme);
+        if (render.error != null) value.put("renderError", render.error);
         value.put("pinned", CompanionOverlayService.prefs(getContext()).getBoolean("pinned", false));
         value.put("theme", CompanionOverlayService.prefs(getContext()).getString("theme", "gentle-dot"));
         value.put("partialChat", getActivity() instanceof CompanionChatActivity);
-        call.resolve(value);
+        return value;
     }
 
     @PluginMethod
@@ -131,7 +139,9 @@ public class GentleMobilePlugin extends Plugin {
 
     @PluginMethod
     public void setCompanion(PluginCall call) {
-        getActivity().runOnUiThread(() -> {
+        Activity activity = getActivity();
+        if (activity == null) { call.reject("Abre Gentle Dot e inténtalo de nuevo."); return; }
+        activity.runOnUiThread(() -> {
             Boolean enabled = call.getBoolean("enabled");
             String theme = call.getString("theme");
             Boolean pinned = call.getBoolean("pinned");
@@ -144,22 +154,47 @@ public class GentleMobilePlugin extends Plugin {
             if (theme != null) edit.putString("theme", theme);
             if (pinned != null) edit.putBoolean("pinned", pinned);
             if (!edit.commit()) { call.reject("No se pudo guardar el acompañante."); return; }
+            String requestedTheme = CompanionOverlayService.prefs(getContext()).getString("theme", "gentle-dot");
             try {
-                if (Boolean.FALSE.equals(enabled)) getContext().stopService(new Intent(getContext(), CompanionOverlayService.class));
-                else if (Boolean.TRUE.equals(enabled)) ContextCompat.startForegroundService(getContext(), new Intent(getContext(), CompanionOverlayService.class));
+                if (Boolean.FALSE.equals(enabled)) {
+                    getContext().stopService(new Intent(getContext(), CompanionOverlayService.class));
+                    call.resolve(companionStateValue());return;
+                }
+                if (Boolean.TRUE.equals(enabled)) ContextCompat.startForegroundService(getContext(), new Intent(getContext(), CompanionOverlayService.class));
                 CompanionOverlayService.configure();
-                if (Boolean.TRUE.equals(enabled)) {
+                // A stored preference is not a rendered character. Only a running renderer may confirm activation.
+                if (Boolean.TRUE.equals(enabled) || CompanionOverlayService.running()) {
                     Handler handler = new Handler(Looper.getMainLooper());
                     long deadline = android.os.SystemClock.uptimeMillis() + 3000;
                     handler.post(new Runnable() {
                         @Override public void run() {
-                            if (CompanionOverlayService.running()) call.resolve();
+                            if (!requestedTheme.equals(CompanionOverlayService.prefs(getContext()).getString("theme", "gentle-dot"))) {
+                                call.reject("El tema cambió mientras se activaba el acompañante. Revisa el tema seleccionado.");return;
+                            }
+                            CompanionSpriteView.RenderState render = CompanionOverlayService.renderState();
+                            if (render.error != null) {
+                                CompanionOverlayService.prefs(getContext()).edit().putBoolean("enabled", false).apply();
+                                getContext().stopService(new Intent(getContext(), CompanionOverlayService.class));
+                                call.reject(render.error);return;
+                            }
+                            if (!CompanionOverlayService.prefs(getContext()).getBoolean("enabled", false)) {
+                                call.reject("Se canceló la activación del acompañante.");return;
+                            }
+                            if (CompanionOverlayService.running() && render.ready && requestedTheme.equals(render.appliedTheme)) call.resolve(companionStateValue());
                             else if (android.os.SystemClock.uptimeMillis() < deadline) handler.postDelayed(this, 50);
-                            else { CompanionOverlayService.prefs(getContext()).edit().putBoolean("enabled", false).apply(); call.reject("Android no confirmó el inicio del acompañante. Vuelve a intentarlo con la app abierta."); }
+                            else {
+                                CompanionOverlayService.prefs(getContext()).edit().putBoolean("enabled", false).apply();
+                                getContext().stopService(new Intent(getContext(), CompanionOverlayService.class));
+                                call.reject("Android no confirmó el personaje del acompañante. Vuelve a intentarlo con la app abierta.");
+                            }
                         }
                     });
-                } else call.resolve();
-            } catch (RuntimeException error) { CompanionOverlayService.prefs(getContext()).edit().putBoolean("enabled", false).apply(); call.reject("Android no pudo activar el acompañante. Inténtalo con la app abierta."); }
+                } else call.resolve(companionStateValue());
+            } catch (RuntimeException error) {
+                CompanionOverlayService.prefs(getContext()).edit().putBoolean("enabled", false).apply();
+                getContext().stopService(new Intent(getContext(), CompanionOverlayService.class));
+                call.reject("Android no pudo activar el acompañante. Inténtalo con la app abierta.");
+            }
         });
     }
 

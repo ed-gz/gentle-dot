@@ -24,6 +24,9 @@ export interface NativeCompanionState {
 	active: boolean;
 	pinned: boolean;
 	theme: "gentle-dot" | "capri";
+	appliedTheme?: "gentle-dot" | "capri";
+	renderReady?: boolean;
+	renderError?: string;
 	partialChat: boolean;
 }
 interface NativePlugin {

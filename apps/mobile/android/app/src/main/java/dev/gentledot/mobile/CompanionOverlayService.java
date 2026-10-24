@@ -45,6 +45,7 @@ public final class CompanionOverlayService extends Service {
     static final String PREFS="gentledot-companion-native-v1";
     private static final int NOTICE=731, PIN=0x01020001, LEFT=0x01020002, RIGHT=0x01020003, HIDE=0x01020004;
     private static volatile WeakReference<CompanionOverlayService> current=new WeakReference<>(null);
+    private static volatile CompanionSpriteView.RenderState lastRenderState=CompanionSpriteView.RenderState.unavailable();
     private final Handler handler=new Handler(Looper.getMainLooper());
     private WindowManager windows;
     private CompanionSpriteView sprite;
@@ -55,10 +56,27 @@ public final class CompanionOverlayService extends Service {
     private String latestTitle="",latestBody="",latestEvent="",latestPane="",latestSession="",latestConversation="";
     static SharedPreferences prefs(Context context){return context.getSharedPreferences(PREFS,Context.MODE_PRIVATE);}
     static boolean permitted(Context context){return Build.VERSION.SDK_INT>=26 && Settings.canDrawOverlays(context);}
-    static boolean presenting(){CompanionOverlayService value=current.get();return value!=null && value.attached;}
+    static boolean presenting(){CompanionOverlayService value=current.get();return value!=null && value.attached && value.sprite.renderState().ready;}
     static boolean running(){CompanionOverlayService value=current.get();return value!=null && value.started;}
     static void refresh(){CompanionOverlayService value=current.get();if(value!=null)value.handler.post(value::updateVisibility);}
-    static void configure(){CompanionOverlayService value=current.get();if(value!=null)value.handler.post(()->{value.sprite.theme(prefs(value).getString("theme","gentle-dot"));value.updateVisibility();});}
+    static CompanionSpriteView.RenderState renderState(){
+        CompanionOverlayService value=current.get();return value!=null&&value.sprite!=null?value.sprite.renderState():lastRenderState;
+    }
+    /** Called by the plugin on the UI thread: a theme update is verified before it returns. */
+    static void configure(){
+        if(Looper.myLooper()!=Looper.getMainLooper())throw new IllegalStateException("Companion configuration requires the UI thread");
+        CompanionOverlayService value=current.get();
+        if(value==null){lastRenderState=CompanionSpriteView.RenderState.unavailable();return;}
+        String requested=prefs(value).getString("theme","gentle-dot");
+        if(!value.sprite.renderState().ready || !requested.equals(value.sprite.renderState().appliedTheme))value.sprite.theme(requested);
+        value.updateVisibility();
+    }
+    private void rendererChanged(CompanionSpriteView.RenderState state){
+        lastRenderState=state;
+        if(state.error!=null)handler.post(()->{
+            if(current.get()==this&&!sprite.renderState().ready){hideSpeech();stopEnabled();}
+        });
+    }
     static void offer(String kind,String id,String title,String body,String pane,String session,String conversation,Consumer<Boolean> receipt){
         CompanionOverlayService value=current.get();if(value==null){receipt.accept(false);return;}
         AtomicBoolean done=new AtomicBoolean();
@@ -78,7 +96,7 @@ public final class CompanionOverlayService extends Service {
                     if(!done.compareAndSet(false,true))return;
                     receiptHandler.removeCallbacks(timeout);
                     receipt.accept(current.get()==value && value.attached && value.speechAttached && value.speech==candidate && !MainActivity.isVisible()
-                        && !value.getSystemService(KeyguardManager.class).isKeyguardLocked());
+                        && value.sprite.renderState().ready && !value.getSystemService(KeyguardManager.class).isKeyguardLocked());
                 });}
             });
         });
@@ -86,7 +104,7 @@ public final class CompanionOverlayService extends Service {
     private final BroadcastReceiver stateReceiver=new BroadcastReceiver(){@Override public void onReceive(Context c,Intent i){updateVisibility();}};
     @Override public void onCreate(){
         super.onCreate();if(Build.VERSION.SDK_INT<26){stopSelf();return;}current=new WeakReference<>(this);windows=getSystemService(WindowManager.class);
-        sprite=new CompanionSpriteView(this);sprite.theme(prefs(this).getString("theme","gentle-dot"));
+        sprite=new CompanionSpriteView(this);sprite.onStateChanged(this::rendererChanged);sprite.theme(prefs(this).getString("theme","gentle-dot"));
         int size=dp(112);
         position=new WindowManager.LayoutParams(size,size,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT);
@@ -123,14 +141,14 @@ public final class CompanionOverlayService extends Service {
         Notification notice=new NotificationCompat.Builder(this,"companion-presence").setSmallIcon(R.drawable.ic_notification).setContentTitle("Tu acompañante está disponible")
             .setContentText("Toca para conversar. Se pausa al bloquear la pantalla.").setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
             .addAction(0,"Ocultar",stop).setVisibility(NotificationCompat.VISIBILITY_SECRET).build();
-        try {if(Build.VERSION.SDK_INT>=34)startForeground(NOTICE,notice,ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);else startForeground(NOTICE,notice);started=true;updateVisibility();}
+        try {if(Build.VERSION.SDK_INT>=34)startForeground(NOTICE,notice,ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);else startForeground(NOTICE,notice);started=true;if(sprite.renderState().ready)updateVisibility();else stopEnabled();}
         catch(RuntimeException error){stopSelf();}
         return START_NOT_STICKY;
     }
     private void togglePin(){boolean value=!prefs(this).getBoolean("pinned",false);prefs(this).edit().putBoolean("pinned",value).apply();sprite.announceForAccessibility(value?"Posición fijada":"Puedes mover el acompañante");}
     private void updateVisibility(){
         PowerManager power=getSystemService(PowerManager.class);KeyguardManager keyguard=getSystemService(KeyguardManager.class);
-        boolean visible=CompanionPolicy.visible(prefs(this).getBoolean("enabled",false),permitted(this),power.isInteractive(),keyguard.isKeyguardLocked(),MainActivity.isVisible());
+        boolean visible=sprite.renderState().ready && CompanionPolicy.visible(prefs(this).getBoolean("enabled",false),permitted(this),power.isInteractive(),keyguard.isKeyguardLocked(),MainActivity.isVisible());
         if(visible&&!attached){try{clamp();windows.addView(sprite,position);attached=true;}catch(RuntimeException denied){stopEnabled();return;}}
         if(!visible){hideSpeech();if(attached){windows.removeView(sprite);attached=false;}}
         boolean motion=CompanionPolicy.animate(visible,power.isPowerSaveMode(),Settings.Global.getFloat(getContentResolver(),Settings.Global.ANIMATOR_DURATION_SCALE,1f)==0f);
@@ -139,7 +157,7 @@ public final class CompanionOverlayService extends Service {
     private boolean present(String kind,String id,String title,String body,String pane,String session,String conversation){
         if(Build.VERSION.SDK_INT<26 || !attached || getSystemService(KeyguardManager.class).isKeyguardLocked())return false;
         latestEvent=safe(id,160);latestTitle=safe(title,120);latestBody=safe(body,1000);latestPane=safe(pane,160);latestSession=safe(session,160);latestConversation=safe(conversation,160);
-        sprite.play(CompanionPolicy.action(kind));if("capture".equals(kind)||"download".equals(kind)){hideSpeech();return false;}
+        sprite.play(CompanionPolicy.action(kind));if(!sprite.renderState().ready)return false;if("capture".equals(kind)||"download".equals(kind)){hideSpeech();return false;}
         hideSpeech();
         // The existing preview setting controls the lock screen; this window never appears there.
         String displayTitle=latestTitle, displayBody=latestBody;
@@ -167,6 +185,6 @@ public final class CompanionOverlayService extends Service {
     private static String safe(String value,int length){return value==null?"":value.substring(0,Math.min(length,value.length()));}
     private void stopEnabled(){prefs(this).edit().putBoolean("enabled",false).apply();stopSelf();}
     @Override public void onConfigurationChanged(Configuration config){super.onConfigurationChanged(config);hideSpeech();move();}
-    @Override public void onDestroy(){started=false;handler.removeCallbacksAndMessages(null);hideSpeech();if(attached)windows.removeView(sprite);if(sprite!=null){sprite.release();unregisterReceiver(stateReceiver);}if(current.get()==this)current.clear();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}
+    @Override public void onDestroy(){started=false;handler.removeCallbacksAndMessages(null);hideSpeech();if(attached)windows.removeView(sprite);if(sprite!=null){CompanionSpriteView.RenderState state=sprite.renderState();lastRenderState=new CompanionSpriteView.RenderState(null,false,state.error);sprite.release();unregisterReceiver(stateReceiver);}if(current.get()==this)current.clear();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}
     @Override public IBinder onBind(Intent intent){return null;}
 }
