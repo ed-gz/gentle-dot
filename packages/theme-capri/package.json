@@ -10,6 +10,7 @@
 		"./art": "./src/art.ts",
 		"./animation": "./src/animation.ts",
 		"./scenes": "./src/scenes.ts",
+		"./behavior": "./src/behavior.ts",
 		"./style.css": "./src/style.css",
 		"./assets/*": "./src/assets/*"
 	},

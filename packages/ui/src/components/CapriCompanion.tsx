@@ -1,13 +1,14 @@
 import type { AgentState } from "@gentle-dot/protocol";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useCompanionActivity } from "../companion-activity.ts";
+import { companionTarget, useCompanionActivity } from "../companion-activity.ts";
 import { useCapriFloat } from "../useCapriFloat.ts";
 import type { CompanionControls } from "../useCompanion.ts";
 import "../capri.css";
 import { type CapriAction, capriAnimation } from "../capri-animation.ts";
 import { type CapriPose, capriFrame } from "../capri-art.ts";
-import { sceneCaption, sceneForActivity } from "../capri-scenes.ts";
+import { capriBehavior, CAPRI_OUTCOME_MS } from "@gentle-dot/theme-capri/behavior";
+import { sceneCaption } from "../capri-scenes.ts";
 import { CapriAnimatedSprite } from "./CapriAnimatedSprite.tsx";
 import { CompanionSpaceEditor } from "./CompanionSpaceEditor.tsx";
 
@@ -254,7 +255,6 @@ export function CapriCompanion({
 	controls,
 	state,
 	connected,
-	sessions = false,
 	needsYou = false,
 	speaking = false,
 	onSettings,
@@ -282,8 +282,7 @@ export function CapriCompanion({
 	const descriptionId = useId();
 	const activity = useCompanionActivity(settings.visible && !settings.minimized);
 	const interaction = activity.kind;
-	const [phase, setPhase] = useState(0);
-	const [celebrate, setCelebrate] = useState(false);
+	const [outcome, setOutcome] = useState<{ kind: "done" | "error"; at: number }>();
 	const [focused, setFocused] = useState(false);
 	const [hovered, setHovered] = useState(false);
 	const [awake, setAwake] = useState(() => !document.hidden);
@@ -314,43 +313,29 @@ export function CapriCompanion({
 		document.addEventListener("visibilitychange", update);
 		return () => document.removeEventListener("visibilitychange", update);
 	}, []);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: A company change starts its visit sequence again.
-	useEffect(() => {
-		setPhase(0);
-	}, [settings.company]);
-	useEffect(() => {
-		if (!alive) return;
-		const timer = setInterval(() => setPhase((value) => (value + 1) % 120), 12_000);
-		return () => clearInterval(timer);
-	}, [alive]);
 	useEffect(() => {
 		const busy = state === "working" || state === "thinking";
-		const finished = previousBusy.current && state === "idle";
+		if (state === "error" || (previousBusy.current && state === "idle"))
+			setOutcome({ kind: state === "error" ? "error" : "done", at: Date.now() });
 		previousBusy.current = busy;
-		setCelebrate(finished);
-		if (finished) {
-			const timer = setTimeout(() => setCelebrate(false), 6500);
-			return () => clearTimeout(timer);
-		}
 	}, [state]);
+	useEffect(() => {
+		if (!outcome) return;
+		const timer = setTimeout(() => setOutcome(undefined), Math.max(0, outcome.at + CAPRI_OUTCOME_MS - Date.now()));
+		return () => clearTimeout(timer);
+	}, [outcome]);
 	const attention = needsYou || state === "needs_you";
 	const busy = state === "thinking" || state === "working";
-	let pose = sceneForActivity({
-		state,
-		connected,
-		attention,
-		sessions,
-		interaction,
-		activitySequence: activity.sequence,
-		company: "visits",
-		phase,
-		scene: "auto",
-		celebrate,
+	const behavior = capriBehavior({
+		now: Date.now(),
+		pendingQuestion: attention,
+		outcome: interaction === "failed" ? { kind: "error", at: activity.at ?? Date.now() } : outcome,
+		typingUntil: interaction === "typing" ? activity.expiresAt : undefined,
+		agentWorking: busy || interaction === "sending" || interaction === "queued",
+		reply: ["response", "reading", "submitted"].includes(interaction)
+			? { kind: interaction === "submitted" ? "submitted" : "reply", at: activity.at ?? Date.now() } : undefined,
 	});
-	if (moodFlash && connected && !attention) pose = moodFlash === "hacker" ? "hacker" : "victory";
-	if (connected && !attention) {
-		if (speaking) pose = "face";
-	}
+	const pose = behavior.animation;
 
 	const duo = pose.startsWith("duo-") || pose === "invite-rebecca";
 	const character = duo ? "CAPRI + REBECCA" : pose.startsWith("rebecca-") ? "REBECCA" : "CAPRI";
@@ -394,7 +379,9 @@ export function CapriCompanion({
 		enabled: settings.visible,
 		moving,
 		pinned: settings.pinned,
-		target: activity.target,
+		behaviorTarget: behavior.target,
+		target: behavior.target === "editor" && interaction === "typing" ? activity.target
+			: behavior.target === "attention-source" ? companionTarget(document.querySelector(".ask-card")) : undefined,
 		space: settings.space,
 		side: settings.side,
 		size: naturalSize,

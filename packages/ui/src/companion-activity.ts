@@ -14,6 +14,8 @@ export interface CompanionLocalActivity {
 	kind: CompanionActivityKind;
 	/** Changes on a new activity, not on every keystroke. */
 	sequence: number;
+	at?: number;
+	expiresAt?: number;
 	target?: CompanionTarget;
 }
 export const COMPANION_ACTIVITY_EVENT = "gentle-dot-companion-activity";
@@ -65,13 +67,15 @@ export function useCompanionActivity(enabled: boolean): CompanionLocalActivity {
 			if (document.hidden) return;
 			clearTimeout(timer);
 			const changed = current.current.kind !== kind;
-			// Long typing runs get gentle variation, without rendering on each key.
+			// Refresh geometry at a bounded rate, without reading draft contents.
 			const measured = changed || Date.now() - lastMeasure > 750;
 			if (measured) {
 				lastMeasure = Date.now();
 				const next = {
 					kind,
 					sequence: current.current.sequence + (changed ? 1 : 0),
+					at: Date.now(),
+					expiresAt: Date.now() + durations[kind],
 					target: supplied ?? companionTarget(element),
 				};
 				current.current = next;

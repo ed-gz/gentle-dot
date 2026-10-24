@@ -67,6 +67,13 @@ function setup(value = controls()) {
 	return { value, toggle, startDrag, view, button: screen.getByRole("button") };
 }
 
+it("watches typing without verified editor geometry and without phase changes", () => {
+ const { button } = setup(controls({ context: { musicPlaying: false, musicAvailable: false, notificationsAvailable: false, cue: { kind: "typing", id: "typing:test", expiresAt: Date.now() + 90_000 } } }));
+ expect(button).toHaveAttribute("data-pose", "eyes");
+ act(() => vi.advanceTimersByTime(60_000));
+ expect(button).toHaveAttribute("data-pose", "eyes");
+});
+
 it("keeps the original rose when desktop Capri is off, regardless of mobile or web mode", () => {
 	localStorage.setItem(
 		"gentle-dot-companion-v1",
@@ -106,17 +113,11 @@ it("uses native enabled state and ignores app appearance preferences", () => {
 	expect(storage).not.toHaveBeenCalled();
 });
 
-it("moves through Capri scenes and Rebecca's invitation sequence every twelve seconds", () => {
+it("rests calmly without clock-driven scene rotation", () => {
 	const { button } = setup();
-	expect(button).toHaveAttribute("data-pose", "greeting");
-	act(() => vi.advanceTimersByTime(12_000));
-	expect(button).toHaveAttribute("data-pose", "coffee");
-	act(() => vi.advanceTimersByTime(24_000));
-	expect(button).toHaveAttribute("data-pose", "invite-rebecca");
-	act(() => vi.advanceTimersByTime(12_000));
-	expect(button).toHaveAttribute("data-pose", "duo-watch");
-	act(() => vi.advanceTimersByTime(12_000));
-	expect(button).toHaveAttribute("data-pose", "duo-coffee");
+	expect(button).toHaveAttribute("data-pose", "idle");
+	act(() => vi.advanceTimersByTime(60_000));
+	expect(button).toHaveAttribute("data-pose", "idle");
 });
 
 it("keeps question and connection poses ahead of ambient scenes", () => {
@@ -127,7 +128,7 @@ it("keeps question and connection poses ahead of ambient scenes", () => {
 	expect(screen.getByRole("button")).toHaveAccessibleName(/Hay una pregunta para ti/);
 	expect(screen.queryByText("!")).not.toBeInTheDocument();
 	view.rerender(<DesktopCompanionSurface {...props} agentState="needs_you" connected={false} />);
-	expect(screen.getByRole("button")).toHaveAttribute("data-pose", "sleep");
+	expect(screen.getByRole("button")).toHaveAttribute("data-pose", "alert");
 	expect(screen.getByRole("button")).toHaveAccessibleName(/Sin conexión/);
 });
 
@@ -208,7 +209,7 @@ it("has no animation timers while the native window is hidden", () => {
 	expect(button).toHaveAttribute("data-visible", "false");
 	expect(vi.getTimerCount()).toBe(0);
 	act(() => vi.advanceTimersByTime(120_000));
-	expect(button).toHaveAttribute("data-pose", "greeting");
+	expect(button).toHaveAttribute("data-pose", "idle");
 });
 
 it("stops timers on document hiding and restarts only after becoming visible", () => {
@@ -218,11 +219,11 @@ it("stops timers on document hiding and restarts only after becoming visible", (
 	act(() => document.dispatchEvent(new Event("visibilitychange")));
 	expect(vi.getTimerCount()).toBe(0);
 	act(() => vi.advanceTimersByTime(60_000));
-	expect(button).toHaveAttribute("data-pose", "greeting");
+	expect(button).toHaveAttribute("data-pose", "idle");
 	visibility.mockReturnValue(false);
 	act(() => document.dispatchEvent(new Event("visibilitychange")));
 	act(() => vi.advanceTimersByTime(12_000));
-	expect(button).toHaveAttribute("data-pose", "coffee");
+	expect(button).toHaveAttribute("data-pose", "idle");
 });
 
 it("honors reduced motion but keeps gestures alive during native position pauses", () => {
@@ -352,7 +353,7 @@ it("keeps pinned gestures and scenes alive under hover/focus, and offers a nativ
 	expect(button).toHaveAttribute("data-motion", "false");
 	expect(button).toHaveAttribute("data-animated", "true");
 	act(() => vi.advanceTimersByTime(12_000));
-	expect(button).toHaveAttribute("data-pose", "coffee");
+	expect(button).toHaveAttribute("data-pose", "idle");
 	fireEvent.contextMenu(button);
 	expect(value.menu).toHaveBeenCalledOnce();
 	fireEvent.keyDown(button, { key: "F10", shiftKey: true });

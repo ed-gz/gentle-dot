@@ -64,10 +64,26 @@ function keyboard(key: string, shiftKey = false) {
 }
 const frame = () => act(() => vi.advanceTimersByTime(20));
 
-it("ends the walk cycle at arrival even without a browser transitionend event", () => {
+it("never moves on a timer without an activity target", () => {
+ const { result } = renderHook(() => useCapriFloat(settings({ moving: true })));
+ const before = { ...result.current.point };
+ act(() => vi.advanceTimersByTime(60_000));
+ expect(result.current.point).toEqual(before);
+});
+
+it("approaches the composer when typing provides a target", () => {
+ const { result, rerender } = renderHook(({ target }) => useCapriFloat(settings({ moving: true, target })), { initialProps: { target: undefined as { x: number; y: number; width: number; height: number } | undefined } });
+ const before = { ...result.current.point };
+ rerender({ target: { x: 40, y: 650, width: 300, height: 80 } });
+ frame();
+ expect(result.current.point).not.toEqual(before);
+ expect(result.current.point.y).toBeLessThan(650 - 100);
+});
+
+it("ends a target-driven walk at arrival even without transitionend", () => {
 	const options = settings({ moving: true });
-	const hook = renderHook(() => useCapriFloat(options));
-	act(() => vi.advanceTimersByTime(20_000));
+	const hook = renderHook((props) => useCapriFloat(props), { initialProps: options });
+	hook.rerender({ ...options, target: { x: 0, y: 650, width: 100, height: 60 } });
 	frame();
 	expect(hook.result.current.travelling).toBe(true);
 	const destination = hook.result.current.point;
@@ -75,8 +91,8 @@ it("ends the walk cycle at arrival even without a browser transitionend event", 
 	expect(hook.result.current.travelling).toBe(false);
 	expect(hook.result.current.point).toEqual(destination);
 	expect(options.onPosition).not.toHaveBeenCalled();
-	act(() => vi.advanceTimersByTime(18_500));
-	expect(hook.result.current.travelling).toBe(true);
+	act(() => vi.advanceTimersByTime(60_000));
+	expect(hook.result.current.travelling).toBe(false);
 	hook.unmount();
 	expect(vi.getTimerCount()).toBe(0);
 });
@@ -462,11 +478,11 @@ it("does not flee its own keyboard controls", () => {
 	expect(hook.result.current.point).toEqual(before);
 });
 
-it("walks every twenty seconds without persisting and observes a sixty-second drag cooldown", () => {
+it("moves for a target without persisting and respects the drag cooldown", () => {
 	const options = settings({ moving: true });
-	const hook = renderHook(() => useCapriFloat(options));
+	const hook = renderHook((props) => useCapriFloat(props), { initialProps: options });
 	frame();
-	act(() => vi.advanceTimersByTime(20_000));
+	hook.rerender({ ...options, target: { x: 0, y: 650, width: 100, height: 60 } });
 	frame();
 	expect(hook.result.current.point.x).toBe(8);
 	expect(options.onPosition).not.toHaveBeenCalled();
@@ -475,9 +491,13 @@ it("walks every twenty seconds without persisting and observes a sixty-second dr
 	act(() => hook.result.current.dragProps.onPointerUp(pointer(button, 120, 100)));
 	const dropped = hook.result.current.point;
 	act(() => vi.advanceTimersByTime(59_000));
+	hook.rerender({ ...options, target: { x: 220, y: 600, width: 100, height: 60 } });
 	frame();
 	expect(hook.result.current.point).toEqual(dropped);
 	act(() => vi.advanceTimersByTime(21_000));
+	frame();
+	expect(hook.result.current.point).toEqual(dropped);
+	hook.rerender({ ...options, target: { x: 220, y: 650, width: 100, height: 60 } });
 	frame();
 	expect(hook.result.current.point).not.toEqual(dropped);
 	expect(options.onPosition).toHaveBeenCalledOnce();
@@ -500,9 +520,9 @@ it("stops walks while motion is paused or the document is hidden", () => {
 	hidden.mockReturnValue(false);
 	act(() => document.dispatchEvent(new Event("visibilitychange")));
 	frame();
-	act(() => vi.advanceTimersByTime(20_000));
+	act(() => vi.advanceTimersByTime(60_000));
 	frame();
-	expect(hook.result.current.point.x).toBe(8);
+	expect(hook.result.current.point).toEqual(paused);
 });
 
 it("keeps a chosen side during automatic walks and persists accessible keyboard moves", () => {
@@ -537,9 +557,9 @@ it("does not persist or leave a dragging flag after being disabled", () => {
 	expect(vi.getTimerCount()).toBe(0);
 });
 
-it("starts a drag at the rendered position during an automatic CSS transition", () => {
+it("starts a drag at the rendered position during a target-driven transition", () => {
 	const options = settings({ moving: true });
-	const hook = renderHook(() => useCapriFloat(options));
+	const hook = renderHook((props) => useCapriFloat(props), { initialProps: options });
 	frame();
 	const element = document.createElement("div");
 	vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
@@ -554,7 +574,7 @@ it("starts a drag at the rendered position during an automatic CSS transition", 
 		toJSON() {},
 	});
 	hook.result.current.floatRef.current = element;
-	act(() => vi.advanceTimersByTime(20_000));
+	hook.rerender({ ...options, target: { x: 0, y: 650, width: 100, height: 60 } });
 	frame();
 	expect(hook.result.current.travelling).toBe(true);
 	expect(hook.result.current.point.x).toBe(8);
@@ -589,7 +609,7 @@ it("freezes the actual CSS position when movement is paused without saving it", 
 		toJSON() {},
 	});
 	hook.result.current.floatRef.current = element;
-	act(() => vi.advanceTimersByTime(20_000));
+	hook.rerender({ ...options, target: { x: 0, y: 650, width: 100, height: 60 } });
 	frame();
 	expect(hook.result.current.travelling).toBe(true);
 	hook.rerender({ ...options, moving: false });
@@ -602,7 +622,7 @@ it("freezes the actual CSS position when movement is paused without saving it", 
 
 it("cancels to the grabbed visual position and freezes travel while hidden", () => {
 	const options = settings({ moving: true });
-	const hook = renderHook(() => useCapriFloat(options));
+	const hook = renderHook((props) => useCapriFloat(props), { initialProps: options });
 	frame();
 	const element = document.createElement("div");
 	vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
@@ -627,6 +647,7 @@ it("cancels to the grabbed visual position and freezes travel while hidden", () 
 	expect(hook.result.current.point).toEqual({ x: 120, y: 260 });
 	expect(hook.result.current.travelling).toBe(false);
 	act(() => vi.advanceTimersByTime(80_000));
+	hook.rerender({ ...options, target: { x: 0, y: 650, width: 100, height: 60 } });
 	frame();
 	expect(hook.result.current.travelling).toBe(true);
 	vi.spyOn(document, "hidden", "get").mockReturnValue(true);

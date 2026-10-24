@@ -19,6 +19,7 @@ interface Options {
 	enabled: boolean;
 	moving: boolean;
 	pinned?: boolean;
+	behaviorTarget?: "editor" | "attention-source" | "stay";
 	/** Actual input/message geometry, local to this document. Never a screen estimate. */
 	target?: { x: number; y: number; width: number; height: number };
 	space?: CompanionSpaceRect;
@@ -203,7 +204,6 @@ export function useCapriFloat(options: Options) {
 	const cooldown = useRef(0);
 	const suppressClick = useRef(false);
 	const probe = useRef<HTMLElement | undefined>(undefined);
-	const walk = useRef(0);
 	const paint = useCallback((next: FloatPoint, immediate = false) => {
 		current.current = next;
 		if (immediate) {
@@ -457,30 +457,7 @@ export function useCapriFloat(options: Options) {
 		options.pinned,
 		refresh,
 	]);
-	useEffect(() => {
-		if (!options.enabled || !options.moving || options.pinned || !visible) return;
-		const interval = window.setInterval(() => {
-			const config = latest.current;
-			if (
-				document.hidden ||
-				drag.current ||
-				modalRef.current ||
-				config.target ||
-				Date.now() < cooldown.current
-			)
-				return;
-			walk.current++;
-			anchor.current = {
-				x: config.side === "auto" ? (anchor.current.x >= 0.5 ? 0 : 1) : config.side === "left" ? 0 : 1,
-				y: [0.18, 0.42, 0.64, 0.3][walk.current % 4] ?? 0.48,
-			};
-			travel(true);
-			paint(
-				avoidFocus(locate(anchor.current, bounds.current, sizeRef.current), bounds.current, sizeRef.current),
-			);
-		}, 20_000);
-		return () => window.clearInterval(interval);
-	}, [options.enabled, options.moving, options.pinned, visible, paint, travel]);
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Target geometry and movement gates are read through latest to avoid stale pointer state.
 	useEffect(() => {
 		const config = latest.current,
@@ -488,6 +465,7 @@ export function useCapriFloat(options: Options) {
 		if (
 			!config.enabled ||
 			!config.moving ||
+			config.behaviorTarget === "stay" ||
 			config.pinned ||
 			!visible ||
 			!target ||
@@ -522,6 +500,7 @@ export function useCapriFloat(options: Options) {
 		travel(true);
 		paint(next);
 	}, [
+		options.behaviorTarget,
 		options.target?.x,
 		options.target?.y,
 		options.target?.width,

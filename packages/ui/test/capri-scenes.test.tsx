@@ -21,32 +21,28 @@ function Stage({ state = "idle", connected = true }: { state?: AgentState; conne
 }
 const pose = () => document.querySelector(".capri-float .capri-sprite")?.getAttribute("data-pose");
 
-it("invites Rebecca before they watch together and then share coffee", () => {
+it("keeps working purposeful without a timed visit or scene change", () => {
 	vi.useFakeTimers();
 	render(<Stage state="working" />);
-	act(() => vi.advanceTimersByTime(36_000));
-	expect(pose()).toBe("invite-rebecca");
-	expect(screen.getByLabelText("Capri y Rebecca, tus acompañantes")).toHaveTextContent("Rebecca, ven");
-	act(() => vi.advanceTimersByTime(12_000));
-	expect(pose()).toBe("duo-watch");
-	act(() => vi.advanceTimersByTime(12_000));
-	expect(pose()).toBe("duo-coffee");
+	expect(pose()).toBe("working");
+	act(() => vi.advanceTimersByTime(60_000));
+	expect(pose()).toBe("working");
 });
 
-it("pauses scene cycling in a hidden app and resumes on return", () => {
+it("rests at the last focus across hiding and returning", () => {
 	vi.useFakeTimers();
 	const hidden = vi.spyOn(document, "hidden", "get");
 	render(<Stage />);
 	act(() => vi.advanceTimersByTime(36_000));
-	expect(pose()).toBe("invite-rebecca");
+	expect(pose()).toBe("idle");
 	hidden.mockReturnValue(true);
 	fireEvent(document, new Event("visibilitychange"));
 	act(() => vi.advanceTimersByTime(60_000));
-	expect(pose()).toBe("invite-rebecca");
+	expect(pose()).toBe("idle");
 	hidden.mockReturnValue(false);
 	fireEvent(document, new Event("visibilitychange"));
 	act(() => vi.advanceTimersByTime(12_000));
-	expect(pose()).toBe("duo-watch");
+	expect(pose()).toBe("idle");
 });
 
 it("disables autonomous scene changes and blinking for reduced motion", () => {
@@ -63,12 +59,12 @@ it("disables autonomous scene changes and blinking for reduced motion", () => {
 it("migrates a fixed pose to autonomy and keeps questions and connection status authoritative", () => {
 	localStorage.setItem(COMPANION_KEY, JSON.stringify({ mode: "capri", form: "body", scene: "angry" }));
 	const view = render(<Stage />);
-	expect(pose()).toBe("greeting");
+	expect(pose()).toBe("idle");
 	view.rerender(<Stage state="needs_you" />);
 	expect(pose()).toBe("alert");
 	expect(screen.getByLabelText("Capri, tu acompañante")).toHaveTextContent("Hay una pregunta para ti");
 	view.rerender(<Stage connected={false} />);
-	expect(pose()).toBe("sleep");
+	expect(pose()).toBe("idle");
 	expect(screen.getByLabelText("Capri, tu acompañante")).toHaveTextContent("Esperando conexión");
 });
 
@@ -87,7 +83,7 @@ it("typing and voice cannot replace a pending question or disconnected pose", ()
 	fireEvent.input(screen.getByRole("textbox"), { target: { value: "No enviar" } });
 	expect(pose()).toBe("alert");
 	view.rerender(<Fixture connected={false} />);
-	expect(pose()).toBe("sleep");
+	expect(pose()).toBe("alert");
 });
 
 it("keeps a small typing pose when keyboard scrolling happens in the focused editor", () => {
@@ -128,16 +124,14 @@ it("chooses its own forms without exposing a pose gallery or manual selectors", 
 		);
 	}
 	render(<Settings />);
-	expect(pose()).toBe("greeting");
+	expect(pose()).toBe("idle");
 	expect(screen.queryByRole("combobox", { name: "Forma" })).not.toBeInTheDocument();
 	expect(screen.queryByRole("combobox", { name: "Posición" })).not.toBeInTheDocument();
 	expect(screen.queryByRole("combobox", { name: "Compañía" })).not.toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Las formas de Capri" })).not.toBeInTheDocument();
-	act(() => vi.advanceTimersByTime(36_000));
-	expect(pose()).toBe("invite-rebecca");
-	act(() => vi.advanceTimersByTime(60_000));
-	expect(pose()).toBe("eyes");
-	expect(screen.getByLabelText("Capri, tu acompañante")).toHaveAttribute("data-form", "glimpse");
+	act(() => vi.advanceTimersByTime(96_000));
+	expect(pose()).toBe("idle");
+	expect(screen.getByLabelText("Capri, tu acompañante")).toHaveAttribute("data-form", "body");
 });
 
 it("uses verified terminal mood events only for a known local palette", () => {

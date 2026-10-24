@@ -115,12 +115,12 @@ const scene = {
 	scene: "auto",
 	celebrate: false,
 } as const;
-it("music comes from playback; questions and real work override music and idle scenes", () => {
-	expect(sceneForActivity({ ...scene, musicPlaying: true })).toBe("headphones");
-	expect(sceneForActivity({ ...scene, musicPlaying: true, phase: 1 })).toBe("dancing");
-	expect(sceneForActivity({ ...scene, musicPlaying: true, phase: 3 })).toBe("headphones");
+it("ignores ambient phases and keeps activity authoritative", () => {
+	expect(sceneForActivity({ ...scene, musicPlaying: true })).toBe("idle");
+	expect(sceneForActivity({ ...scene, musicPlaying: true, phase: 1 })).toBe("idle");
+	expect(sceneForActivity({ ...scene, musicPlaying: true, phase: 3 })).toBe("idle");
 	expect(sceneForActivity({ ...scene, musicPlaying: true, attention: true })).toBe("alert");
-	expect(sceneForActivity({ ...scene, musicPlaying: true, interaction: "typing" })).toBe("typing");
+	expect(sceneForActivity({ ...scene, musicPlaying: true, interaction: "typing" })).toBe("eyes");
 	expect(sceneForActivity({ ...scene, musicPlaying: true, interaction: "submitted" })).toBe("follow-message");
 	expect(["headphones", "dancing"]).not.toContain(
 		sceneForActivity({ ...scene, musicPlaying: true, state: "working" }),
@@ -131,7 +131,7 @@ it("music comes from playback; questions and real work override music and idle s
 				sceneForActivity({ ...scene, interaction: "typing", activitySequence }),
 			),
 		),
-	).toEqual(new Set(["typing", "eyes", "peek"]));
+	).toEqual(new Set(["eyes"]));
 });
 
 function snapshot(): CompanionSessionSnapshot {
@@ -205,13 +205,20 @@ it("sits only on a fresh verified editor and steps aside when typing starts", ()
 	session.targets.composer.kind = "cursor";
 	expect(companionSessionCue(data)).toMatchObject({ kind: "typing", placement: "aside" });
 	session.activity = { phase: "idle" };
-	expect(companionSessionCue(data).kind).toBe("rest");
+	expect(companionSessionCue(data)).toMatchObject({ kind: "input-ready" });
+	expect(companionSessionCue(data).target).toBeUndefined();
 	session.targets.composer.kind = "editor";
 	session.targets.composer.observedAt = new Date(Date.now() - 2501).toISOString();
-	expect(companionSessionCue(data).kind).toBe("rest");
+	expect(companionSessionCue(data)).toMatchObject({ kind: "input-ready" });
+	expect(companionSessionCue(data).target).toBeUndefined();
 	session.targets.composer.observedAt = new Date().toISOString();
 	session.visible = false;
-	expect(companionSessionCue(data).kind).toBe("rest");
+	expect(companionSessionCue(data).kind).toBe("input-ready");
+	expect(companionSessionCue(data).target).toBeUndefined();
+	session.targets.composer = null;
+	session.activity = { phase: "typing", typingUntil: new Date(Date.now() + 3000).toISOString() };
+	expect(companionSessionCue(data)).toMatchObject({ kind: "typing" });
+	expect(companionSessionCue(data).target).toBeUndefined();
 });
 
 it("keeps pinned coordinates while real input guidance changes", () => {

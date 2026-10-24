@@ -1,8 +1,8 @@
 import type { AgentState } from "@gentle-dot/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type CapriAction, capriAnimation } from "../capri-animation.ts";
-import type { CapriPose } from "../capri-art.ts";
-import { sceneCaption, sceneForActivity } from "../capri-scenes.ts";
+import { capriBehavior, CAPRI_OUTCOME_MS } from "@gentle-dot/theme-capri/behavior";
+import { sceneCaption } from "../capri-scenes.ts";
 import { isVisualNotification, notificationPresentation } from "../companion-notification.ts";
 import type { DesktopCompanionControls } from "../desktop-companion.ts";
 import { CapriSprite } from "./CapriCompanion.tsx";
@@ -17,20 +17,6 @@ interface Props {
 	toggle(): void;
 	startDrag(): void | Promise<void>;
 }
-const IDLE_ART: readonly CapriPose[] = [
-	"idle",
-	"coffee",
-	"stretch",
-	"snack",
-	"chill",
-	"reading",
-	"lounging",
-	"peek",
-	"eyes",
-	"face",
-	"sleepy-coffee",
-	"confused",
-];
 interface Press {
 	id: number;
 	x: number;
@@ -52,9 +38,7 @@ export function DesktopCompanionSurface({
 	const latest = useRef({ controls, inControl, reduced: false });
 	const [awake, setAwake] = useState(() => !document.hidden);
 	const [interacting, setInteracting] = useState(false);
-	const [phase, setPhase] = useState(0);
-	const [greeting, setGreeting] = useState(true);
-	const [celebrate, setCelebrate] = useState(false);
+	const [outcome, setOutcome] = useState<{ kind: "done" | "error"; at: number }>();
 	const [reduced, setReduced] = useState(
 		() => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches,
 	);
@@ -88,11 +72,6 @@ export function DesktopCompanionSurface({
 		!controls.state.paused &&
 		!interacting &&
 		!inControl;
-	useEffect(() => {
-		if (!animated || !greeting) return;
-		const timer = setTimeout(() => setGreeting(false), 3500);
-		return () => clearTimeout(timer);
-	}, [animated, greeting]);
 	const publishInteraction = useCallback((reconcile = false) => {
 		const local = held.current.hover || held.current.focus || held.current.press;
 		setInteracting(local);
@@ -166,26 +145,32 @@ export function DesktopCompanionSurface({
 		publishInteraction,
 	]);
 	useEffect(() => {
-		if (!animated) return;
-		const timer = setInterval(() => setPhase((value) => (value + 1) % 120), 12_000);
-		return () => clearInterval(timer);
-	}, [animated]);
-	useEffect(() => {
 		const busy = agentState === "working" || agentState === "thinking";
-		const finished = previousBusy.current && agentState === "idle" && visible;
+		if (agentState === "error" || (previousBusy.current && agentState === "idle"))
+			setOutcome({ kind: agentState === "error" ? "error" : "done", at: Date.now() });
 		previousBusy.current = busy;
-		setCelebrate(finished);
-		if (!finished) return;
-		const timer = setTimeout(() => setCelebrate(false), 6000);
+	}, [agentState]);
+	useEffect(() => {
+		if (!outcome) return;
+		const timer = setTimeout(() => setOutcome(undefined), Math.max(0, outcome.at + CAPRI_OUTCOME_MS - Date.now()));
 		return () => clearTimeout(timer);
-	}, [agentState, visible]);
+	}, [outcome]);
 	const context = controls.state.context;
+	const [, refreshExpiry] = useState(0);
+	useEffect(() => {
+		const deadlines = [context?.cue?.expiresAt, context?.notification?.expiresAt]
+			.filter((at): at is number => at !== undefined && at > Date.now());
+		if (!deadlines.length) return;
+		const timer = setTimeout(() => refreshExpiry((n) => n + 1), Math.max(0, Math.min(...deadlines) - Date.now()));
+		return () => clearTimeout(timer);
+	});
 	const activeQuestion =
 		context?.cue?.kind === "question" && context.cue.expiresAt > Date.now() ? context.cue : undefined;
 	const cue =
 		isVisualNotification(context?.notification) && activeQuestion
 			? activeQuestion
-			: (context?.notification ?? context?.cue);
+			: (context?.notification && context.notification.expiresAt > Date.now() ? context.notification
+				: context?.cue && context.cue.expiresAt > Date.now() ? context.cue : undefined);
 	const visualNotification = isVisualNotification(context?.notification) ? context?.notification : undefined;
 	const notificationId = visualNotification?.id;
 	const contextReady = controls.contextReady;
@@ -211,34 +196,20 @@ export function DesktopCompanionSurface({
 		},
 		[notificationId, visible, inControl, attention, visualExpiresAt, contextReady],
 	);
-	const visiting = phase % 10 >= 3 && phase % 10 <= 7;
-	const soloSlot = phase % 10 <= 2 ? phase % 10 : (phase % 10) - 5;
-	const idlePose = IDLE_ART[(Math.floor(phase / 10) * 5 + soloSlot) % IDLE_ART.length] ?? "idle";
-	let pose = sceneForActivity({
-		state: inControl || cue?.kind === "working" ? "working" : agentState,
-		connected: connected || !!context?.musicPlaying || !!cue,
-		attention,
-		sessions: !!cue?.sessionId,
-		interaction:
-			cue?.kind === "typing"
-				? "typing"
-				: cue?.kind === "submitted"
-					? "submitted"
-					: greeting && agentState === "idle" && !context?.musicPlaying
-						? "greeting"
-						: "rest",
-		company: "visits",
-		phase,
-		scene: agentState === "idle" && phase > 0 && !visiting && !celebrate && !inControl ? idlePose : "auto",
-		celebrate,
-		musicPlaying: context?.musicPlaying,
+	const behavior = capriBehavior({
+		now: Date.now(),
+		pendingQuestion: attention,
+		outcome,
+		typingUntil: cue?.kind === "typing" ? cue.expiresAt : undefined,
+		agentWorking: inControl || cue?.kind === "working" || agentState === "working" || agentState === "thinking",
+		reply: cue?.kind === "submitted" ? { kind: "submitted", at: cue.expiresAt - 4500 } : undefined,
 	});
-	if (!attention && !inControl && isVisualNotification(cue)) pose = "file-away";
-	if (!attention && !inControl && cue?.kind === "notification") pose = "face";
-	if (!attention && !inControl && !context?.notification && cue?.placement) {
-		if (cue.kind === "input-ready" && cue.placement === "perch") pose = "perch";
-		else if (cue.kind === "typing" && cue.placement === "aside")
-			pose = controls.state.travelling ? "step-aside" : "peek";
+	let pose = behavior.animation;
+	// Delivery gestures and a verified resting perch have explicit causes, never a clock phase.
+	if (behavior.state === "idle") {
+		if (isVisualNotification(cue)) pose = "file-away";
+		else if (cue?.kind === "notification") pose = "face";
+		else if (cue?.kind === "input-ready" && cue.placement === "perch") pose = "perch";
 	}
 	const duo = pose.startsWith("duo-") || pose === "invite-rebecca";
 	const externalMessage = cue?.kind === "notification" ? notificationPresentation(cue) : undefined;

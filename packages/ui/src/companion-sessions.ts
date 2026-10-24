@@ -48,7 +48,7 @@ function freshEditorTarget(value: CompanionEditorTarget | null, now: number) {
 	return { x: value.x, y: value.y, width: value.width, height: value.height };
 }
 
-/** Choose real work first. Rest animation is free to vary only after these signals are absent. */
+/** Semantic activity remains useful even without optional verified editor geometry. */
 export function companionSessionCue(
 	snapshot: CompanionSessionSnapshot,
 	now = Date.now(),
@@ -96,8 +96,9 @@ export function companionSessionCue(
 		};
 	if (session.activity.phase === "working")
 		return { ...base, id: `working:${session.sessionId}`, kind: "working" };
-	if (target && session.targets.composer?.kind === "editor" && session.activity.phase === "idle")
-		return { ...base, id: `ready:${session.sessionId}`, kind: "input-ready", target, placement: "perch" };
+	if (session.activity.phase === "idle")
+		return { ...base, id: `ready:${session.sessionId}`, kind: "input-ready",
+			...(target && session.targets.composer?.kind === "editor" ? { target, placement: "perch" as const } : {}) };
 	return { kind: "rest", id: "sessions-rest" };
 }
 
