@@ -1073,7 +1073,15 @@ pub fn run() {
     }
     // Apply only to this app, before GTK starts; keep other desktop applications unchanged.
     #[cfg(target_os = "linux")]
-    if let Some(value) = platform::webkit_renderer_env(|key| std::env::var(key).ok()) {
+    // SAFETY: plain getters of the linked WebKitGTK version; no initialization required.
+    let webkit = unsafe {
+        (
+            webkit2gtk::ffi::webkit_get_major_version(),
+            webkit2gtk::ffi::webkit_get_minor_version(),
+        )
+    };
+    #[cfg(target_os = "linux")]
+    if let Some(value) = platform::webkit_renderer_env(webkit, |key| std::env::var(key).ok()) {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", value);
     }
     let places_windows = !platform::compositor_places_windows(|key| std::env::var(key).ok());
