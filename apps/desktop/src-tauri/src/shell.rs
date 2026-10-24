@@ -1067,6 +1067,11 @@ pub fn run() {
     if let Some(backend) = platform::forced_gdk_backend(|key| std::env::var(key).ok()) {
         std::env::set_var("GDK_BACKEND", backend);
     }
+    // Apply only to this app, before GTK starts; keep other desktop applications unchanged.
+    #[cfg(target_os = "linux")]
+    if let Some(value) = platform::webkit_renderer_env(|key| std::env::var(key).ok()) {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", value);
+    }
     let places_windows = !platform::compositor_places_windows(|key| std::env::var(key).ok());
     let config = config::load_config();
     tauri::Builder::default()

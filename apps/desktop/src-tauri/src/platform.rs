@@ -68,6 +68,13 @@ pub fn compositor_places_windows(env: impl Fn(&str) -> Option<String>) -> bool {
     }
 }
 
+/// Avoid WebKitGTK's DMA-BUF explicit-sync crash on native Wayland (WebKit bug 280210).
+/// Call after choosing the GDK backend; an explicit renderer choice remains untouched.
+pub fn webkit_renderer_env(env: impl Fn(&str) -> Option<String>) -> Option<&'static str> {
+    (compositor_places_windows(&env) && set(&env, "WEBKIT_DISABLE_DMABUF_RENDERER").is_none())
+        .then_some("1")
+}
+
 /// Desktop shortcuts can toggle the panel or stop control without opening/focusing any window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchRequest {
@@ -93,6 +100,35 @@ mod tests {
 
     fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
         move |key| pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string())
+    }
+
+    #[test]
+    fn native_wayland_defaults_to_the_compatible_renderer_without_overriding_the_user() {
+        assert_eq!(
+            webkit_renderer_env(env_of(&[("WAYLAND_DISPLAY", "wayland-1")])),
+            Some("1")
+        );
+        for explicit in ["0", "1"] {
+            assert_eq!(
+                webkit_renderer_env(env_of(&[
+                    ("WAYLAND_DISPLAY", "wayland-1"),
+                    ("WEBKIT_DISABLE_DMABUF_RENDERER", explicit),
+                ])),
+                None
+            );
+        }
+        assert_eq!(
+            webkit_renderer_env(env_of(&[
+                ("WAYLAND_DISPLAY", "wayland-1"),
+                ("GDK_BACKEND", "x11,wayland"),
+            ])),
+            None
+        );
+        assert_eq!(
+            webkit_renderer_env(env_of(&[("XDG_SESSION_TYPE", "x11"), ("DISPLAY", ":0")])),
+            None
+        );
+        assert_eq!(webkit_renderer_env(env_of(&[])), None);
     }
 
     const GNOME_WAYLAND: &[(&str, &str)] = &[

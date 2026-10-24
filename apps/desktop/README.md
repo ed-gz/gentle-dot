@@ -1,5 +1,11 @@
 # Gentle Dot desktop (macOS and Linux)
 
+The Capri fork also applies the native Wayland compatibility fix from upstream PR #49:
+before GTK starts, it defaults `WEBKIT_DISABLE_DMABUF_RENDERER` to `1` for this application
+on native Wayland. This avoids WebKitGTK's explicit-sync startup failure (bug 280210).
+Explicit user settings and X11/XWayland remain unchanged; no session-wide environment
+change is installed. The sprite, speech and panel windows keep their existing transparency.
+
 The Tauri 2 shell around the Gentle Dot UI: a floating Dot, an expandable panel, a menu bar item, and a global shortcut. The contract between Rust and the UI is §9 of [`docs/design.md`](../../docs/design.md). Linux is covered [below](#linux).
 
 ## Requirements
