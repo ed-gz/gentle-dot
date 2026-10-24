@@ -100,6 +100,27 @@ it("reacts locally to typing without passing draft content to a client", async (
 	expect(localStorage.getItem(COMPANION_KEY)).not.toContain("borrador");
 });
 
+it("keeps a theme from another window when a mood event arrives before React renders", () => {
+	const { result } = renderHook(() => useCompanion(undefined, false));
+	act(() => {
+		localStorage.setItem(COMPANION_KEY, JSON.stringify({ mode: "capri", persona: "gentle" }));
+		window.dispatchEvent(new StorageEvent("storage", { key: COMPANION_KEY }));
+		window.dispatchEvent(new CustomEvent("gentle-dot-terminal-mood", { detail: { mood: "sunset" } }));
+	});
+	expect(result.current.settings).toMatchObject({ mode: "capri", persona: "gentle", ambience: "sunset" });
+	expect(JSON.parse(localStorage.getItem(COMPANION_KEY) ?? "null")).toMatchObject({ mode: "capri" });
+});
+
+it("does not replace an in-memory theme because an unrelated storage key changes", async () => {
+	const { result } = renderHook(() => useCompanion(undefined, false));
+	vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+		throw new Error("denied");
+	});
+	await act(() => result.current.setMode("capri"));
+	act(() => window.dispatchEvent(new StorageEvent("storage", { key: "unrelated-setting" })));
+	expect(result.current.settings.mode).toBe("capri");
+});
+
 it("migrates old manual direction while preserving pauses, visibility and placement", () => {
 	expect(
 		parseCompanion({

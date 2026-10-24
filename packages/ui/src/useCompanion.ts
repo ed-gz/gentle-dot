@@ -108,8 +108,13 @@ export function useCompanion(client?: CompanionClient, connected = true) {
 		return () => window.removeEventListener("gentle-dot-terminal-mood", update);
 	}, [save]);
 	useEffect(() => {
-		const update = (event: Event) =>
-			setSettings(event instanceof CustomEvent ? parseCompanion(event.detail) : read());
+		const update = (event: Event) => {
+			if (event instanceof StorageEvent && event.key !== null && event.key !== COMPANION_KEY) return;
+			const next = event instanceof CustomEvent ? parseCompanion(event.detail) : read();
+			// Another event in this batch (for example a mood change) must use the new theme.
+			current.current = next;
+			setSettings(next);
+		};
 		window.addEventListener("storage", update);
 		window.addEventListener(CHANGED, update);
 		return () => {
