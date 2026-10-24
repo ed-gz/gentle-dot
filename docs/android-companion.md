@@ -1,6 +1,6 @@
 # Un acompañante sobre otras apps en Android
 
-Gentle Dot incluye un personaje nativo transparente que abre la conversación en una ventana parcial. El parche **0.21.3 / código 37** corrige la sincronización del tema Capri y comprueba que sus sprites estén cargados antes de confirmar la activación. Capri sigue siendo opcional; el modo Gentle permanece disponible. Los mensajes y las sesiones conservan la conexión privada existente con el PC por Tailscale: el personaje puede permanecer en pantalla con el PC apagado, pero el asistente necesita que el PC esté conectado.
+Gentle Dot incluye un personaje nativo transparente que abre la conversación en una ventana parcial. El parche **0.21.4 / código 38** mantiene la animación de reposo, recupera su temporizador al reaparecer y simplifica la conversación móvil. Conserva la confirmación de carga y la sincronización de Capri introducidas en 0.21.3. Capri sigue siendo opcional; el modo Gentle permanece disponible. Los mensajes y las sesiones conservan la conexión privada existente con el PC por Tailscale: el personaje puede permanecer en pantalla con el PC apagado, pero el asistente necesita que el PC esté conectado.
 
 ## Activarlo
 
@@ -14,7 +14,7 @@ El acompañante sobre otras apps requiere Android 8 o posterior. Android 7 conse
 
 ## Si elegiste Capri pero aparece Gentle
 
-Actualiza a **0.21.3** conservando la misma firma de tu instalación. Esta versión corrige desajustes entre la apariencia de la app y la preferencia nativa; esas correcciones no identifican por sí solas la causa de lo ocurrido en un teléfono concreto.
+Actualiza a **0.21.4** conservando la misma firma de tu instalación. Incluye las correcciones de 0.21.3 entre la apariencia de la app y la preferencia nativa; esas correcciones no identifican por sí solas la causa de lo ocurrido en un teléfono concreto.
 
 1. Elige **Tema Capri** en Ajustes. No necesitas activar **Personalidad Capri**: la apariencia y la personalidad del agente son independientes.
 2. Abre **Ajustes → Avisos y teléfono → Tu equipo → Sobre otras apps** y actívalo si está apagado. Mientras se comprueba el cambio aparece **Aplicando el personaje en Android…**. Espera **Capri está lista** antes de pulsar Inicio.
@@ -48,7 +48,7 @@ Un icono o una ventana flotante del sistema puede mostrar la rosa de Gentle Dot.
 | Pantalla apagada o teléfono bloqueado | Se retiran las ventanas y se detiene la animación. No muestra contenido sobre el bloqueo. |
 | No molestar o notificaciones desactivadas en Android | El personaje no presenta el aviso; Android conserva el control de su ruta normal. |
 | Ahorro de batería o animaciones desactivadas por accesibilidad | El personaje permanece quieto. |
-| Reposo, con movimiento permitido | Un ciclo breve de animación seguido de 30 segundos sin redibujado continuo. Los eventos disparan acciones concretas. |
+| Reposo, con movimiento permitido | El ciclo de seis fotogramas se repite cada 3,6 segundos, con los tiempos del atlas y un único temporizador. No hay bucle de 60 fps ni pausa adicional de 30 segundos. |
 | Android termina el servicio | No se reinicia desde el fondo; puedes reactivarlo desde ajustes. |
 
 Al pasar una ventana del chat al fondo, se cierra su conexión WebSocket; al volver se recupera el historial sin reenviar mensajes. El monitor nativo de avisos puede seguir conectado si lo activaste.
@@ -56,6 +56,8 @@ Al pasar una ventana del chat al fondo, se cierra su conexión WebSocket; al vol
 Los ajustes de alertas existentes siguen filtrando qué eventos se entregan. El ajuste **Contenido en pantalla bloqueada** afecta a las notificaciones del sistema. El texto del acompañante solo aparece mientras el teléfono está desbloqueado. No solicita un servicio de accesibilidad, captura la pantalla ni lee lo escrito en otras aplicaciones.
 
 La conversación parcial reutiliza el chat y el almacenamiento seguro existentes. Al colapsarla conserva su actividad y los adjuntos en memoria. El texto del borrador se guarda cifrado por identidad de dispositivo y conversación; no se envía solo. Ambas ventanas usan revisiones compartidas para que una escritura atrasada no restaure un borrador que ya enviaste o borre texto más reciente. Los archivos adjuntos en memoria no sobreviven a que Android termine el proceso.
+
+En la conversación parcial, **Volver a la burbuja** está en la misma cabecera que Ajustes, Capri/Dot y Sesiones. La vista de sesión agrupa modelo, ambiente, plan y herramientas en **Detalles y actividad**, cerrado inicialmente; las preguntas pendientes mantienen su acceso directo. El control de entrega explica **En la próxima pausa** y **Al terminar** dentro de la app: elegir una opción no envía el borrador.
 
 ## Implementación y compilación
 
@@ -77,4 +79,4 @@ El script compila el cliente, sincroniza Capacitor, construye un APK local y com
 
 Hay pruebas de la política de visibilidad, límites de pantalla, ahorro de energía, selección de acciones, activación explícita, errores de inicio y almacenamiento de borradores. Las pruebas de vinculación conservan el origen HTTPS de Tailscale como requisito. La compilación y el lint de Android se ejecutan sobre el APK completo.
 
-La visualización sobre otras apps, el flujo de ajustes restringidos de cada fabricante, el teclado de la actividad parcial y las mediciones de batería requieren una prueba física. **El parche 0.21.3 no se ha verificado en un teléfono físico en esta revisión.** Una compilación y las pruebas web no sustituyen esa comprobación. Antes de distribuir en Google Play, revisa la declaración de [`specialUse`](https://developer.android.com/develop/background-work/services/fgs/service-types) y las [restricciones de servicios en segundo plano](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start).
+La visualización sobre otras apps, el flujo de ajustes restringidos de cada fabricante, el teclado de la actividad parcial y las mediciones de batería requieren una prueba física. **El parche 0.21.4 no se ha verificado en un teléfono físico en esta revisión.** Una compilación y las pruebas web no sustituyen esa comprobación. Antes de distribuir en Google Play, revisa la declaración de [`specialUse`](https://developer.android.com/develop/background-work/services/fgs/service-types) y las [restricciones de servicios en segundo plano](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start).

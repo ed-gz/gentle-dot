@@ -25,6 +25,16 @@ La actualización documental que contiene este registro reorganiza el onboarding
 
 La [matriz de integración](upstream-2026-10-23.md) incorpora correcciones de Node empaquetado, codemode, lecturas de Notion, WebKit/Wayland, enlaces del chat y preferencia de voz nativa. Registra la procedencia de cada PR abierta, las adaptaciones necesarias para Linux/Android/Capri y las propuestas aplazadas. También distingue los fallos previos del baseline, la reparación de las fixtures y los resultados finales de pruebas, incluido Android 0.21.2; el lint completo continúa pendiente.
 
+## Parche Android 0.21.4: movimiento y conversación móvil
+
+Capri deja de esperar 30 segundos después de cada animación. Su reposo recorre seis fotogramas cada 3,6 segundos con un solo temporizador, reutiliza el atlas cargado y recupera el reloj al volver a mostrarse. Tocar, arrastrar y fijar disparan reacciones breves. Bloquear la pantalla, activar ahorro o desactivar las animaciones de Android sigue pausando el movimiento; Ajustes distingue esas pausas de un fallo de carga.
+
+La conversación parcial integra **Volver a la burbuja** en la navegación y elimina la cabecera duplicada. En móvil, **Detalles y actividad** reúne ambiente, modelo, plan y herramientas sin ocupar permanentemente el espacio de los mensajes. Las preguntas pendientes siguen accesibles. La entrega se elige dentro de la app con **En la próxima pausa** o **Al terminar**, sin el diálogo nativo de selección; cambiarla no envía el mensaje. Atrás y Escape cierran primero las opciones, conservando borradores y confirmaciones de entrega. La vista de escritorio mantiene sus controles.
+
+Validación: 108 pruebas enfocadas de interfaz y sincronización, 48 escenarios móviles de navegador y 81 pruebas JVM de Android aprobados. Typecheck y compilación pasan; lint Android conserva seis advertencias previas, sin errores. Se revisaron capturas en vertical, paisaje y lectura ampliada.
+
+El APK **0.21.4 / código 38** se compila y distribuye de forma privada; el fork conserva fuentes y documentación. Las pruebas automatizadas de animación y navegación no sustituyen la validación física del teléfono ni una medición real de batería.
+
 ## Parche Android 0.21.3: sincronización de Capri
 
 Android **0.21.3 / código 37** corrige desajustes reproducidos entre la selección de Capri y el acompañante nativo: se respeta el valor del evento aunque falle el almacenamiento web, se recupera la apariencia nativa cuando falta la preferencia web y se atienden cambios de almacenamiento de otra ventana. El estado compartido también evita que un cambio de ánimo inmediatamente posterior revierta una selección reciente.
