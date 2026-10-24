@@ -7,8 +7,8 @@ android {
         applicationId "dev.gentledot.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 33
-        versionName "0.20.8"
+        versionCode 34
+        versionName "0.21.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -45,11 +45,27 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
-try {
-    def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
-        apply plugin: 'com.google.gms.google-services'
+// The overlay uses the exact PNG already packaged by Vite, avoiding a duplicate atlas copy.
+def companionAssets = layout.buildDirectory.dir('generated/companion-assets')
+def themeAssets = file('../../../../packages/theme-capri/src/assets')
+def webAssets = file('src/main/assets/public/assets')
+tasks.register('syncCompanionAssets') {
+    inputs.files(fileTree(themeAssets) { include 'capri-motion-core-v1.json', 'capri-motion-actions-v1.json' })
+    inputs.files(fileTree(webAssets) { include 'capri-motion-core-v1-*.png', 'capri-motion-actions-v1-*.png' })
+    outputs.dir(companionAssets)
+    doLast {
+        def output = companionAssets.get().dir('companion').asFile
+        delete(companionAssets)
+        output.mkdirs()
+        ['core', 'actions'].each { name ->
+            def stem = "capri-motion-${name}-v1"
+            def images = fileTree(webAssets) { include "${stem}-*.png" }.files
+            if (images.size() != 1) throw new GradleException("Build the mobile web app and run cap sync android before packaging the companion (${stem}).")
+            def manifest = new groovy.json.JsonSlurper().parse(new File(themeAssets, "${stem}.json"))
+            manifest.image = "public/assets/${images.first().name}"
+            new File(output, "${stem}.json").text = groovy.json.JsonOutput.toJson(manifest)
+        }
     }
-} catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
 }
+android.sourceSets.main.assets.srcDir(companionAssets)
+tasks.named('preBuild').configure { dependsOn 'syncCompanionAssets' }

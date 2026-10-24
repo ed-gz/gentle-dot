@@ -5,6 +5,7 @@ export default defineConfig({
 	testDir: "./e2e",
 	testMatch: [
 		"mobile-shell.mobile.ts",
+		"companion-overlay.mobile.ts",
 		"mobile-rich.mobile.ts",
 		"mobile-chat-scroll.mobile.ts",
 		"mobile-usage.mobile.ts",

@@ -2,6 +2,14 @@
  * The APK entry point, storage validation, pairing, and shared UI remain real.
  */
 interface NativeFixture {
+	companion?: {
+		permission?: boolean;
+		enabled?: boolean;
+		active?: boolean;
+		pinned?: boolean;
+		partialChat?: boolean;
+		theme?: string;
+	};
 	connection?: unknown;
 	monitoring: boolean;
 	mode?: "all" | "dot" | "agents";
@@ -29,7 +37,56 @@ export const Capacitor = {
 
 export function registerPlugin() {
 	return {
+		async readDraft({ scope }: { scope: string }) {
+			record("readDraft");
+			return draftValues.get(scope) ?? { text: "", revision: "0" };
+		},
+		async saveDraft({
+			scope,
+			text,
+			expectedRevision,
+		}: {
+			scope: string;
+			text: string;
+			expectedRevision: string;
+		}) {
+			record("saveDraft");
+			const previous = draftValues.get(scope) ?? { text: "", revision: "0" };
+			if (previous.revision !== expectedRevision) return { ...previous, applied: false };
+			const next = { text, revision: String(nextDraftRevision++) };
+			draftValues.set(scope, next);
+			return { ...next, applied: true };
+		},
 		addListener: (name: string, callback: (value: unknown) => void) => App.addListener(name, callback),
+		async companionState() {
+			return {
+				supported: true,
+				permission: true,
+				enabled: false,
+				active: false,
+				pinned: false,
+				theme: "gentle-dot",
+				partialChat: false,
+				...fixture().companion,
+			};
+		},
+		async setCompanion(options: { enabled?: boolean; pinned?: boolean; theme?: string }) {
+			record("setCompanion", options);
+			fixture().companion = {
+				...fixture().companion,
+				...options,
+				...(options.enabled !== undefined ? { active: options.enabled } : {}),
+			};
+		},
+		async requestCompanionPermission() {
+			record("requestCompanionPermission");
+		},
+		async closeCompanionChat() {
+			record("closeCompanionChat");
+		},
+		async companionLaunchContext() {
+			return {};
+		},
 		async setNotificationPreferences(options: { preferences: Record<string, boolean> }) {
 			record("setNotificationPreferences", options);
 			fixture().preferences = options.preferences;
@@ -69,24 +126,32 @@ export function registerPlugin() {
 		},
 		async transcribe(options: unknown) {
 			record("transcribe", options);
-			if (fixture().deferSpeech) return new Promise<{ text: string }>(resolve => { window.__resolveMobileSpeech = resolve; });
+			if (fixture().deferSpeech)
+				return new Promise<{ text: string }>((resolve) => {
+					window.__resolveMobileSpeech = resolve;
+				});
 			return { text: "Revisa el avance de mis tareas" };
 		},
 	};
 }
 
+const draftValues = new Map<string, { text: string; revision: string }>();
+let nextDraftRevision = 1;
+const secureValues = new Map<string, unknown>();
 export const SecureStorage = {
 	async get(key: string) {
 		record("storage.get", key);
-		return fixture().connection;
+		return key === "gentledot.mobile.connection.v1" ? fixture().connection : secureValues.get(key);
 	},
 	async set(key: string, value: unknown) {
 		record("storage.set", key);
-		fixture().connection = value;
+		if (key === "gentledot.mobile.connection.v1") fixture().connection = value;
+		else secureValues.set(key, value);
 	},
 	async remove(key: string) {
 		record("storage.remove", key);
-		delete fixture().connection;
+		if (key === "gentledot.mobile.connection.v1") delete fixture().connection;
+		else secureValues.delete(key);
 	},
 };
 

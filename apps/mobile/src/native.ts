@@ -11,12 +11,40 @@ import type {
 	ReceiveFileOptions,
 	ReceiveFileResult,
 } from "../../../packages/ui/src/mobile.ts";
-import { type NotificationMode, normalizeNotificationPreferences } from "./notifications.ts";
 import { isNotificationEvent } from "../../../packages/ui/src/mobile.ts";
+import { readMobileDraft, saveMobileDraft } from "./drafts.ts";
+import { type NotificationMode, normalizeNotificationPreferences } from "./notifications.ts";
 
 export type { NotificationMode } from "./notifications.ts";
 
+export interface NativeCompanionState {
+	supported: boolean;
+	permission: boolean;
+	enabled: boolean;
+	active: boolean;
+	pinned: boolean;
+	theme: "gentle-dot" | "capri";
+	partialChat: boolean;
+}
 interface NativePlugin {
+	companionState(): Promise<NativeCompanionState>;
+	setCompanion(options: {
+		enabled?: boolean;
+		pinned?: boolean;
+		theme?: "gentle-dot" | "capri";
+	}): Promise<void>;
+	requestCompanionPermission(): Promise<void>;
+	closeCompanionChat(): Promise<void>;
+	companionLaunchContext(): Promise<{
+		openChat?: boolean;
+		eventId?: string;
+		title?: string;
+		body?: string;
+		paneId?: string;
+		sessionId?: string;
+		conversationId?: string;
+	}>;
+
 	addListener(
 		eventName: "foregroundNotification",
 		listener: (event: MobileNotification) => void,
@@ -38,7 +66,13 @@ interface NativePlugin {
 	}): Promise<void>;
 	startMonitor(options: { url: string; token: string; mode?: NotificationMode }): Promise<void>;
 	stopMonitor(): Promise<void>;
-	monitorState(): Promise<{ active: boolean; connected?: boolean; notificationsEnabled?: boolean; mode: NotificationMode; preferences: NotificationPreferences }>;
+	monitorState(): Promise<{
+		active: boolean;
+		connected?: boolean;
+		notificationsEnabled?: boolean;
+		mode: NotificationMode;
+		preferences: NotificationPreferences;
+	}>;
 	setNotificationPreferences(options: {
 		preferences: NotificationPreferences;
 	}): Promise<{ preferences: NotificationPreferences }>;
@@ -98,26 +132,39 @@ export function setupNative(): void {
 	syncSystemBars();
 	void GentleMobile.addListener("foregroundNotification", (event) => {
 		if (
-			!event || typeof event.id !== "string" || typeof event.title !== "string" ||
-			typeof event.body !== "string" || !isNotificationEvent(event.event)
-		) return;
-		if (event.session !== undefined && (
-			typeof event.session?.paneId !== "string" ||
-			(event.session.sessionId !== undefined && typeof event.session.sessionId !== "string")
-		)) return;
+			!event ||
+			typeof event.id !== "string" ||
+			typeof event.title !== "string" ||
+			typeof event.body !== "string" ||
+			!isNotificationEvent(event.event)
+		)
+			return;
+		if (
+			event.session !== undefined &&
+			(typeof event.session?.paneId !== "string" ||
+				(event.session.sessionId !== undefined && typeof event.session.sessionId !== "string"))
+		)
+			return;
 		// Copy only the public notice contract, never opaque native payload/credential fields.
 		const detail: MobileNotification = {
-			id: event.id, title: event.title, body: event.body, event: event.event,
-			...(event.session ? {
-				session: {
-					paneId: event.session.paneId,
-					...(event.session.sessionId !== undefined ? { sessionId: event.session.sessionId } : {}),
-				},
-			} : {}),
+			id: event.id,
+			title: event.title,
+			body: event.body,
+			event: event.event,
+			...(event.session
+				? {
+						session: {
+							paneId: event.session.paneId,
+							...(event.session.sessionId !== undefined ? { sessionId: event.session.sessionId } : {}),
+						},
+					}
+				: {}),
 		};
 		window.dispatchEvent(new CustomEvent("gentledot-notification", { detail }));
 	}).catch(() => {});
 	window.__GENTLE_MOBILE__ = {
+		readDraft: readMobileDraft,
+		saveDraft: saveMobileDraft,
 		notificationPreferences: readNotificationPreferences,
 		subscribeNotificationPreferences: (listener) => {
 			preferenceListeners.add(listener);

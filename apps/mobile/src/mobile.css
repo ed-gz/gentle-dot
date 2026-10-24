@@ -444,3 +444,12 @@ body {
 	display: block;
 	margin-top: 8px;
 }
+
+/* A partial native activity reuses the chat without rendering a second character. */
+html[data-companion-chat="true"] .capri-overlay { display: none; }
+html[data-companion-chat="true"], html[data-companion-chat="true"] body { border-radius: 20px 20px 0 0; overflow: hidden; }
+html[data-companion-chat="true"] .mobile-shell { height: 100%; display: flex; flex-direction: column; }
+html[data-companion-chat="true"] .mobile-shell > .chat-mobile { flex: 1; min-height: 0; height: auto; }
+.companion-chat-bar { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 16px; background: var(--bg, #17151b); color: var(--text, #eee); border-bottom: 1px solid var(--line, #37313e); }
+.companion-chat-bar button { min-height: 44px; padding: 0 12px; border: 0; color: inherit; background: transparent; }
+.mobile-companion-settings { margin-block: 16px; }

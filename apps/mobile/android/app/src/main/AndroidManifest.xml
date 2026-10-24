@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <queries><intent><action android:name="android.speech.action.RECOGNIZE_SPEECH" /></intent></queries>
 
@@ -44,6 +46,11 @@
                 <data android:scheme="gentledot" android:host="pair" />
             </intent-filter>
         </activity>
+
+        <activity android:name=".CompanionChatActivity" android:taskAffinity="${applicationId}.companion" android:excludeFromRecents="true" android:exported="false" android:theme="@style/AppTheme.CompanionChat" android:launchMode="singleTask" android:resizeableActivity="true" android:windowSoftInputMode="adjustResize" />
+        <service android:name=".CompanionOverlayService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled animated companion overlay and quick access to conversations; hidden while locked, paused in battery saver, user can stop at any time." />
+        </service>
 
         <service android:name=".AgentMonitorService" android:exported="false" android:foregroundServiceType="remoteMessaging" />
 

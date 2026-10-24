@@ -142,6 +142,14 @@ public class AgentMonitorService extends Service {
         return PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
+    private static PendingIntent openConversation(Context context, String id, String title, String body, String pane, String session, String conversation) {
+        Intent intent = new Intent(context, CompanionOverlayService.running() ? CompanionChatActivity.class : MainActivity.class)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            .putExtra("companion.openChat", true).putExtra("companion.eventId", id).putExtra("companion.title", title).putExtra("companion.body", body)
+            .putExtra("companion.paneId", pane).putExtra("companion.sessionId", session).putExtra("companion.conversationId", conversation);
+        return PendingIntent.getActivity(context, id.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
     private Notification status(String body) {
         Intent stop = new Intent(this, AgentMonitorService.class).setAction(STOP);
         PendingIntent action = PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
@@ -165,21 +173,41 @@ public class AgentMonitorService extends Service {
 
     static void notifyEvent(Context context, String event, String id, String title, String body,
             String paneId, String sessionId, boolean monitorEvent) {
+        deliver(context, event, id, title, body, paneId, sessionId, null, monitorEvent);
+    }
+    private static void deliver(Context context, String event, String id, String title, String body,
+            String paneId, String sessionId, String conversationId, boolean monitorEvent) {
         NotificationPreferences preferences = preferences(context);
         NotificationDelivery.Route route = NotificationDelivery.route(preferences, event, MainActivity.isVisible(), monitorEvent);
         if (route == NotificationDelivery.Route.NONE) return;
         if (route == NotificationDelivery.Route.FOREGROUND
                 && GentleMobilePlugin.foregroundNotification(event, id, title, body, paneId, sessionId)) return;
-        // If the activity/bridge disappeared during handoff, keep the normal Android fallback.
+        boolean normalInterruptionMode = false;
+        try { normalInterruptionMode = context.getSystemService(NotificationManager.class).getCurrentInterruptionFilter() == NotificationManager.INTERRUPTION_FILTER_ALL; }
+        catch (RuntimeException ignored) { /* Unknown interruption policy stays with the system notification route. */ }
+        if (!CompanionPolicy.offerNotice(NotificationManagerCompat.from(context).areNotificationsEnabled(), normalInterruptionMode)) {
+            systemNotice(context, event, id, title, body, paneId, sessionId, conversationId, false); return;
+        }
+        CompanionOverlayService.offer(event, id, title, body, paneId, sessionId, conversationId,
+            drawn -> systemNotice(context, event, id, title, body, paneId, sessionId, conversationId, drawn));
+    }
+
+    private static void systemNotice(Context context, String event, String id, String title, String body,
+            String paneId, String sessionId, String conversationId, boolean companionVisible) {
+        NotificationPreferences preferences = preferences(context);
+        if (!preferences.allows(event)) return;
+        if (!companionVisible && MainActivity.isVisible() && preferences.get("inApp")
+                && GentleMobilePlugin.foregroundNotification(event, id, title, body, paneId, sessionId)) return;
+        // Keep the normal heads-up fallback unless the overlay actually drew this notice.
         channels(context);
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return;
         title = title.substring(0, Math.min(title.length(), 120));
         body = body.substring(0, Math.min(body.length(), 1000));
         String source = "permission".equals(event) ? PERMISSION_CHANNEL : event.startsWith("dot") ? DOT_CHANNEL : ALERT_CHANNEL;
-        String channel = source + "-v2-" + preferences.channelSuffix();
+        String channel = source + "-v2-" + preferences.channelSuffix() + (companionVisible ? "-companion" : "");
         if (Build.VERSION.SDK_INT >= 26) {
             String name = "permission".equals(event) ? "Solicitudes de permiso" : event.startsWith("dot") ? "Alertas de Dot" : "Alertas de sesiones";
-            NotificationChannel settings = new NotificationChannel(channel, name, NotificationManager.IMPORTANCE_HIGH);
+            NotificationChannel settings = new NotificationChannel(channel, name, companionVisible ? NotificationManager.IMPORTANCE_LOW : NotificationManager.IMPORTANCE_HIGH);
             settings.setDescription("Personaliza los avisos desde Ajustes → Alertas en Gentle Dot.");
             settings.enableVibration(preferences.get("vibration"));
             settings.setSound(preferences.get("sound") ? RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION) : null,
@@ -194,7 +222,7 @@ public class AgentMonitorService extends Service {
             .setContentText(body).setStyle(new NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH).setOnlyAlertOnce(true)
             .setDefaults((preferences.get("sound") ? Notification.DEFAULT_SOUND : 0) | (preferences.get("vibration") ? Notification.DEFAULT_VIBRATE : 0))
-            .setContentIntent(openApp(context)).setAutoCancel(true).setOngoing(false)
+            .setContentIntent(openConversation(context, id, title, body, paneId, sessionId, conversationId)).setAutoCancel(true).setOngoing(false)
             .setTimeoutAfter("permission".equals(event) ? 30 * 60_000 : 5 * 60_000)
             .setPublicVersion(publicVersion)
             .setVisibility(preferences.get("preview") ? NotificationCompat.VISIBILITY_PUBLIC : NotificationCompat.VISIBILITY_PRIVATE).build();

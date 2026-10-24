@@ -62,16 +62,26 @@ export function NotificationSettings({
 	const [retry, setRetry] = useState(0);
 	const [delivery, setDelivery] = useState<{ connected?: boolean; notificationsEnabled?: boolean }>();
 	const generation = useRef(0);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Refresh immediately after the user starts or stops monitoring.
 	useEffect(() => {
 		if (!nativeAndroid) return;
 		let alive = true;
-		const refresh = () => void GentleMobile.monitorState().then(value => {
-			if (alive) setDelivery(value);
-		}).catch(() => { if (alive) setDelivery(undefined); });
+		const refresh = () =>
+			void GentleMobile.monitorState()
+				.then((value) => {
+					if (alive) setDelivery(value);
+				})
+				.catch(() => {
+					if (alive) setDelivery(undefined);
+				});
 		refresh();
 		const timer = window.setInterval(refresh, 10_000);
 		window.addEventListener("gentledot-resume", refresh);
-		return () => { alive = false; window.clearInterval(timer); window.removeEventListener("gentledot-resume", refresh); };
+		return () => {
+			alive = false;
+			window.clearInterval(timer);
+			window.removeEventListener("gentledot-resume", refresh);
+		};
 	}, [monitoring]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Retry reloads saved settings.
 	useEffect(() => {
@@ -174,7 +184,9 @@ export function NotificationSettings({
 						{delivery?.notificationsEnabled === false
 							? "Android tiene bloqueadas las notificaciones. Actívalas en Ajustes de Android."
 							: monitoring
-								? delivery?.connected ? "Avisos conectados con tu equipo." : "Reconectando avisos. Comprueba que Tailscale esté activo y el equipo encendido."
+								? delivery?.connected
+									? "Avisos conectados con tu equipo."
+									: "Reconectando avisos. Comprueba que Tailscale esté activo y el equipo encendido."
 								: "Activa esta opción para recibir respuestas fuera de la app."}
 					</p>
 					{toggle("inApp", "Mientras uso Dot", "Avisos breves que desaparecen solos.")}

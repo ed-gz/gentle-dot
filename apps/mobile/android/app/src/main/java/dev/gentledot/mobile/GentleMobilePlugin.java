@@ -40,6 +40,8 @@ public class GentleMobilePlugin extends Plugin {
     private volatile boolean listening;
     private MobileFileReceiver files;
 
+    @Override protected void handleOnResume() { current = new WeakReference<>(this); }
+
     @Override public void load() { files = new MobileFileReceiver(this); current = new WeakReference<>(this); }
 
     static void foregroundNotification(String id, String title, String body) {
@@ -60,6 +62,104 @@ public class GentleMobilePlugin extends Plugin {
         // Before the WebView is listening, the caller falls back to Android delivery.
         plugin.notifyListeners("foregroundNotification", event);
         return true;
+    }
+
+    private static final java.util.concurrent.ExecutorService draftWorker = java.util.concurrent.Executors.newSingleThreadExecutor();
+    @PluginMethod
+    public void readDraft(PluginCall call) {
+        String input = call.getString("scope");
+        draftWorker.execute(() -> {
+            try {
+                DraftLedger.Record record = MobileDraftStore.ledger(getContext()).read(MobileDraftStore.scope(input));
+                JSObject result = new JSObject(); result.put("text", record.text); result.put("revision", record.revision); call.resolve(result);
+            } catch (Exception error) { call.reject("No se pudo recuperar el borrador del almacenamiento seguro."); }
+        });
+    }
+    @PluginMethod
+    public void saveDraft(PluginCall call) {
+        String input = call.getString("scope"), text = call.getString("text"), expected = call.getString("expectedRevision");
+        draftWorker.execute(() -> {
+            try {
+                MobileDraftStore.validateText(text);
+                if (expected == null || expected.isEmpty() || expected.length() > 80) throw new IllegalArgumentException();
+                DraftLedger.Result saved = MobileDraftStore.ledger(getContext()).save(MobileDraftStore.scope(input), text, expected);
+                JSObject result = new JSObject(); result.put("text", saved.record.text); result.put("revision", saved.record.revision);
+                result.put("applied", saved.applied); call.resolve(result);
+            } catch (Exception error) { call.reject("No se pudo guardar el borrador en este teléfono. El texto se conserva en el editor."); }
+        });
+    }
+
+    @PluginMethod
+    public void companionState(PluginCall call) {
+        JSObject value = new JSObject();
+        value.put("supported", Build.VERSION.SDK_INT >= 26);
+        value.put("permission", CompanionOverlayService.permitted(getContext()));
+        value.put("enabled", CompanionOverlayService.prefs(getContext()).getBoolean("enabled", false));
+        value.put("active", CompanionOverlayService.running());
+        value.put("pinned", CompanionOverlayService.prefs(getContext()).getBoolean("pinned", false));
+        value.put("theme", CompanionOverlayService.prefs(getContext()).getString("theme", "gentle-dot"));
+        value.put("partialChat", getActivity() instanceof CompanionChatActivity);
+        call.resolve(value);
+    }
+
+    @PluginMethod
+    public void requestCompanionPermission(PluginCall call) {
+        if (Build.VERSION.SDK_INT < 26) { call.reject("El acompañante sobre otras apps requiere Android 8 o posterior."); return; }
+        try { getActivity().startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:" + getContext().getPackageName()))); call.resolve(); }
+        catch (Exception error) { call.reject("Abre los ajustes de Android y permite Mostrar sobre otras apps para Gentle Dot."); }
+    }
+
+    @PluginMethod
+    public void setCompanion(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            Boolean enabled = call.getBoolean("enabled");
+            String theme = call.getString("theme");
+            Boolean pinned = call.getBoolean("pinned");
+            if (theme != null && !theme.equals("gentle-dot") && !theme.equals("capri")) { call.reject("Tema no válido."); return; }
+            if (Boolean.TRUE.equals(enabled) && (!CompanionOverlayService.permitted(getContext()) || !MainActivity.isVisible())) {
+                call.reject("Permite Mostrar sobre otras apps y activa el acompañante desde la app abierta."); return;
+            }
+            android.content.SharedPreferences.Editor edit = CompanionOverlayService.prefs(getContext()).edit();
+            if (enabled != null) edit.putBoolean("enabled", enabled);
+            if (theme != null) edit.putString("theme", theme);
+            if (pinned != null) edit.putBoolean("pinned", pinned);
+            if (!edit.commit()) { call.reject("No se pudo guardar el acompañante."); return; }
+            try {
+                if (Boolean.FALSE.equals(enabled)) getContext().stopService(new Intent(getContext(), CompanionOverlayService.class));
+                else if (Boolean.TRUE.equals(enabled)) ContextCompat.startForegroundService(getContext(), new Intent(getContext(), CompanionOverlayService.class));
+                CompanionOverlayService.configure();
+                if (Boolean.TRUE.equals(enabled)) {
+                    Handler handler = new Handler(Looper.getMainLooper());
+                    long deadline = android.os.SystemClock.uptimeMillis() + 3000;
+                    handler.post(new Runnable() {
+                        @Override public void run() {
+                            if (CompanionOverlayService.running()) call.resolve();
+                            else if (android.os.SystemClock.uptimeMillis() < deadline) handler.postDelayed(this, 50);
+                            else { CompanionOverlayService.prefs(getContext()).edit().putBoolean("enabled", false).apply(); call.reject("Android no confirmó el inicio del acompañante. Vuelve a intentarlo con la app abierta."); }
+                        }
+                    });
+                } else call.resolve();
+            } catch (RuntimeException error) { CompanionOverlayService.prefs(getContext()).edit().putBoolean("enabled", false).apply(); call.reject("Android no pudo activar el acompañante. Inténtalo con la app abierta."); }
+        });
+    }
+
+    @PluginMethod
+    public void closeCompanionChat(PluginCall call) {
+        if (getActivity() instanceof CompanionChatActivity) getActivity().runOnUiThread(() -> getActivity().moveTaskToBack(true));
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void companionLaunchContext(PluginCall call) {
+        Intent intent = getActivity().getIntent(); JSObject result = new JSObject();
+        result.put("openChat", intent.getBooleanExtra("companion.openChat", false)); intent.removeExtra("companion.openChat");
+        for (String name : new String[]{"eventId", "title", "body", "paneId", "sessionId", "conversationId"}) {
+            String value = intent.getStringExtra("companion." + name);
+            if (value != null && !value.isEmpty()) result.put(name, value);
+            intent.removeExtra("companion." + name);
+        }
+        call.resolve(result);
     }
 
     @PluginMethod

@@ -3,6 +3,7 @@ import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "../../../packages/ui/src/App.tsx";
 import { RoseGlyph } from "../../../packages/ui/src/components/icons.tsx";
+import { CompanionSettings } from "./CompanionSettings.tsx";
 import { NotificationSettings } from "./NotificationSettings.tsx";
 import { GentleMobile, nativeAndroid, setupNative } from "./native.ts";
 import {
@@ -21,6 +22,7 @@ setupNative();
 
 function MobileApp() {
 	const [connection, setConnection] = useState<Connection>();
+	const [partialChat, setPartialChat] = useState(false);
 	const [loading, setLoading] = useState(true);
 	const [input, setInput] = useState("");
 	const [invitation, setInvitation] = useState<Invitation>();
@@ -40,6 +42,56 @@ function MobileApp() {
 				: undefined,
 		[connection],
 	);
+	useEffect(() => {
+		if (!nativeAndroid) return;
+		const theme = () => {
+			try {
+				const value = JSON.parse(localStorage.getItem("gentle-dot-companion-v1") ?? "{}");
+				void GentleMobile.setCompanion({ theme: value.mode === "capri" ? "capri" : "gentle-dot" }).catch(
+					() => {},
+				);
+			} catch {
+				/* Keep native selection if storage is unavailable. */
+			}
+		};
+		const refresh = () => {
+			void GentleMobile.companionState()
+				.then((state) => {
+					setPartialChat(state.partialChat);
+					document.documentElement.dataset.companionChat = String(state.partialChat);
+				})
+				.catch(() => {});
+			theme();
+		};
+		refresh();
+		window.addEventListener("gentledot-resume", refresh);
+		window.addEventListener("gentle-dot-companion-change", theme);
+		return () => {
+			window.removeEventListener("gentledot-resume", refresh);
+			window.removeEventListener("gentle-dot-companion-change", theme);
+		};
+	}, []);
+	useEffect(() => {
+		if (!nativeAndroid || !connection) return;
+		const receive = () =>
+			void GentleMobile.companionLaunchContext()
+				.then((context) => {
+					if (context.paneId)
+						window.dispatchEvent(
+							new CustomEvent("gentledot-open-session", {
+								detail: { paneId: context.paneId, sessionId: context.sessionId },
+							}),
+						);
+					if (!context.paneId && context.openChat) window.dispatchEvent(new Event("gentledot-open-chat"));
+				})
+				.catch(() => {});
+		const timer = window.setTimeout(receive, 300);
+		window.addEventListener("gentledot-resume", receive);
+		return () => {
+			window.clearTimeout(timer);
+			window.removeEventListener("gentledot-resume", receive);
+		};
+	}, [connection]);
 	const fail = useCallback(
 		(cause: unknown) =>
 			setError(cause instanceof Error ? cause.message : "No se pudo completar la operación."),
@@ -91,12 +143,16 @@ function MobileApp() {
 					// Dispatch below window so nested screens handle capture before the shell's bubble listener.
 					const event = new Event("gentledot-back", { cancelable: true, bubbles: true });
 					document.dispatchEvent(event);
-					if (!event.defaultPrevented) void NativeApp.minimizeApp();
+					if (!event.defaultPrevented)
+						void GentleMobile.companionState().then((state) =>
+							state.partialChat ? GentleMobile.closeCompanionChat() : NativeApp.minimizeApp(),
+						);
 				})
 			: undefined;
 		const state = nativeAndroid
 			? NativeApp.addListener("appStateChange", (value) => {
 					if (value.isActive) window.dispatchEvent(new Event("gentledot-resume"));
+					else window.dispatchEvent(new Event("gentledot-pause"));
 					if (value.isActive)
 						void GentleMobile.monitorState()
 							.then((value) => setMonitoring(value.active))
@@ -183,14 +239,28 @@ function MobileApp() {
 		);
 	return (
 		<div className={connection && !invitation ? "mobile-shell" : "pairing"}>
+			{partialChat && (
+				<div className="companion-chat-bar">
+					<span>Conversación</span>
+					<button
+						type="button"
+						aria-label="Volver a la burbuja"
+						onClick={() => void GentleMobile.closeCompanionChat()}
+					>
+						Cerrar
+					</button>
+				</div>
+			)}
 			{connection && info && !invitation ? (
 				<App
 					key={connection.deviceId}
 					connection={info}
+					mobileDraftScope={JSON.stringify([connection.url, connection.deviceId])}
 					mobileControls={
 						<section className="mobile-device" aria-label="Este teléfono">
 							<h3>Tu equipo</h3>
 							<p className="mobile-device-host">{new URL(connection.url).hostname}</p>
+							<CompanionSettings />
 							<NotificationSettings
 								connection={connection}
 								monitoring={monitoring}
