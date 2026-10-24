@@ -8,13 +8,28 @@
 		"module": "ESNext",
 		"moduleResolution": "Bundler",
 		"jsx": "react-jsx",
-		"lib": ["ES2023", "DOM", "DOM.Iterable"],
-		"types": ["vite/client", "node"]
+		"lib": [
+			"ES2023",
+			"DOM",
+			"DOM.Iterable"
+		],
+		"types": [
+			"vite/client",
+			"node"
+		]
 	},
 	"references": [
 		{
 			"path": "../protocol"
+		},
+		{
+			"path": "../theme-capri"
 		}
 	],
-	"include": ["src", "src/**/*.json", "test", "vite.config.ts"]
+	"include": [
+		"src",
+		"src/**/*.json",
+		"test",
+		"vite.config.ts"
+	]
 }

@@ -90,6 +90,18 @@ describe("build:runtime", () => {
 		);
 	});
 
+	it("loads the optional persona extension without workspace packages or artwork", () => {
+		const source = readFileSync(join(out, "daemon/extensions/dot-companion.ts"), "utf8");
+		expect(source).not.toContain('from "@gentle-dot/theme-capri');
+		expect(source).toContain("Active companion: Capri");
+		const loaded = spawnSync(process.execPath, ["--input-type=module", "-e",
+			`const extension = await import(${JSON.stringify(join(out, "daemon/extensions/dot-companion.ts"))});
+			if (typeof extension.default !== "function") process.exit(1);`
+		], { encoding: "utf8" });
+		expect(loaded.stderr).toBe("");
+		expect(loaded.status).toBe(0);
+	});
+
 	it("ships an npm postinstall that applies the pinned patch to pristine provider bytes and is idempotent", () => {
 		const root = resolve(".cache/rdd-consent-bridge/packaging");
 		mkdirSync(root, { recursive: true });

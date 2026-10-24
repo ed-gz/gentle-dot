@@ -1,3 +1,6 @@
+export { DEFAULT_COMPANION_MODE, isCompanionMode } from "./companion-theme.ts";
+export type { CompanionActivityKind, CompanionMode, CompanionThemeManifest } from "./companion-theme.ts";
+
 /** Version of the client <-> daemon protocol (docs/design.md §4). */
 export const PROTOCOL_VERSION = 1;
 

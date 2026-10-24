@@ -1,3 +1,7 @@
+import type { CompanionActivityKind } from "@gentle-dot/protocol";
+
+export type { CompanionActivityKind } from "@gentle-dot/protocol";
+
 import { useEffect, useRef, useState } from "react";
 
 export interface CompanionTarget {
@@ -6,16 +10,6 @@ export interface CompanionTarget {
 	width: number;
 	height: number;
 }
-export type CompanionActivityKind =
-	| "rest"
-	| "greeting"
-	| "typing"
-	| "reading"
-	| "response"
-	| "sending"
-	| "submitted"
-	| "queued"
-	| "failed";
 export interface CompanionLocalActivity {
 	kind: CompanionActivityKind;
 	/** Changes on a new activity, not on every keystroke. */

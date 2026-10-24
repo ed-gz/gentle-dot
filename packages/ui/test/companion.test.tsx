@@ -9,23 +9,23 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-it("only commits a mode after acknowledgement and retains the prior mode on failure", async () => {
+it("only commits the agent persona after acknowledgement and retains it on failure", async () => {
 	const client = {
 		read: vi.fn().mockResolvedValue("gentle"),
 		set: vi.fn().mockRejectedValue(new Error("Sin conexión")),
 	};
 	const { result } = renderHook(() => useCompanion(client));
 	await act(async () => {});
-	await act(async () => result.current.setMode("capri"));
-	expect(result.current.settings.mode).toBe("gentle");
+	await act(async () => result.current.setPersona("capri"));
+	expect(result.current.settings.persona).toBe("gentle");
 	expect(result.current.error).toBe("Sin conexión");
 	client.set.mockResolvedValue("capri");
-	await act(async () => result.current.setMode("capri"));
-	expect(result.current.settings.mode).toBe("capri");
-	expect(JSON.parse(localStorage.getItem(COMPANION_KEY)!)).toMatchObject({ mode: "capri" });
+	await act(async () => result.current.setPersona("capri"));
+	expect(result.current.settings.persona).toBe("capri");
+	expect(JSON.parse(localStorage.getItem(COMPANION_KEY)!)).toMatchObject({ persona: "capri" });
 });
 
-it("a slow initial read cannot overwrite a newly confirmed switch", async () => {
+it("a slow initial read cannot overwrite a newly confirmed persona", async () => {
 	let resolve!: (mode: "gentle") => void;
 	const client = {
 		read: () =>
@@ -35,9 +35,9 @@ it("a slow initial read cannot overwrite a newly confirmed switch", async () => 
 		set: vi.fn().mockResolvedValue("capri"),
 	};
 	const { result } = renderHook(() => useCompanion(client));
-	await act(async () => result.current.setMode("capri"));
+	await act(async () => result.current.setPersona("capri"));
 	await act(async () => resolve("gentle"));
-	expect(result.current.settings.mode).toBe("capri");
+	expect(result.current.settings.persona).toBe("capri");
 });
 
 it("ignores an old computer's acknowledgement after switching computers", async () => {
@@ -54,7 +54,7 @@ it("ignores an old computer's acknowledgement after switching computers", async 
 	await act(async () => {});
 	let pending: Promise<void>;
 	act(() => {
-		pending = hook.result.current.setMode("capri");
+		pending = hook.result.current.setPersona("capri");
 	});
 	hook.rerender({ client: second });
 	await act(async () => {});
@@ -63,7 +63,7 @@ it("ignores an old computer's acknowledgement after switching computers", async 
 		finish("capri");
 		await pending;
 	});
-	expect(hook.result.current.settings.mode).toBe("gentle");
+	expect(hook.result.current.settings.persona).toBe("gentle");
 });
 
 it("keeps an in-memory choice when storage is blocked and validates old preferences", async () => {
@@ -141,5 +141,34 @@ it("persists independent pin and area preferences, validating corrupt input", ()
 		y: 0,
 		width: 1,
 		height: 1,
+	});
+});
+
+it("selects the bundled appearance offline without changing persona or calling an agent", async () => {
+	const client = { read: vi.fn(), set: vi.fn() };
+	const { result, unmount } = renderHook(() => useCompanion(client, false));
+	expect(result.current.settings.mode).toBe("gentle");
+	await act(async () => result.current.setMode("capri"));
+	expect(result.current.settings).toMatchObject({ mode: "capri", persona: "gentle" });
+	expect(client.set).not.toHaveBeenCalled();
+	expect(client.read).not.toHaveBeenCalled();
+	unmount();
+	const restored = renderHook(() => useCompanion(client, false));
+	expect(restored.result.current.settings).toMatchObject({ mode: "capri", persona: "gentle" });
+});
+
+it("a connection's persona does not overwrite this device's selected appearance", async () => {
+	localStorage.setItem(COMPANION_KEY, JSON.stringify({ mode: "capri", persona: "capri" }));
+	const client = { read: vi.fn().mockResolvedValue("gentle"), set: vi.fn() };
+	const { result } = renderHook(() => useCompanion(client));
+	await act(async () => {});
+	expect(result.current.settings).toMatchObject({ mode: "capri", persona: "gentle" });
+});
+
+it("migrates legacy unified mode but keeps explicit independent identity", () => {
+	expect(parseCompanion({ mode: "capri" })).toMatchObject({ mode: "capri", persona: "capri" });
+	expect(parseCompanion({ mode: "capri", persona: "gentle" })).toMatchObject({
+		mode: "capri",
+		persona: "gentle",
 	});
 });

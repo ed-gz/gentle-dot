@@ -7,7 +7,10 @@ import { type CompanionSpaceRect, FULL_COMPANION_SPACE, normalizeCompanionSpace 
 export const COMPANION_KEY = "gentle-dot-companion-v1";
 const CHANGED = "gentle-dot-companion-change";
 export interface CompanionSettings {
+	/** Local appearance; legacy field and storage key are preserved. */
 	mode: CompanionMode;
+	/** Agent identity, independent of appearance and confirmed by its connection. */
+	persona: CompanionMode;
 	form: "auto" | "body" | "face" | "eyes" | "hands";
 	motion: boolean;
 	visible: boolean;
@@ -22,6 +25,7 @@ export interface CompanionSettings {
 }
 export const DEFAULT_COMPANION: CompanionSettings = {
 	mode: "gentle",
+	persona: "gentle",
 	form: "auto",
 	motion: true,
 	visible: true,
@@ -39,6 +43,7 @@ export function parseCompanion(value: unknown): CompanionSettings {
 	const point = v.position as { x?: unknown; y?: unknown } | null;
 	return {
 		mode: v.mode === "capri" ? "capri" : "gentle",
+		persona: v.persona === "capri" || (v.persona === undefined && v.mode === "capri") ? "capri" : "gentle",
 		// Older releases exposed pose selectors. New sessions always let Capri choose her form.
 		form: "auto",
 		motion: v.motion !== false,
@@ -126,7 +131,7 @@ export function useCompanion(client?: CompanionClient, connected = true) {
 			void client.read(controller.signal).then(
 				(mode) => {
 					if (!controller.signal.aborted && revision === sequence.current) {
-						save({ ...current.current, mode });
+						save({ ...current.current, persona: mode });
 						setSyncError(undefined);
 					}
 				},
@@ -146,9 +151,13 @@ export function useCompanion(client?: CompanionClient, connected = true) {
 			window.removeEventListener("gentledot-resume", refresh);
 		};
 	}, [client, connected, save]);
-	const change = (patch: Partial<Omit<CompanionSettings, "mode">>) =>
+	const change = (patch: Partial<Omit<CompanionSettings, "mode" | "persona">>) =>
 		save(parseCompanion({ ...current.current, ...patch }));
+	// Appearance never waits for a computer or changes its instructions.
 	const setMode = async (mode: CompanionMode) => {
+		save({ ...current.current, mode });
+	};
+	const setPersona = async (mode: CompanionMode) => {
 		if (busy.current || !connected) return;
 		busy.current = true;
 		const revision = ++sequence.current;
@@ -157,7 +166,7 @@ export function useCompanion(client?: CompanionClient, connected = true) {
 		try {
 			const confirmed = client ? await client.set(mode) : mode;
 			if (revision === sequence.current) {
-				save({ ...current.current, mode: confirmed });
+				save({ ...current.current, persona: confirmed });
 				setSyncError(undefined);
 			}
 		} catch (reason) {
@@ -170,6 +179,6 @@ export function useCompanion(client?: CompanionClient, connected = true) {
 			}
 		}
 	};
-	return { settings, change, setMode, pending, error, syncError, storageFailed, connected };
+	return { settings, change, setMode, setPersona, pending, error, syncError, storageFailed, connected };
 }
 export type CompanionControls = ReturnType<typeof useCompanion>;

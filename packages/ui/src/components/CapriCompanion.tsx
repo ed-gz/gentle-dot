@@ -87,25 +87,22 @@ export function CompanionSwitch({
 		<button
 			type="button"
 			role="switch"
-			aria-label="Modo Capri"
+			aria-label="Tema Capri"
 			aria-checked={controls.settings.mode === "capri"}
 			className={`companion-switch${compact ? " capri-activation" : ""}`}
-			disabled={controls.pending || !controls.connected}
 			onClick={() => void controls.setMode(controls.settings.mode === "capri" ? "gentle" : "capri")}
 		>
 			<span className="companion-switch-track" aria-hidden="true">
 				<span />
 			</span>
 			<span>
-				{controls.pending
-					? "Cambiando…"
-					: compact
-						? controls.settings.mode === "capri"
-							? "Activa"
-							: "Activar"
-						: controls.settings.mode === "capri"
-							? "Capri"
-							: "Gentle Dot"}
+				{compact
+					? controls.settings.mode === "capri"
+						? "Activo"
+						: "Activar"
+					: controls.settings.mode === "capri"
+						? "Capri"
+						: "Gentle Dot"}
 			</span>
 		</button>
 	);
@@ -120,20 +117,41 @@ export function CompanionSettings({
 }) {
 	const { settings, change } = controls;
 	return (
-		<section className="companion-settings capri-preferences" aria-label="Capri en la app">
+		<section className="companion-settings capri-preferences" aria-label="Tema y personalidad">
 			<div className="capri-preferences-header">
 				<div>
-					<h3>{desktop ? "Personalidad del asistente" : "Capri"}</h3>
+					<h3>Tema Capri</h3>
 					<p>
-						{desktop
-							? "Elige cómo conversa contigo."
-							: settings.mode === "capri"
-								? "En este dispositivo"
-								: "Modo Gentle Dot"}
+						{settings.mode === "capri"
+							? "Sprites y colores en este dispositivo"
+							: "Opcional · incluido, funciona sin conexión"}
 					</p>
 				</div>
 				<CompanionSwitch controls={controls} compact />
 			</div>
+			<details className="companion-persona-settings">
+				<summary>Conversación · {settings.persona === "capri" ? "Capri" : "Gentle Dot"}</summary>
+				<label className="capri-preference-row">
+					<span>
+						<strong>Personalidad Capri</strong>
+						<small>
+							{controls.connected
+								? "Nombre y tono del agente. Se aplica en su siguiente respuesta."
+								: "Conecta un agente para cambiar su personalidad. El tema sigue disponible."}
+						</small>
+					</span>
+					<input
+						type="checkbox"
+						role="switch"
+						aria-label="Personalidad Capri"
+						checked={settings.persona === "capri"}
+						aria-checked={settings.persona === "capri"}
+						disabled={controls.pending || !controls.connected}
+						onChange={(event) => void controls.setPersona(event.target.checked ? "capri" : "gentle")}
+					/>
+				</label>
+				{controls.pending ? <p role="status">Confirmando con el agente…</p> : null}
+			</details>
 			{controls.error ? (
 				<p role="alert">{controls.error}</p>
 			) : controls.syncError ? (

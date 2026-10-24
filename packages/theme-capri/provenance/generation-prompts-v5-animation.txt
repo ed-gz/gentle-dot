@@ -14,11 +14,11 @@ Official Rebecca guide: https://cdn-s-cyberpunk.cdprojektred.com/cosplay-guides/
 
 Output files, each 1536 x 1024 RGBA, six temporal drawings per action:
 - capri-motion-core-v1.png: idle, walk, greeting, working
-  Original: generated-artifacts/exec-b0952940-0b10-4f17-81eb-027491e4d0e1.png
+  Original: [local generation output]
 - capri-motion-reactions-v1.png: coffee, chill, crying, angry
-  Original: generated-artifacts/exec-f8f1f351-5e6d-423a-a684-40a754b4a25f.png
+  Original: [local generation output]
 - capri-motion-friends-v1.png: duo-watch, duo-coffee, duo-couch, duo-high-five
-  Original: generated-artifacts/exec-b7e844bf-1ead-44f9-ae21-748c5914e559.png
+  Original: [local generation output]
 
 The matching JSON files describe measured source crops and absolute clip polygons,
 not assumed uniform cells. Each action has a shared canvas and frame offsets that

@@ -10,7 +10,10 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/protocol/package.json packages/protocol/
 COPY packages/daemon/package.json packages/daemon/
 COPY packages/ui/package.json packages/ui/
+COPY packages/theme-capri/package.json packages/theme-capri/
 COPY apps/desktop/package.json apps/desktop/
+COPY apps/mobile/package.json apps/mobile/
+COPY patches patches
 RUN pnpm install --frozen-lockfile
 COPY packages packages
 COPY tsconfig.base.json ./

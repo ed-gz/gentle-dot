@@ -8,12 +8,12 @@ CD PROJEKT RED's official Rebecca cosplay guide:
 https://cdn-s-cyberpunk.cdprojektred.com/cosplay-guides/REBECCA_COSPLAY_GUIDE_EN.pdf
 Downloaded read-only reference PDF to .cache/rebecca-reference/official-cosplay-guide.pdf.
 Reference images rendered from official PDF pages3,4,7 with pdftoppm, saved as rebecca-body.png, rebecca-head.png and rebecca-details.png in the same cache directory. These original document renders were supplied directly to the image generator; they are not shipped as product assets.
-Identity reference for Capri: packages/ui/src/assets/capri/capri-atlas-v2.png (unchanged).
+Identity reference for Capri: packages/theme-capri/src/assets/capri-atlas-v2.png (unchanged).
 
 Correction rationale: user rejected the old friends-atlas-v1 Rebecca as unrelated. The original atlas used an inaccurate white-haired generic chibi description. The official guide establishes mint hair swept away from an exposed forehead, long twin ponytails and mechanical dark/lime clips, pale cyan skin, coral-red sclera and lime/green rings around magenta centers, violet lips, angular under-eye seams, pink skull neck tattoo, navy oversized collar jacket, and giant pink/blue cyberhands with lime knuckles.
 
 CALL 1 — RECREATE 12 SCENES WITH OFFICIAL IDENTITY
-Source output: generated-artifacts/exec-44ba5426-96b0-4c74-b4a8-b5042ba71874.png
+Source output: [local generation output]
 Status: intermediate; identity improved but coffee scene cropped Rebecca's lower legs.
 Prompt:
 Use case: stylized-concept
@@ -52,7 +52,7 @@ ROW 3 COL 4 duo-sleep: Capri and Rebecca dozing at opposite ends of a compact da
 FINAL CHECK: 12 complete separated scenes. Exact official Rebecca head features and cyberhands. Capri unchanged. No generic white-haired anime girl, no chibi baby, no Lucy, no weapons, no nudity. Transparent gutters essential.
 
 CALL 2 — COMPOSITION REPAIR
-Source output: generated-artifacts/exec-49cb5dbd-a326-4876-86f8-06e8c989b9e6.png
+Source output: [local generation output]
 Status: intermediate; complete coffee pose restored. Review identified white sclera/amber iris mismatch against official guide.
 Prompt:
 Use case: precise-object-edit
@@ -68,8 +68,8 @@ Capri must remain exactly the angular black/red/green character with fuchsia sta
 No labels, no text, no checkerboard, no background, no shadow rectangles, no weapons. Keep genuine alpha transparency everywhere outside the silhouettes, including gaps between limbs. Preserve clean antialiasing and full-opacity colors inside the characters. Do not replace any character with transparency.
 
 CALL 3 — TARGETED EYE IDENTITY CORRECTION
-Source output: generated-artifacts/exec-6ab84bfb-985a-453f-8855-84b445a13e38.png
-Selected final, copied byte-for-byte into packages/ui/src/assets/capri/friends-atlas-v2.png.
+Source output: [local generation output]
+Selected final, copied byte-for-byte into packages/theme-capri/src/assets/friends-atlas-v2.png.
 Prompt:
 Use case: precise-object-edit
 Image 1 is the EDIT TARGET: a transparent 12-scene Rebecca-and-Capri sprite atlas.

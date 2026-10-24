@@ -1,0 +1,53 @@
+{
+	"version": 1,
+	"id": "capri",
+	"name": "Capri",
+	"description": "Personalizaci\u00f3n opcional de Eduardo Garza, inspirada en Cyberpunk: Edgerunners.",
+	"defaultEnabled": false,
+	"personaId": "capri",
+	"style": "src/style.css",
+	"animationSheets": [
+		{
+			"manifest": "src/assets/capri-motion-core-v1.json",
+			"image": "src/assets/capri-motion-core-v1.png"
+		},
+		{
+			"manifest": "src/assets/capri-motion-reactions-v1.json",
+			"image": "src/assets/capri-motion-reactions-v1.png"
+		},
+		{
+			"manifest": "src/assets/capri-motion-friends-v1.json",
+			"image": "src/assets/capri-motion-friends-v1.png"
+		},
+		{
+			"manifest": "src/assets/capri-motion-life-v1.json",
+			"image": "src/assets/capri-motion-life-v1.png"
+		},
+		{
+			"manifest": "src/assets/capri-motion-glimpses-v1.json",
+			"image": "src/assets/capri-motion-glimpses-v1.png"
+		},
+		{
+			"manifest": "src/assets/capri-motion-context-v1.json",
+			"image": "src/assets/capri-motion-context-v1.png"
+		},
+		{
+			"manifest": "src/assets/capri-motion-actions-v1.json",
+			"image": "src/assets/capri-motion-actions-v1.png"
+		}
+	],
+	"staticSheets": [
+		{
+			"manifest": "src/assets/atlas.json",
+			"image": "src/assets/capri-atlas-v2.png"
+		},
+		{
+			"manifest": "src/assets/reactions-atlas.json",
+			"image": "src/assets/reactions-atlas-v1.png"
+		},
+		{
+			"manifest": "src/assets/friends-atlas-v2.json",
+			"image": "src/assets/friends-atlas-v2.png"
+		}
+	]
+}

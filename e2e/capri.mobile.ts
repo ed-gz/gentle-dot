@@ -152,11 +152,11 @@ test("follows real typing and sending, while pinning preserves the chosen place"
 
 async function enable(page: Page) {
 	await page.getByRole("button", { name: "Ajustes", exact: true }).click();
-	await page.getByRole("switch", { name: "Modo Capri" }).click();
+	await page.getByRole("switch", { name: "Tema Capri" }).click();
 	await expect(page.locator(".chat")).toHaveAttribute("data-companion", "capri");
 	await expect(page.locator(".capri-overlay")).toBeVisible();
 	await expect(page.getByRole("button", { name: "Mover a Capri", exact: true })).toBeVisible();
-	await page.getByRole("button", { name: "Capri", exact: true }).click();
+	await page.getByRole("button", { name: "Dot", exact: true }).click();
 }
 
 async function menu(page: Page) {
@@ -278,10 +278,10 @@ test("Capri floats without reserving a row, drags freely and lets exterior click
 	await expect(page.locator(".capri-bubble-menu")).not.toBeVisible();
 	await expect(textarea).toBeFocused();
 	await page.getByRole("button", { name: "Ajustes", exact: true }).click();
-	await page.getByRole("switch", { name: "Modo Capri" }).click();
+	await page.getByRole("switch", { name: "Tema Capri" }).click();
 	await expect(page.locator(".capri-overlay")).toHaveCount(0);
 	await expect(page.locator(".chat")).toHaveAttribute("data-companion", "gentle");
-	expect(requests.filter((path) => path === "/api/mobile/companion").length).toBeGreaterThanOrEqual(3);
+	expect(requests.filter((path) => path === "/api/mobile/companion").length).toBeGreaterThanOrEqual(1);
 });
 
 test("Capri offers keyboard movement, pause, minimize and viewport bounds on resize", async ({ page }) => {
@@ -372,7 +372,7 @@ test("one independent sprite persists across chat, sessions, settings and connec
 	await sameSprite();
 	await page.screenshot({ path: ".cache/capri-app-overlay-sessions.png" });
 	await page.getByRole("button", { name: "Ajustes", exact: true }).click();
-	await expect(page.getByRole("region", { name: "Capri en la app", exact: true })).toBeVisible();
+	await expect(page.getByRole("region", { name: "Tema y personalidad", exact: true })).toBeVisible();
 	await sameSprite();
 	await expect(page.locator(".capri-gallery, .companion-scene-preview")).toHaveCount(0);
 	await expect(page.getByRole("combobox", { name: "Forma", exact: true })).toHaveCount(0);
@@ -380,7 +380,7 @@ test("one independent sprite persists across chat, sessions, settings and connec
 	await page.getByRole("combobox", { name: "Colores de la app", exact: true }).selectOption("afterlife");
 	await expect(page.locator(".chat")).toHaveAttribute("data-ambience", "afterlife");
 	await sameSprite();
-	await page.getByRole("button", { name: "Capri", exact: true }).click();
+	await page.getByRole("button", { name: "Dot", exact: true }).click();
 	fixture.disconnect();
 	await expect(page.getByText(/Reconectando con tu equipo|Conectando…/, { exact: true })).toBeVisible();
 	await sameSprite();
@@ -398,7 +398,7 @@ test("Capri stays interactive above a real modal while outside touches still rea
 	await pause(page);
 	await page.getByRole("button", { name: "Ajustes", exact: true }).click();
 	await page.getByRole("radio", { name: "Ventana emergente con respuestas" }).check();
-	await page.getByRole("button", { name: "Capri", exact: true }).click();
+	await page.getByRole("button", { name: "Dot", exact: true }).click();
 	const handle = page.getByRole("button", { name: "Mover a Capri", exact: true });
 	const original = await handle.elementHandle();
 	const beforeModal = await handle.boundingBox();
@@ -647,7 +647,7 @@ test("pinning keeps gestures alive and the chosen area survives reopening", asyn
 		"rgb(188, 248, 106)",
 	);
 	await page.screenshot({ path: ".cache/capri-settings-phone-375.png" });
-	await page.getByRole("button", { name: "Capri", exact: true }).click();
+	await page.getByRole("button", { name: "Dot", exact: true }).click();
 	await drag(page, 15, 250, true);
 	const placed = await page.locator(".capri-float").boundingBox();
 	expect(placed?.x).toBeGreaterThanOrEqual(187.5);
@@ -657,7 +657,7 @@ test("pinning keeps gestures alive and the chosen area survives reopening", asyn
 		"true",
 	);
 	expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-	await page.getByRole("button", { name: "Capri", exact: true }).click();
+	await page.getByRole("button", { name: "Dot", exact: true }).click();
 	fixture.state("idle");
 	fixture.ask();
 	const speech = page.locator(".capri-speech");

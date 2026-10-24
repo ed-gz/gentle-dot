@@ -186,6 +186,7 @@ function ChatSurfaceView({
 	const mobile = mobileControls !== undefined && mobileControls !== null;
 	const appearance = useChatAppearance(mobile);
 	const capri = companion.settings.mode === "capri";
+	const capriPersona = companion.settings.persona === "capri";
 	const [requestMode] = useRequestPresentation();
 	const popupRequests = mobile && requestMode === "popup";
 	const [showTools, setShowTools] = useState(false);
@@ -519,7 +520,7 @@ function ChatSurfaceView({
 					</button>
 					<button type="button" className="mobile-dot-tab" aria-pressed={chatVisible} onClick={closeOptions}>
 						<>{capri ? <CapriSprite pose="face" className="capri-header-sprite" /> : <RoseGlyph />}</>
-						<span>{capri ? "Capri" : "Dot"}</span>
+						<span>{capriPersona ? "Capri" : "Dot"}</span>
 					</button>
 					{orchestration ? (
 						<button
@@ -567,7 +568,7 @@ function ChatSurfaceView({
 					) : (
 						<h1 className="assistant-name">
 							<>{capri ? <CapriSprite pose="face" className="capri-header-sprite" /> : <RoseGlyph />}</>
-							<span className="gradient-text">{capri ? "Capri" : "Gentle Dot"}</span>
+							<span className="gradient-text">{capriPersona ? "Capri" : "Gentle Dot"}</span>
 						</h1>
 					)}
 					<DesktopOptions>

@@ -9,7 +9,13 @@
 	"references": [
 		{
 			"path": "../protocol"
+		},
+		{
+			"path": "../theme-capri"
 		}
 	],
-	"include": ["src", "test"]
+	"include": [
+		"src",
+		"test"
+	]
 }

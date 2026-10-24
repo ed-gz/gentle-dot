@@ -4,7 +4,7 @@ Mode: built-in image_gen.imagegen, transparent_background=true. One call per she
 Reference: capri-atlas-v2.png (identity and style reference, not edited or replaced).
 
 REACTIONS
-Source output: generated-artifacts/exec-000eac0d-52d9-4897-b585-0988ba6243c2.png
+Source output: [local generation output]
 Project output: reactions-atlas-v1.png
 Prompt:
 Use case: stylized-concept
@@ -30,7 +30,7 @@ Row 3 col 4 SNACK: Capri sitting cross-legged, happily eating a small triangular
 Constraints: all 12 cells distinct, all complete and entirely separated by empty transparent space; no cropped hair or fingers or furniture. No other characters, no weapons, no sexualization, no watermark. Real alpha transparency everywhere outside the sprites and props, including gaps between limbs and within furniture. Preserve the recognizable character from the reference exactly.
 
 FRIENDS
-Source output: generated-artifacts/exec-656fd3a1-2490-4178-997b-08cf4450f741.png
+Source output: [local generation output]
 Project output: friends-atlas-v1.png
 Prompt:
 Use case: stylized-concept

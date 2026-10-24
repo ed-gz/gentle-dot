@@ -1,14 +1,16 @@
 # Capri en Gentle Dot
 
-La versión móvil 0.20.8 incluye una Capri que elige sus propias formas, escenas y visitas de Rebecca. El interruptor **Gentle Dot / Capri**, en Ajustes, cambia la apariencia y la personalidad del asistente principal desde su siguiente turno. Las sesiones externas conservan su identidad, instrucciones y permisos.
+Capri es la personalización opcional de Eduardo Garza, incluida en [`packages/theme-capri`](../packages/theme-capri/README.md). Gentle Dot conserva el asistente, conversaciones, permisos, conexiones y notificaciones. El paquete aporta sprites, colores, escenas y una personalidad opcional. Una instalación nueva conserva Gentle Dot; no necesita descargar ni generar imágenes para activar el tema.
 
 ## Usarlo
 
-1. Instala la APK actualizada sobre la anterior para conservar la vinculación.
-2. Activa **Modo Capri** en **Ajustes → Capri**. El modo se confirma con el equipo antes de mostrarse como guardado.
-3. Déjala acompañarte. Toca o haz clic en Capri para apartarla, fijarla aquí u ocultarla. En Ajustes puedes ocultarla o cambiar los colores de la app.
+1. En **Ajustes**, activa **Tema Capri**. Se guarda en este dispositivo y funciona aunque el equipo o el agente estén desconectados.
+2. Si también quieres que el agente converse como Capri, abre **Conversación → Personalidad Capri**. Este cambio espera la confirmación del agente y se aplica en su siguiente respuesta.
+3. Toca o haz clic en Capri para apartarla, fijarla aquí u ocultarla. En Ajustes puedes cambiar sus colores y su área permitida.
 
-El modo del asistente se guarda en el equipo. El movimiento, visibilidad, colores y posición se guardan en cada dispositivo. Las antiguas preferencias de pose, forma y compañía se migran a selección automática. Al reconectar o volver a la app se consulta el modo del equipo. Cambiar a Gentle Dot restaura la identidad anterior sin borrar conversaciones ni preferencias.
+La apariencia y la personalidad son independientes: puedes usar los sprites de Capri con la personalidad original de Gentle Dot, o conservar la personalidad Capri con el tema original. Cambiar de tema no envía instrucciones al agente ni altera las sesiones externas. El movimiento, visibilidad, colores y posición se guardan en cada dispositivo; el nombre y tono del agente se confirman con su conexión.
+
+Las preferencias anteriores conservan su clave `gentle-dot-companion-v1` y su campo `mode`. Las instalaciones que ya usaban Capri migran esa elección a apariencia y personalidad, manteniendo posición, área y visibilidad. La reconexión actualiza únicamente la personalidad confirmada: no sobrescribe el tema local. Las antiguas preferencias manuales de pose, forma y compañía continúan migrándose a selección automática. Cambiar cualquier ajuste no borra conversaciones.
 
 ## Qué hace el personaje
 
@@ -28,9 +30,9 @@ Los ciclos se detienen al pausar animaciones, reducir movimiento en el sistema u
 
 **Colores y animación → Colores de la app** cambia inmediatamente entre Capri original, Hacker (verde), Afterlife (violeta) y Atardecer (ámbar). Para cambiar los colores de una terminal real, abre **Ambiente de terminal** en esa sesión. Es una operación independiente: cambiar sólo la app no recolorea terminales. Consulta [los ambientes de terminal](terminal-moods.md) para las ventanas compatibles y la restauración.
 
-Las secuencias nuevas están en `packages/ui/src/assets/capri/capri-motion-*-v1.png`, con manifiestos de cuadros y duración. Los atlas originales se conservan para el acceso fijo y la recuperación si falla la carga. Las escenas de descanso alternan ciclos. Las acciones ligadas a un evento, como guardar un documento o hacerse a un lado, se reproducen una vez y conservan su último cuadro hasta terminar el evento; no repiten la misma operación continuamente.
+Las secuencias nuevas están en `packages/theme-capri/src/assets/capri-motion-*-v1.png`, con manifiestos de cuadros y duración. Los atlas originales se conservan para el acceso fijo y la recuperación si falla la carga. Las escenas de descanso alternan ciclos. Las acciones ligadas a un evento, como guardar un documento o hacerse a un lado, se reproducen una vez y conservan su último cuadro hasta terminar el evento; no repiten la misma operación continuamente.
 
-El arte está en `packages/ui/src/assets/capri/`: `capri-atlas-v2.png`, `reactions-atlas-v1.png` y `friends-atlas-v2.png`. Rebecca se rehízo usando la guía oficial de CD PROJEKT RED: frente despejada, coletas menta, ojos coral/lima/magenta y manos cibernéticas azul y rosa. Sus manifiestos JSON contienen rectángulos y polígonos medidos que evitan mostrar piezas vecinas. No se debe suponer una cuadrícula uniforme. Los archivos `generation-prompts*.txt` conservan los prompts y la validación de las generaciones con imagegen.
+El arte está en `packages/theme-capri/src/assets/`: `capri-atlas-v2.png`, `reactions-atlas-v1.png` y `friends-atlas-v2.png`. Rebecca se rehízo usando la guía oficial de CD PROJEKT RED: frente despejada, coletas menta, ojos coral/lima/magenta y manos cibernéticas azul y rosa. Sus manifiestos JSON contienen rectángulos y polígonos medidos que evitan mostrar piezas vecinas. No se debe suponer una cuadrícula uniforme. Los archivos `packages/theme-capri/provenance/generation-prompts*.txt` conservan los prompts de imagegen con rutas locales retiradas. El [aviso del tema](../packages/theme-capri/NOTICE.md) distingue el software, el arte generado y los derechos de los personajes. Las capturas de referencia y borradores rechazados no se incluyen en el paquete.
 
 ## Capri sobre el escritorio de PC
 

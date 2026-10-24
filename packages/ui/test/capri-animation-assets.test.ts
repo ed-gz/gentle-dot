@@ -10,7 +10,7 @@ import {
 } from "../src/capri-animation.ts";
 import { CONTEXT_POSES, capriFrame } from "../src/capri-art.ts";
 
-const directory = join(dirname(fileURLToPath(import.meta.url)), "../src/assets/capri");
+const directory = join(dirname(fileURLToPath(import.meta.url)), "../../theme-capri/src/assets");
 const sheets = [
 	["capri-motion-core-v1", ["idle", "walk", "greeting", "working"]],
 	["capri-motion-reactions-v1", ["coffee", "chill", "crying", "angry"]],

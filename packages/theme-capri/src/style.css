@@ -1,0 +1,638 @@
+/* The companion floats in a body portal, independently of chat layout. */
+:is(.chat, .capri-overlay)[data-companion="capri"] {
+	--bg: #0b1114;
+	--bg-glass: #0b1114;
+	--surface: #121d22;
+	--surface-2: #1b2a30;
+	--line: #30434b;
+	--text: #f0f6ef;
+	--muted: #b0c4c2;
+	--accent: #bcf86a;
+	--accent-ink: #13200c;
+	--accent-soft: #bcf86a12;
+	--accent-line: #88ba50;
+	--accent-shadow: none;
+	--chat-action: #bcf86a;
+	--chat-action-ink: #13200c;
+	--chat-error: #ffb5d1;
+	--chat-error-soft: #3a1929;
+	--chat-success: #bcf86a;
+	--mobile-bg: var(--bg);
+	--mobile-card: var(--surface);
+	--mobile-text: var(--text);
+	--mobile-muted: var(--muted);
+	--mobile-accent: var(--accent);
+	--mobile-border: #6c858c;
+	--red: #ff91b8;
+	--green: #bcf86a;
+	--yellow: #f1d17d;
+	--companion-stage: #0f181d;
+	--companion-header: #101a20;
+	color-scheme: dark;
+	background: var(--bg);
+	color: var(--text);
+}
+:is(.chat, .capri-overlay)[data-companion="capri"][data-ambience="hacker"] {
+	--bg: #07140e;
+	--bg-glass: #07140e;
+	--surface: #0c2116;
+	--surface-2: #173122;
+	--line: #355842;
+	--text: #effff2;
+	--muted: #b5d6bf;
+	--accent: #80ffab;
+	--accent-ink: #062510;
+	--companion-stage: #0a1b11;
+	--companion-header: #0a1b11;
+}
+:is(.chat, .capri-overlay)[data-companion="capri"][data-ambience="afterlife"] {
+	--bg: #151025;
+	--bg-glass: #151025;
+	--surface: #211a35;
+	--surface-2: #302542;
+	--line: #57466d;
+	--text: #f8f1ff;
+	--muted: #c9b9dc;
+	--accent: #d0adff;
+	--accent-ink: #25123f;
+	--companion-stage: #1c142e;
+	--companion-header: #1c142e;
+}
+:is(.chat, .capri-overlay)[data-companion="capri"][data-ambience="sunset"] {
+	--bg: #211710;
+	--bg-glass: #211710;
+	--surface: #2b211b;
+	--surface-2: #3b2b20;
+	--line: #695344;
+	--text: #fff3e7;
+	--muted: #d9c4b3;
+	--accent: #ffc078;
+	--accent-ink: #35200a;
+	--companion-stage: #2b1b12;
+	--companion-header: #2b1b12;
+}
+:is(.chat, .capri-overlay)[data-companion="capri"] {
+	--chat-action: var(--accent);
+	--chat-action-ink: var(--accent-ink);
+	--accent-line: var(--accent);
+	--accent-soft: color-mix(in srgb, var(--accent) 8%, transparent);
+	--mobile-border: var(--line);
+}
+:is(.chat, .capri-overlay)[data-companion="capri"] .gradient-text {
+	background: none;
+	color: var(--accent);
+	-webkit-text-fill-color: currentColor;
+}
+:is(.chat, .capri-overlay)[data-companion="capri"] :is(.chat-header, .mobile-top-nav) {
+	background: var(--companion-header);
+	border-bottom: 1px solid #40504c;
+}
+:is(.chat, .capri-overlay)[data-companion="capri"] .mobile-top-nav button[aria-pressed="true"] {
+	background: #bcf86a12;
+	color: var(--accent);
+	box-shadow: inset 0 -2px var(--accent);
+}
+:is(.chat, .capri-overlay)[data-companion="capri"] :is(.composer, .agent-composer) {
+	border-color: #47604f;
+}
+:is(.chat, .capri-overlay)[data-companion="capri"] button.primary:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--accent) 85%, white);
+	border-color: var(--accent);
+}
+:is(.chat, .capri-overlay)[data-companion="capri"]
+	:is(.ask-card, .agent-permission-card, .agent-command-shelf) {
+	border-color: var(--line);
+	box-shadow: none;
+}
+:is(.chat, .capri-overlay)[data-companion="capri"] .assistant-name {
+	letter-spacing: 0.06em;
+}
+.companion-switch {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 44px;
+	padding: 6px 10px;
+	flex-shrink: 0;
+	font-size: 12px;
+	border-color: var(--line);
+	white-space: nowrap;
+}
+.companion-switch-track {
+	display: inline-flex;
+	align-items: center;
+	width: 30px;
+	height: 18px;
+	padding: 3px;
+	background: #60706e;
+	border-radius: 20px;
+}
+.companion-switch-track > span {
+	display: block;
+	height: 12px;
+	width: 12px;
+	border-radius: 50%;
+	background: #fff;
+	transition: transform 160ms ease;
+}
+.companion-switch[aria-checked="true"] .companion-switch-track {
+	background: #bcf86a;
+}
+.companion-switch[aria-checked="true"] .companion-switch-track > span {
+	background: #17200f;
+	transform: translateX(12px);
+}
+.companion-settings {
+	padding: 18px;
+	border: 1px solid var(--line);
+	border-radius: 14px;
+	background: var(--surface);
+	margin: 12px 0;
+}
+.companion-setting-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.companion-setting-heading h3 {
+	margin: 0 0 4px;
+}
+.companion-setting-heading p,
+.companion-help {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.55;
+	margin: 6px 0 14px;
+}
+.companion-setting-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 12px;
+	margin-bottom: 12px;
+}
+.companion-setting-grid label {
+	display: grid;
+	gap: 6px;
+	min-width: 0;
+	font-size: 14px;
+}
+.companion-setting-grid select {
+	width: 100%;
+	min-width: 0;
+	min-height: 44px;
+	background: var(--surface-2);
+}
+.companion-check {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-height: 44px;
+	font-size: 14px;
+}
+.companion-check input {
+	accent-color: var(--accent);
+	width: 18px;
+	height: 18px;
+}
+.companion-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 4px 16px;
+	gap: 12px;
+	border-bottom: 1px solid var(--line);
+	flex-shrink: 0;
+}
+.companion-toolbar > span {
+	color: var(--muted);
+	font-size: 12px;
+}
+.companion-toolbar button {
+	min-height: 44px;
+}
+.companion-options {
+	max-height: 60dvh;
+	overflow-y: auto;
+	flex-shrink: 0;
+	padding: 0 16px;
+}
+.companion-error {
+	padding: 8px 16px;
+	color: var(--red);
+	margin: 0;
+	font-size: 13px;
+}
+.capri-sprite {
+	display: inline-block;
+	width: 112px;
+	height: 112px;
+	flex-shrink: 0;
+	background-size: 400% 400%;
+	background-repeat: no-repeat;
+	vertical-align: middle;
+}
+.capri-header-sprite {
+	width: 28px;
+	height: 28px;
+}
+.companion-layer {
+	position: fixed;
+	inset: 0;
+	z-index: 100;
+	width: 100%;
+	height: 100%;
+	max-width: none;
+	max-height: none;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	overflow: visible;
+	pointer-events: none;
+	color: inherit;
+}
+.companion-layer::backdrop {
+	background: transparent;
+	pointer-events: none;
+}
+.capri-overlay[data-companion="capri"] {
+	position: fixed;
+	inset: 0;
+	z-index: 100;
+	pointer-events: none;
+	background: transparent;
+	font-family: var(--font-sans, system-ui, sans-serif);
+}
+.capri-float {
+	position: absolute;
+	top: 0;
+	left: 0;
+	pointer-events: none;
+	transition: none;
+}
+.capri-float[data-travelling="true"] {
+	transition: transform 1400ms cubic-bezier(0.22, 0.75, 0.3, 1);
+}
+.capri-float[data-dragging="true"] {
+	transition: none;
+}
+.capri-overlay .capri-drag-handle {
+	width: 100%;
+	height: 100%;
+	min-width: 48px;
+	min-height: 48px;
+	padding: 0;
+	border: 0;
+	border-radius: 24px;
+	background: transparent;
+	box-shadow: none;
+	cursor: grab;
+	pointer-events: auto;
+	touch-action: none;
+	user-select: none;
+	-webkit-user-select: none;
+	-webkit-tap-highlight-color: transparent;
+}
+.capri-overlay .capri-drag-handle:active {
+	cursor: grabbing;
+}
+.capri-overlay .capri-drag-handle:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 3px;
+}
+.capri-overlay:not([data-minimized="true"]) .capri-drag-handle:focus-visible {
+	outline: none;
+}
+.capri-overlay:not([data-minimized="true"]) .capri-drag-handle:focus-visible .capri-sprite {
+	filter: drop-shadow(0 0 2px #fff2fc) drop-shadow(0 2px 4px #0009);
+}
+.capri-drag-handle .capri-sprite {
+	width: 100%;
+	height: 100%;
+	pointer-events: none;
+	filter: drop-shadow(0 3px 5px #0007);
+}
+.capri-overlay[data-minimized="true"] .capri-drag-handle {
+	background: var(--surface);
+	border: 1px solid var(--accent-line);
+	border-radius: 50%;
+	box-shadow: 0 4px 16px #0005;
+	padding: 5px;
+}
+.capri-overlay[data-minimized="true"][data-attention="true"] .capri-drag-handle {
+	border-color: #ff9bca;
+}
+.capri-speech {
+	position: absolute;
+	bottom: calc(100% + 5px);
+	left: 0;
+	width: max-content;
+	max-width: min(184px, calc(100vw - 32px));
+	padding: 9px 12px;
+	background: var(--surface);
+	color: var(--text);
+	border: 0;
+	border-radius: 14px 14px 14px 4px;
+	box-shadow: 0 4px 16px #0004;
+	font-size: 12px;
+	line-height: 1.45;
+	opacity: 0;
+	visibility: hidden;
+	pointer-events: none;
+}
+.capri-speech[data-visible="true"] {
+	opacity: 1;
+	visibility: visible;
+}
+.capri-speech[data-visible="true"][data-actionable="true"] {
+	pointer-events: auto;
+}
+.capri-speech button {
+	display: block;
+	min-height: 44px;
+	margin-top: 6px;
+	padding: 6px 10px;
+	color: var(--text);
+	border: 0;
+	border-radius: 10px;
+	background: var(--surface-2);
+	font: inherit;
+}
+.capri-speech[data-align="right"] {
+	left: auto;
+	right: 0;
+	border-radius: 14px 14px 4px 14px;
+}
+.capri-speech[data-below="true"] {
+	top: calc(100% + 5px);
+	bottom: auto;
+}
+.capri-speech button:focus-visible {
+	outline: 1px solid var(--text);
+	outline-offset: 2px;
+}
+/* Reading layouts keep a quiet separator, independent of Capri's neon accent. */
+.chat-mobile[data-companion="capri"][data-chat-layout="reading"]
+:is(.message-user .message-body, .agent-message-user, .appearance-preview-user) {
+	border-left: 1px solid var(--line);
+}
+.capri-bubble-menu {
+	min-width: 0;
+	margin: 0;
+	position: absolute;
+	width: 272px;
+	box-sizing: border-box;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	pointer-events: auto;
+	background: var(--surface);
+	color: var(--text);
+	border: 1px solid var(--line);
+	border-radius: 18px;
+	padding: 12px;
+	box-shadow: 0 10px 40px #0006;
+	font-size: 14px;
+}
+.capri-menu-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+.capri-menu-heading strong {
+	color: var(--accent);
+	font-size: 12px;
+	letter-spacing: 0.08em;
+}
+.capri-bubble-menu .capri-menu-heading button {
+	width: 48px;
+	margin: 0;
+	font-size: 24px;
+}
+.capri-bubble-menu p {
+	margin: 4px 0 12px;
+	line-height: 1.5;
+}
+.capri-bubble-menu button {
+	width: 100%;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	min-height: 48px;
+	padding: 8px;
+	margin-top: 8px;
+	white-space: normal;
+	color: var(--text);
+	background: var(--surface-2);
+	border: 1px solid var(--line);
+	font-size: 13px;
+	line-height: 1.35;
+}
+.capri-bubble-menu button:hover {
+	border-color: var(--accent);
+}
+.capri-bubble-menu button:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+.capri-move-controls {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	gap: 8px;
+}
+.capri-move-controls button {
+	margin: 0;
+}
+.capri-sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+.capri-gallery {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 8px;
+	margin-top: 16px;
+}
+.capri-gallery figure {
+	display: grid;
+	justify-items: center;
+	align-content: start;
+	margin: 0;
+	min-width: 0;
+	background: #10191e;
+	border: 1px solid #30434b;
+	border-radius: 10px;
+	padding: 5px;
+}
+.capri-gallery .capri-sprite {
+	width: 100%;
+	height: auto;
+	aspect-ratio: 1;
+}
+.capri-gallery figcaption {
+	font-size: 11px;
+	line-height: 1.4;
+	text-align: center;
+	color: #c9d9d6;
+	padding: 4px;
+}
+.capri-gallery button {
+	width: 100%;
+	padding: 0;
+	min-width: 48px;
+	min-height: 48px;
+	background: transparent;
+	border-color: transparent;
+}
+.capri-gallery button[aria-pressed="true"] {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+.companion-scene-preview {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 12px 0;
+	border: 1px solid var(--accent);
+	border-radius: 12px;
+	padding: 12px;
+}
+.companion-scene-preview p {
+	margin: 0 0 8px;
+}
+.companion-scene-preview button {
+	min-height: 48px;
+}
+.companion-scene-preview .capri-sprite {
+	width: 96px;
+	height: 96px;
+}
+.dot .capri-sprite {
+	width: 68px;
+	height: 68px;
+}
+.dot:has(.capri-sprite) .dot-disc {
+	background: #0b1114;
+}
+.capri-overlay[data-motion="false"] .capri-sprite {
+	animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+	.capri-overlay[data-motion] .capri-drag-handle .capri-sprite {
+		animation: none;
+	}
+	.companion-switch * {
+		transition: none;
+	}
+}
+@media (max-width: 400px) {
+	.capri-gallery {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+	.companion-setting-grid {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* Companion preferences share one layout across a narrow panel and phone. */
+.capri-preference-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	min-height: 48px;
+	color: var(--text);
+	font-size: 14px;
+}
+.capri-preference-row > span {
+	min-width: 0;
+}
+.capri-preference-row strong {
+	display: block;
+	font-weight: 600;
+}
+.capri-preference-row small {
+	display: block;
+	color: var(--muted);
+	margin-top: 4px;
+	font-size: 12px;
+	line-height: 1.5;
+}
+.capri-preference-row input {
+	flex: none;
+	width: 20px;
+	height: 20px;
+	accent-color: var(--accent);
+}
+.capri-preference-row select {
+	max-width: 55%;
+	min-height: 44px;
+	background: var(--surface);
+	border: 1px solid var(--line);
+	border-radius: 10px;
+	color: var(--text);
+	padding: 8px;
+}
+.companion-persona-settings > summary,
+.capri-area-details > summary,
+.capri-preferences .companion-ambience > summary {
+	min-height: 48px;
+	align-content: center;
+	cursor: pointer;
+	font-size: 14px;
+	color: var(--text);
+}
+.capri-area-details .companion-space-editor {
+	margin-top: 12px;
+}
+.capri-preferences .companion-setting-heading {
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.capri-preference-row input[role="switch"] {
+	appearance: none;
+	-webkit-appearance: none;
+	width: 40px;
+	height: 24px;
+	border-radius: 20px;
+	border: 1px solid var(--muted);
+	background: var(--surface-2);
+	position: relative;
+	cursor: pointer;
+	margin: 0;
+}
+.capri-preference-row input[role="switch"]::after {
+	content: "";
+	position: absolute;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	left: 3px;
+	top: 3px;
+	background: var(--muted);
+	transition: transform 120ms ease;
+}
+.capri-preference-row input[role="switch"]:checked {
+	background: var(--accent);
+	border-color: var(--accent);
+}
+.capri-preference-row input[role="switch"]:checked::after {
+	background: var(--accent-ink);
+	transform: translateX(16px);
+}
+.capri-preference-row input:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 4px;
+}
+.capri-preferences-mode {
+	margin: 0;
+	border: 0;
+}

@@ -15,7 +15,7 @@ ROW 2 PERCH: Capri sits ON AN INVISIBLE HORIZONTAL EDGE, no actual edge/seat/cha
 ROW 3 STEP-ASIDE: Capri notices the person needs space and playfully takes a small side-step to viewer's right. Front-facing with head watching down-left; six successive distinct poses: (1) notices; (2) shifts weight left and raises right foot; (3) extends right foot sideways; (4) transfers weight to right; (5) brings left foot in and gestures 'go ahead' with one open hand; (6) settles, friendly blink. Keep her centered within each cell, movement is in drawn limbs rather than moving the entire character across cells. No props.
 Constraints: all frames must be clean cutouts on alpha=0 around the character; no generated frame or boxed UI, no stray noise. Same hair design, face design, palette and proportions in every frame. Do not render this instruction or any labels.
 
-Original source: generated-artifacts/exec-d6a59a97-1e3e-488f-8267-4d8f6989d7e0.png
+Original source: [local generation output]
 Project asset: capri-motion-actions-v1.png
 Manifest registration and alpha validation: .cache/capri-actions/registration.json, .cache/capri-actions/validation.json
 Browser-rendered contact sheet: .cache/capri-actions/contact.png

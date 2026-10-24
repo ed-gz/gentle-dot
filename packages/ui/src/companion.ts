@@ -1,7 +1,8 @@
+import { type CompanionMode, isCompanionMode } from "@gentle-dot/protocol";
 import type { ConnectionInfo } from "./client.ts";
 import { uploadBase } from "./uploads.ts";
 
-export type CompanionMode = "gentle" | "capri";
+export type { CompanionMode } from "@gentle-dot/protocol";
 export interface CompanionClient {
 	read(signal?: AbortSignal): Promise<CompanionMode>;
 	set(mode: CompanionMode, signal?: AbortSignal): Promise<CompanionMode>;
@@ -21,7 +22,7 @@ export function createCompanionClient(info: ConnectionInfo): CompanionClient {
 					: "No se pudo guardar el modo en el equipo. Vuelve a intentar.",
 			);
 		const body = await response.json();
-		if (body.mode !== "gentle" && body.mode !== "capri") throw new Error("Respuesta de modo inválida.");
+		if (!isCompanionMode(body.mode)) throw new Error("Respuesta de modo inválida.");
 		return body.mode;
 	};
 	return { read: (signal) => request(undefined, signal), set: (mode, signal) => request(mode, signal) };

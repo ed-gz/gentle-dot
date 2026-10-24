@@ -2,9 +2,6 @@ Capri companion artwork provenance
 Generated with the built-in image_gen.imagegen tool (not CLI).
 Reference material: three screenshots of Capri from Cyberpunk: Edgerunners 2, viewed and downloaded from https://mudae.net/series/Cyberpunk:%20Edgerunners%202/all-images on 2026-10-22 (America/Monterrey). The references establish identity only; generated sprites are new compositions.
 Original image URLs:
-https://mudae.net/uploads/3127100/yHv4qwZ~LBAH9KIJh.png
-https://mudae.net/uploads/3127100/etkfvCP~bf712a2ea2bf.png
-https://mudae.net/uploads/3127100/OwjeVmT~59966d2d98c2.png
 
 PROMPT 1 — capri-atlas.png
 Use case: stylized-concept.

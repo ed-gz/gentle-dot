@@ -166,7 +166,19 @@ export async function buildRuntime(outDir: string): Promise<void> {
 		"dot-watch.ts",
 		"dot-session.ts",
 	]) {
-		copyFileSync(join(PACKAGE, "src", "extensions", name), join(daemon, "extensions", name));
+		if (name === "dot-companion.ts") {
+			// Bundle the optional persona into this standalone extension. Installed runtimes
+			// do not depend on workspace package paths or ship the artwork to the agent.
+			await build({
+				entryPoints: [join(PACKAGE, "src", "extensions", name)],
+				outfile: join(daemon, "extensions", name),
+				bundle: true,
+				platform: "node",
+				format: "esm",
+				target: "node24",
+				logLevel: "error",
+			});
+		} else copyFileSync(join(PACKAGE, "src", "extensions", name), join(daemon, "extensions", name));
 	}
 	mkdirSync(join(daemon, "orchestration"), { recursive: true });
 	for (const name of [

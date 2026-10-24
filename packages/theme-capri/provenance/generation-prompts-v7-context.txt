@@ -14,7 +14,7 @@ FINAL OUTPUT AND VALIDATION
 
 {
   "image": "capri-motion-context-v1.png",
-  "source": "generated-artifacts/exec-613206b6-9c4e-4045-b19a-d90832d5f30c.png",
+  "source": "[local generation output]",
   "sourceUnmodified": true,
   "sha256": "ef1197e2f54ca6581f87a7379bf5332b4a3d223d8a39410c2be07ff201cfd222",
   "width": 1536,
