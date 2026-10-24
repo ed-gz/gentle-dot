@@ -77,6 +77,26 @@ it.each([false, true])("shows live work above the composer, marks the list row, 
  expect(screen.queryByRole("status", { name: "Actividad de la sesión" })).not.toBeInTheDocument();
 });
 
+it("keeps a waiting session question and its answer options inline above the phone composer", async()=>{
+ const next:OrchestrationSnapshot={...snapshot,approvals:snapshot.approvals.map(a=>({...a,kind:"select",options:[{id:"continue",label:"Continuar"},{id:"stop",label:"Detener"}]}))};
+ const {controls,client,view}=setup(next,{sessionId:"s1",status:"waiting",messages:[],question:{id:"ask1",kind:"select",title:"Push prepared changes?",answerable:true}});
+ view.rerender(<OrchestrationPanel controls={controls} client={client} mobile requestsVisible={false}/>);
+ fireEvent.click(screen.getByRole("button",{name:/Release/}));
+ const card=await screen.findByRole("region",{name:"Solicitud pendiente de esta sesión"});
+ expect(within(card).getByText("Push prepared changes?")).toBeVisible();
+ expect(within(card).getByLabelText("Continuar")).toBeEnabled();
+ expect(card.closest("details,dialog")).toBeNull();
+ fireEvent.click(within(card).getByLabelText("Continuar"));
+ fireEvent.click(within(card).getByRole("button",{name:"Enviar respuesta"}));
+ await waitFor(()=>expect(controls.act).toHaveBeenCalledWith({action:"answer",paneId:"p1",sessionId:"s1",requestId:"ask1",optionId:"continue"}));
+});
+it("shows the waiting-question queue receipt instead of losing the extra detail", async()=>{
+ const delivery={id:"queued-human-123",status:"queued" as const,deliverAs:"followUp" as const,preview:"extra detail",acceptedAt:new Date().toISOString()};
+ setup({...snapshot,approvals:[]},{sessionId:"s1",status:"waiting",messages:[],question:null,deliveries:[delivery]});
+ fireEvent.click(screen.getByRole("button",{name:/Release/}));
+ expect(await screen.findByText("En cola: se enviará cuando respondas la pregunta")).toBeVisible();
+});
+
 function ProductionAgentPanel({ client, active = true, connected = true, send = () => false }: { client: OrchestrationClient; active?: boolean; connected?: boolean; send?: Send }) {
 	const controls = useOrchestration(client, active);
 	return <AgentVoiceContext value={{ state: { ...initialState, connection: connected ? "open" : "closed" }, send }}>

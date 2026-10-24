@@ -102,6 +102,7 @@ async function session(withCustom = true) {
 		});
 	return {
 		ctx,
+		sendUserMessage: pi.sendUserMessage,
 		native,
 		originals,
 		call,
@@ -113,6 +114,31 @@ async function session(withCustom = true) {
 		finishCustom: (value: unknown) => finishCustom?.(value),
 	};
 }
+
+it("queues human extra detail behind the question in order, never as an answer, while refusing workflow prompts", async()=>{
+ const h=await session(); const waiting=h.ctx.ui.confirm("Continue?","Choose first");
+ const page=await h.call("snapshot"); const q=page.question as {id:string};
+ await expect(h.call("prompt",{text:"autonomous"})).rejects.toMatchObject({code:"QUESTION_PENDING"});
+ await expect(h.call("prompt",{text:"extra one",humanInteraction:true,clientMessageId:"queue-human-001",deliverAs:"steer"})).resolves.toMatchObject({accepted:true});
+ await h.call("prompt",{text:"extra two",humanInteraction:true,clientMessageId:"queue-human-002"});
+ expect(h.sendUserMessage).not.toHaveBeenCalled();
+ expect((await h.call("snapshot")).deliveries).toMatchObject([{id:"queue-human-001",status:"queued",deliverAs:"followUp"},{id:"queue-human-002",status:"queued"}]);
+ vi.mocked(h.sendUserMessage).mockImplementationOnce(()=>{ void h.handlers.get("input")?.({source:"extension",text:"extra one"},h.ctx); });
+ await h.call("answer",{questionId:q.id,confirmed:true}); expect(await waiting).toBe(true);
+ await vi.waitFor(()=>expect(h.sendUserMessage).toHaveBeenCalledTimes(2));
+ expect(vi.mocked(h.sendUserMessage).mock.calls.map(c=>c[0])).toEqual(["extra one","extra two"]);
+ expect(vi.mocked(h.sendUserMessage).mock.calls[0]?.[1]).toMatchObject({deliverAs:"followUp"});
+});
+it("counts human dialog answers as personal activity but not fenced workflow answers", async()=>{
+ const h=await session(); const first=h.ctx.ui.confirm("Continue?","Question");
+ const q=(await h.call("snapshot")).question as {id:string};
+ await h.call("answer",{questionId:q.id,confirmed:true,expectedHumanActivityAt:null}); await first;
+ expect((await h.call("snapshot")).companionActivity).not.toHaveProperty("humanActivityAt");
+ const second=h.ctx.ui.confirm("Continue again?","Question");
+ const next=(await h.call("snapshot")).question as {id:string};
+ await h.call("answer",{questionId:next.id,confirmed:true}); await second;
+ expect((await h.call("snapshot")).companionActivity).toHaveProperty("humanActivityAt");
+});
 
 describe("real session UI answers", () => {
 	it("exports activity events through the bound socket without draft or submitted text", async () => {

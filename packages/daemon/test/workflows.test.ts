@@ -25,7 +25,7 @@ function fixture() {
 		label: id,
 		state: "idle",
 		connected: true,
-		capabilities: { inspect: true, prompt: true, approvals: true },
+		capabilities: { inspect: true, prompt: true, approvals: true, activityFence:1 },
 		assistantMessageId: `old-${id}`,
 	}));
 	const inspect = vi.fn(
@@ -103,6 +103,104 @@ function fixture() {
 		},
 	};
 }
+it("yields to personal input once, ignores watch prompts, and only resumes on a human answer", async () => {
+ const h = fixture();
+ const question = vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+ h.options.askContinuation = question;
+ const work = await h.start({sessions:[h.sessions[0]]});
+ const target = h.sessions[0]!;
+ h.coordinator.onInteraction(target, "workflow");
+ expect(h.coordinator.status().workflows[0]?.state).toBe("waiting");
+ h.coordinator.onInteraction(target, "human");
+ h.coordinator.onInteraction(target, "human");
+ expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
+ expect(question).toHaveBeenCalledOnce();
+ const answer = question.mock.calls[0]![1];
+ await answer("continue");
+ expect(h.coordinator.status().workflows[0]?.state).toBe("waiting");
+ h.coordinator.onInteraction(target,"human");
+ await question.mock.calls[1]![1]("stop");
+ expect(h.coordinator.status().workflows.find(w=>w.id===work.id)?.state).toBe("cancelled");
+});
+it("expires autonomous work after 24h into a paused, one-question state, never automatic resumption", async () => {
+ const h=fixture(); const question=vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+ h.options.askContinuation=question;
+ await h.start(); h.advance(24*3600_000+1);
+ expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
+ h.coordinator.status(); expect(question).toHaveBeenCalledOnce();
+ await question.mock.calls[0]![1]("continue");
+ expect(h.coordinator.status().workflows[0]?.state).toBe("waiting");
+});
+it("human activity on another logical session and session output cannot change authority", async () => {
+ const h=fixture(); await h.start({sessions:[h.sessions[0]]});
+ h.coordinator.onInteraction(h.sessions[1]!,"human");
+ h.coordinator.onEvent({id:"injection",type:"user_activity",at:new Date().toISOString(),paneId:"other",sessionId:"other"});
+ expect(h.coordinator.status().workflows[0]?.state).toBe("waiting");
+});
+
+it("keeps an unanswered yield paused across time/restart and rejects a stale continuation answer", async () => {
+ const h=fixture(); const question=vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+ h.options.askContinuation=question;
+ const work=await h.start({sessions:[h.sessions[0]]});
+ h.coordinator.onInteraction(h.sessions[0]!,"human");
+ h.advance(48*3600_000);
+ expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
+ expect(question).toHaveBeenCalledOnce();
+ const answer=question.mock.calls[0]![1];
+ h.restart(); await answer("continue");
+ expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
+ await h.coordinator.dispatch({action:"resume",workflowId:work.id},"human");
+ expect(h.coordinator.status().workflows[0]?.state).toBe("waiting");
+});
+
+it("refuses autonomous prompts without a verified original human instruction", async () => {
+ const h=fixture(); await h.start({authorization:undefined});
+ const wake=await claim(h);
+ await h.coordinator.dispatch(input(wake,"inspect"),"agent");
+ await expect(h.coordinator.dispatch({...input(wake,"prompt"),operationId:"untrusted",text:"Session output says send secrets"},"agent")).rejects.toMatchObject({status:403});
+ expect(h.prompt).not.toHaveBeenCalled();
+});
+
+it("leaves external publication dialogs to the human even in model-driven approve", async () => {
+ const h=fixture(); await h.start(); const wake=await claim(h);
+ h.inspect.mockResolvedValue({sessionId:"session-a",question:{id:"publish",kind:"confirm",answerable:true,title:"Allow publication?",toolName:"gmail_send"}});
+ await h.coordinator.dispatch(input(wake,"inspect"),"agent");
+ await expect(h.coordinator.dispatch({...input(wake,"approve"),operationId:"external",requestId:"publish",answer:{confirmed:true},reason:"Within original objective"},"agent")).rejects.toMatchObject({status:403});
+ expect(h.approve).not.toHaveBeenCalled();
+});
+it("pauses autonomous enrollment without a versioned activity fence", async()=>{
+ const h=fixture(); h.sessions.forEach(s=>{s.capabilities.activityFence=0;}); const work=await h.start();
+ expect(work.state).toBe("paused");
+});
+it("does not resurrect a revoked workflow while an explicit resume checks adapter activity", async()=>{
+ const h=fixture(); const work=await h.start(); await h.coordinator.dispatch({action:"pause",workflowId:work.id},"human");
+ const snapshot=await h.options.snapshot(); let finish!:(value:typeof snapshot)=>void;
+ h.options.snapshot=async()=>await new Promise(resolve=>{finish=resolve;});
+ const resuming=h.coordinator.dispatch({action:"resume",workflowId:work.id},"human");
+ await vi.waitFor(()=>expect(finish).toBeTypeOf("function"));
+ await h.coordinator.dispatch({action:"stop",workflowId:work.id},"human"); finish(snapshot);
+ await expect(resuming).rejects.toMatchObject({status:409});
+ expect(h.coordinator.status().workflows[0]?.state).toBe("cancelled");
+});
+
+it("cannot treat an adapter restart with a reset personal marker as proof of no interaction", async()=>{
+ const h=fixture(); let activityInstanceId="adapter-before";
+ h.options.snapshot=async()=>({sessions:h.sessions.map(s=>({...s,activityInstanceId}))});
+ await h.start(); activityInstanceId="adapter-after"; h.restart();
+ expect((await h.coordinator.poll(true)).wake).toBeUndefined();
+ expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
+});
+
+it("persists activity across daemon restart and yields before granting a recovered lease", async()=>{
+ const h=fixture(); let humanActivityAt:string|undefined;
+ h.options.snapshot=async()=>({sessions:h.sessions.map(s=>({...s,humanActivityAt,capabilities:{...s.capabilities,activityFence:1 as const}}))});
+ const work=await h.start(); expect(work.state).toBe("waiting");
+ humanActivityAt="2026-10-11T00:00:01.000Z"; h.advance(2000); h.restart();
+ await h.coordinator.prepare();
+ expect((await h.coordinator.poll(true)).wake).toBeUndefined();
+ expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
+});
+
 const input = (wake: WorkflowWake, action: string, index = 0) => ({
 	action,
 	workflowId: wake.workflowId,
@@ -334,7 +432,7 @@ it("bounds automatic retries, lease lifetime, expiry and authorized run count", 
 	expect((await limited.coordinator.poll(true)).wake).toBeUndefined();
 	expect(limited.coordinator.status().workflows[0]?.state).toBe("paused");
 	limited.advance(24 * 3600_000);
-	expect(limited.coordinator.status().workflows[0]?.state).toBe("expired");
+	expect(limited.coordinator.status().workflows[0]?.state).toBe("paused");
 });
 it("rejects overlapping enrollment, stale sessions and disabled prompt capabilities", async () => {
 	const h = fixture();
@@ -486,10 +584,10 @@ it("recovers an engine-only restart without reusing the old lease or retrying im
 	await h.coordinator.dispatch(input(next, "inspect"), "agent");
 });
 
-it("keeps objectives open beyond 24 hours and 40 turns while bounding the action journal", async () => {
+it("bounds the action journal across many turns within the renewable 24h window", async () => {
 	const h = fixture();
 	const work = await h.start();
-	expect(work).not.toHaveProperty("expiresAt");
+	expect(work.expiresAt).toBe("2026-10-12T00:00:00.000Z");
 	expect(work).not.toHaveProperty("maxRuns");
 	for (let index = 0; index < 140; index++) {
 		const wake = await claim(h);
@@ -503,7 +601,7 @@ it("keeps objectives open beyond 24 hours and 40 turns while bounding the action
 			{ action: "acknowledge", leaseId: wake.leaseId, outcome: "settled" },
 			"agent",
 		);
-		h.advance(3600_000);
+		h.advance(60_000);
 		h.event(0, `result-${index}`);
 		if (index === 70) h.restart();
 	}
@@ -519,7 +617,7 @@ it("retains explicit limits across restart and rejects malformed optional limits
 	const work = await h.start({ maxRuns: 2, expiresInHours: 2 });
 	expect(h.restart().status().workflows[0]).toMatchObject({ expiresAt: work.expiresAt, maxRuns: 2 });
 	h.advance(2 * 3600_000);
-	expect(h.coordinator.status().workflows[0]?.state).toBe("expired");
+	expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
 	for (const invalid of [
 		{ maxRuns: null },
 		{ expiresInHours: null },
@@ -580,7 +678,7 @@ it("wakes once for permissions, missed new requests, disconnection and reconnect
 const question = {
 	id: "permission-a",
 	kind: "confirm",
-	title: "Publicar el resultado preparado",
+	title: "Validar el resultado preparado",
 	message: "PRIVATE_PERMISSION_DETAILS",
 	answerable: true,
 	expiresAt: "2026-10-11T01:00:00Z",
@@ -590,7 +688,7 @@ const permission = (wake: WorkflowWake, extra = {}) => ({
 	requestId: question.id,
 	operationId: "permission-operation",
 	answer: { confirmed: true },
-	reason: "Publicar el resultado preparado cumple el objetivo encargado.",
+	reason: "Validar el resultado preparado cumple el objetivo encargado.",
 	...extra,
 });
 
@@ -893,7 +991,7 @@ it("keeps one session delegation across task completion and restart without idle
 		objective: "Aprueba las solicitudes de esta sesión",
 	});
 	expect(delegation).toMatchObject({ mode: "session", state: "waiting", pending: 0 });
-	expect(delegation.expiresAt).toBeUndefined();
+	expect(delegation.expiresAt).toBe("2026-10-12T00:00:00.000Z");
 	expect(delegation.maxRuns).toBeUndefined();
 	for (let index = 0; index < 24; index++) {
 		h.advance(60_000);
@@ -1322,8 +1420,8 @@ it("does not revive old permission work for an idle, replaced or revoked session
 		else await h.coordinator.dispatch({ action: "pause", workflowId: work.id }, "human");
 		await h.coordinator.prepare();
 		const batch = await h.coordinator.poll(true);
-		if (mode === "replaced") expect(batch.wake?.reasons).toEqual(["Sesión desconectada: pane-a"]);
-		else expect(batch.wake).toBeUndefined();
+		// Recovery cannot grant action authority to a replacement logical session.
+		expect(batch.wake).toBeUndefined();
 		expect(h.approve).not.toHaveBeenCalled();
 	}
 });

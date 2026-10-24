@@ -223,7 +223,7 @@ it.each(["granted", "declined"] as const)("real patched gentle_review + Dot runn
 		expect(h.component.getActionOptions()).toHaveLength(3);
 		expect(h.component.getActionOptions()[2]).toContain("Review and allow this session");
 		expect(JSON.stringify(h.question)).not.toContain("consentBinding");
-		expect(await h.call("answer", { questionId: h.question.id, optionId: answer })).toMatchObject({ accepted: true });
+		expect(await h.call("answer", { questionId: h.question.id, optionId: answer, expectedHumanActivityAt: ((await h.call("snapshot")).companionActivity as {humanActivityAt?:string}).humanActivityAt ?? null })).toMatchObject({ accepted: true });
 		await h.turn;
 		expect(h.closed).toBe(1);
 		expect(h.calls).toHaveLength(1);

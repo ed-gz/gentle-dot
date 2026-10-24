@@ -16,6 +16,19 @@ afterEach(() => {
 	vi.useRealTimers();
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+it("emits a phone-consumable notification once a mail report settles", async () => {
+ const h=fixture(); const notify=vi.fn(); h.options.notify=notify;
+ await h.start({kind:"email",connectorId:"gmail"}); await h.watchers.tick();
+ h.email.mockResolvedValue({cursor:{checkpoint:2}, events:[h.mail("mail-1")]});
+ h.advance(120_000); await h.watchers.tick();
+ h.advance(5_000); await h.watchers.prepare();
+ const wake=(await h.watchers.poll(true)).wake;
+ expect(wake).toBeDefined();
+ await h.watchers.dispatch({action:"acknowledge",leaseId:wake!.leaseId,outcome:"settled"},"agent");
+ expect(notify).toHaveBeenCalledOnce();
+ expect(notify.mock.calls[0]![0]).toMatchObject({type:"toast",level:"info",notificationEvent:"dotReply",title:"Correo: resumen listo"});
+});
+
 function fixture() {
 	const dataDir = tempDir();
 	roots.push(dataDir);

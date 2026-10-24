@@ -5,6 +5,8 @@ export const EDITOR_ACTIVITY_EVENT = "gentle-dot:editor-activity";
 export interface CompanionActivity {
 	phase: "idle" | "typing" | "submitted" | "working" | "waiting" | "unknown";
 	geometry?: EditorGeometry;
+	/** Semantic personal input only; extension/workflow prompts never update it. */
+	humanActivityAt?: string;
 	at?: string;
 	typingUntil?: string;
 	submittedAt?: string;
@@ -20,6 +22,9 @@ export class CompanionActivityTracker {
 	private initial(): CompanionActivity {
 		return { phase: "idle", source: "pi", capabilities: { typing: false, submission: true } };
 	}
+	human(now = Date.now()) {
+		this.state.humanActivityAt = new Date(Math.max(now, Date.parse(this.state.humanActivityAt ?? "") + 1 || 0)).toISOString();
+	}
 	geometry(value: unknown) {
 		this.state.geometry = parseEditorGeometry(value);
 	}
@@ -33,6 +38,7 @@ export class CompanionActivityTracker {
 			return;
 		}
 		if (kind === "changed") {
+			this.human(now);
 			this.state.typingUntil = new Date(now + 3500).toISOString();
 			this.state.at = new Date(now).toISOString();
 		}
@@ -83,7 +89,7 @@ export function parseCompanionActivity(value: unknown, now = Date.now()): Compan
 		},
 	};
 	result.geometry = parseEditorGeometry(value.geometry, now);
-	for (const field of ["at", "submittedAt", "responseStartedAt", "responseEndedAt", "typingUntil"] as const) {
+	for (const field of ["at", "humanActivityAt", "submittedAt", "responseStartedAt", "responseEndedAt", "typingUntil"] as const) {
 		const time = value[field];
 		if (
 			typeof time === "string" &&

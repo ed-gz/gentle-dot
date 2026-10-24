@@ -85,7 +85,7 @@ const SUBAGENT_VARIABLES = [
 ];
 
 /** What only the daemon may hold: the server's connector secrets key (S25.8). */
-const DAEMON_ONLY = ["GENTLE_DOT_SECRETS_KEY"];
+const DAEMON_ONLY = ["GENTLE_DOT_SECRETS_KEY", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"];
 
 /** Subagents are on unless `GENTLE_DOT_SUBAGENTS` is `off`, `0`, or `false`. */
 export function subagentsEnabled(base: NodeJS.ProcessEnv): boolean {

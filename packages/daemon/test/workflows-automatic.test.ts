@@ -24,8 +24,8 @@ function fixture() {
 	const question: Record<string, unknown> = {
 		id: "q1",
 		kind: "confirm",
-		title: "Allow guarded git push?",
-		message: "git push origin feature",
+		title: "Allow running tests?",
+		message: "Run local unit tests",
 		answerable: true,
 		expiresAt: new Date(now + 600_000).toISOString(),
 	};
@@ -34,7 +34,7 @@ function fixture() {
 		label: "Fixture",
 		state: "working",
 		connected: true,
-		capabilities: { inspect: true, prompt: true, approvals: true },
+		capabilities: { inspect: true, prompt: true, approvals: true, activityFence:1 },
 	};
 	const approvals: Array<{ id: string; paneId: string; sessionId: string }> = [];
 	const inspect = vi.fn(async () => ({ sessionId: target.sessionId, status: "waiting", question }));
@@ -86,6 +86,17 @@ function fixture() {
 		},
 	};
 }
+
+it.each([
+ {toolName:"github_issue",title:"Allow tool?"},
+ {connector:"gmail",action:"send_message",title:"Allow connector?"},
+ {title:"Allow gh --repo owner/repo issue create?"},
+ {title:"Allow Gmail reply?"},
+ {title:"Allow post to Slack?"},
+])("never auto-answers a human-only external dialog: %j", async metadata => {
+ const h=fixture(); await h.start(); Object.assign(h.question,metadata);
+ expect(await h.attempt()).toBe(false); expect(h.approve).not.toHaveBeenCalled();
+});
 
 it("answers directly on discovery with no model lease, heavy transcript read, wake or repeated response", async () => {
 	const h = fixture();
@@ -168,7 +179,7 @@ it("enforces delegated expiry and the explicitly requested run quota", async () 
 	await h.start({ expiresInHours: 0.25 });
 	h.advance(900_000);
 	expect(await h.attempt()).toBe(false);
-	expect(h.coordinator.status().workflows[0]?.state).toBe("expired");
+	expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
 	const limited = fixture();
 	await limited.start({ maxRuns: 1 });
 	expect(await limited.attempt()).toBe(true);
@@ -194,6 +205,7 @@ it.each(["pause", "stop", "pauseAll", "update", "close"])(
 			return { accepted: true };
 		});
 		const pending = h.attempt();
+		await vi.waitFor(() => expect(captured).toBeTypeOf("function"));
 		expect(captured()).toBe(true);
 		if (action === "close") h.coordinator.close();
 		else
@@ -315,7 +327,7 @@ it("expires the delegation while a delayed adapter is preparing its answer", asy
 		return { accepted: true };
 	});
 	expect(await h.attempt()).toBe(false);
-	expect(h.coordinator.status().workflows[0]?.state).toBe("expired");
+	expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
 });
 
 it("retains manual review when immediate registration inspection fails or reports another session", async () => {

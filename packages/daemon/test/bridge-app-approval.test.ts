@@ -1,5 +1,5 @@
 import type { Ask, ServerPayload } from "@gentle-dot/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppChannel } from "../src/app-channel.ts";
 import { DotBridge } from "../src/bridge.ts";
 import { MobileApprovals } from "../src/mobile-approvals.ts";
@@ -49,6 +49,17 @@ function setup(options: { mobile?: boolean; online?: boolean; now?: () => number
 	});
 	return { app, channel, mobile, supervisor, bridge, received, client, clientId, detach, ask, answer };
 }
+
+it.each(["Continuar", "Dejar de vigilar"])("delivers the autonomous watch question to desktop/phone and accepts %s once", async value => {
+ const h=setup(); const answer=vi.fn(async (_choice:"continue"|"stop")=>{});
+ h.bridge.askWatchContinuation("X",answer);
+ const ask=h.ask();
+ expect(ask.title).toBe("¿Sigo vigilando la sesión X o la dejo?");
+ expect(ask.options).toEqual(["Continuar","Dejar de vigilar"]);
+ await h.bridge.handle(h.client,{type:"ui_response",requestId:ask.requestId,value});
+ expect(answer).toHaveBeenCalledExactlyOnceWith(value==="Continuar"?"continue":"stop");
+ expect(h.received).toContainEqual({type:"ask_resolved",requestId:ask.requestId});
+});
 
 const request = {
 	connector: "Programa de prueba",

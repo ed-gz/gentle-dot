@@ -22,6 +22,7 @@ import {
 	type NativeQuestion,
 	nativeQuestion,
 	questionAnswer,
+	humanOnlyQuestion,
 	questionDetails,
 } from "../orchestration/questions.ts";
 import type { Manifest } from "../orchestration/registry.ts";
@@ -73,8 +74,25 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 	const deliveries = new SessionDeliveries();
 	const deliveredAttachments = new Map<string, string>();
 	const deliveredTokens = new Set<string>();
+	const remoteAnswers = new WeakSet<object>();
+	const remoteReviewAnswers = new WeakSet<object>();
+	const queuedHuman: Array<{content: Parameters<ExtensionAPI["sendUserMessage"]>[0]; id?: string}> = [];
+	let flushingHuman = false;
+	function flushQueuedHuman() {
+		if (flushingHuman || !ctx || closing || question || terminalQuestion || ctx.sessionManager.getSessionId() !== sessionId) return;
+		flushingHuman = true;
+		try {
+			while (queuedHuman.length) {
+				const next = queuedHuman[0]!;
+				try { pi.sendUserMessage(next.content, {deliverAs:"followUp", expandPromptTemplates:false}); }
+				catch { return; } // Retain the receipt and payload rather than silently dropping a send.
+				queuedHuman.shift();
+			}
+		} finally { flushingHuman = false; }
+	}
 
 	async function close() {
+		queuedHuman.length = 0;
 		deliveries.clear();
 		companionActivity.reset();
 		deliveredAttachments.clear();
@@ -153,7 +171,10 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 					cancel();
 					return cancelled;
 				}
-				return await Promise.race([remote, local({ ...options, timeout, signal: controller.signal })]);
+				return await Promise.race([remote, local({ ...options, timeout, signal: controller.signal }).then(value => {
+					if (!decided && !controller.signal.aborted) companionActivity.human();
+					return value;
+				})]);
 			} finally {
 				decided = true;
 				clearTimeout(timer);
@@ -164,6 +185,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 					answer = undefined;
 				}
 				revision++;
+				flushQueuedHuman();
 			}
 		}
 		const confirm: typeof ui.confirm = (title, message, options) =>
@@ -231,8 +253,12 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 		const callCustom = original.custom?.bind(ui);
 		const custom: typeof ui.custom = async (factory, options) => {
 			const selected = nativeTool;
-			if (!selected?.armed || question || !server || context.sessionManager.getSessionId() !== sessionId)
-				return callCustom(factory, options);
+			if (!selected?.armed || question || !server || context.sessionManager.getSessionId() !== sessionId) {
+				const consent = reviewConsent;
+				const result = await callCustom(factory, options);
+				if (consent && !remoteReviewAnswers.has(consent) && result !== undefined) companionActivity.human();
+				return result;
+			}
 			selected.armed = false;
 			let pending: PendingDialog | undefined;
 			try {
@@ -250,11 +276,13 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 					const finish = (value: unknown) => {
 						if (settled) return;
 						settled = true;
+						if (pending && !remoteAnswers.has(pending) && !closing) companionActivity.human();
 						if (question === pending) {
 							question = undefined;
 							customAnswer = cancelCustom = undefined;
 							terminalQuestion = undefined;
 							revision++;
+							queueMicrotask(flushQueuedHuman);
 						}
 						done(value as Parameters<typeof done>[0]);
 					};
@@ -326,7 +354,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				sessionId,
 				instanceId,
 				revision: `${sessionId}:${revision}`,
-				deliveries: deliveries.snapshot(ctx.isIdle(), ctx.hasPendingMessages?.() ?? true),
+				deliveries: deliveries.snapshot(ctx.isIdle(), !!question || !!terminalQuestion || queuedHuman.length > 0 || (ctx.hasPendingMessages?.() ?? true)),
 				companionActivity: companionActivity.snapshot(ctx.isIdle(), !!question || !!terminalQuestion),
 				messages,
 				history: {
@@ -347,6 +375,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				metadata: metadata?.(),
 				capabilities: {
 					companionActivity: true,
+					activityFence: 1,
 					prompt: true,
 					deliveryReceipts: true,
 					deliveryModes: ["steer", "followUp"],
@@ -389,7 +418,9 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 			return { accepted: true, sessionId, instanceId, closing: true };
 		}
 		if (method === "prompt") {
-			if (question || terminalQuestion)
+			// This bit comes from the authenticated daemon's actor, never from prompt text.
+			if (params.humanInteraction === true) companionActivity.human();
+			if ((question || terminalQuestion) && params.humanInteraction !== true)
 				throw new OrchestrationError("QUESTION_PENDING", "Responde al permiso pendiente antes de continuar.");
 			if ("model" in ctx && !ctx.model)
 				throw new OrchestrationError("NO_MODEL", "Selecciona un modelo en esta sesión antes de enviar instrucciones.");
@@ -398,17 +429,24 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 					"INVALID_PROMPT",
 					"El mensaje debe contener texto y ocupar hasta 64 KiB.",
 				);
-			const deliverAs = params.deliverAs ?? "followUp";
-			if (deliverAs !== "steer" && deliverAs !== "followUp")
+			const waitingForQuestion = !!question || !!terminalQuestion;
+			const deliverAs = waitingForQuestion ? "followUp" : (params.deliverAs ?? "followUp") as "steer" | "followUp";
+			if (params.deliverAs !== undefined && params.deliverAs !== "steer" && params.deliverAs !== "followUp")
 				throw new OrchestrationError("INVALID_DELIVERY", "El modo de entrega no es válido.");
 			const clientMessageId = params.clientMessageId;
 			if (clientMessageId !== undefined && typeof clientMessageId !== "string")
 				throw new OrchestrationError("INVALID_DELIVERY", "El mensaje no contiene una identidad válida.");
 			const send = (content: Parameters<ExtensionAPI["sendUserMessage"]>[0]) => {
+				if ("expectedHumanActivityAt" in params && params.humanInteraction !== true &&
+					params.expectedHumanActivityAt !== (companionActivity.snapshot(ctx!.isIdle(), false).humanActivityAt ?? null))
+					throw new OrchestrationError("HUMAN_ACTIVE", "La persona volvió a trabajar en esta sesión; la autonomía debe pausarse.");
 				const plain = typeof content === "string" ? content : content.filter(part => part.type === "text").map(part => part.text).join("\n");
-				const prepared = typeof clientMessageId === "string"
-					? deliveries.prepare(clientMessageId, [params.text, params.deliveryId, deliverAs], plain, deliverAs, ctx!.isIdle(), String(params.text)) : undefined;
+				if (waitingForQuestion && queuedHuman.length >= 16) throw new OrchestrationError("DELIVERY_LIMIT", "Responde la pregunta antes de enviar más mensajes.");
+				const deliveryId = typeof clientMessageId === "string" ? clientMessageId : waitingForQuestion ? randomUUID() : undefined;
+				const prepared = deliveryId
+					? deliveries.prepare(deliveryId, [params.text, params.deliveryId, params.deliverAs ?? "followUp"], plain, deliverAs, !waitingForQuestion && ctx!.isIdle(), String(params.text)) : undefined;
 				if (!prepared?.duplicate) {
+					if (waitingForQuestion) { queuedHuman.push({content, id:deliveryId}); return; }
 					try { pi.sendUserMessage(content, { deliverAs, expandPromptTemplates: false }); }
 					catch (error) { if (typeof clientMessageId === "string") deliveries.remove(clientMessageId); throw error; }
 				}
@@ -435,12 +473,23 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				send(params.text);
 			}
 		} else if (method === "answer") {
+			if ("expectedHumanActivityAt" in params && params.expectedHumanActivityAt !== null &&
+				(typeof params.expectedHumanActivityAt !== "string" || !Number.isFinite(Date.parse(params.expectedHumanActivityAt))))
+				throw new OrchestrationError("INVALID_ANSWER", "La marca de actividad no es válida.");
+			if ("expectedHumanActivityAt" in params && params.expectedHumanActivityAt !==
+				(companionActivity.snapshot(ctx.isIdle(), false).humanActivityAt ?? null))
+				throw new OrchestrationError("HUMAN_ACTIVE", "La persona volvió a trabajar en esta sesión; la autonomía debe pausarse.");
 			if (!question || params.questionId !== question.id || Date.parse(question.expiresAt) <= Date.now())
 				throw new OrchestrationError("QUESTION_CHANGED", "El permiso ya fue respondido o venció.");
 			if (reviewConsent && Object.keys(params).some(key =>
-				!["expectedInstanceId", "expectedSessionId", "questionId", "optionId", "cancelled"].includes(key)))
+				!["expectedInstanceId", "expectedSessionId", "questionId", "optionId", "cancelled", "expectedHumanActivityAt"].includes(key)))
 				throw new OrchestrationError("INVALID_ANSWER", "La respuesta no corresponde a esta solicitud.");
+			if ("expectedHumanActivityAt" in params && humanOnlyQuestion(question))
+				throw new OrchestrationError("HUMAN_REQUIRED", "Esta publicación o envío necesita una respuesta humana directa.", 403);
 			const response = questionAnswer(question, params);
+			if (!("expectedHumanActivityAt" in params)) companionActivity.human();
+			remoteAnswers.add(question);
+			if (reviewConsent) remoteReviewAnswers.add(reviewConsent);
 			if (reviewConsent) {
 				const pending = reviewConsent;
 				if (response.cancelled === true) {
@@ -483,7 +532,8 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 			ctx.abort();
 		} else throw new OrchestrationError("UNKNOWN_ACTION", "Acción no admitida.");
 		revision++;
-		return { accepted: true, sessionId, instanceId };
+		flushQueuedHuman();
+		return { accepted: true, sessionId, instanceId, ...(method === "prompt" && queuedHuman.length ? {receiptStatus:"queued"} : {}) };
 	}
 
 	function accept(socket: Socket) {
@@ -635,6 +685,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 					if (question === pending) question = undefined;
 					if (reviewConsent === request) reviewConsent = undefined;
 					revision++;
+					queueMicrotask(flushQueuedHuman);
 				};
 			}));
 			if (pi.events) {
@@ -676,8 +727,10 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				busDisposers.push(
 					pi.events.on("herdr-connect:question:closed", (value) => {
 						if (record(value) && value.sessionId === sessionId && value.id === question?.id) {
+							if (question && !remoteAnswers.has(question)) companionActivity.human();
 							question = undefined;
 							revision++;
+							queueMicrotask(flushQueuedHuman);
 						}
 					}),
 				);
@@ -708,8 +761,9 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 	const refresh = (_event: unknown, context: ExtensionContext) => {
 		ctx = context;
 		revision++;
+		flushQueuedHuman();
 	};
-	pi.on("input", (_event, context) => { companionActivity.submitted(); refresh(_event, context); });
+	pi.on("input", (_event, context) => { if (_event.source !== "extension") companionActivity.human(); companionActivity.submitted(); refresh(_event, context); });
 	pi.on("agent_start", (event, context) => { companionActivity.response(true); refresh(event, context); });
 	pi.on("agent_end", (event, context) => { companionActivity.response(false); refresh(event, context); });
 	pi.on("agent_settled", (event, context) => {

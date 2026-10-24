@@ -157,6 +157,7 @@ export async function buildRuntime(outDir: string): Promise<void> {
 		"screenshot-context.ts",
 		"dot-orchestrator.ts",
 		"dot-browser.ts",
+		"dot-github.ts",
 		"dot-share-file.ts",
 		"dot-completions.ts",
 		"dot-live-input.ts",

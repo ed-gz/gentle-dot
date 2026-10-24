@@ -43,6 +43,13 @@ afterEach(async () => {
 	await Promise.all(daemons.splice(0).map((d) => d.close()));
 });
 
+it("strips every GitHub authentication override from the engine without changing the daemon environment", () => {
+ const base={HOME:tempDir(),GH_TOKEN:"fixture",GITHUB_TOKEN:"fixture",GH_ENTERPRISE_TOKEN:"fixture",GITHUB_ENTERPRISE_TOKEN:"fixture"};
+ const env=isolatedAgentEnv(base,tempDir());
+ for(const key of ["GH_TOKEN","GITHUB_TOKEN","GH_ENTERPRISE_TOKEN","GITHUB_ENTERPRISE_TOKEN"]) expect(env).not.toHaveProperty(key);
+ expect(base.GH_TOKEN).toBe("fixture");
+});
+
 describe("isolatedAgentEnv PATH", () => {
 	it("puts the bundled `pi` first so the engine's first-run setup works on a clean machine", () => {
 		const env = isolatedAgentEnv({ PATH: "/usr/bin:/bin", HOME: tempDir() }, tempDir());

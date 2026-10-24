@@ -249,15 +249,16 @@ describe("HERDR orchestration authority", () => {
 		});
 	});
 
-	it("answers only the concrete inspected question through a workflow delegation without creating a future policy", async () => {
+	it("answers only the concrete inspected local question through a workflow delegation without creating a future policy", async () => {
 		const h = harness();
-		h.setQuestion();
+		h.setCapabilities({activityFence:1});
+		h.setRawQuestion({id:"q1",kind:"confirm",answerable:true,title:"Allow running tests?",message:"Local unit tests",expiresAt:new Date(Date.now()+600_000).toISOString()});
 		const request = await delegatedRequest(h);
 		await expect(h.orchestrator.answerForWorkflow(request, () => true)).resolves.toMatchObject({
 			accepted: true,
 		});
 		expect(h.calls.filter((call) => call.method === "answer")).toEqual([
-			expect.objectContaining({ params: { questionId: "q1", confirmed: true, expectedSessionId: "s1" } }),
+			expect.objectContaining({ params: { questionId: "q1", confirmed: true, expectedSessionId: "s1", expectedHumanActivityAt: null } }),
 		]);
 		expect((await h.orchestrator.snapshot()).policies).toEqual([]);
 		await expect(h.orchestrator.answerForWorkflow(request, () => true)).rejects.toMatchObject({
@@ -814,6 +815,18 @@ it("validates paging before contacting a session and refuses fake history on leg
 	});
 });
 
+it("keeps GitHub publication for the human even with a valid inspected workflow request", async()=>{
+ const h=harness(); h.setCapabilities({activityFence:1}); h.setQuestion();
+ const request=await delegatedRequest(h);
+ await expect(h.orchestrator.answerForWorkflow(request,()=>true)).rejects.toMatchObject({code:"HUMAN_REQUIRED"});
+ expect(h.calls.filter(c=>c.method==="answer")).toEqual([]);
+});
+it("personal dialog answers notify the watch owner, unlike workflow-origin answers", async()=>{
+ const onInteraction=vi.fn(); const h=harness({onInteraction}); h.setQuestion();
+ await h.orchestrator.dispatch({action:"answer",paneId:"w1:p1",sessionId:"s1",requestId:"q1",approved:true},"human");
+ expect(onInteraction).toHaveBeenCalledExactlyOnceWith({paneId:"w1:p1",sessionId:"s1"},"human");
+});
+
 describe("deterministic delegated discovery", () => {
 	it("answers the exact raw request before attention, without a Dot turn or success notification", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "dot-fast-approval-"));
@@ -830,7 +843,7 @@ describe("deterministic delegated discovery", () => {
 				workflows?.onEvent(event);
 			},
 		});
-		h.setCapabilities({ questions: true });
+		h.setCapabilities({ questions: true, activityFence:1 });
 		workflows = new WorkflowContinuations({
 			dataDir: directory,
 			snapshot: () => h.orchestrator.snapshot(),
@@ -853,8 +866,8 @@ describe("deterministic delegated discovery", () => {
 			id: "q1",
 			kind: "confirm",
 			answerable: true,
-			title: "Allow guarded git push?",
-			message: "git push origin feature",
+			title: "Allow running local tests?",
+			message: "Run unit tests",
 			fingerprint: "raw-field-not-in-ui-approval",
 			expiresAt: new Date(Date.now() + 60_000).toISOString(),
 		});
@@ -901,7 +914,8 @@ describe("independent session concurrency", () => {
 				return h.request(socket, method, params);
 			},
 		});
-		h.setQuestion();
+		h.setCapabilities({activityFence:1});
+		h.setRawQuestion({id:"q1",kind:"confirm",answerable:true,title:"Allow running tests?",message:"Local unit tests",expiresAt:new Date(Date.now()+600_000).toISOString()});
 		const raw = await h.request("/pi.sock", "snapshot");
 		const question = raw.question as Record<string, unknown>;
 		const inspecting = h.orchestrator.dispatch(
@@ -953,10 +967,11 @@ describe("independent session concurrency", () => {
 						finish = resolve;
 					});
 				}
-				if (socket === "/pi2.sock") return { accepted: true, sessionId: "s2" };
+				if (socket === "/pi2.sock") return method === "snapshot" ? {sessionId:"s2",capabilities:{activityFence:1},status:"idle",messages:[]} : { accepted: true, sessionId: "s2" };
 				return h.request(socket, method, params);
 			},
 		});
+		h.setCapabilities({activityFence:1});
 		const sendingFirst = h.orchestrator.dispatch(
 			{ action: "prompt", paneId: "w1:p1", sessionId: "s1", text: "first" },
 			"agent",

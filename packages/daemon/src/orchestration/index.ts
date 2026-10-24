@@ -25,7 +25,7 @@ import {
 	type RunCli,
 } from "./displays.ts";
 import { defaultHerdrSocket, localRequest, OrchestrationError, record } from "./herdr.ts";
-import { canAnswerQuestion, questionAnswer, questionDetails, type RemoteQuestion } from "./questions.ts";
+import { canAnswerQuestion, humanOnlyQuestion, questionAnswer, questionDetails, type RemoteQuestion } from "./questions.ts";
 import { type DisplayProvider, type Manifest, readManifests } from "./registry.ts";
 import { isSessionCopy } from "./session-copy.ts";
 import { historySessionMetadata, publicSessionMetadata, type SessionMetadata } from "./session-info.ts";
@@ -43,10 +43,13 @@ export const SESSION_EXTENSION_PATH = runtime
 	: fileURLToPath(new URL("../extensions/dot-session.ts", import.meta.url));
 
 export interface Session {
+	humanActivityAt?: string;
+	activityInstanceId?: string;
 	provider: DisplayProvider;
 	capabilities: {
 		inspect: boolean;
 		prompt: boolean;
+		activityFence?: number;
 		deliveryReceipts?: boolean;
 		deliveryModes?: ("steer" | "followUp")[];
 		abort: boolean;
@@ -130,6 +133,7 @@ export interface OrchestratorOptions {
 	/** Zero disables background polling, useful for deterministic tests. */
 	pollMs?: number;
 	onEvent?: (event: OrchestrationEvent) => void;
+	onInteraction?: (target: {paneId:string; sessionId:string}, origin: "human" | "workflow") => void;
 	/** Resolve an exact, already authorized confirmation before publishing a pending alert. */
 	onApproval?: (request: WorkflowPendingApproval) => Promise<boolean>;
 	request?: typeof localRequest;
@@ -156,6 +160,7 @@ export class Orchestrator {
 	private readonly expectedClosures = new Set<string>();
 	private readonly events: OrchestrationEvent[] = [];
 	private readonly settledMessages = new Map<string, string | undefined>();
+	private readonly humanActivity = new Map<string, string | undefined>();
 	private readonly metadataPeers = new Map<string, { until: number; metadata?: SessionMetadata }>();
 	private last: OrchestrationSnapshot = {
 		available: false,
@@ -182,11 +187,22 @@ export class Orchestrator {
 		read: async (peer: CompanionPollPeer & { bound: Bound }) => {
 			const value = (await this.call(peer.bound, "companion.activity", {}, () => true, 1000)).companionActivity;
 			if (!parseCompanionActivity(value)) throw new OrchestrationError("PROTOCOL", "Pi devolvió actividad inválida.");
+			this.observeHumanActivity(peer.paneId, peer.sessionId, value);
 			return value;
 		},
 		accept: (peer, value) => this.companionContext.acceptActivity(peer.paneId, peer.sessionId, value),
 		unavailable: peer => this.companionContext.activityUnavailable(peer.paneId, peer.sessionId),
 	});
+
+	private observeHumanActivity(paneId: string, sessionId: string, value: unknown): void {
+		const key = JSON.stringify([paneId, sessionId]);
+		const at = record(value) && typeof value.humanActivityAt === "string" ? value.humanActivityAt : undefined;
+		const previous = this.humanActivity.get(key);
+		if (at && Number.isFinite(Date.parse(at)) && (!previous || Date.parse(at) > Date.parse(previous))) {
+			if (this.humanActivity.has(key)) this.options.onInteraction?.({paneId, sessionId}, "human");
+			this.humanActivity.set(key, at);
+		} else if (!this.humanActivity.has(key)) this.humanActivity.set(key, undefined);
+	}
 
 	companion() { this.companionPoll.touch(); return this.companionContext.read(); }
     companionGeometryBindings() { return [...this.companionPeers.values()].map(peer => ({paneId:peer.paneId,sessionId:peer.sessionId,pid:peer.bound.manifest.pid,herdrSocketPath:peer.bound.manifest.binding.herdrSocketPath ?? this.socketPath})); }
@@ -410,7 +426,11 @@ export class Orchestrator {
 			},
 			timeoutMs,
 			() => !this.closed && authorize(),
-		);
+		).catch(error => {
+			if (error instanceof OrchestrationError && error.code === "HUMAN_ACTIVE")
+				this.options.onInteraction?.({paneId:String(bound.pane.pane_id),sessionId:bound.manifest.sessionId}, "human");
+			throw error;
+		});
 		this.assertAuthorized(authorize);
 		if (bound.manifest.instanceId && result.instanceId !== bound.manifest.instanceId)
 			throw new OrchestrationError("INSTANCE_CHANGED", "Pi respondió desde otro proceso.");
@@ -564,14 +584,18 @@ export class Orchestrator {
 							const page = await this.call(bound, "snapshot", { limit: 10 });
 							companionActivity.set(session.paneId, page.companionActivity);
 							session.sessionId = bound.manifest.sessionId;
+							session.activityInstanceId = bound.manifest.instanceId;
+							this.observeHumanActivity(session.paneId, session.sessionId, page.companionActivity);
 							session.connected = true;
 							session.managed = bound.manifest.managed === true;
 							const caps = record(page.capabilities) ? page.capabilities : {};
+							if (record(page.companionActivity) && typeof page.companionActivity.humanActivityAt === "string") session.humanActivityAt = page.companionActivity.humanActivityAt;
 							if (caps.companionActivity === true && bound.manifest.version === 2 && bound.manifest.instanceId)
 								companionPeers.set(session.paneId, { paneId: session.paneId, sessionId: bound.manifest.sessionId,
 									key: `${bound.manifest.socketPath}:${bound.manifest.instanceId}:${bound.manifest.sessionId}`, bound });
 							session.capabilities = {
 								inspect: true,
+								...(caps.activityFence === 1 ? {activityFence:1} : {}),
 								prompt: caps.prompt === true,
 								...(caps.deliveryReceipts === true ? { deliveryReceipts: true } : {}),
 								...(Array.isArray(caps.deliveryModes) ? { deliveryModes: caps.deliveryModes.filter((mode): mode is "steer" | "followUp" => mode === "steer" || mode === "followUp") } : {}),
@@ -691,6 +715,7 @@ export class Orchestrator {
 											answered =
 												!this.mutatingPanes.has(session.paneId) &&
 												(await this.options.onApproval({
+                                                    activity:{version:caps.activityFence === 1 ? 1 : 0, at:session.humanActivityAt ?? null, instanceId:session.activityInstanceId},
 													paneId: session.paneId,
 													sessionId: session.sessionId,
 													question,
@@ -858,6 +883,8 @@ export class Orchestrator {
 			acquired = true;
 			const bound = await this.bind(input.paneId, input.sessionId);
 			const page = await this.call(bound, "snapshot", {}, authorize);
+			this.observeHumanActivity(input.paneId, input.sessionId, page.companionActivity);
+			this.assertAuthorized(authorize);
 			const question = page.question;
 			if (
 				!record(question) ||
@@ -869,10 +896,13 @@ export class Orchestrator {
 					"QUESTION_CHANGED",
 					"La solicitud cambió; vuelve a inspeccionar la sesión.",
 				);
+			if (humanOnlyQuestion(question)) throw new OrchestrationError("HUMAN_REQUIRED", "Esta publicación o envío requiere respuesta humana directa.", 403);
+			if (!record(page.capabilities) || page.capabilities.activityFence !== 1) throw new OrchestrationError("ACTIVITY_FENCE_REQUIRED", "Actualiza el adaptador antes de delegar acciones.", 403);
 			const answer = questionAnswer(question, input.answer);
 			this.assertAuthorized(authorize);
 			submitted = true;
-			const result = await this.call(bound, "answer", { questionId: input.requestId, ...answer }, authorize);
+			const result = await this.call(bound, "answer", { questionId: input.requestId, ...answer,
+				expectedHumanActivityAt:this.humanActivity.get(JSON.stringify([input.paneId,input.sessionId])) ?? null }, authorize);
 			this.emit(
 				"policy",
 				`Dot resolvió una solicitud del objetivo: ${input.reason}`,
@@ -1066,7 +1096,14 @@ export class Orchestrator {
 				throw new OrchestrationError("INVALID_DELIVERY", "El modo de entrega no es válido.", 400);
 			if (action === "prompt" && input.clientMessageId !== undefined && (typeof input.clientMessageId !== "string" || !/^[A-Za-z0-9_-]{8,96}$/.test(input.clientMessageId)))
 				throw new OrchestrationError("INVALID_DELIVERY", "El mensaje no contiene una identidad válida.", 400);
-			const delivery = { deliverAs: input.deliverAs ?? "followUp", ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}) };
+			if (action === "prompt" && actor === "human") this.options.onInteraction?.({paneId, sessionId:bound.manifest.sessionId}, "human");
+			if (action === "prompt" && actor === "agent") {
+				const fresh = await this.call(bound, "snapshot", {limit:1}, authorize);
+				if (!record(fresh.capabilities) || fresh.capabilities.activityFence !== 1) throw new OrchestrationError("ACTIVITY_FENCE_REQUIRED", "Actualiza el adaptador antes de delegar acciones.", 403);
+				this.observeHumanActivity(paneId, bound.manifest.sessionId, fresh.companionActivity);
+				this.assertAuthorized(authorize);
+			}
+			const delivery = { humanInteraction: actor === "human", ...(actor === "agent" ? {expectedHumanActivityAt:this.humanActivity.get(JSON.stringify([paneId,bound.manifest.sessionId])) ?? null} : {}), deliverAs: input.deliverAs ?? "followUp", ...(input.clientMessageId ? { clientMessageId: input.clientMessageId } : {}) };
 			if (action === "prompt" && input.attachments !== undefined) {
 				if (actor !== "human" || !device || !this.uploads)
 					throw new OrchestrationError("HUMAN_REQUIRED", "Los archivos requieren un dispositivo autenticado.", 403);
@@ -1107,6 +1144,7 @@ export class Orchestrator {
 			if (!["answer", "grant"].includes(action))
 				throw new OrchestrationError("UNKNOWN_ACTION", "Acción no admitida.", 400);
 			const requestId = text(input.requestId, "requestId");
+			this.options.onInteraction?.({paneId, sessionId:bound.manifest.sessionId}, "human");
 			const page = await this.call(bound, "snapshot", {}, authorize);
 			const question = page.question;
 			if (!record(question) || question.id !== requestId)

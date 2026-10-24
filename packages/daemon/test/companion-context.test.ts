@@ -212,6 +212,8 @@ describe("editor activity bridge", () => {
 });
 
 function orchestratorFixture() {
+	let humanActivityAt: string | undefined;
+	const onInteraction = vi.fn();
 	let focus = "p1";
 	let realSession = "s-p1";
 	let authorized = true;
@@ -236,7 +238,7 @@ function orchestratorFixture() {
 		if (method === "pane.get") return { pane: { pane_id: "p1", terminal_id: "t1" } };
 		if (method === "pane.process_info") return { process_info: { foreground_processes: [{ pid: 123 }] } };
 		if (method === "snapshot")
-			return { sessionId: realSession, status: "idle", messages: [], capabilities: {} };
+			return { sessionId: realSession, status: "idle", messages: [], capabilities: {}, companionActivity:{humanActivityAt} };
 		if (method === "pane.focus") {
 			if (acknowledgeFocus) focus = "p1";
 			return { focused: true };
@@ -245,6 +247,7 @@ function orchestratorFixture() {
 	});
 	const orchestrator = new Orchestrator({
 		dataDir: "/tmp/companion-fixture-only",
+		onInteraction,
 		socketPath: "/fixture-herdr.sock",
 		request,
 		registry: async () => [manifest],
@@ -255,6 +258,8 @@ function orchestratorFixture() {
 	return {
 		orchestrator,
 		request,
+		onInteraction,
+		human: () => { humanActivityAt = new Date(time).toISOString(); },
 		authorize: () => authorized,
 		revoke: () => {
 			authorized = false;
@@ -268,6 +273,22 @@ function orchestratorFixture() {
 		},
 	};
 }
+
+it("observes personal editor/submission metadata once for the exact logical session, not prompt content", async () => {
+ const h=orchestratorFixture();
+ try {
+  await h.orchestrator.snapshot(); expect(h.onInteraction).not.toHaveBeenCalled();
+  h.human(); await h.orchestrator.snapshot(); await h.orchestrator.snapshot();
+  expect(h.onInteraction).toHaveBeenCalledExactlyOnceWith({paneId:"p1",sessionId:"s-p1"},"human");
+ } finally { await h.orchestrator.close(); }
+});
+it("does not mark ordinary submission/agent response as personal activity", () => {
+ const tracker=new CompanionActivityTracker();
+ tracker.submitted(time); tracker.response(true,time+1);
+ expect(tracker.snapshot(false,false,time+2).humanActivityAt).toBeUndefined();
+ tracker.editor("changed",time+3);
+ expect(tracker.snapshot(false,false,time+4).humanActivityAt).toBe(new Date(time+3).toISOString());
+});
 
 it("serves contextual cache without any extra terminal snapshot or mutation", async () => {
 	const h = orchestratorFixture();

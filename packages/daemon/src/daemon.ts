@@ -64,6 +64,7 @@ import { runtimeDir } from "./runtime.ts";
 import { FileSecretSource, SECRETS_FILE, SECRETS_KEY_VAR } from "./secret-file.ts";
 import { AppSecretSource } from "./secret-source.ts";
 import { sessionNotice } from "./session-notifications.ts";
+import { GitHubIssues } from "./github-issues.ts";
 import { SHARE_FILE_EXTENSION_PATH, SharedFileStore } from "./shared-files.ts";
 import { SharedFilesGateway } from "./shared-files-http.ts";
 import { AgentSupervisor } from "./supervisor.ts";
@@ -207,6 +208,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 	const acceptsToken = (value: string) => sameToken(value, token) || mobile.accepts(value);
 	const orchestrationKey = randomBytes(32).toString("base64url");
 	const browserKey = randomBytes(32).toString("base64url");
+	const githubKey = randomBytes(32).toString("base64url");
 	const completionsKey = randomBytes(32).toString("base64url");
 	let completionReports: CompletionReports | undefined;
 	const workflowsKey = randomBytes(32).toString("base64url");
@@ -225,6 +227,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 				...(options.agentHome ? { agentHome: options.agentHome } : {}),
 			}));
 	let notifySession: DotBridge["notifySession"] | undefined;
+	let presentWatchQuestion: DotBridge["askWatchContinuation"] | undefined;
+	const pendingWatchQuestions: Array<Parameters<DotBridge["askWatchContinuation"]>> = [];
 	// Local display adapters must never launch processes as a VPS daemon user (which may be root).
 	const orchestrator = vps
 		? undefined
@@ -232,6 +236,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 				dataDir: options.dataDir,
 				piCommand: process.env.GENTLE_DOT_PI_BIN,
 				onApproval: (approval) => workflows?.tryApprove(approval) ?? Promise.resolve(false),
+				onInteraction: (target, origin) => workflows?.onInteraction(target, origin),
 				onEvent: (event) => {
 					const followed = workflows?.onEvent(event);
 					const watched = watchers?.onEvent(event, followed ?? false);
@@ -260,6 +265,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 			prompt: (paneId, sessionId, text, authorize) =>
 				orchestrator.dispatch({ action: "prompt", paneId, sessionId, text }, "agent", authorize),
 			approve: (request, authorize) => orchestrator.answerForWorkflow(request, authorize),
+			askContinuation: (work, answer) => {
+				const args: Parameters<DotBridge["askWatchContinuation"]> = [work.sessions.map(session => session.label ?? session.paneId).join(", "), answer];
+				if (presentWatchQuestion) presentWatchQuestion(...args);
+				else pendingWatchQuestions.push(args);
+			},
 		});
 	const folderArgs = options.preferredFolder
 		? [
@@ -278,6 +288,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 	delete agentEnv.GENTLE_DOT_WORKFLOWS_KEY;
 	delete agentEnv.GENTLE_DOT_WATCHERS_URL;
 	delete agentEnv.GENTLE_DOT_WATCHERS_KEY;
+	delete agentEnv.GENTLE_DOT_GITHUB_URL;
+	delete agentEnv.GENTLE_DOT_GITHUB_KEY;
 	delete agentEnv.GENTLE_DOT_HISTORY_DIR;
 	delete agentEnv.GENTLE_DOT_COMPANION_URL;
 	delete agentEnv.GENTLE_DOT_COMPANION_KEY;
@@ -343,6 +355,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 	if (orchestrator)
 		watchers = new Watchers({
 			dataDir: options.dataDir,
+			notify: notice => notifySession?.(notice),
 			snapshot: () => orchestrator.snapshot(),
 			inspect: (paneId, sessionId) =>
 				orchestrator.dispatch({ action: "inspect", paneId, sessionId }, "agent"),
@@ -408,6 +421,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 	const companionExtension = runtime
 		? join(runtime, "daemon", "extensions", "dot-companion.ts")
 		: fileURLToPath(new URL("./extensions/dot-companion.ts", import.meta.url));
+	const githubExtension = runtime
+		? join(runtime, "daemon", "extensions", "dot-github.ts")
+		: fileURLToPath(new URL("./extensions/dot-github.ts", import.meta.url));
 	const liveInputExtension = runtime
 		? join(runtime, "daemon", "extensions", "dot-live-input.ts")
 		: fileURLToPath(new URL("./extensions/dot-live-input.ts", import.meta.url));
@@ -428,7 +444,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 				"-e",
 				APPROVAL_GUARD,
 				...(!vps
-					? ["-e", ORCHESTRATOR_EXTENSION_PATH, "-e", BROWSER_EXTENSION_PATH, "-e", SHARE_FILE_EXTENSION_PATH]
+					? ["-e", ORCHESTRATOR_EXTENSION_PATH, "-e", BROWSER_EXTENSION_PATH, "-e", SHARE_FILE_EXTENSION_PATH, "-e", githubExtension]
 					: []),
 			]
 		: [];
@@ -467,6 +483,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 							GENTLE_DOT_ORCHESTRATION_KEY: orchestrationKey,
 							GENTLE_DOT_BROWSER_URL: `http://127.0.0.1:${port}/api/browser/agent`,
 							GENTLE_DOT_BROWSER_KEY: browserKey,
+							GENTLE_DOT_GITHUB_URL: `http://127.0.0.1:${port}/api/github/agent`,
+							GENTLE_DOT_GITHUB_KEY: githubKey,
 							GENTLE_DOT_FILES_URL: `http://127.0.0.1:${port}/api/files/agent`,
 							GENTLE_DOT_FILES_KEY: filesKey,
 							GENTLE_DOT_COMPLETIONS_URL: `http://127.0.0.1:${port}/api/completions/agent`,
@@ -561,6 +579,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		.checkIntegrity()
 		.catch((error: Error) => log(`could not check connectors.json: ${error.message}`));
 	notifySession = (notice) => bridge.notifySession(notice);
+	presentWatchQuestion = (label, answer) => bridge.askWatchContinuation(label, answer);
+	for (const args of pendingWatchQuestions.splice(0)) presentWatchQuestion(...args);
+	const github = new GitHubIssues({approve: (request, signal) => bridge.askInApp(request, signal)});
 
 	if (app) {
 		// Nothing the app asks changes connectors before connectors.json was checked (S25.6).
@@ -636,6 +657,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 			pathname === "/api/orchestration/agent" ||
 			pathname === "/browser" ||
 			pathname === "/api/browser/agent" ||
+			pathname === "/api/github/agent" ||
 			pathname === "/api/completions/agent" ||
 			pathname === "/api/workflows/agent" ||
 			pathname === "/api/watchers/agent" ||
@@ -749,6 +771,18 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 									async () => reports.takeReady(),
 								),
 					);
+				}
+				if (pathname === "/api/github/agent") {
+					if (vps) return jsonResponse(res, 503, {error:"GitHub local no está disponible en modo servidor."});
+					if (!sameToken(key, githubKey)) return jsonResponse(res, 401, {error:"Unauthorized"});
+					if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "") || req.headers.origin || Object.keys(req.headers).some(name => name === "forwarded" || name.startsWith("x-forwarded-"))) return jsonResponse(res,403,{error:"GitHub control is local to the assistant engine"});
+					if (req.method !== "POST") return jsonResponse(res,405,{error:"Use POST"});
+					const abort = new AbortController();
+					const cancel = () => abort.abort();
+					res.on("close",cancel);
+					try { return jsonResponse(res,200,await github.dispatch(await readJson(req),abort.signal)); }
+					catch { return jsonResponse(res,400,{error:"GitHub no pudo completar la operación. Verifica los campos, gh y los permisos del repositorio antes de reintentar."}); }
+					finally { res.off("close",cancel); }
 				}
 				if (pathname === "/api/workflows/agent") {
 					if (!sameToken(key, workflowsKey)) return jsonResponse(res, 401, { error: "Unauthorized" });

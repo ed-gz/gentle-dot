@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
-import type { AgentConversation, AgentPolicy, AgentSession } from "../orchestration.ts";
+import { AgentPermissionCard } from "./AgentPermissionCard.tsx";
+import type { AgentApproval, AgentConversation, AgentPolicy, AgentSession } from "../orchestration.ts";
 import type { OrchestrationControls } from "../useOrchestration.ts";
 import "../agent-session-details.css";
 
@@ -396,6 +397,24 @@ function Policy({
 			</button>
 		</div>
 	);
+}
+
+/** The question is part of the active conversation, never hidden behind session details. */
+export function SessionPendingQuestion({session, conversation, controls, disabled}: {
+	session:AgentSession; conversation?:AgentConversation; controls:OrchestrationControls; disabled:boolean;
+}) {
+	if (!session.sessionId) return null;
+	const question = conversation?.sessionId === session.sessionId ? conversation.question : undefined;
+	const supplied = controls.snapshot?.approvals.find(a => a.paneId === session.paneId && a.sessionId === session.sessionId && (!question || a.id === question.id));
+	const approval:AgentApproval|undefined = supplied ?? (question ? {
+		...question, kind:question.kind as AgentApproval["kind"], paneId:session.paneId,sessionId:session.sessionId,
+		message:question.message ?? "",action:question.title,createdAt:"",expiresAt:"expiresAt" in question && typeof question.expiresAt === "string" ? question.expiresAt : "",
+	} : undefined);
+	if (!approval || (!supplied && session.state !== "blocked" && conversation?.status !== "waiting")) return null;
+	return <section className="session-pending-question" aria-label="Solicitud pendiente de esta sesión">
+		<AgentPermissionCard key={approval.id} approval={approval} controls={controls} disabled={disabled} label="La sesión necesita tu respuesta"/>
+		<p className="muted">Puedes añadir detalles abajo. Se enviarán después de responder esta pregunta.</p>
+	</section>;
 }
 
 export function SessionDetails({

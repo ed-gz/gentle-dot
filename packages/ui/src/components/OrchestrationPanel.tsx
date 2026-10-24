@@ -7,8 +7,7 @@ import "../session-delivery.css";
 import { AgentPermissionCard } from "./AgentPermissionCard.tsx";
 import { AgentAttachments } from "./AgentAttachments.tsx";
 import { AgentWorkflow } from "./AgentWorkflow.tsx";
-import { RequestPresentation } from "./RequestPresentation.tsx";
-import { SessionContext, SessionMenu } from "./SessionDetails.tsx";
+import { SessionContext, SessionMenu, SessionPendingQuestion } from "./SessionDetails.tsx";
 import { SharedMarkdown } from "./SharedMarkdown.tsx";
 import { TerminalMoodControl } from "./TerminalMoodControl.tsx";
 import "../orchestration.css";
@@ -347,21 +346,6 @@ export function OrchestrationPanel({
 					}
 				}}
 			>
-				<RequestPresentation enabled={false} active={active && requestsVisible} title={`Solicitudes de ${session.label}`} ids={(snapshot?.approvals ?? []).filter((approval) => approval.paneId === session.paneId && approval.sessionId === session.sessionId).map((approval) => approval.id)}>
-				{snapshot?.approvals
-					.filter(
-						(approval) => approval.paneId === session.paneId && approval.sessionId === session.sessionId,
-					)
-					.map((approval) => (
-						<AgentPermissionCard
-							key={approval.id}
-							approval={approval}
-							controls={controls}
-							disabled={!connected || !session.connected}
-							label={session.label}
-						/>
-					))}
-				</RequestPresentation>
 				{receipt ? (
 					<p className="orchestration-receipt" role="status">
 						{receipt}
@@ -434,7 +418,7 @@ export function OrchestrationPanel({
 						{outbox.filter(item => item.identity === identity).filter((item, index, items) => item.status !== "delivered" || index === items.length - 1).map(item => (
 							<article key={item.id} className={`session-delivery session-delivery-${item.status}`}>
 								{item.status !== "delivered" ? <p>{item.text || "Archivos adjuntos"}</p> : null}
-								<small>{DELIVERY_STATUS[item.status]}</small>
+								<small>{item.status === "queued" && conversation?.status === "waiting" ? "En cola: se enviará cuando respondas la pregunta" : DELIVERY_STATUS[item.status]}</small>
 							</article>
 						))}
 					</section>
@@ -454,6 +438,7 @@ export function OrchestrationPanel({
 					Ir al último mensaje ↓
 				</button>
 			) : null}
+			<SessionPendingQuestion session={session} conversation={conversation} controls={controls} disabled={!active || !connected || !session.connected || !!conversationError}/>
 			{active && connected && session.connected && session.state === "working" ? (
 				<div className="session-working" role="status" aria-label="Actividad de la sesión" aria-atomic="true">
 					<span className="session-working-spinner" aria-hidden="true" />

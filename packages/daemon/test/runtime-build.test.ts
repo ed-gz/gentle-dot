@@ -52,6 +52,7 @@ describe("build:runtime", () => {
 			"daemon/extensions/dot-browser.ts",
 			"daemon/extensions/dot-companion.ts",
 			"daemon/extensions/dot-completions.ts",
+			"daemon/extensions/dot-github.ts",
 			"daemon/extensions/dot-history.ts",
 			"daemon/extensions/dot-live-input.ts",
 			"daemon/extensions/dot-orchestrator.ts",

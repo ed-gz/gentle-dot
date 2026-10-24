@@ -256,6 +256,18 @@ export function decide(call: GuardCall, policy: ConnectorPolicy): GuardDecision 
 	}
 	if (COMMAND_TOOLS.has(toolName)) {
 		const command = typeof input.command === "string" ? input.command : "";
+		// Resolve simple shell variable assignments, not arbitrary shell programs. This is best-effort.
+		const bindings = new Map<string, string>();
+		for (const match of command.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)=["']?([^\s;"']+)["']?/g))
+			bindings.set(match[1]!, match[2]!);
+		const githubCommand = command.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (original, name) => bindings.get(name) ?? original).replace(/["'`\\]/g, "");
+		if (/\bgh\b[^;\n|&]*\bauth\s+(?:token\b|status\b[^;\n]*--show-token\b)/i.test(githubCommand))
+			return {action:"block", reason:"Nunca leas tokens de GitHub. Usa github_issue status, que sólo consulta el código de salida."};
+		if (/\bgh\b[^;\n|&]*\b(?:issue|pr)\s+create\b/i.test(githubCommand) ||
+			(/\bgh\b[^;\n|&]*\bapi\b/i.test(githubCommand) &&
+			 /\brepos\/[\w.{}-]+\/[\w.{}-]+\/(?:issues|pulls)(?:\b|\/)/i.test(githubCommand) &&
+			 /(?:\b(?:POST|PATCH|PUT|DELETE)\b|(?:^|\s)(?:-f|-F|--(?:raw-)?field|--input)(?:\s|=))/i.test(githubCommand)))
+			return {action:"block", reason:"Usa github_issue create: publicar un issue requiere confirmación real en PC o teléfono."};
 		if (CONNECTOR_COMMAND.test(command)) return { action: "block", reason: USE_CONNECTORS_SCREEN };
 		return namesPrivateFile(command, policy.protectedPaths)
 			? { action: "block", reason: PRIVATE_FILE }

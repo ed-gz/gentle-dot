@@ -72,6 +72,7 @@ export interface WatcherOptions {
 	pollMs?: number;
 	debounceMs?: number;
 	isFollowed?: (paneId: string, sessionId: string) => boolean;
+	notify?: (notice: Extract<import("@gentle-dot/protocol").ServerPayload, {type:"toast"}>) => void;
 }
 interface Lease {
 	id: string;
@@ -841,9 +842,12 @@ export class Watchers {
 			if (!["settled", "error", "delivery_failed", "interrupted"].includes(String(value.outcome)))
 				throw new WatcherError("Confirmación inválida.");
 			if (watch) {
+				const notificationId = watch.lease?.deliveryId;
+				const mail = watch.source.kind === "email" && value.outcome === "settled";
 				// An explicit human interruption dismisses this report; future events remain subscribed.
 				this.release(watch, value.outcome === "settled" || value.outcome === "interrupted");
 				this.save();
+				if (mail && notificationId) this.options.notify?.({type:"toast", level:"info", notificationEvent:"dotReply", notificationId:`watch:${notificationId}`, title:"Correo: resumen listo", message:"Hay novedades de tu vigilancia de correo. Abre la conversación para leer el resumen."});
 			}
 			return { acknowledged: true };
 		}

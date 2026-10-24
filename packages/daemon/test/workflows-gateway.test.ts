@@ -105,7 +105,7 @@ function pendingSession() {
 				state: "blocked",
 				connected: true,
 				managed: true,
-				capabilities: { inspect: true, prompt: true, approvals: true, abort: true },
+				capabilities: { inspect: true, prompt: true, approvals: true, abort: true, activityFence:1 },
 			},
 		],
 		approvals: [{ ...pair, ...question, action: "select", createdAt: new Date().toISOString() }],

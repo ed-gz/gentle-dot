@@ -36,7 +36,7 @@ it.each([false, true])(
 			connected: true,
 			state: "working",
 			assistantMessageId: `old-${id}`,
-			capabilities: { inspect: true, prompt: true },
+			capabilities: { inspect: true, prompt: true, activityFence:1 },
 		}));
 		const inspect = vi.fn(async (paneId: string, sessionId: string) => {
 			const target = workers.find((worker) => worker.paneId === paneId && worker.sessionId === sessionId);
@@ -73,6 +73,9 @@ it.each([false, true])(
 			prompt,
 		};
 		const coordinator = new WorkflowContinuations(options);
+		const original = "Da seguimiento al flujo autorizado de A y B hasta que B valide el resultado.";
+		const ledger = new WorkflowAuthorization();
+		ledger.record(original, original);
 		let loseFirstAcknowledgment = !cancelFirstContinuation;
 		const acknowledgments: Array<{ leaseId: string; outcome: string }> = [];
 		const authorization: string[] = [];
@@ -89,6 +92,8 @@ it.each([false, true])(
 						res.destroy();
 						return;
 					}
+					delete input.authorization;
+					if (["start", "update", "resume"].includes(input.action)) input.authorization = ledger.resolve(input.sourceHash);
 					result = await coordinator.dispatch(input, "agent");
 					if (input.action === "acknowledge")
 						acknowledgments.push({ leaseId: input.leaseId, outcome: input.outcome });
@@ -284,7 +289,7 @@ it.each([false, true])(
 		};
 		try {
 			session = await engine();
-			await session.prompt("Da seguimiento al flujo autorizado de A y B hasta que B valide el resultado.");
+			await session.prompt(original);
 			expect(coordinator.status().workflows, JSON.stringify({ stage, messages, errors })).toHaveLength(1);
 			finish(0, "result-a");
 			finish(1, "result-b-initial");

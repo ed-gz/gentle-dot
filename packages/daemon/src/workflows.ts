@@ -3,6 +3,7 @@ import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CompletionEvent, CompletionSession } from "./completion-reports.ts";
+import { humanOnlyQuestion } from "./orchestration/questions.ts";
 import { writePrivateFile } from "./private-file.ts";
 import { runtimeDir } from "./runtime.ts";
 import { type SessionApprovalPolicy, sessionApprovalPolicy } from "./workflow-authorization.ts";
@@ -68,6 +69,8 @@ export interface WorkflowApprovalRequest {
 	reason: string;
 }
 export interface WorkflowPendingApproval {
+	/** Adapter metadata supplied directly by discovery, not dialog text. */
+	activity?: { version: number; at: string | null; instanceId?: string };
 	paneId: string;
 	sessionId: string;
 	/** The original adapter dialog, not the UI projection of it. */
@@ -86,7 +89,9 @@ export interface WorkflowOptions {
 		sessions: Array<
 			CompletionSession & {
 				assistantMessageId?: string;
-				capabilities?: { inspect: boolean; prompt?: boolean; approvals?: boolean };
+				humanActivityAt?: string;
+				activityInstanceId?: string;
+				capabilities?: { inspect: boolean; prompt?: boolean; approvals?: boolean; activityFence?: number };
 			}
 		>;
 		approvals?: Array<{ id: string; paneId: string; sessionId: string }>;
@@ -95,9 +100,14 @@ export interface WorkflowOptions {
 	prompt: (paneId: string, sessionId: string, text: string, authorize: () => boolean) => Promise<unknown>;
 	/** The adapter must recheck session, question hash and authority immediately before answering. */
 	approve?: (request: WorkflowApprovalRequest, authorize: () => boolean) => Promise<unknown>;
+	/** A trusted UI question; no answer leaves the durable workflow paused. */
+	askContinuation?: (work: WorkflowStatus, answer: (choice: "continue" | "stop") => Promise<void>) => void;
 	now?: () => number;
 }
 interface Observation {
+	activityInstanceId?: string;
+	/** null means the versioned adapter positively reported no personal interaction yet. */
+	humanActivityAt?: string | null;
 	state: string;
 	assistantMessageId?: string;
 	awaiting?: boolean;
@@ -124,10 +134,13 @@ interface Lease {
 	startedAt: number;
 	reasons: string[];
 	inspected: Record<string, number>;
-	questions: Record<string, { id: string; hash: string; at: number }>;
+	questions: Record<string, { id: string; hash: string; at: number; humanOnly?: boolean }>;
 	prompts: number;
 }
 interface StoredWorkflow extends Omit<WorkflowStatus, "pending"> {
+	/** Durable question identity prevents repeated prompts and stale answers after a pause/resume. */
+	yieldQuestion?: string;
+	renewalHours?: number;
 	/** Durable turn ordering: continuously busy objectives cannot starve another pending objective. */
 	claimOrder?: number;
 	/** Verified human instruction supplied only by the trusted gateway, never by a tool schema. */
@@ -143,7 +156,7 @@ interface StoredWorkflow extends Omit<WorkflowStatus, "pending"> {
 }
 const record = (value: unknown): value is Record<string, unknown> =>
 	value !== null && typeof value === "object" && !Array.isArray(value);
-const pair = (session: WorkflowSession) => JSON.stringify([session.paneId, session.sessionId]);
+const pair = (session: {paneId:string; sessionId?:string}) => JSON.stringify([session.paneId, session.sessionId]);
 const active = (work: StoredWorkflow) => work.state === "waiting" || work.state === "running";
 const terminal = (work: StoredWorkflow) => ["completed", "cancelled", "expired"].includes(work.state);
 const MAX_STATE_BYTES = 4 * 1024 * 1024;
@@ -218,6 +231,7 @@ export class WorkflowContinuations {
 	private claimSequence = 0;
 	private engine?: { id: string; startedAt: number };
 	private readonly automaticInFlight = new Set<string>();
+	private readonly needsActivityRecovery = new Set<string>();
 	private readonly sendingSessions = new Map<string, number>();
 	private readonly approvalRevisions = new Map<string, number>();
 	private sending(target: WorkflowSession): () => void {
@@ -298,6 +312,8 @@ export class WorkflowContinuations {
 				)
 					throw new Error("Invalid workflow record");
 				const work = candidate as unknown as StoredWorkflow;
+				if (!Number.isFinite(work.renewalHours) || Number(work.renewalHours) < 0.25 || Number(work.renewalHours) > 168) work.renewalHours = 24;
+				if (!work.expiresAt) work.expiresAt = stamp(Date.parse(work.createdAt) + 24 * 3600_000);
 				// Reconstruct only from trusted human provenance. A stored/model-supplied
 				// policy flag cannot widen the original instruction, including after upgrade.
 				work.approvalPolicy = work.mode === "session" ? sessionApprovalPolicy(work.authorization) : undefined;
@@ -312,6 +328,7 @@ export class WorkflowContinuations {
 						"No se pudo confirmar una respuesta anterior. Revisa la sesión antes de reanudar.";
 				}
 				this.works.set(work.id, work);
+				this.needsActivityRecovery.add(work.id);
 			}
 			this.expire();
 			this.save();
@@ -377,14 +394,61 @@ export class WorkflowContinuations {
 			...(this.storageError ? { error: this.storageError } : {}),
 		};
 	}
+	private async verifyActivity(work: StoredWorkflow, authorize: () => boolean = () => true, activity?: {version:number;at:string|null;instanceId?:string}): Promise<boolean> {
+		const snapshot = activity ? {sessions:work.sessions.map(target => ({...target, label:target.label ?? "", state:"unknown", connected:true, humanActivityAt:activity.at ?? undefined, activityInstanceId:activity.instanceId, capabilities:{inspect:true,activityFence:activity.version}}))} : await this.options.snapshot();
+		this.ensure(authorize);
+		for (const target of work.sessions) {
+			const session = snapshot.sessions.find(s => pair(s) === pair(target));
+			if (!session?.connected) return false;
+			if (session.capabilities?.activityFence !== 1) {
+				work.state = "paused";
+				delete work.lease;
+				work.lastMessage = "Sólo avisos: actualiza el adaptador con protección de actividad antes de reanudar la autonomía.";
+				this.save();
+				return false;
+			}
+			const previous = work.observed[pair(target)];
+			const marker = session.humanActivityAt ?? null;
+			if (!previous || previous.humanActivityAt === undefined || previous.humanActivityAt !== marker || previous.activityInstanceId !== session.activityInstanceId) {
+				if (active(work)) this.yieldToHuman(work, "La persona trabajó en esta sesión desde la última observación.");
+				return false;
+			}
+		}
+		return active(work);
+	}
+
+	/** Called only by trusted interaction metadata, never session/mail content. */
+	onInteraction(target: WorkflowSession, origin: "human" | "workflow"): void {
+		if (origin !== "human" || this.closed || this.storageError) return;
+		for (const work of this.works.values()) {
+			if (active(work) && work.sessions.some(session => pair(session) === pair(target)))
+				this.yieldToHuman(work, "La persona volvió a trabajar en esta sesión.");
+		}
+	}
+	private yieldToHuman(work: StoredWorkflow, reason: string): void {
+		if (!active(work)) return;
+		work.state = "paused";
+		delete work.lease;
+		work.lastMessage = reason;
+		work.updatedAt = stamp(this.now());
+		const question = randomUUID();
+		work.yieldQuestion = question;
+		this.approvalRevisions.set(work.id, (this.approvalRevisions.get(work.id) ?? 0) + 1);
+		this.save(); // Revoke action authority before presenting the question.
+		this.options.askContinuation?.(this.public(work), async choice => {
+			if (this.closed || this.storageError || work.state !== "paused" || work.yieldQuestion !== question) return;
+			if (choice !== "continue" && choice !== "stop") return;
+			if (choice === "continue") {
+				// A new human decision renews the bounded delegation, never replays a dispatch.
+				await this.dispatch({action:"resume", workflowId:work.id}, "human");
+			} else await this.dispatch({action:"stop", workflowId:work.id}, "human");
+		});
+	}
 	private expire(): void {
 		let changed = false;
 		for (const work of this.works.values()) {
-			if ((active(work) || work.state === "paused") && deadline(work) <= this.now()) {
-				work.state = "expired";
-				work.pending = [];
-				delete work.lease;
-				work.lastMessage = "Venció el plazo autorizado.";
+			if (active(work) && deadline(work) <= this.now()) {
+				this.yieldToHuman(work, "Venció el plazo autorizado; espera tu decisión para continuar.");
 				changed = true;
 			} else if (work.lease && work.lease.expiresAt <= this.now()) {
 				this.release(work, "error", true);
@@ -428,9 +492,11 @@ export class WorkflowContinuations {
 			runLimitReached(work)
 		)
 			return false;
+		if (!(await this.verifyActivity(work, () => true, input.activity).catch(() => false)) || !active(work) || this.closed || work.lease || this.automaticInFlight.has(work.id)) return false;
 		const policy = work.approvalPolicy;
 		const revision = this.approvalRevisions.get(work.id);
 		const question = input.question;
+		if (humanOnlyQuestion(question)) return false;
 		// Do not turn a yes/no personal question, credentials, connector grants or
 		// changes to other sessions into operational permission. Unknown dialogs use review.
 		const title = typeof question.title === "string" ? question.title : "";
@@ -468,6 +534,7 @@ export class WorkflowContinuations {
 			active(work) &&
 			!work.lease &&
 			work.approvalPolicy === policy &&
+			!humanOnlyQuestion(question) && workflowQuestionHash(question) === questionHash &&
 			this.approvalRevisions.get(work.id) === revision &&
 			deadline(work) > this.now();
 		const operation: Operation = {
@@ -611,6 +678,7 @@ export class WorkflowContinuations {
 				continue;
 			}
 			work.observed[key] = {
+				...previous,
 				state: "idle",
 				connected: true,
 				...(event.assistantMessageId ? { assistantMessageId: event.assistantMessageId } : {}),
@@ -711,6 +779,8 @@ export class WorkflowContinuations {
 					this.enqueue(work, `Resultado recuperado: ${target.paneId}`);
 				}
 				const observed = {
+					humanActivityAt: previous?.humanActivityAt,
+					activityInstanceId: previous?.activityInstanceId,
 					state: session.state,
 					connected: true,
 					...(work.mode !== "session" && this.delegated(target) ? { delegated: true } : {}),
@@ -729,6 +799,7 @@ export class WorkflowContinuations {
 	/** Reconcile missed adapter events outside the single-model-turn arbitration. */
 	prepare(): Promise<void> {
 		if (this.closed || this.storageError) return Promise.resolve();
+		this.expire();
 		if (this.recovering) return this.recovering.then(() => this.prepare());
 		if (
 			this.now() < this.recoveryRetryAt ||
@@ -771,6 +842,8 @@ export class WorkflowContinuations {
 				this.save();
 				return this.status();
 			}
+			if (this.needsActivityRecovery.has(work.id) && !(await this.verifyActivity(work, authorize))) return this.status();
+			this.needsActivityRecovery.delete(work.id);
 			const wake = this.leaseWork(work, work.pending.splice(0));
 			return {
 				...this.status(),
@@ -1013,6 +1086,7 @@ export class WorkflowContinuations {
 			work.nextAttemptAt = this.now();
 			const reasons = work.pending.splice(0);
 			if (!reasons.length) reasons.push("La persona pidió revisar ahora las solicitudes de esta sesión.");
+			if (!(await this.verifyActivity(work, authorize))) throw new WorkflowError("La sesión requiere revisión humana antes de continuar.", 403);
 			return this.leaseWork(work, reasons, foregroundClaim);
 		}
 		if (["pause", "stop", "complete", "resume", "update"].includes(String(action))) {
@@ -1036,9 +1110,10 @@ export class WorkflowContinuations {
 					actor === "agent" ? text(input.authorization, "authorization", MAX_AUTHORIZATION_CHARS) : undefined;
 				if (this.busy || this.automaticInFlight.has(work.id))
 					throw new WorkflowError("Espera a que termine la operación en curso antes de reanudar.", 429);
+				const renew = !!work.yieldQuestion;
 				if (
 					!["paused", "failed"].includes(work.state) ||
-					deadline(work) <= this.now() ||
+					(!renew && deadline(work) <= this.now()) ||
 					runLimitReached(work)
 				)
 					throw new WorkflowError("El plazo o el límite de este seguimiento no permite reanudarlo.", 409);
@@ -1054,6 +1129,18 @@ export class WorkflowContinuations {
 					)
 				)
 					throw new WorkflowError("Una sesión ya pertenece a otro seguimiento activo.", 409);
+				const resumeRevision = this.approvalRevisions.get(work.id);
+				const resumeState = work.state;
+				const snapshot = await this.options.snapshot();
+				this.ensure(authorize);
+				if (this.approvalRevisions.get(work.id) !== resumeRevision || work.state !== resumeState)
+					throw new WorkflowError("La delegación cambió durante la revisión de actividad.", 409);
+				for (const target of work.sessions) {
+					const session = snapshot.sessions.find(s => pair(s) === pair(target));
+					if (!session?.connected || session.capabilities?.activityFence !== 1) throw new WorkflowError("Sólo avisos: actualiza el adaptador con protección de actividad antes de reanudar.", 403);
+					work.observed[pair(target)] = {...work.observed[pair(target)], state:session.state, humanActivityAt:session.humanActivityAt ?? null, activityInstanceId:session.activityInstanceId};
+				}
+				if (renew) work.expiresAt = stamp(this.now() + (work.renewalHours ?? 24) * 3600_000);
 				work.state = "waiting";
 				if (!work.authorization && resumeAuthorization) work.authorization = resumeAuthorization;
 				work.attempts = 0;
@@ -1112,6 +1199,7 @@ export class WorkflowContinuations {
 				delete work.lease;
 				if (action === "complete" || action === "stop") work.pending = [];
 			}
+			delete work.yieldQuestion;
 			work.updatedAt = stamp(this.now());
 			this.approvalRevisions.set(work.id, (this.approvalRevisions.get(work.id) ?? 0) + 1);
 			this.save();
@@ -1150,6 +1238,7 @@ export class WorkflowContinuations {
 				delete lease.questions[pair(target)];
 				if (record(result.question) && result.question.answerable === true) {
 					lease.questions[pair(target)] = {
+						humanOnly: humanOnlyQuestion(result.question),
 						id: text(result.question.id, "requestId", 256),
 						hash: workflowQuestionHash(result.question),
 						at: this.now(),
@@ -1166,9 +1255,9 @@ export class WorkflowContinuations {
 			const requestId = approval ? text(input.requestId, "requestId", 256) : undefined;
 			const reason = approval ? text(input.reason, "reason", 2000) : undefined;
 			const answer = approval ? input.answer : undefined;
-			if (approval && !work.authorization)
+			if (!work.authorization)
 				throw new WorkflowError(
-					"Este seguimiento antiguo no tiene una instrucción humana verificable. Actualiza el objetivo antes de delegar sus permisos.",
+					"Este seguimiento antiguo no tiene una instrucción humana verificable. Actualiza el objetivo antes de delegar acciones o permisos.",
 					403,
 				);
 			if (
@@ -1211,6 +1300,8 @@ export class WorkflowContinuations {
 				);
 			if (approval && (!question || question.id !== requestId || this.now() - question.at > 60_000))
 				throw new WorkflowError("Inspecciona primero esta solicitud concreta de la sesión autorizada.", 409);
+			if (approval && question?.humanOnly !== false)
+				throw new WorkflowError("Esta publicación o envío requiere respuesta humana directa.", 403);
 			if (approval && !this.options.approve)
 				throw new WorkflowError("Esta conexión no permite responder solicitudes del objetivo.", 409);
 			if (lease.prompts >= 8)
@@ -1349,6 +1440,8 @@ export class WorkflowContinuations {
 					409,
 				);
 			observed[pair(target)] = {
+				humanActivityAt: session.humanActivityAt ?? null,
+				activityInstanceId: session.activityInstanceId,
 				state: session.state,
 				connected: true,
 				requestId: snapshot.approvals?.find(
@@ -1368,7 +1461,8 @@ export class WorkflowContinuations {
 			state: "waiting",
 			createdAt: stamp(this.now()),
 			updatedAt: stamp(this.now()),
-			...(typeof hours === "number" ? { expiresAt: stamp(this.now() + hours * 3600_000) } : {}),
+			expiresAt: stamp(this.now() + (typeof hours === "number" ? hours : 24) * 3600_000),
+			renewalHours: typeof hours === "number" ? hours : 24,
 			runs: 0,
 			...(typeof maxRuns === "number" ? { maxRuns } : {}),
 			pending:
@@ -1389,8 +1483,12 @@ export class WorkflowContinuations {
 			nextAttemptAt: this.now(),
 		};
 		this.works.set(work.id, work);
+		if (snapshot.sessions.some(session => sessions.some(target => pair(target) === pair(session)) && session.capabilities?.activityFence !== 1)) {
+			work.state = "paused";
+			work.lastMessage = "Sólo avisos: el adaptador no tiene protección de actividad versionada. Actualízalo antes de activar autonomía.";
+		}
 		this.save();
-		if (work.approvalPolicy && work.pending.length) {
+		if (active(work) && work.approvalPolicy && work.pending.length) {
 			// An existing dialog must not wait for a future event or another model turn.
 			// Registration remains durable if its adapter cannot be read immediately.
 			const target = selected[0];

@@ -144,6 +144,7 @@ export class DotBridge {
 	/** Each window's id, for the app's commands on its behalf. */
 	private readonly clientIds = new Map<string, BridgeClient>();
 	private readonly asks = new Map<string, PendingAsk>();
+	private readonly continuationAnswers = new Map<string, (choice: "continue" | "stop") => Promise<void>>();
 	/** One decision shared by the native dialog, desktop card, and any trusted phone. */
 	private readonly appApprovals: MobileApprovals;
 	/** The answer each open PIN approval waits for, by request id (S25.8). */
@@ -213,6 +214,18 @@ export class DotBridge {
 	/** Status from a real external session, never a model-generated approval. */
 	notifySession(notice: Extract<ServerPayload, { type: "toast" }>): void {
 		this.broadcast(notice);
+	}
+
+	/** A daemon-owned choice, displayed by the same desktop/phone ask channel as engine requests. */
+	askWatchContinuation(label: string, answer: (choice: "continue" | "stop") => Promise<void>): void {
+		const requestId = `watch-${randomUUID()}`;
+		const ask: Ask = {requestId, method:"select", title:presentText(`¿Sigo vigilando la sesión ${label} o la dejo?`), options:["Continuar", "Dejar de vigilar"]};
+		this.continuationAnswers.set(requestId, answer);
+		const timer = setTimeout(() => this.resolveAsk(requestId), APPROVAL_WAIT_MS);
+		timer.unref();
+		this.asks.set(requestId, {ask, timer});
+		this.broadcast({type:"ask",ask});
+		this.refreshState();
 	}
 
 	get agentState(): AgentState {
@@ -508,6 +521,15 @@ export class DotBridge {
 					return;
 				}
 				const { requestId } = message;
+				const continuation = this.continuationAnswers.get(requestId);
+				if (continuation) {
+					if (message.cancelled) this.resolveAsk(requestId);
+					else if (message.value === "Continuar" || message.value === "Dejar de vigilar") {
+						await continuation(message.value === "Continuar" ? "continue" : "stop");
+						this.resolveAsk(requestId);
+					}
+					return;
+				}
 				if (pending.ask.method === "app") {
 					this.deliver(client, { type: "error", code: "app_required", message: WAITING_IN_APP });
 					return;
@@ -1444,6 +1466,7 @@ export class DotBridge {
 		clearTimeout(entry.timer);
 		this.appApprovals.answer(requestId, false);
 		this.asks.delete(requestId);
+		this.continuationAnswers.delete(requestId);
 		// A PIN approval still waiting is refused: declined, timed out, or the run ended.
 		this.pinWaiters.get(requestId)?.(false);
 		this.pinWaiters.delete(requestId);

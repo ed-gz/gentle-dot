@@ -93,6 +93,14 @@ it("carries stable delivery IDs through the native socket, steers once, and conf
 			code: "INVALID_DELIVERY",
 		});
 		expect(sendUserMessage).toHaveBeenCalledTimes(1);
+		// Autonomy must yield even when the next daemon poll has not observed this keystroke yet.
+		await handlers.get("input")?.({source:"interactive",text:"personal"},context);
+		const personal = await request("snapshot");
+		expect(personal.companionActivity).toHaveProperty("humanActivityAt");
+		await expect(request("prompt",{text:"watch continuation",expectedHumanActivityAt:null})).rejects.toMatchObject({code:"HUMAN_ACTIVE"});
+		expect(sendUserMessage).toHaveBeenCalledTimes(1);
+		await handlers.get("input")?.({source:"extension",text:"watch continuation"},context);
+		expect((await request("snapshot")).companionActivity).toMatchObject({humanActivityAt:(personal.companionActivity as {humanActivityAt:string}).humanActivityAt});
 	} finally {
 		await adapter.close();
 		await rm(directory, { recursive: true, force: true });
