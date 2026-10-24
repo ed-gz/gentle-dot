@@ -123,7 +123,7 @@ export const CATALOG: readonly CatalogEntry[] = [
 		name: "Notion",
 		server: { url: "https://mcp.notion.com/mcp" },
 		oauth: true,
-		reads: "Search and read your pages, databases, and comments.",
+		reads: "Search and read your pages, databases, comments, saved memories, and workspace information.",
 		sends: "Create and edit pages and add comments, after you approve each one.",
 		readOnlyTools: [
 			"notion-search",
@@ -133,6 +133,19 @@ export const CATALOG: readonly CatalogEntry[] = [
 			"notion-get-users",
 			"notion-query-data-sources",
 			"notion-query-meeting-notes",
+			// Additional reads checked against Notion's supported tools on 2026-10-23.
+			"notion-query-multiple-data-sources",
+			"notion-list-private-pages",
+			"notion-list-shared-pages",
+			"notion-list-favorite-pages",
+			"notion-list-recent-pages",
+			"notion-list-page-backlinks",
+			"notion-memory-search",
+			"notion-get-self",
+			"notion-get-groups",
+			"notion-get-async-task",
+			// Reads connection metadata; it does not grant access or change the workspace.
+			"notion-get-tool-access",
 		],
 	},
 	{

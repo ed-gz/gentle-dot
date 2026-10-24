@@ -55,6 +55,50 @@ describe("connectors catalog", () => {
 		expect(isReadOnlyCall("linear", "mcp__linear__list_issues", true, linear)).toBe(true);
 		expect(isReadOnlyCall("linear", "mcp__linear__create_issue", true, linear)).toBe(false);
 	});
+
+	it("requires Notion's read-only hint for its curated page, memory, and metadata reads", () => {
+		const notion = CATALOG.find((entry) => entry.id === "notion")?.readOnlyTools ?? [];
+		for (const tool of [
+			"notion-query-multiple-data-sources",
+			"notion-list-private-pages",
+			"notion-list-shared-pages",
+			"notion-list-favorite-pages",
+			"notion-list-recent-pages",
+			"notion-list-page-backlinks",
+			"notion-memory-search",
+			"notion-get-self",
+			"notion-get-groups",
+			"notion-get-async-task",
+			"notion-get-tool-access",
+		]) {
+			const toolName = `mcp__notion__${tool.replaceAll("-", "_")}`;
+			expect(isReadOnlyCall("notion", toolName, true, notion), tool).toBe(true);
+			for (const hint of [false, undefined])
+				expect(isReadOnlyCall("notion", toolName, hint, notion), tool).toBe(false);
+		}
+	});
+
+	it("keeps Notion writes and uncurated tools behind approval even with a read-only hint", () => {
+		const notion = CATALOG.find((entry) => entry.id === "notion")?.readOnlyTools ?? [];
+		for (const tool of [
+			"notion-create-pages",
+			"notion-update-page",
+			"notion-delete-pages",
+			"notion-move-pages",
+			"notion-create-comment",
+			"notion-calendar-list-events",
+			"notion-calendar-list-contacts",
+			"notion-download-attachment",
+			"notion-get-file-download-urls",
+			"notion-search-sessions",
+			"notion-read-session-event",
+			"notion-download-skill",
+			"notion-unknown-future-tool",
+		]) {
+			const toolName = `mcp__notion__${tool.replaceAll("-", "_")}`;
+			expect(isReadOnlyCall("notion", toolName, true, notion), tool).toBe(false);
+		}
+	});
 });
 
 describe("mcp.json rendering", () => {
