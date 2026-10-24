@@ -23,6 +23,7 @@ function fixture() {
 	let now = Date.parse("2026-10-13T00:00:00Z");
 	const question: Record<string, unknown> = {
 		id: "q1",
+		workflowPermission: {provider:"dot-session/v1",category:"workspace-tool",scope:"project-workspace",tool:"bash"},
 		kind: "confirm",
 		title: "Allow running tests?",
 		message: "Run local unit tests",
@@ -34,6 +35,7 @@ function fixture() {
 		label: "Fixture",
 		state: "working",
 		connected: true,
+		activityInstanceId: "adapter-a",
 		capabilities: { inspect: true, prompt: true, approvals: true, activityFence:1 },
 	};
 	const approvals: Array<{ id: string; paneId: string; sessionId: string }> = [];
@@ -93,8 +95,11 @@ it.each([
  {title:"Allow gh --repo owner/repo issue create?"},
  {title:"Allow Gmail reply?"},
  {title:"Allow post to Slack?"},
+ {title:"Allow SMTP delivery?",message:"To: alice@example.com; subject: update"},
+ {title:"Allow distribution?",message:"Make this available to everyone"},
+ {title:"Allow operation?",message:"Unknown effect"},
 ])("never auto-answers a human-only external dialog: %j", async metadata => {
- const h=fixture(); await h.start(); Object.assign(h.question,metadata);
+ const h=fixture(); await h.start(); delete h.question.workflowPermission; Object.assign(h.question,metadata);
  expect(await h.attempt()).toBe(false); expect(h.approve).not.toHaveBeenCalled();
 });
 

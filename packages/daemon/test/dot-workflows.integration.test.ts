@@ -34,6 +34,7 @@ it.each([false, true])(
 			sessionId: `session-${id}`,
 			label: `Agent ${id}`,
 			connected: true,
+			activityInstanceId: `adapter-${id}`,
 			state: "working",
 			assistantMessageId: `old-${id}`,
 			capabilities: { inspect: true, prompt: true, activityFence:1 },
@@ -365,7 +366,7 @@ it.each([
 	{ mode: "session", immediate: false },
 	{ mode: "session", immediate: true },
 ] as const)(
-	"answers the exact native confirmation through real Pi (mode=$mode, already pending=$immediate)",
+	"keeps an unclassified native confirmation human-only through real Pi (mode=$mode, already pending=$immediate)",
 	async ({ mode, immediate }) => {
 		const directory = tempDir();
 		const registry = join(directory, "sessions");
@@ -448,6 +449,7 @@ it.each([
 			orcaCommand: false,
 			terminalLauncher: false,
 			pollMs: 0,
+			onInteraction: (target, origin) => coordinator?.onInteraction(target, origin),
 			onEvent: (event) => {
 				events.push(event);
 				coordinator?.onEvent(event);
@@ -639,8 +641,8 @@ it.each([
 				workflowSourceHash(original),
 			);
 			if (immediate) {
-				// Already resolved when the original human turn returns: no idle poll or hidden second turn.
-				expect(executed, JSON.stringify({ step, messages, errors })).toHaveBeenCalledOnce();
+				// Even an immediate, human-authorized delegation cannot answer an unclassified dialog.
+				expect(executed, JSON.stringify({ step, messages, errors })).not.toHaveBeenCalled();
 				expect(
 					seenRequests
 						.filter((entry) => ["start", "claim", "inspect", "approve"].includes(String(entry.action)))
@@ -654,26 +656,34 @@ it.each([
 				);
 			} else await requestValidation();
 			await vi.waitFor(
-				async () => {
-					await orchestrator.snapshot();
-					expect(coordinator?.status().workflows[0]?.state, JSON.stringify({ step, messages, errors })).toBe(
-						mode === "session" ? "waiting" : "completed",
-					);
-					expect(step).toBe(immediate ? 3 : mode === "session" ? 5 : 8);
-					expect(executed).toHaveBeenCalledOnce();
+				() => {
+					expect(step, JSON.stringify({ messages, errors })).toBe(immediate ? 3 : 5);
+					expect(dot?.isIdle).toBe(true);
+					expect(seenRequests.some(entry => entry.action === "approve")).toBe(true);
 				},
-				{ timeout: 20_000, interval: 100 },
+				{ timeout: 10_000, interval: 100 },
 			);
-			expect(native).toHaveBeenCalledOnce();
-			expect(executed).toHaveBeenCalledOnce();
-			expect(readFileSync(join(directory, "verified.txt"), "utf8")).toBe("validated\n");
-			expect(approve).toHaveBeenCalledOnce();
-			expect(approve.mock.calls[0]?.[0]).toMatchObject({
-				authorizedInstruction: original,
-				...pair,
-				answer: { confirmed: true },
+			expect(executed).not.toHaveBeenCalled();
+			expect(approve).not.toHaveBeenCalled();
+			const pending = await orchestrator.snapshot();
+			expect(pending.approvals).toHaveLength(1);
+			expect(pending.approvals[0]).toMatchObject({ ...pair, kind: "confirm", answerable: true });
+			expect(messages).toContainEqual(expect.objectContaining({
+				role: "toolResult", toolName: "dot_workflows", isError: true,
+				content: [expect.objectContaining({text: expect.stringContaining("humana directa")})],
+			}));
+			// Only the direct human answer resolves the native dialog and permits the write.
+			await orchestrator.dispatch({action:"answer", ...pair, requestId:pending.approvals[0]!.id, approved:true}, "human");
+			await vi.waitFor(() => {
+				expect(executed).toHaveBeenCalledOnce();
+				expect(worker?.isIdle).toBe(true);
 			});
-			expect(inspect).toHaveBeenCalledTimes(mode === "session" ? 1 : 2);
+			expect(coordinator.status().workflows[0]?.state).toBe("paused");
+			expect(native).toHaveBeenCalledOnce();
+			expect(readFileSync(join(directory, "verified.txt"), "utf8")).toBe("validated\n");
+			expect(approve).not.toHaveBeenCalled();
+			expect((await orchestrator.snapshot()).approvals).toEqual([]);
+			expect(inspect).toHaveBeenCalledOnce();
 			expect(events).toContainEqual(
 				expect.objectContaining({ type: "attention", requestId: expect.any(String) }),
 			);
@@ -683,7 +693,7 @@ it.each([
 					(item) => typeof item === "object" && item !== null && "role" in item && item.role === "user",
 				),
 			).toHaveLength(1);
-			expect(messages).not.toContainEqual(expect.objectContaining({ role: "toolResult", isError: true }));
+			expect(messages.filter(item => typeof item === "object" && item !== null && "role" in item && item.role === "toolResult" && "isError" in item && item.isError)).toHaveLength(1);
 			expect(errors).toEqual([]);
 		} finally {
 			for (const session of [dot, worker])

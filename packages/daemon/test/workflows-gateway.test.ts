@@ -12,7 +12,6 @@ import {
 	WorkflowContinuations,
 	type WorkflowStatus,
 	type WorkflowWake,
-	workflowQuestionHash,
 } from "../src/workflows.ts";
 import { fakeAuthRuntime } from "./fake-auth-runtime.ts";
 import { FAKE_AGENT, tempDir, waitFor } from "./helpers.ts";
@@ -104,6 +103,7 @@ function pendingSession() {
 				label: "Fixture",
 				state: "blocked",
 				connected: true,
+				activityInstanceId: "fixture-adapter",
 				managed: true,
 				capabilities: { inspect: true, prompt: true, approvals: true, abort: true, activityFence:1 },
 			},
@@ -272,7 +272,7 @@ it("derives delegated authority only from authenticated human chat input, ignori
 	}
 });
 
-it("approves a pending session request in the human turn without a background claim or a second prompt", async () => {
+it("keeps an unclassified pending session request human-only even in the original human turn", async () => {
 	const h = pendingSession();
 	const { daemon, api, env } = await setup();
 	const poll = vi.spyOn(WorkflowContinuations.prototype, "poll");
@@ -314,21 +314,16 @@ it("approves a pending session request in the human turn without a background cl
 	const inspection = await call({ action: "inspect", ...scope });
 	expect(inspection.status).toBe(200);
 	expect(await inspection.json()).toMatchObject({ question: { id: h.question.id, policyEligible: false } });
-	const approved = await call(request);
-	expect(approved.status).toBe(200);
-	expect(await approved.json()).toMatchObject({ accepted: true, sessionId: h.pair.sessionId });
-	expect(h.approve).toHaveBeenCalledOnce();
-	expect(h.approve.mock.calls[0]?.[0]).toMatchObject({
-		...h.pair,
-		workflowId: work.id,
-		authorizedInstruction: instruction,
-		questionHash: workflowQuestionHash(h.question),
-		requestId: h.question.id,
-		answer: { optionId: "local" },
+	const rejected = await call(request);
+	expect(rejected.status).toBe(403);
+	expect(await rejected.json()).toMatchObject({ error: expect.stringContaining("humana directa") });
+	// A retry cannot turn an inspected but unclassified dialog into delegated authority.
+	expect((await call(request)).status).toBe(403);
+	expect(h.approve).not.toHaveBeenCalled();
+	expect(await (await call({ action: "inspect", ...scope })).json()).toMatchObject({
+		question: { id: h.question.id, answerable: true },
 	});
-	expect(await (await call(request)).json()).toMatchObject({ duplicate: true });
-	expect(h.approve).toHaveBeenCalledOnce();
-	expect(h.inspect).toHaveBeenCalledOnce();
+	expect(h.inspect).toHaveBeenCalledTimes(2);
 	expect(poll).not.toHaveBeenCalled();
 });
 

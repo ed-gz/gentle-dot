@@ -3,14 +3,23 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { OrchestrationError, record } from "./herdr.ts";
 
-/** Human-only external effects. Structured metadata and the complete preview can only narrow authority. */
+/** Adapter-owned metadata only: generic UI titles/tool names never confer authority. */
 export function humanOnlyQuestion(question: unknown): boolean {
 	if (!record(question)) return true;
+	const permission = question.workflowPermission;
+	if (!record(permission) || permission.provider !== "dot-session/v1") return true;
+	const workspace = permission.category === "workspace-tool" &&
+		permission.scope === "project-workspace" &&
+		["read", "edit", "write", "bash"].includes(String(permission.tool)) &&
+		question.kind === "confirm";
+	const review = permission.category === "native-review-consent" && question.kind === "select";
+	if (!workspace && !review) return true;
 	let text: string;
 	try { text = JSON.stringify(question); } catch { return true; }
 	if (text.length > 65_536) return true;
 	text = text.replace(/([a-z])([A-Z])/g, "$1 $2").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[_-]/g, " ");
-	// Connector/tool action metadata is authoritative only for narrowing, never for bypassing review.
+	// Even recognized categories lose authority when any preview discloses a wider effect.
+	if (/\b(?:smtp|credential|password|secret|token|payment|purchase|billing|connector|oauth)\b/.test(text)) return true;
 	if (/"(?:tool name|tool|action|method)"\s*:\s*"[^"]*\b(?:send|compose|reply|post|publish|dispatch|submit)\b/.test(text)) return true;
 	return /\b(?:gh|github|git hub)\b|\bgithub issue\b|\bgithub.{0,80}(?:creat|publish|publicar|issue|pull request|\bpr\b)|\b(?:gmail|email|e mail|correo|mail).{0,100}(?:send|compose|reply|envi|respon)|\b(?:send|compose|reply|envi|respon).{0,100}(?:gmail|email|e mail|correo|mail)|\b(?:post|publish|publicar|publicacion|tweet|slack|discord|teams|webhook)\b|\bgit\s+push\b/.test(text);
 }

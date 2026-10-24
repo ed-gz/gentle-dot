@@ -68,6 +68,18 @@ export interface WorkflowApprovalRequest {
 	/** Explains why this concrete response is within the already authorized objective. */
 	reason: string;
 }
+export interface WorkflowActivityEvidence {
+	version: number;
+	at: string | null;
+	instanceId?: string;
+}
+// Capability travels with the existing authorize callback, never with model-authored input.
+const activityAuthorities = new WeakMap<() => boolean, (target: WorkflowSession, evidence: WorkflowActivityEvidence) => boolean>();
+export function verifyWorkflowActivity(authorize: () => boolean, target: WorkflowSession, evidence: WorkflowActivityEvidence): boolean {
+	// Non-workflow foreground actions retain their own authorization path.
+	return activityAuthorities.get(authorize)?.(target, evidence) ?? true;
+}
+
 export interface WorkflowPendingApproval {
 	/** Adapter metadata supplied directly by discovery, not dialog text. */
 	activity?: { version: number; at: string | null; instanceId?: string };
@@ -231,7 +243,6 @@ export class WorkflowContinuations {
 	private claimSequence = 0;
 	private engine?: { id: string; startedAt: number };
 	private readonly automaticInFlight = new Set<string>();
-	private readonly needsActivityRecovery = new Set<string>();
 	private readonly sendingSessions = new Map<string, number>();
 	private readonly approvalRevisions = new Map<string, number>();
 	private sending(target: WorkflowSession): () => void {
@@ -328,7 +339,6 @@ export class WorkflowContinuations {
 						"No se pudo confirmar una respuesta anterior. Revisa la sesión antes de reanudar.";
 				}
 				this.works.set(work.id, work);
-				this.needsActivityRecovery.add(work.id);
 			}
 			this.expire();
 			this.save();
@@ -399,22 +409,33 @@ export class WorkflowContinuations {
 		this.ensure(authorize);
 		for (const target of work.sessions) {
 			const session = snapshot.sessions.find(s => pair(s) === pair(target));
-			if (!session?.connected) return false;
-			if (session.capabilities?.activityFence !== 1) {
-				work.state = "paused";
-				delete work.lease;
-				work.lastMessage = "Sólo avisos: actualiza el adaptador con protección de actividad antes de reanudar la autonomía.";
-				this.save();
-				return false;
-			}
-			const previous = work.observed[pair(target)];
-			const marker = session.humanActivityAt ?? null;
-			if (!previous || previous.humanActivityAt === undefined || previous.humanActivityAt !== marker || previous.activityInstanceId !== session.activityInstanceId) {
-				if (active(work)) this.yieldToHuman(work, "La persona trabajó en esta sesión desde la última observación.");
+			if (!session?.connected || !this.matchesActivity(work, target, {
+				version: session.capabilities?.activityFence ?? 0,
+				at: session.humanActivityAt ?? null,
+				instanceId: session.activityInstanceId,
+			})) {
+				this.yieldToHuman(work, "La actividad o el adaptador de la sesión cambió o no pudo comprobarse.");
 				return false;
 			}
 		}
 		return active(work);
+	}
+
+	private matchesActivity(work: StoredWorkflow, target: WorkflowSession, evidence: WorkflowActivityEvidence): boolean {
+		const previous = work.observed[pair(target)];
+		return evidence.version === 1 && typeof evidence.instanceId === "string" && !!evidence.instanceId &&
+			(evidence.at === null || Number.isFinite(Date.parse(evidence.at))) &&
+			previous?.humanActivityAt !== undefined && previous.humanActivityAt === evidence.at &&
+			previous.activityInstanceId === evidence.instanceId;
+	}
+	private bindActivity(work: StoredWorkflow, authorize: () => boolean): void {
+		activityAuthorities.set(authorize, (target, evidence) => {
+			if (!work.sessions.some(session => pair(session) === pair(target)) || !this.matchesActivity(work, target, evidence)) {
+				this.yieldToHuman(work, "La actividad o el adaptador de la sesión cambió o no pudo comprobarse.");
+				return false;
+			}
+			return authorize();
+		});
 	}
 
 	/** Called only by trusted interaction metadata, never session/mail content. */
@@ -537,6 +558,7 @@ export class WorkflowContinuations {
 			!humanOnlyQuestion(question) && workflowQuestionHash(question) === questionHash &&
 			this.approvalRevisions.get(work.id) === revision &&
 			deadline(work) > this.now();
+		this.bindActivity(work, current);
 		const operation: Operation = {
 			id: operationId,
 			hash: questionHash,
@@ -842,8 +864,7 @@ export class WorkflowContinuations {
 				this.save();
 				return this.status();
 			}
-			if (this.needsActivityRecovery.has(work.id) && !(await this.verifyActivity(work, authorize))) return this.status();
-			this.needsActivityRecovery.delete(work.id);
+			if (!(await this.verifyActivity(work, authorize))) return this.status();
 			const wake = this.leaseWork(work, work.pending.splice(0));
 			return {
 				...this.status(),
@@ -1074,6 +1095,7 @@ export class WorkflowContinuations {
 			const foregroundClaim = createHash("sha256")
 				.update(JSON.stringify([claimId, authorization]))
 				.digest("hex");
+			if (!(await this.verifyActivity(work, authorize))) throw new WorkflowError("La sesión requiere revisión humana antes de continuar.", 403);
 			if (work.lease?.foregroundClaim === foregroundClaim) return this.wake(work);
 			if ([...this.works.values()].some((candidate) => candidate.lease))
 				throw new WorkflowError(
@@ -1218,6 +1240,9 @@ export class WorkflowContinuations {
 		if (!target) throw new WorkflowError("La sesión no está incluida en el objetivo autorizado.", 403);
 		if (this.busy) throw new WorkflowError("Otra operación está en curso.", 429);
 		const lease = this.scoped(work, input, authorize);
+		const verified = await this.verifyActivity(work, authorize);
+		this.scoped(work, input, authorize);
+		if (!verified) throw new WorkflowError("La actividad de la sesión cambió; el seguimiento está pausado.", 409);
 		this.busy = true;
 		const current = () =>
 			!this.closed &&
@@ -1227,6 +1252,7 @@ export class WorkflowContinuations {
 			lease.expiresAt > this.now() &&
 			deadline(work) > this.now() &&
 			authorize();
+		this.bindActivity(work, current);
 		try {
 			if (action === "inspect") {
 				const result = await this.options.inspect(target.paneId, target.sessionId);

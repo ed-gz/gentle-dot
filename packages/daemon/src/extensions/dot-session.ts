@@ -441,11 +441,14 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 					params.expectedHumanActivityAt !== (companionActivity.snapshot(ctx!.isIdle(), false).humanActivityAt ?? null))
 					throw new OrchestrationError("HUMAN_ACTIVE", "La persona volvió a trabajar en esta sesión; la autonomía debe pausarse.");
 				const plain = typeof content === "string" ? content : content.filter(part => part.type === "text").map(part => part.text).join("\n");
-				if (waitingForQuestion && queuedHuman.length >= 16) throw new OrchestrationError("DELIVERY_LIMIT", "Responde la pregunta antes de enviar más mensajes.");
 				const deliveryId = typeof clientMessageId === "string" ? clientMessageId : waitingForQuestion ? randomUUID() : undefined;
 				const prepared = deliveryId
 					? deliveries.prepare(deliveryId, [params.text, params.deliveryId, params.deliverAs ?? "followUp"], plain, deliverAs, !waitingForQuestion && ctx!.isIdle(), String(params.text)) : undefined;
 				if (!prepared?.duplicate) {
+					if (waitingForQuestion && queuedHuman.length >= 16) {
+						if (deliveryId) deliveries.remove(deliveryId);
+						throw new OrchestrationError("DELIVERY_LIMIT", "Responde la pregunta antes de enviar más mensajes.");
+					}
 					if (waitingForQuestion) { queuedHuman.push({content, id:deliveryId}); return; }
 					try { pi.sendUserMessage(content, { deliverAs, expandPromptTemplates: false }); }
 					catch (error) { if (typeof clientMessageId === "string") deliveries.remove(clientMessageId); throw error; }
@@ -671,6 +674,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				if (!details || !questionDetails(details)) return;
 				const pending: PendingDialog = {
 					...details,
+					workflowPermission: { provider: "dot-session/v1", category: "native-review-consent" },
 					kind: "select",
 					title: String(details.title),
 					id: randomUUID(),

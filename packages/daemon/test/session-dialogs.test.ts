@@ -129,11 +129,24 @@ it("queues human extra detail behind the question in order, never as an answer, 
  expect(vi.mocked(h.sendUserMessage).mock.calls.map(c=>c[0])).toEqual(["extra one","extra two"]);
  expect(vi.mocked(h.sendUserMessage).mock.calls[0]?.[1]).toMatchObject({deliverAs:"followUp"});
 });
-it("counts human dialog answers as personal activity but not fenced workflow answers", async()=>{
+it("acknowledges an accepted queued retry at capacity without admitting a new message", async()=>{
+ const h=await session(); const waiting=h.ctx.ui.confirm("Continue?","Choose first");
+ const q=(await h.call("snapshot")).question as {id:string};
+ for(let i=0;i<16;i++) await h.call("prompt",{text:`extra ${i}`,humanInteraction:true,clientMessageId:`capacity-msg-${i}`});
+ await expect(h.call("prompt",{text:"extra 0",humanInteraction:true,clientMessageId:"capacity-msg-0"})).resolves.toMatchObject({accepted:true});
+ await expect(h.call("prompt",{text:"overflow",humanInteraction:true,clientMessageId:"capacity-overflow"})).rejects.toMatchObject({code:"DELIVERY_LIMIT"});
+ await h.call("answer",{questionId:q.id,confirmed:true}); await waiting;
+ await vi.waitFor(()=>expect(h.sendUserMessage).toHaveBeenCalledTimes(16));
+ await h.call("prompt",{text:"overflow",humanInteraction:true,clientMessageId:"capacity-overflow"});
+ expect(h.sendUserMessage).toHaveBeenCalledTimes(17);
+});
+
+it("refuses autonomous answers to generic dialogs and counts human answers as personal activity", async()=>{
  const h=await session(); const first=h.ctx.ui.confirm("Continue?","Question");
  const q=(await h.call("snapshot")).question as {id:string};
- await h.call("answer",{questionId:q.id,confirmed:true,expectedHumanActivityAt:null}); await first;
+ await expect(h.call("answer",{questionId:q.id,confirmed:true,expectedHumanActivityAt:null})).rejects.toMatchObject({code:"HUMAN_REQUIRED"});
  expect((await h.call("snapshot")).companionActivity).not.toHaveProperty("humanActivityAt");
+ await h.call("answer",{questionId:q.id,confirmed:true}); await first;
  const second=h.ctx.ui.confirm("Continue again?","Question");
  const next=(await h.call("snapshot")).question as {id:string};
  await h.call("answer",{questionId:next.id,confirmed:true}); await second;

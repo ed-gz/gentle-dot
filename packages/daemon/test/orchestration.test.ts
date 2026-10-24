@@ -56,14 +56,14 @@ function harness(extra: Partial<OrchestratorOptions> = {}) {
 		if (method === "pane.get") return { pane: { pane_id: "w1:p1", terminal_id: "t1" } };
 		if (method === "pane.process_info") return { process_info: { foreground_processes: [{ pid }] } };
 		if (method === "snapshot")
-			return { sessionId, status: question ? "waiting" : state, messages, question, capabilities };
+			return { sessionId, instanceId:manifest.instanceId, status: question ? "waiting" : state, messages, question, capabilities }; 
 		if (method === "answer") {
 			if (params.questionId !== question?.id) throw new Error("Stale question");
 			question = null;
 		}
 		if (["workspace.create", "tab.create"].includes(method))
 			return { root_pane: { pane_id: "w2:p1", terminal_id: "t2" } };
-		return { accepted: true, sessionId };
+		return { accepted: true, sessionId, instanceId:manifest.instanceId };
 	};
 	const orchestrator = new Orchestrator({
 		dataDir: "/tmp/gentle-dot-orchestration-test",
@@ -252,7 +252,7 @@ describe("HERDR orchestration authority", () => {
 	it("answers only the concrete inspected local question through a workflow delegation without creating a future policy", async () => {
 		const h = harness();
 		h.setCapabilities({activityFence:1});
-		h.setRawQuestion({id:"q1",kind:"confirm",answerable:true,title:"Allow running tests?",message:"Local unit tests",expiresAt:new Date(Date.now()+600_000).toISOString()});
+		h.setRawQuestion({id:"q1",kind:"confirm",answerable:true,title:"Allow running tests?",message:"Local unit tests",workflowPermission:{provider:"dot-session/v1",category:"workspace-tool",scope:"project-workspace",tool:"bash"},expiresAt:new Date(Date.now()+600_000).toISOString()});
 		const request = await delegatedRequest(h);
 		await expect(h.orchestrator.answerForWorkflow(request, () => true)).resolves.toMatchObject({
 			accepted: true,
@@ -827,6 +827,37 @@ it("personal dialog answers notify the watch owner, unlike workflow-origin answe
  expect(onInteraction).toHaveBeenCalledExactlyOnceWith({paneId:"w1:p1",sessionId:"s1"},"human");
 });
 
+it.each(["prompt", "approve"])("revokes workflow authority if the adapter restarts between coordinator verification and %s", async action => {
+ const directory=await mkdtemp(join(tmpdir(),"dot-reconnect-"));
+ cleanups.push(()=>rm(directory,{recursive:true,force:true}));
+ const h=harness(); Object.assign(h.manifest,{instanceId:"before"});
+ h.setCapabilities({questions:true,prompt:true,activityFence:1});
+ const question=vi.fn();
+ const workflows=new WorkflowContinuations({
+  dataDir:directory,snapshot:()=>h.orchestrator.snapshot(),
+  inspect:(paneId,sessionId)=>h.orchestrator.dispatch({action:"inspect",paneId,sessionId},"agent"),
+  prompt:async(paneId,sessionId,text,authorize)=>{
+   h.manifest.instanceId="after";
+   return h.orchestrator.dispatch({action:"prompt",paneId,sessionId,text},"agent",authorize);
+  },
+  approve:async(request,authorize)=>{
+   h.manifest.instanceId="after";
+   return h.orchestrator.answerForWorkflow(request,authorize);
+  },
+  askContinuation:question,
+ });
+ cleanups.push(async()=>workflows.close());
+ await workflows.dispatch({action:"start",objective:"Local project work",authorization:"Continue the local work",sessions:[{paneId:"w1:p1",sessionId:"s1"}]},"agent");
+ const wake=(await workflows.poll(true)).wake!;
+ if(action==="approve") h.setRawQuestion({id:"local-q",kind:"confirm",answerable:true,title:"Allow local read?",workflowPermission:{provider:"dot-session/v1",category:"workspace-tool",scope:"project-workspace",tool:"read"}});
+ const scoped={workflowId:wake.workflowId,leaseId:wake.leaseId,paneId:"w1:p1",sessionId:"s1"};
+ await workflows.dispatch({...scoped,action:"inspect"},"agent");
+ await expect(workflows.dispatch({...scoped,action,operationId:"reconnected",text:"Continue",requestId:"local-q",answer:{confirmed:true},reason:"Local work"},"agent")).rejects.toMatchObject({status:409});
+ expect(h.calls.filter(c=>c.method==="prompt"||c.method==="answer")).toEqual([]);
+ expect(workflows.status().workflows[0]?.state).toBe("paused");
+ expect(question).toHaveBeenCalledOnce();
+});
+
 describe("deterministic delegated discovery", () => {
 	it("answers the exact raw request before attention, without a Dot turn or success notification", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "dot-fast-approval-"));
@@ -844,6 +875,7 @@ describe("deterministic delegated discovery", () => {
 			},
 		});
 		h.setCapabilities({ questions: true, activityFence:1 });
+		Object.assign(h.manifest, {instanceId:"adapter-a"});
 		workflows = new WorkflowContinuations({
 			dataDir: directory,
 			snapshot: () => h.orchestrator.snapshot(),
@@ -866,6 +898,7 @@ describe("deterministic delegated discovery", () => {
 			id: "q1",
 			kind: "confirm",
 			answerable: true,
+			workflowPermission: {provider:"dot-session/v1",category:"workspace-tool",scope:"project-workspace",tool:"bash"},
 			title: "Allow running local tests?",
 			message: "Run unit tests",
 			fingerprint: "raw-field-not-in-ui-approval",
@@ -915,7 +948,7 @@ describe("independent session concurrency", () => {
 			},
 		});
 		h.setCapabilities({activityFence:1});
-		h.setRawQuestion({id:"q1",kind:"confirm",answerable:true,title:"Allow running tests?",message:"Local unit tests",expiresAt:new Date(Date.now()+600_000).toISOString()});
+		h.setRawQuestion({id:"q1",kind:"confirm",answerable:true,title:"Allow running tests?",message:"Local unit tests",workflowPermission:{provider:"dot-session/v1",category:"workspace-tool",scope:"project-workspace",tool:"bash"},expiresAt:new Date(Date.now()+600_000).toISOString()});
 		const raw = await h.request("/pi.sock", "snapshot");
 		const question = raw.question as Record<string, unknown>;
 		const inspecting = h.orchestrator.dispatch(

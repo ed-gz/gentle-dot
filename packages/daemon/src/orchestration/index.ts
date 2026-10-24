@@ -12,6 +12,7 @@ import {
 	type WorkflowApprovalRequest,
 	type WorkflowPendingApproval,
 	workflowQuestionHash,
+	verifyWorkflowActivity,
 } from "../workflows.ts";
 import { parseCompanionActivity } from "./companion-activity.ts";
 import { CompanionContext } from "./companion-context.ts";
@@ -883,6 +884,11 @@ export class Orchestrator {
 			acquired = true;
 			const bound = await this.bind(input.paneId, input.sessionId);
 			const page = await this.call(bound, "snapshot", {}, authorize);
+			if (!verifyWorkflowActivity(authorize, input, {
+				version: record(page.capabilities) && page.capabilities.activityFence === 1 ? 1 : 0,
+				instanceId: bound.manifest.instanceId,
+				at: record(page.companionActivity) && typeof page.companionActivity.humanActivityAt === "string" ? page.companionActivity.humanActivityAt : null,
+			})) throw new OrchestrationError("HUMAN_ACTIVE", "La actividad o el adaptador cambió; la autonomía está pausada.");
 			this.observeHumanActivity(input.paneId, input.sessionId, page.companionActivity);
 			this.assertAuthorized(authorize);
 			const question = page.question;
@@ -1100,6 +1106,11 @@ export class Orchestrator {
 			if (action === "prompt" && actor === "agent") {
 				const fresh = await this.call(bound, "snapshot", {limit:1}, authorize);
 				if (!record(fresh.capabilities) || fresh.capabilities.activityFence !== 1) throw new OrchestrationError("ACTIVITY_FENCE_REQUIRED", "Actualiza el adaptador antes de delegar acciones.", 403);
+				if (!verifyWorkflowActivity(authorize, {paneId, sessionId:bound.manifest.sessionId}, {
+					version: 1,
+					instanceId: bound.manifest.instanceId,
+					at: record(fresh.companionActivity) && typeof fresh.companionActivity.humanActivityAt === "string" ? fresh.companionActivity.humanActivityAt : null,
+				})) throw new OrchestrationError("HUMAN_ACTIVE", "La actividad o el adaptador cambió; la autonomía está pausada.");
 				this.observeHumanActivity(paneId, bound.manifest.sessionId, fresh.companionActivity);
 				this.assertAuthorized(authorize);
 			}

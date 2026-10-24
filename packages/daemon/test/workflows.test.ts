@@ -25,6 +25,7 @@ function fixture() {
 		label: id,
 		state: "idle",
 		connected: true,
+		activityInstanceId: `adapter-${id}`,
 		capabilities: { inspect: true, prompt: true, approvals: true, activityFence:1 },
 		assistantMessageId: `old-${id}`,
 	}));
@@ -161,11 +162,16 @@ it("refuses autonomous prompts without a verified original human instruction", a
  expect(h.prompt).not.toHaveBeenCalled();
 });
 
-it("leaves external publication dialogs to the human even in model-driven approve", async () => {
+it.each([
+ {title:"Allow publication?",toolName:"gmail_send"},
+ {title:"Allow SMTP delivery?",message:"To: alice@example.com; subject: update"},
+ {title:"Allow distribution?",message:"Make this available to everyone"},
+ {title:"Allow operation?",message:"Unknown effect"},
+])("leaves external and unknown dialogs to the human in model-driven approve: %j", async metadata => {
  const h=fixture(); await h.start(); const wake=await claim(h);
- h.inspect.mockResolvedValue({sessionId:"session-a",question:{id:"publish",kind:"confirm",answerable:true,title:"Allow publication?",toolName:"gmail_send"}});
+ h.inspect.mockResolvedValue({sessionId:"session-a",question:{id:"q-external",kind:"confirm",answerable:true,...metadata}});
  await h.coordinator.dispatch(input(wake,"inspect"),"agent");
- await expect(h.coordinator.dispatch({...input(wake,"approve"),operationId:"external",requestId:"publish",answer:{confirmed:true},reason:"Within original objective"},"agent")).rejects.toMatchObject({status:403});
+ await expect(h.coordinator.dispatch({...input(wake,"approve"),operationId:"external",requestId:"q-external",answer:{confirmed:true},reason:"Within original objective"},"agent")).rejects.toMatchObject({status:403});
  expect(h.approve).not.toHaveBeenCalled();
 });
 it("pauses autonomous enrollment without a versioned activity fence", async()=>{
@@ -181,6 +187,23 @@ it("does not resurrect a revoked workflow while an explicit resume checks adapte
  await h.coordinator.dispatch({action:"stop",workflowId:work.id},"human"); finish(snapshot);
  await expect(resuming).rejects.toMatchObject({status:409});
  expect(h.coordinator.status().workflows[0]?.state).toBe("cancelled");
+});
+
+it.each(["before-lease", "existing-lease"])("fences an adapter-only restart with lost human activity: %s", async stage => {
+ const h=fixture(); let activityInstanceId="adapter-before";
+ const question=vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+ h.options.askContinuation=question;
+ h.options.snapshot=async()=>({sessions:h.sessions.map(s=>({...s,activityInstanceId}))});
+ await h.start();
+ const wake=stage === "existing-lease" ? await claim(h) : undefined;
+ if(wake) await h.coordinator.dispatch(input(wake,"inspect"),"agent");
+ // The adapter lost an unobserved human edit and reset its marker to null.
+ activityInstanceId="adapter-after";
+ if(wake) await expect(h.coordinator.dispatch({...input(wake,"prompt"),operationId:"after-restart",text:"Continue"},"agent")).rejects.toMatchObject({status:409});
+ else expect((await h.coordinator.poll(true)).wake).toBeUndefined();
+ expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
+ await h.coordinator.poll(true); await h.coordinator.prepare();
+ expect(question).toHaveBeenCalledOnce(); expect(h.prompt).not.toHaveBeenCalled();
 });
 
 it("cannot treat an adapter restart with a reset personal marker as proof of no interaction", async()=>{
@@ -667,16 +690,19 @@ it("wakes once for permissions, missed new requests, disconnection and reconnect
 	expect((await settle()).reasons).toContain("Permiso pendiente: pane-a");
 	session.connected = false;
 	h.advance(30_000);
-	expect((await settle()).reasons).toContain("Sesión desconectada: pane-a");
+	await h.coordinator.prepare();
+	expect((await h.coordinator.poll(true)).wake).toBeUndefined();
+	expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
 	h.advance(30_000);
 	expect((await h.coordinator.poll(true)).wake).toBeUndefined();
 	session.connected = true;
 	h.advance(30_000);
-	expect((await settle()).reasons).toContain("Sesión reconectada: pane-a");
+	expect((await h.coordinator.poll(true)).wake).toBeUndefined(); // Reconnection never renews authority.
 });
 
 const question = {
 	id: "permission-a",
+	workflowPermission: {provider:"dot-session/v1",category:"workspace-tool",scope:"project-workspace",tool:"read"},
 	kind: "confirm",
 	title: "Validar el resultado preparado",
 	message: "PRIVATE_PERMISSION_DETAILS",
@@ -750,6 +776,7 @@ it("isolates an ambiguous in-flight answer when stopped, while another objective
 	);
 	const sending = h.coordinator.dispatch(permission(stopped), "agent");
 	const rejected = expect(sending).rejects.toThrow("No se pudo confirmar");
+	await vi.waitFor(() => expect(rejectReply).toBeTypeOf("function"));
 	await h.coordinator.dispatch(
 		{ action: "acknowledge", leaseId: stopped.leaseId, outcome: "interrupted" },
 		"agent",
@@ -1008,7 +1035,7 @@ it("keeps one session delegation across task completion and restart without idle
 		pending: 0,
 	});
 	expect((await h.coordinator.poll(true)).wake).toBeUndefined();
-	const question = { id: "request-1", answerable: true, kind: "confirm", title: "Guardar" };
+	const question = { id: "request-1", answerable: true, kind: "confirm", title: "Guardar", workflowPermission: {provider:"dot-session/v1",category:"workspace-tool",scope:"project-workspace",tool:"write"} };
 	h.approvals.push({ id: question.id, paneId: session.paneId, sessionId: session.sessionId });
 	h.inspect.mockResolvedValue({ sessionId: session.sessionId, status: "waiting", question });
 	h.advance(30_000);
@@ -1426,21 +1453,24 @@ it("does not revive old permission work for an idle, replaced or revoked session
 	}
 });
 
-it("does not hold a ready objective behind slow background session recovery", async () => {
+it("waits for fresh activity evidence before leasing even when recovery is slow", async () => {
 	const h = fixture();
 	await h.start();
 	let finish!: () => void;
+	const blocked = new Promise<void>(resolve => { finish = resolve; });
 	h.options.snapshot = async () => {
-		await new Promise<void>((resolve) => {
-			finish = resolve;
-		});
+		await blocked;
 		return { sessions: h.sessions, approvals: h.approvals };
 	};
 	const preparing = h.coordinator.prepare();
-	const batch = await h.coordinator.poll(true);
+	let settled = false;
+	const polling = h.coordinator.poll(true).then(batch => { settled = true; return batch; });
+	await Promise.resolve();
+	expect(settled).toBe(false);
+	finish();
+	const batch = await polling;
 	expect(batch.wake).toBeDefined();
 	expect(batch.workflows[0]?.state).toBe("running");
-	finish();
 	await preparing;
 });
 
@@ -1473,7 +1503,9 @@ it.each(["during", "after"])(
 		h.advance(30_001);
 		let finishSnapshot!: () => void;
 		const stale = structuredClone({ sessions: h.sessions, approvals: h.approvals });
+		let reads = 0;
 		h.options.snapshot = async () => {
+			if (reads++ > 0) return structuredClone({sessions:h.sessions,approvals:h.approvals});
 			await new Promise<void>((resolve) => {
 				finishSnapshot = resolve;
 			});
@@ -1492,6 +1524,7 @@ it.each(["during", "after"])(
 			{ ...input(wake, "prompt"), text: "Continúa con la validación acordada", operationId: "next" },
 			"agent",
 		);
+		await vi.waitFor(() => expect(finishPrompt).toBeTypeOf("function"));
 		if (timing === "after") {
 			finishPrompt();
 			await sending;
