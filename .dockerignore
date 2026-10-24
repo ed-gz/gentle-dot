@@ -7,3 +7,14 @@ test-results
 playwright-report
 odd
 .atl
+.cache
+build
+**/.gradle
+**/build
+**/local.properties
+**/*.jks
+**/*.keystore
+**/.env
+**/.env.*
+**/google-services.json
+**/*service-account*.json

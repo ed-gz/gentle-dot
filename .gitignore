@@ -16,3 +16,17 @@ apps/desktop/src-tauri/gen/
 
 # Declarations emitted next to sources by accident
 packages/*/src/**/*.d.ts
+
+# Local credentials and signing material never belong in a personal fork.
+.env
+.env.*
+!.env.example
+!*.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx
+*service-account*.json
+google-services.json
+firebase-adminsdk*.json
+local.properties

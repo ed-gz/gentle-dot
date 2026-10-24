@@ -1,6 +1,8 @@
 <!-- markdownlint-disable-next-line MD041 -->
 <a id="top"></a>
 
+> **Eduardo Garza's personal fork:** [ed-gz/gentle-dot](https://github.com/ed-gz/gentle-dot), based on [Gentleman-Programming/gentle-dot](https://github.com/Gentleman-Programming/gentle-dot). Gentle Dot remains the base application. The bundled **Capri** fan theme is optional and contains its sprites, animation data, colors and persona in [`packages/theme-capri`](packages/theme-capri). See [what belongs to the base and to this fork](docs/fork.md) and [the Android companion](docs/android-companion.md).
+
 <div align="center">
 
 <img width="100%" alt="Gentle Dot banner: the neon rose glowing inside a black circle, the Gentle Dot wordmark, and the tagline Your assistant, always one key away" src="docs/assets/brand/gentle-dot-banner.png" />
@@ -106,7 +108,7 @@ Attach files with the paperclip, drag and drop, or paste. Images go straight to 
 
 ## Android and remote sessions
 
-Build an installable Android companion with `pnpm android:apk`, then run `pnpm mobile:connect` to pair over private Tailscale HTTPS. The app shares the desktop chat, supports Android dictation, and adds HERDR session controls with explicit, expiring approvals. See [the mobile guide](docs/mobile-orchestration.md).
+Build an installable Android companion with `pnpm android:apk`, then run `pnpm mobile:connect` to pair over private Tailscale HTTPS. The app shares the desktop chat, supports Android dictation, and adds HERDR session controls with explicit, expiring approvals. An optional native companion floats above other Android apps and opens a compact chat window. Its local animation can remain visible without a connection; AI responses and session updates still require the paired computer. See [the mobile guide](docs/mobile-orchestration.md) and [overlay controls](docs/android-companion.md).
 
 ## Get started
 
