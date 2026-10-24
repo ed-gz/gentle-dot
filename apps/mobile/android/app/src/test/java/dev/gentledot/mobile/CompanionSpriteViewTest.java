@@ -67,8 +67,13 @@ public class CompanionSpriteViewTest {
         CompanionSpriteView view=new CompanionSpriteView(context);
         assertTrue(view.theme("capri").ready);
         assertEquals("capri",view.renderState().appliedTheme);
-        for(String action:new String[]{"idle","walk","greeting","working","file-away","perch","step-aside"}) {
-            view.play(action);assertNull(action,view.renderState().error);assertCapri(draw(view));
+        for(String action:new String[]{"idle","walk","greeting","working","file-away","perch","step-aside","crying","follow-message","curious","attentive","eyes","duo-high-five"}) {
+            view.play(action);assertNull(action,view.renderState().error);
+            Bitmap rendered=draw(view);
+            if("eyes".equals(action)) {
+                // This authored glimpse intentionally paints eyes only, not Capri's pink body.
+                assertTrue(colored(rendered)>1000);assertEquals(0,rendered.getPixel(0,0));
+            } else assertCapri(rendered);
         }
         view.release();
     }
@@ -79,6 +84,15 @@ public class CompanionSpriteViewTest {
         Bitmap next=draw(view);assertFalse("Two distinct atlas frames",first.sameAs(next));assertCapri(next);
         view.theme("gentle-dot");assertEquals("gentle-dot",view.renderState().appliedTheme);
         Bitmap gentle=draw(view);assertEquals(Color.rgb(184,154,228),gentle.getPixel(112,112));view.release();
+    }
+    @Test public void sustainedWorkIsVisiblyDifferentFromIdleAndKeepsAnimating() {
+        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");attach(view);view.active(true);
+        Bitmap idle=draw(view);view.sustain("working");Bitmap working=draw(view);
+        int changed=0;for(int y=0;y<224;y++)for(int x=0;x<224;x++)if(idle.getPixel(x,y)!=working.getPixel(x,y))changed++;
+        assertTrue("Working is not a subtly altered idle pose",changed>5000);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200));assertFalse(working.sameAs(draw(view)));
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(12));Bitmap later=draw(view);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200));assertFalse(later.sameAs(draw(view)));view.release();
     }
     @Test public void missingOptionalActionReturnsToCapriIdle() {
         CompanionSpriteView view=new CompanionSpriteView(context,path->{

@@ -16,6 +16,7 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    buildFeatures { buildConfig = true }
     testOptions {
         unitTests.includeAndroidResources = true
         unitTests.all {
@@ -65,19 +66,24 @@ def companionAssets = layout.buildDirectory.dir('generated/companion-assets')
 def themeAssets = file('../../../../packages/theme-capri/src/assets')
 def webAssets = file('src/main/assets/public/assets')
 tasks.register('syncCompanionAssets') {
-    inputs.files(fileTree(themeAssets) { include 'capri-motion-core-v1.json', 'capri-motion-actions-v1.json' })
-    inputs.files(fileTree(webAssets) { include 'capri-motion-core-v1-*.png', 'capri-motion-actions-v1-*.png' })
+    inputs.files(fileTree(themeAssets) { include 'capri-motion-*-v1.json', 'capri-motion-*-v1.png' })
+    inputs.files(fileTree(webAssets) { include 'capri-motion-*-v1-*.png' })
     outputs.dir(companionAssets)
     doLast {
         def output = companionAssets.get().dir('companion').asFile
         delete(companionAssets)
         output.mkdirs()
-        ['core', 'actions'].each { name ->
+        ['core', 'actions', 'reactions', 'context', 'life', 'glimpses', 'friends'].each { name ->
             def stem = "capri-motion-${name}-v1"
             def images = fileTree(webAssets) { include "${stem}-*.png" }.files
-            if (images.size() != 1) throw new GradleException("Build the mobile web app and run cap sync android before packaging the companion (${stem}).")
             def manifest = new groovy.json.JsonSlurper().parse(new File(themeAssets, "${stem}.json"))
-            manifest.image = "public/assets/${images.first().name}"
+            if (images.size() == 1) {
+                manifest.image = "public/assets/${images.first().name}"
+            } else {
+                // Native reactions must not depend on which animations Vite currently imports.
+                copy { from new File(themeAssets, "${stem}.png"); into output }
+                manifest.image = "companion/${stem}.png"
+            }
             new File(output, "${stem}.json").text = groovy.json.JsonOutput.toJson(manifest)
         }
     }

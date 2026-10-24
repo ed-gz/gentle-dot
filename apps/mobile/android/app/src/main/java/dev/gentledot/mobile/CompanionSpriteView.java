@@ -40,7 +40,9 @@ final class CompanionSpriteView extends View {
     private Animation animation;
     private int frame;
     private boolean capri, animate, attachedToWindow;
-    private String sheet="", action="idle", sustained="idle";
+    private String sheet="", action="idle", sustained="idle", reaction="";
+    private long reactionUntil;
+    private final Runnable endReaction=()->{reaction="";play(sustained);};
     private volatile RenderState state=RenderState.unavailable();
     private Consumer<RenderState> stateListener;
     private final Runnable advance=()->{
@@ -48,7 +50,7 @@ final class CompanionSpriteView extends View {
         if(++frame>=animation.frames.length){
             frame=0;
             // Idle already contains a 3.6 s breath/blink cycle. Keep its decoded frames resident.
-            if(!CompanionPolicy.loop(action,sustained))loadOrIdle(sustained);
+            if(!CompanionPolicy.loop(action,sustained)&&SystemClock.uptimeMillis()>=reactionUntil)loadOrIdle(sustained);
         }
         invalidate();schedule();
     };
@@ -75,7 +77,18 @@ final class CompanionSpriteView extends View {
     void sustain(String kind) {
         String next=CompanionPolicy.action(kind);
         if(next.equals(sustained))return;
-        sustained=next;play(next);
+        sustained=next;
+        if(SystemClock.uptimeMillis()<reactionUntil && CompanionPolicy.priority(reaction)>CompanionPolicy.priority(next))return;
+        reaction="";reactionUntil=0;handler.removeCallbacks(endReaction);
+        play(next);
+    }
+    void react(String value) {
+        if(value.equals(sustained))return;
+        if(SystemClock.uptimeMillis()<reactionUntil && CompanionPolicy.priority(reaction)>CompanionPolicy.priority(value))return;
+        if(CompanionPolicy.priority(sustained)>CompanionPolicy.priority(value))return;
+        reaction=value;reactionUntil=SystemClock.uptimeMillis()+6500;
+        handler.removeCallbacks(endReaction);handler.postAtTime(endReaction,reactionUntil);
+        play(value);
     }
     void play(String value) {
         cancelFrames();frame=0;
@@ -101,7 +114,7 @@ final class CompanionSpriteView extends View {
     }
     private void fail() { release();state(new RenderState(null,false,LOAD_ERROR));invalidate(); }
     private void load(String name) throws Exception {
-        String next=("file-away".equals(name)||"perch".equals(name)||"step-aside".equals(name))?"actions":"core";
+        String next=sheetFor(name);
         JSONObject manifest;
         try(InputStream input=assets.open("companion/capri-motion-"+next+"-v1.json");ByteArrayOutputStream output=new ByteArrayOutputStream()) {
             byte[] chunk=new byte[8192];int count;
@@ -123,6 +136,25 @@ final class CompanionSpriteView extends View {
         // Only replace a complete, validated animation. Optional action failures can return to Capri idle.
         if(atlas!=null&&atlas!=nextAtlas)atlas.recycle();
         atlas=nextAtlas;sheet=next;animation=selected;action=name;frame=0;state(new RenderState("capri",true,null));
+    }
+    static String sheetFor(String animation) throws IOException {
+        switch(animation) {
+            case "idle": case "walk": case "greeting": case "working": return "core";
+            case "file-away": case "perch": case "step-aside": return "actions";
+            case "coffee": case "chill": case "crying": case "angry": return "reactions";
+            case "headphones": case "dancing": case "capture": case "follow-message": return "context";
+            case "snack": case "stretch": case "curious": case "attentive": return "life";
+            case "eyes": case "face": case "point-left": case "point-right": return "glimpses";
+            case "duo-watch": case "duo-coffee": case "duo-couch": case "duo-high-five": return "friends";
+            default: throw new IOException("Unknown animation");
+        }
+    }
+    /** Debug preview does not mutate persisted preferences or agent facts. */
+    void preview(String name) {
+        try { sheetFor(name); } catch(IOException unknown) { return; }
+        reaction=name;reactionUntil=SystemClock.uptimeMillis()+6500;
+        handler.removeCallbacks(endReaction);handler.postAtTime(endReaction,reactionUntil);
+        cancelFrames();if(capri&&state.ready)loadOrIdle(name);invalidate();schedule();
     }
     private static final class Animation {
         final int width,height;
@@ -177,7 +209,7 @@ final class CompanionSpriteView extends View {
         } catch(RuntimeException error) { fail(); }
         finally { canvas.restoreToCount(saved); }
     }
-    void release() { cancelFrames();if(atlas!=null)atlas.recycle();atlas=null;animation=null;sheet="";state=RenderState.unavailable(); }
+    void release() { cancelFrames();handler.removeCallbacks(endReaction);reaction="";reactionUntil=0;if(atlas!=null)atlas.recycle();atlas=null;animation=null;sheet="";state=RenderState.unavailable(); }
     @Override protected void onAttachedToWindow() { super.onAttachedToWindow();attachedToWindow=true;schedule(); }
     @Override protected void onDetachedFromWindow() { attachedToWindow=false;cancelFrames();super.onDetachedFromWindow(); }
 }

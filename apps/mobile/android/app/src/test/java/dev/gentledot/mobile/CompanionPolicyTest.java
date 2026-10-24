@@ -41,10 +41,12 @@ public class CompanionPolicyTest {
         assertEquals("file-away",CompanionPolicy.action("capture"));
         assertEquals("idle",CompanionPolicy.action("unknown"));
         assertEquals("idle",CompanionPolicy.action(null));
-        for(String kind:new String[]{"typing","working","thinking"}) assertEquals("working",CompanionPolicy.action(kind));
-        for(String kind:new String[]{"permission","agentAttention","blocked","needs_you"}) assertEquals("perch",CompanionPolicy.action(kind));
-        for(String kind:new String[]{"agentCompleted","dotReply","done","success"}) assertEquals("greeting",CompanionPolicy.action(kind));
-        for(String kind:new String[]{"agentError","dotError","error","failed"}) assertEquals("step-aside",CompanionPolicy.action(kind));
+        assertEquals("eyes",CompanionPolicy.action("typing"));
+        assertEquals("working",CompanionPolicy.action("working"));
+        assertEquals("curious",CompanionPolicy.action("thinking"));
+        for(String kind:new String[]{"permission","agentAttention","blocked","needs_you"}) assertEquals("attentive",CompanionPolicy.action(kind));
+        for(String kind:new String[]{"agentCompleted","dotReply","done","success"}) assertEquals("duo-high-five",CompanionPolicy.action(kind));
+        for(String kind:new String[]{"agentError","dotError","error","failed"}) assertEquals("crying",CompanionPolicy.action(kind));
         for(String kind:new String[]{"agentAvailable","idle","starting","restarting"}) assertEquals("idle",CompanionPolicy.action(kind));
     }
 }

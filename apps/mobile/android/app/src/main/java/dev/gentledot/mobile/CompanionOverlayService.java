@@ -50,6 +50,7 @@ public final class CompanionOverlayService extends Service {
     private final Handler handler=new Handler(Looper.getMainLooper());
     private WindowManager windows;
     private CompanionSpriteView sprite;
+    private BroadcastReceiver debugReceiver;
     private TextView speech;
     private WindowManager.LayoutParams position, speechPosition;
     private volatile boolean attached, started;
@@ -72,7 +73,7 @@ public final class CompanionOverlayService extends Service {
     }
     static void react(String kind){
         CompanionOverlayService value=current.get();
-        if(value!=null)value.handler.post(()->value.sprite.play(CompanionPolicy.action(kind)));
+        if(value!=null)value.handler.post(()->value.sprite.react(CompanionPolicy.action(kind)));
     }
     static void refresh(){CompanionOverlayService value=current.get();if(value!=null)value.handler.post(value::updateVisibility);}
     static CompanionSpriteView.RenderState renderState(){
@@ -135,6 +136,7 @@ public final class CompanionOverlayService extends Service {
     @Override public void onCreate(){
         super.onCreate();if(Build.VERSION.SDK_INT<26){stopSelf();return;}current=new WeakReference<>(this);windows=getSystemService(WindowManager.class);
         sprite=new CompanionSpriteView(this);sprite.onStateChanged(this::rendererChanged);sprite.theme(prefs(this).getString("theme","gentle-dot"));
+        debugReceiver=CompanionDebug.register(this,BuildConfig.DEBUG,name->sprite.preview(name));
         int size=dp(112);
         position=new WindowManager.LayoutParams(size,size,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT);
@@ -190,7 +192,7 @@ public final class CompanionOverlayService extends Service {
     private boolean present(String kind,String id,String title,String body,String pane,String session,String conversation){
         if(Build.VERSION.SDK_INT<26 || !attached || getSystemService(KeyguardManager.class).isKeyguardLocked())return false;
         latestEvent=safe(id,160);latestTitle=safe(title,120);latestBody=safe(body,1000);latestPane=safe(pane,160);latestSession=safe(session,160);latestConversation=safe(conversation,160);
-        sprite.play(CompanionPolicy.action(kind));if(!sprite.renderState().ready)return false;if("capture".equals(kind)||"download".equals(kind)){hideSpeech();return false;}
+        sprite.react(CompanionPolicy.action(kind));if(!sprite.renderState().ready)return false;if("capture".equals(kind)||"download".equals(kind)){hideSpeech();return false;}
         hideSpeech();
         // The existing preview setting controls the lock screen; this window never appears there.
         String displayTitle=latestTitle, displayBody=latestBody;
@@ -218,6 +220,6 @@ public final class CompanionOverlayService extends Service {
     private static String safe(String value,int length){return value==null?"":value.substring(0,Math.min(length,value.length()));}
     private void stopEnabled(){prefs(this).edit().putBoolean("enabled",false).apply();stopSelf();}
     @Override public void onConfigurationChanged(Configuration config){super.onConfigurationChanged(config);hideSpeech();move();}
-    @Override public void onDestroy(){started=false;handler.removeCallbacksAndMessages(null);hideSpeech();if(attached){try{windows.removeView(sprite);}catch(RuntimeException ignored){}attached=false;}if(sprite!=null){CompanionSpriteView.RenderState state=sprite.renderState();lastRenderState=new CompanionSpriteView.RenderState(null,false,state.error);sprite.release();unregisterReceiver(stateReceiver);getContentResolver().unregisterContentObserver(motionObserver);}if(current.get()==this)current.clear();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}
+    @Override public void onDestroy(){if(debugReceiver!=null){unregisterReceiver(debugReceiver);debugReceiver=null;}started=false;handler.removeCallbacksAndMessages(null);hideSpeech();if(attached){try{windows.removeView(sprite);}catch(RuntimeException ignored){}attached=false;}if(sprite!=null){CompanionSpriteView.RenderState state=sprite.renderState();lastRenderState=new CompanionSpriteView.RenderState(null,false,state.error);sprite.release();unregisterReceiver(stateReceiver);getContentResolver().unregisterContentObserver(motionObserver);}if(current.get()==this)current.clear();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}
     @Override public IBinder onBind(Intent intent){return null;}
 }

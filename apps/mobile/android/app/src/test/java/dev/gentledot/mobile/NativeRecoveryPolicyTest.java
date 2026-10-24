@@ -17,9 +17,9 @@ public class NativeRecoveryPolicyTest {
     @Test public void attentionWinsThenAnyWorkingAgentThenIdle() {
         assertEquals("permission",CompanionPolicy.aggregate(Arrays.asList("working","blocked","idle")));
         assertEquals("permission",CompanionPolicy.aggregate(Arrays.asList("thinking","needs_you")));
-        assertEquals("working",CompanionPolicy.aggregate(Arrays.asList("idle","thinking")));
-        assertEquals("working",CompanionPolicy.aggregate(Arrays.asList("idle","working","done")));
-        assertEquals("idle",CompanionPolicy.aggregate(Arrays.asList("done","unknown")));
+        assertEquals("thinking",CompanionPolicy.aggregate(Arrays.asList("idle","thinking")));
+        assertEquals("done",CompanionPolicy.aggregate(Arrays.asList("idle","working","done")));
+        assertEquals("done",CompanionPolicy.aggregate(Arrays.asList("done","unknown")));
         assertTrue(CompanionPolicy.loop("working","working"));
         assertTrue(CompanionPolicy.loop("idle","idle"));
         assertFalse(CompanionPolicy.loop("greeting","working"));

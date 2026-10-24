@@ -459,7 +459,12 @@ public class AgentMonitorService extends Service {
             JSONArray sessions = snapshot.optJSONArray("sessions");
             if (sessions != null) for (int i = 0; i < sessions.length(); i++) {
                 JSONObject item = sessions.optJSONObject(i);
-                if (item != null && item.optBoolean("connected")) states.add(item.optString("state"));
+                if (item != null && item.optBoolean("connected")) {
+                    String state=item.optString("state");
+                    // Terminal session snapshots can persist for hours. Their event below owns the
+                    // bounded outcome reaction; never turn a stale "done" into sustained victory.
+                    if(!"done".equals(state)&&!"error".equals(state)&&!"failed".equals(state))states.add(state);
+                }
             }
             JSONArray pending = snapshot.optJSONArray("approvals");
             if (pending != null && pending.length() > 0) states.add("permission");

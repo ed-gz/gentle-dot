@@ -93,7 +93,7 @@ public class CompanionMotionLifecycleTest {
         CompanionOverlayService.react("agentAvailable");Shadows.shadowOf(Looper.getMainLooper()).idle();
         assertEquals("An available agent cannot cancel another working agent","working",action.get(sprite));
         CompanionOverlayService.react("agentCompleted");Shadows.shadowOf(Looper.getMainLooper()).idle();
-        assertEquals("greeting",action.get(sprite));
+        assertEquals("duo-high-five",action.get(sprite));
         advance(12_000);assertEquals("working",action.get(sprite));
         CompanionOverlayService.activity("test","idle");Shadows.shadowOf(Looper.getMainLooper()).idle();
         assertEquals("idle",action.get(sprite));
@@ -107,21 +107,33 @@ public class CompanionMotionLifecycleTest {
         Field action=CompanionSpriteView.class.getDeclaredField("action");action.setAccessible(true);
         try {
             receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"ready\",\"agentState\":\"thinking\"}"));
-            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("working",action.get(sprite));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("curious",action.get(sprite));
             receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"agent_state\",\"state\":\"working\"}"));
             Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("working",action.get(sprite));
             receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"ask\",\"ask\":{\"requestId\":\"q1\",\"method\":\"confirm\"}}"));
-            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("perch",action.get(sprite));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("attentive",action.get(sprite));
             receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"ask_resolved\",\"requestId\":\"q1\"}"));
             Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("working",action.get(sprite));
             receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"agent_state\",\"state\":\"idle\"}"));
             Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("idle",action.get(sprite));
             receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"agent_state\",\"state\":\"needs_you\"}"));
-            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("perch",action.get(sprite));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("attentive",action.get(sprite));
             receive.invoke(socket,wire,1L,new org.json.JSONObject("{\"type\":\"agent_state\",\"state\":\"error\"}"));
-            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("step-aside",action.get(sprite));
+            Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("crying",action.get(sprite));
             advance(12_000);assertEquals("idle",action.get(sprite));
         } finally { socket.close(); }
+    }
+    @Test public void outcomeSurvivesStateChangesButAttentionPreemptsItAndResolutionResumesWork() throws Exception {
+        Field action=CompanionSpriteView.class.getDeclaredField("action");action.setAccessible(true);
+        CompanionOverlayService.activity("test","working");Shadows.shadowOf(Looper.getMainLooper()).idle();
+        CompanionOverlayService.react("done");Shadows.shadowOf(Looper.getMainLooper()).idle();
+        advance(3000);assertEquals("duo-high-five",action.get(sprite));
+        CompanionOverlayService.activity("test","idle");Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertEquals("duo-high-five",action.get(sprite));advance(3600);assertEquals("idle",action.get(sprite));
+        CompanionOverlayService.react("error");Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("crying",action.get(sprite));
+        CompanionOverlayService.activity("test","permission");Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("attentive",action.get(sprite));
+        CompanionOverlayService.react("done");Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("attentive",action.get(sprite));
+        CompanionOverlayService.activity("test","working");Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("working",action.get(sprite));
     }
     @Test public void transientRendererFailureKeepsOptInAndRetries() throws Exception {
         sprite.release();

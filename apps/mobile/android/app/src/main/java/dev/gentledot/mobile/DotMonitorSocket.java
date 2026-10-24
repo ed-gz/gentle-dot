@@ -37,10 +37,19 @@ final class DotMonitorSocket implements AutoCloseable {
     private int failures;
     private String agentState = "idle";
     private final LinkedHashSet<String> questions = new LinkedHashSet<>();
+    // Only running tool identities/kinds, never arguments or output. Bound hostile/malformed streams.
+    private final java.util.Map<String,String> tools = new java.util.LinkedHashMap<>();
+    private String overlayState() {
+        if ("error".equals(agentState)) return "idle"; // Error is a bounded reaction, not an endless loop.
+        if (tools.isEmpty() || "needs_you".equals(agentState)) return agentState;
+        for(String kind:tools.values()) if(!"read".equals(kind)&&!"search".equals(kind))return "working";
+        return "reading";
+    }
     private void activity(String state) {
         boolean failed = "error".equals(state) && !state.equals(agentState);
         agentState = state;
-        CompanionOverlayService.activity("dot", questions.isEmpty() ? state : "permission");
+        if ("idle".equals(state)||"error".equals(state)) tools.clear();
+        CompanionOverlayService.activity("dot", questions.isEmpty() ? overlayState() : "permission");
         if (failed) CompanionOverlayService.react("dotError");
     }
 
@@ -123,6 +132,19 @@ final class DotMonitorSocket implements AutoCloseable {
             boolean idle = "idle".equals(message.optString("state"));
             catchup.state(idle);
             if (idle) webSocket.send("{\"type\":\"get_history\"}");
+            return;
+        }
+        if ("activity".equals(type)) {
+            JSONObject tool=message.optJSONObject("activity");
+            if(tool==null)return;
+            String id=tool.optString("id"), status=tool.optString("status"), kind=tool.optString("kind");
+            if(id.isEmpty()||id.length()>160)return;
+            if("running".equals(status)) {
+                if(tools.size()<128||tools.containsKey(id))tools.put(id,("read".equals(kind)||"search".equals(kind))?kind:"other");
+            } else if("done".equals(status)||"failed".equals(status))tools.remove(id);
+            else return;
+            activity(agentState);
+            if("failed".equals(status))CompanionOverlayService.react("dotError");
             return;
         }
         if ("history".equals(type)) {
