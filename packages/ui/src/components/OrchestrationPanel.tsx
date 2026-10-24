@@ -14,6 +14,7 @@ import { TerminalMoodControl } from "./TerminalMoodControl.tsx";
 import "../orchestration.css";
 import "../agent-mobile.css";
 import "../agent-session.css";
+import { SessionDeliveryPicker, SessionWorkShelf } from "./SessionMobileControls.tsx";
 
 const STATES: Record<AgentSession["state"], string> = {
 	idle: "Disponible",
@@ -44,6 +45,7 @@ export function OrchestrationPanel({
 	controls,
 	client,
 	active = true,
+	mobile = false,
 	requestsVisible = true,
 	onVisibleSession,
 	requestedSession,
@@ -51,6 +53,7 @@ export function OrchestrationPanel({
 	controls: OrchestrationControls;
 	client: OrchestrationClient;
 	active?: boolean;
+	mobile?: boolean;
 	requestsVisible?: boolean;
 	onVisibleSession?(identity: { paneId: string; sessionId?: string } | undefined): void;
 	requestedSession?: { paneId: string; sessionId?: string; key: number };
@@ -67,6 +70,7 @@ export function OrchestrationPanel({
 	const outboxRef = useRef(outbox);
 	outboxRef.current = outbox;
 	const [deliverAs, setDeliverAs] = useState<"steer" | "followUp">("steer");
+	const [mobileDisclosure, setMobileDisclosure] = useState<"work" | "delivery">();
 	const [conversation, setConversation] = useState<AgentConversation>();
 	const [conversationError, setConversationError] = useState<string>();
 	const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -112,6 +116,12 @@ export function OrchestrationPanel({
 	const handledRequest = useRef<number | undefined>(undefined);
 	const pendingRequest = useRef<number | undefined>(undefined);
 	const followConversation = useRef(true);
+	useEffect(() => { setMobileDisclosure(undefined); }, [identity, active, mobile]);
+	const closeMobileDisclosure = useCallback(() => {
+		const selector = mobileDisclosure === "work" ? ".session-mobile-controls-trigger" : ".session-delivery-trigger";
+		setMobileDisclosure(undefined);
+		panel.current?.querySelector<HTMLButtonElement>(selector)?.focus({ preventScroll: true });
+	}, [mobileDisclosure]);
 	const setSelected = useCallback(
 		(paneId: string | undefined) => {
 			if (identity) {
@@ -277,18 +287,31 @@ export function OrchestrationPanel({
 				panel.current?.querySelector(".agent-session-menu[open]")
 			)
 				return;
-			if (selected) setSelected(undefined);
+			if (mobile && mobileDisclosure) closeMobileDisclosure();
+			else if (selected) setSelected(undefined);
 			else if (creating) setCreating(false);
 			else return;
 			event.preventDefault();
 		};
 		window.addEventListener("gentledot-back", onBack, true);
 		return () => window.removeEventListener("gentledot-back", onBack, true);
-	}, [selected, creating, active, setSelected]);
+	}, [selected, creating, active, mobile, mobileDisclosure, closeMobileDisclosure, setSelected]);
+	useEffect(() => {
+		if (!active || !mobile || !mobileDisclosure) return;
+		const onEscape = (event: KeyboardEvent) => {
+			if (event.key !== "Escape" || event.defaultPrevented || document.querySelector("dialog[open]") || panel.current?.querySelector(".agent-session-menu[open]")) return;
+			event.preventDefault();
+			closeMobileDisclosure();
+		};
+		window.addEventListener("keydown", onEscape);
+		return () => window.removeEventListener("keydown", onEscape);
+	}, [active, mobile, mobileDisclosure, closeMobileDisclosure]);
 
 	const selectedView = session ? (
 		<section className="agent-detail" aria-label={`Sesión ${session.label}`}>
-			<div className="agent-session-work">
+			<SessionWorkShelf mobile={mobile} open={mobileDisclosure === "work"}
+				onToggle={() => setMobileDisclosure(current => current === "work" ? undefined : "work")}
+				work={conversation?.work} stale={Boolean(conversationError) || !connected || !session.connected}>
 				<TerminalMoodControl client={client.terminalMood} paneId={session.paneId} sessionId={session.sessionId}
 					active={active} paneLabels={Object.fromEntries((snapshot?.sessions ?? []).map(item => [item.paneId, item.label]))} />
 				<SessionContext
@@ -306,7 +329,7 @@ export function OrchestrationPanel({
 						followConversation.current = false;
 					}}
 				/>
-			</div>
+			</SessionWorkShelf>
 			<div
 				className="agent-detail-scroll"
 				ref={conversationViewport}
@@ -437,6 +460,9 @@ export function OrchestrationPanel({
 			) : (
 				<>
 				{session.capabilities?.deliveryModes?.includes("steer") ? (
+					mobile ? <SessionDeliveryPicker value={deliverAs} open={mobileDisclosure === "delivery"}
+						onToggle={() => setMobileDisclosure(current => current === "delivery" ? undefined : "delivery")}
+						onChange={value => { setDeliverAs(value); closeMobileDisclosure(); }} /> :
 					<label className="session-delivery-mode">Entrega del mensaje
 						<select value={deliverAs} onChange={event => setDeliverAs(event.target.value as "steer" | "followUp")}>
 							<option value="steer">En la siguiente pausa de la sesión</option>

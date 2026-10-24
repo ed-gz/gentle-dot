@@ -984,6 +984,7 @@ function ChatSurfaceView({
 					<Suspense fallback={<p role="status">Abriendo agentes…</p>}>
 						<AgentVoiceContext value={{ state, send }}>
 							<OrchestrationPanel
+								mobile={mobile}
 								controls={agents}
 								client={orchestration}
 								active={agentsShown}

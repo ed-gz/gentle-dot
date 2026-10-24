@@ -896,6 +896,11 @@ test("agent workflow unfolds on demand, preserves the draft and fits phone, land
 	const { traffic, errors } = await mountShell(page, { workflow: true });
 	await page.getByRole("button", { name: "Sesiones", exact: true }).click();
 	await page.getByRole("button", { name: /Revisión del proyecto/ }).click();
+	const sessionControls = page.getByRole("button", { name: /Detalles y actividad/ });
+	await expect(sessionControls).toHaveAttribute("aria-expanded", "false");
+	await expect(page.getByRole("region", { name: "Plan de trabajo" })).toBeHidden();
+	await page.screenshot({ path: info.outputPath("apk-session-conversation-first.png") });
+	await sessionControls.click();
 	const workflow = page.locator(".agent-workflow").filter({
 		has: page.getByRole("list", { name: "Subagentes activos", includeHidden: true }),
 	});
@@ -949,6 +954,7 @@ test("agent workflow unfolds on demand, preserves the draft and fits phone, land
 	await page.getByRole("button", { name: "Dot", exact: true }).click();
 	await expect(page.locator(".chat-mobile")).toHaveAttribute("data-chat-theme", "light");
 	await page.getByRole("button", { name: "Sesiones", exact: true }).click();
+	await sessionControls.click();
 	await summary.scrollIntoViewIfNeeded();
 	await page.screenshot({ path: info.outputPath("apk-agent-workflow-light.png") });
 	await page.addStyleTag({ content: "html { -webkit-text-size-adjust:200%; text-size-adjust:200%; }" });
@@ -958,6 +964,9 @@ test("agent workflow unfolds on demand, preserves the draft and fits phone, land
 	await page.screenshot({ path: info.outputPath("apk-agent-workflow-text-200.png") });
 	await page.evaluate(() => window.__mobileShellNativeEvent("backButton"));
 	await expect(workflow).toBeHidden();
+	await expect(sessionControls).toHaveAttribute("aria-expanded", "false");
+	await expect(reply).toHaveValue("Sigue con el plan después de revisar");
+	await page.evaluate(() => window.__mobileShellNativeEvent("backButton"));
 	await expect(page.getByRole("button", { name: /Revisión del proyecto/ })).toBeVisible();
 	expect(errors).toEqual([]);
 });
@@ -1540,6 +1549,7 @@ test("session history loads earlier pages without moving the text being read and
 	const conversation = page.getByRole("region", { name: "Conversación de la sesión" });
 	await expect(conversation.getByRole("article")).toHaveCount(50);
 	const viewport = page.locator(".agent-detail-scroll");
+	await page.getByRole("button", { name: /Detalles y actividad/ }).click();
 	const plan = page.getByRole("region", { name: "Plan de trabajo" });
 	const planToggle = plan.locator("summary");
 	await expect(planToggle).toBeInViewport();
@@ -1643,7 +1653,8 @@ test("reviewed mobile screens retain Gentle identity at 390px and landscape", as
 	await expect(page.locator(".agent-folder")).toHaveCount(0);
 	await page.screenshot({ path: info.outputPath("gentle-dot-sessions-390.png") });
 	await page.getByRole("button", { name: /Revisión del proyecto/ }).click();
-	await expect(page.getByRole("region", { name: "Plan de trabajo" })).toBeVisible();
+	await expect(page.getByRole("region", { name: "Plan de trabajo" })).toBeHidden();
+	await expect(page.getByRole("button", { name: /Detalles y actividad/ })).toBeVisible();
 	await page.screenshot({ path: info.outputPath("gentle-dot-session-390.png") });
 	await page.setViewportSize({ width: 844, height: 390 });
 	await expect(page.getByRole("button", { name: "Enviar instrucción", exact: true })).toBeInViewport();

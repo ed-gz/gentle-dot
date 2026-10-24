@@ -1,0 +1,122 @@
+.agent-session-work.session-mobile-controls {
+	display: flex;
+	flex-direction: column;
+	max-height: 45%;
+	padding: 0 16px;
+	overflow: hidden;
+	border-bottom: 1px solid var(--line);
+}
+.session-mobile-controls-trigger,
+.session-delivery-trigger {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+	min-height: 48px;
+	padding: 6px 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	color: var(--text);
+	font-size: 0.875em;
+	line-height: 1.4;
+	text-align: left;
+	cursor: pointer;
+}
+.session-mobile-controls-trigger {
+	flex: none;
+	justify-content: space-between;
+}
+.session-mobile-controls-trigger > span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.session-mobile-controls-trigger small {
+	display: block;
+	color: var(--muted);
+	font-size: 0.92em;
+}
+.session-mobile-chevron {
+	flex: none;
+}
+.session-mobile-controls-content {
+	min-height: 0;
+	overflow: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+}
+.session-mobile-controls-content[hidden],
+.session-delivery-options[hidden] {
+	display: none;
+}
+.session-delivery-picker {
+	flex: 0 1 auto;
+	min-height: 48px;
+	max-height: 45%;
+	padding: 0 16px;
+	overflow: auto;
+	overscroll-behavior: contain;
+	border-top: 1px solid var(--line);
+	background: var(--bg);
+}
+.session-delivery-label {
+	color: var(--muted);
+}
+.session-delivery-value {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.session-delivery-options {
+	display: grid;
+	gap: 8px;
+	min-width: 0;
+	margin: 0;
+	border: 0;
+	padding: 0 0 8px;
+}
+.session-delivery-options > button {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	min-height: 48px;
+	padding: 8px;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	background: var(--bg);
+	color: var(--text);
+	font-size: 0.875em;
+	line-height: 1.4;
+	text-align: left;
+	overflow-wrap: anywhere;
+	cursor: pointer;
+}
+.session-delivery-options > button[aria-pressed="true"] {
+	border-color: var(--accent);
+}
+.session-delivery-options strong,
+.session-delivery-options small {
+	display: block;
+}
+.session-delivery-options small {
+	margin-top: 2px;
+	color: var(--muted);
+	font-size: 0.92em;
+}
+.session-delivery-check {
+	flex: 0 0 20px;
+	color: var(--accent);
+}
+.session-mobile-controls-trigger:focus-visible,
+.session-delivery-trigger:focus-visible,
+.session-delivery-options > button:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+.session-mobile-controls-trigger:active,
+.session-delivery-trigger:active,
+.session-delivery-options > button:active {
+	background: var(--surface-2);
+}

@@ -12,7 +12,7 @@ const session = (id: string, label: string, state = "working") => ({
 	workspaceId: "workspace",
 	connected: true,
 	managed: true,
-	capabilities: { inspect: true, prompt: true, abort: true, approvals: true, close: true, duplicate: true },
+	capabilities: { inspect: true, prompt: true, abort: true, approvals: true, close: true, duplicate: true, deliveryReceipts: true, deliveryModes: ["steer", "followUp"] },
 });
 const conversation = (id: string) => ({
 	sessionId: `session-${id}`,
@@ -101,6 +101,7 @@ const conversation = (id: string) => ({
 });
 
 async function setup(page: Page, theme: "dark" | "light" = "dark", fontSize = 16) {
+	const sent: Record<string, unknown>[] = [];
 	await page.addInitScript(
 		({ origin, token, theme, fontSize }) => {
 			window.__mobileShellFixture = {
@@ -115,6 +116,7 @@ async function setup(page: Page, theme: "dark" | "light" = "dark", fontSize = 16
 	await page.route(`${origin}/**`, (route) => {
 		const path = new URL(route.request().url()).pathname;
 		const action = route.request().method() === "POST" ? route.request().postDataJSON() : undefined;
+		if (path === "/orchestration" && action?.action === "prompt") sent.push(action);
 		const body =
 			path === "/orchestration"
 				? action?.action === "inspect"
@@ -144,7 +146,7 @@ async function setup(page: Page, theme: "dark" | "light" = "dark", fontSize = 16
 	await page.getByRole("button", { name: "Sesiones", exact: true }).click();
 	await page.getByRole("button", { name: "Aplicación móvil · Trabajando" }).click();
 	await expect(page.getByText("Estoy integrando la revisión y comprobando el resultado.")).toBeVisible();
-	return (id: string, paneId: string) =>
+	const notify = (id: string, paneId: string) =>
 		emit({
 			type: "toast",
 			level: "info",
@@ -154,6 +156,7 @@ async function setup(page: Page, theme: "dark" | "light" = "dark", fontSize = 16
 			notificationId: id,
 			session: { paneId, sessionId: `session-${paneId}` },
 		});
+	return Object.assign(notify, { sent });
 }
 
 test("session chat keeps only active work, separates delegated replies and opens orchestrator details", async ({
@@ -166,15 +169,18 @@ test("session chat keeps only active work, separates delegated replies and opens
 	await expect(page.locator('[data-message-id="delegate"]')).not.toHaveClass(/agent-message-user/);
 	await expect(page.getByText("Subagente antiguo")).toHaveCount(0);
 	await expect(page.getByText("Ver resultado", { exact: true })).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "Detalles y actividad", exact: true })).toHaveAttribute("aria-expanded", "false");
+	await expect(page.getByText("GPT-5.6 Sol").first()).toBeHidden();
+	await page.screenshot({ path: info.outputPath("session-dark-412.png") });
+	await page.getByRole("button", { name: "Detalles y actividad", exact: true }).click();
 	await expect(page.getByText("GPT-5.6 Sol").first()).toBeVisible();
 	await expect(page.getByText(/42\s?%/).first()).toBeVisible();
-	await page.screenshot({ path: info.outputPath("session-dark-412.png") });
-	await page.locator(".agent-workflow > summary").click();
+	await page.locator(".agent-workflow > summary").filter({ hasText: "Subagentes" }).click();
 	const delegates = page.getByRole("list", { name: "Subagentes activos" });
 	await expect(delegates.getByRole("listitem")).toHaveCount(1);
 	await expect(delegates.getByRole("img", { name: "Trabajando" })).toBeVisible();
 	await page.screenshot({ path: info.outputPath("session-active-delegates-412.png") });
-	await page.locator(".agent-workflow > summary").click();
+	await page.locator(".agent-workflow > summary").filter({ hasText: "Subagentes" }).click();
 	for (const width of [320, 375, 780]) {
 		await page.setViewportSize({ width, height: width === 780 ? 390 : 820 });
 		expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -192,6 +198,61 @@ test("session chat keeps only active work, separates delegated replies and opens
 	await expect(dialog.getByText("GitHub", { exact: true })).toBeVisible();
 	await page.screenshot({ path: info.outputPath("session-details-dark-375.png") });
 	expect(failures).toEqual([]);
+});
+
+test("mobile session gives conversation space and selects delivery inline at 375, landscape and enlarged text", async ({ page }, info) => {
+	await page.setViewportSize({ width: 375, height: 820 });
+	const { sent } = await setup(page);
+	const details = page.getByRole("button", { name: "Detalles y actividad", exact: true });
+	const delivery = page.getByRole("button", { name: /Entrega del mensaje:/ });
+	const draft = page.getByLabel("Continuar esta sesión");
+	await expect(details).toHaveAccessibleDescription("Plan 2/3 · 1 subagente");
+	await expect(details).toHaveAttribute("aria-expanded", "false");
+	await expect(page.getByRole("button", { name: "Ambiente de terminal", exact: true })).toBeHidden();
+	await expect(page.getByRole("combobox", { name: "Entrega del mensaje" })).toHaveCount(0);
+	const conversationBox = await page.locator(".agent-detail-scroll").boundingBox();
+	const detailBox = await details.boundingBox();
+	expect(conversationBox!.height).toBeGreaterThan(detailBox!.height * 3);
+	for (const control of [details, delivery]) {
+		const box = await control.boundingBox();
+		expect(box!.height).toBeGreaterThanOrEqual(48);
+		expect(box!.width).toBeGreaterThanOrEqual(48);
+	}
+	await page.screenshot({ path: info.outputPath("session-compact-375.png") });
+	await draft.fill("Continúa cuando termines lo actual");
+	await delivery.click();
+	await expect(page.getByRole("group", { name: "Cuándo recibirá tu mensaje" })).toBeVisible();
+	await expect(page.getByRole("dialog")).toHaveCount(0);
+	await page.screenshot({ path: info.outputPath("session-delivery-375.png") });
+	await page.getByRole("button", { name: "Al terminar", exact: true }).click();
+	await expect(delivery).toHaveAttribute("aria-expanded", "false");
+	await expect(delivery).toHaveAccessibleName("Entrega del mensaje: Al terminar");
+	await expect(draft).toHaveValue("Continúa cuando termines lo actual");
+	expect(sent).toEqual([]);
+	await page.getByRole("button", { name: "Enviar instrucción" }).click();
+	await expect.poll(() => sent.length).toBe(1);
+	expect(sent[0]).toMatchObject({ action: "prompt", paneId: "a", sessionId: "session-a", text: "Continúa cuando termines lo actual", deliverAs: "followUp", clientMessageId: expect.any(String) });
+	await expect(page.getByText("Recibido por la conexión; esperando confirmación de la sesión.")).toBeVisible();
+	await expect(page.getByText("Recibido por la sesión", { exact: true })).toHaveCount(0);
+	await page.setViewportSize({ width: 780, height: 390 });
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+	await expect(draft).toBeInViewport();
+	await page.screenshot({ path: info.outputPath("session-compact-landscape.png") });
+	await delivery.click();
+	await expect(page.getByRole("button", { name: "Al terminar", exact: true })).toBeVisible();
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+	await page.keyboard.press("Escape");
+	await expect(delivery).toHaveAttribute("aria-expanded", "false");
+	await page.setViewportSize({ width: 375, height: 820 });
+	await page.locator(".chat-mobile").evaluate((node) => {
+		(node as HTMLElement).style.setProperty("--chat-font-size", "32px");
+		(node as HTMLElement).style.fontSize = "32px";
+	});
+	await delivery.click();
+	await expect(page.getByRole("button", { name: "Al terminar", exact: true })).toBeVisible();
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+	await expect(draft).toBeInViewport();
+	await page.screenshot({ path: info.outputPath("session-delivery-text-200-percent.png") });
 });
 
 test("compact notifications respect the session being read and open a different session without scrolling chat", async ({
