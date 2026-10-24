@@ -13,6 +13,7 @@
  * dialog, answered `{approved}`).
  */
 import { type StdioOptions, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { closeSync, fstatSync } from "node:fs";
 import { Socket } from "node:net";
 import type { Duplex } from "node:stream";
@@ -58,7 +59,12 @@ type Frame =
 	| { kind: "request"; id: number; method: string; params?: unknown }
 	| { kind: "response"; id: number; result?: unknown; error?: string };
 
-type Pending = { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout };
+type Pending = {
+	resolve(value: unknown): void;
+	reject(error: Error): void;
+	timer: NodeJS.Timeout;
+	removeAbort(): void;
+};
 
 export interface AppChannelOptions {
 	log?: (line: string) => void;
@@ -106,18 +112,30 @@ export class AppChannel implements AppLink {
 		return () => this.closeListeners.delete(listener);
 	}
 
-	request(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+	request(method: string, params: unknown, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
 		if (!this.open) return Promise.reject(new Error("The Gentle Dot app is not connected."));
+		if (signal?.aborted) return Promise.reject(new Error("The app request was cancelled."));
 		const id = ++this.nextId;
 		const line = frameLine({ kind: "request", id, method, params });
 		if (!line) return Promise.reject(new Error(`The request ${method} is too large for the Gentle Dot app.`));
 		return new Promise((resolve, reject) => {
-			const timer = setTimeout(() => {
+			const fail = (error: Error) => {
+				if (!this.pending.has(id)) return;
 				this.pending.delete(id);
-				reject(new Error(`The Gentle Dot app did not answer ${method} in time.`));
-			}, timeoutMs);
-			this.pending.set(id, { resolve, reject, timer });
-			if (this.open) this.stream.write(line);
+				clearTimeout(timer);
+				removeAbort();
+				reject(error);
+			};
+			const abort = () => fail(new Error("The app request was cancelled."));
+			const removeAbort = () => signal?.removeEventListener("abort", abort);
+			const timer = setTimeout(
+				() => fail(new Error(`The Gentle Dot app did not answer ${method} in time.`)),
+				timeoutMs,
+			);
+			this.pending.set(id, { resolve, reject, timer, removeAbort });
+			signal?.addEventListener("abort", abort, { once: true });
+			if (signal?.aborted) abort();
+			else if (this.open) this.stream.write(line);
 		});
 	}
 
@@ -125,15 +143,21 @@ export class AppChannel implements AppLink {
 	approve(request: AppApproval, signal?: AbortSignal): Promise<boolean> {
 		if (!this.open) return Promise.reject(new Error("The Gentle Dot app is not connected."));
 		if (signal?.aborted) return Promise.resolve(false);
-		const answer = this.request("approve", request, this.options.approvalWaitMs ?? APPROVAL_WAIT_MS).then(
-			(result) => (result as { approved?: unknown } | undefined)?.approved === true,
-			() => false,
+		const requestId = randomUUID();
+		return this.request(
+			"approve",
+			{ ...request, requestId },
+			this.options.approvalWaitMs ?? APPROVAL_WAIT_MS,
+			signal,
+		).then(
+			(result) => !signal?.aborted && (result as { approved?: unknown } | undefined)?.approved === true,
+			() => {
+				// Close precisely this native dialog, including a dialog still queued to be shown.
+				// Older desktop versions may not know the method; they still cannot approve late.
+				if (this.open) void this.request("approve_cancel", { requestId }, 10_000).catch(() => {});
+				return false;
+			},
 		);
-		if (!signal) return answer;
-		const aborted = new Promise<boolean>((resolve) =>
-			signal.addEventListener("abort", () => resolve(false), { once: true }),
-		);
-		return Promise.race([answer, aborted]);
 	}
 
 	close(): void {
@@ -142,6 +166,7 @@ export class AppChannel implements AppLink {
 		this.stream.destroy();
 		for (const [id, waiting] of this.pending) {
 			clearTimeout(waiting.timer);
+			waiting.removeAbort();
 			waiting.reject(new Error("The Gentle Dot app closed its channel."));
 			this.pending.delete(id);
 		}
@@ -177,6 +202,7 @@ export class AppChannel implements AppLink {
 			if (!waiting) return;
 			this.pending.delete(frame.id);
 			clearTimeout(waiting.timer);
+			waiting.removeAbort();
 			if (typeof frame.error === "string") waiting.reject(new Error(frame.error));
 			else waiting.resolve(frame.result);
 			return;

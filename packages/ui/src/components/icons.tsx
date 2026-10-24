@@ -80,6 +80,15 @@ export function PlusIcon() {
 	);
 }
 
+/** A filled square: stop the current reply without expanding the composer. */
+export function StopIcon() {
+	return (
+		<Icon>
+			<rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none" />
+		</Icon>
+	);
+}
+
 /** An arrow up, for the composer's send button. */
 export function SendIcon() {
 	return (
@@ -132,29 +141,35 @@ export function SpeakerOffIcon() {
 	);
 }
 
-/** The rose (the app's favicon drawing): who the user is talking to. */
+/** A gauge: available subscription usage, opened on demand. */
+export function UsageIcon() {
+	return (
+		<Icon>
+			<path d="M4.6 18a9 9 0 1 1 14.8 0M12 12l4-4M6 12H4m8-6V4m6 8h2" />
+			<circle cx="12" cy="12" r="1.25" />
+		</Icon>
+	);
+}
+
+/** The Gentle rose, simplified into clear petals and a stem at navigation size. */
 export function RoseGlyph() {
 	return (
 		<svg
 			className="rose-glyph"
-			width="18"
-			height="18"
-			viewBox="0 0 18 18"
+			width="24"
+			height="24"
+			viewBox="0 0 24 24"
 			fill="none"
 			stroke="currentColor"
-			strokeWidth="1.25"
+			strokeWidth="1.6"
 			strokeLinecap="round"
 			strokeLinejoin="round"
 			aria-hidden="true"
 			focusable="false"
 		>
-			<path d="M6.6 11.1C4.2 10.3 3 8.3 3.1 5.3L5.4 6.5" />
-			<path d="M11.4 11.1C13.8 10.3 15 8.3 14.9 5.3L12.6 6.5" />
-			<path d="M5.4 6.5C5.5 3.9 7.1 2.5 9 2.5S12.5 3.9 12.6 6.5" />
-			<path d="M5.4 6.5C5.8 9.6 7.2 11.2 9 11.6C10.8 11.2 12.2 9.6 12.6 6.5" />
-			<path d="M9.05 8.7C7.7 8.7 7.2 7.3 7.9 6.5C8.6 5.8 9.9 6 10.1 6.95C10.25 7.6 9.7 8 9.15 7.8" />
-			<path d="M9 11.6C9 13.6 8.6 15.1 7.5 16.6" />
-			<path d="M8.85 13.7C10.1 12.6 12.2 12.6 13.1 13.5C12 14.6 10.2 14.7 8.85 13.7Z" />
+			<path d="M8.2 4.5C8.5 2.7 10.5 2 12 3.2c1.7-1 3.8-.1 4 1.7 2.1.3 3 2.2 2.2 4-.2 3.4-2.8 5.7-6 6-3.3-.1-6-2.5-6.4-5.6C4.2 7.5 5.4 5 8.2 4.5Z" />
+			<path d="M8.2 4.5c.1 2.2 1.4 3.8 3.8 4.5m4-4.1c-2.5-.2-4.7 1.3-5.2 3.5M7 9c2.7-.3 5.3 1.8 5.2 5.9m6-6c-2.7-.4-5.3 1.8-6 4.1" />
+			<path d="M12.2 14.9c.2 2.8-.8 5.2-2.1 7M11.9 18.1c1.5-2 3.6-2.3 5.4-1.4-1 2.1-3.3 2.7-5.4 1.4ZM11.8 18.7c-2.4-.1-3.9-1.3-4.2-3.2 2.3-.3 3.9 1 4.2 3.2Z" />
 		</svg>
 	);
 }

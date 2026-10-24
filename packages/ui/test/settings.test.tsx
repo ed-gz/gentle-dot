@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatShortcut, recordKey } from "../src/shortcut.ts";
 import { type DotState, initialState } from "../src/store.ts";
+import { openDesktopOptions } from "./desktop-options.ts";
 
 /** The Settings screen and its keyboard shortcut (S33), through the panel and mocked Tauri commands. */
 const h = vi.hoisted(() => ({
@@ -45,6 +46,7 @@ const invoked = (command: string) => h.invoke.mock.calls.filter(([c]) => c === c
 
 async function openSettings() {
 	await renderApp("?surface=panel");
+	openDesktopOptions();
 	await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
 	return screen.findByRole("region", { name: "Settings" });
 }
@@ -64,6 +66,8 @@ beforeEach(() => {
 	vi.spyOn(navigator, "userAgent", "get").mockReturnValue(MAC_AGENT);
 	h.invoke = vi.fn(async (command: string, args?: Record<string, unknown>) => {
 		switch (command) {
+			case "desktop_companion_get":
+				return { enabled: false, motion: true, appearances: true, visible:false, paused:false, available:true, pinned:false, areas:[], monitors:[] };
 			case "connection_info":
 				return new Promise(() => {});
 			case "shortcut_get":
@@ -164,6 +168,7 @@ describe("the Settings screen (S33.1)", () => {
 	it("the web UI shows no gear", async () => {
 		h.tauri = false;
 		await renderApp("?surface=web#token=abc");
+		openDesktopOptions();
 		await screen.findByRole("button", { name: "Accounts" });
 		expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
 		expect(invoked("shortcut_get")).toHaveLength(0);

@@ -278,6 +278,8 @@ describe("connector store", () => {
 			join(agentHome, "models.json"),
 			join(dataDir, "connectors.json"),
 			join(dataDir, "token"),
+			join(dataDir, "watchers.json"),
+			join(dataDir, "workflows.json"),
 			"/app/guard.ts",
 		]);
 	});

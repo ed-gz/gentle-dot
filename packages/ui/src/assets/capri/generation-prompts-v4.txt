@@ -1,0 +1,104 @@
+REBECCA IDENTITY CORRECTION — GENERATION V4
+Date: 2026-10-23
+Mode: built-in image_gen.imagegen, transparent_background=true for all three calls.
+No CLI/API fallback. No raster painting, compositing, recoloring, resizing or cleanup scripts.
+
+AUTHORITATIVE REFERENCE
+CD PROJEKT RED's official Rebecca cosplay guide:
+https://cdn-s-cyberpunk.cdprojektred.com/cosplay-guides/REBECCA_COSPLAY_GUIDE_EN.pdf
+Downloaded read-only reference PDF to .cache/rebecca-reference/official-cosplay-guide.pdf.
+Reference images rendered from official PDF pages3,4,7 with pdftoppm, saved as rebecca-body.png, rebecca-head.png and rebecca-details.png in the same cache directory. These original document renders were supplied directly to the image generator; they are not shipped as product assets.
+Identity reference for Capri: packages/ui/src/assets/capri/capri-atlas-v2.png (unchanged).
+
+Correction rationale: user rejected the old friends-atlas-v1 Rebecca as unrelated. The original atlas used an inaccurate white-haired generic chibi description. The official guide establishes mint hair swept away from an exposed forehead, long twin ponytails and mechanical dark/lime clips, pale cyan skin, coral-red sclera and lime/green rings around magenta centers, violet lips, angular under-eye seams, pink skull neck tattoo, navy oversized collar jacket, and giant pink/blue cyberhands with lime knuckles.
+
+CALL 1 — RECREATE 12 SCENES WITH OFFICIAL IDENTITY
+Source output: /home/egarza/.codex/generated_images/01a166ec-3f54-7611-a897-505e82394029/exec-44ba5426-96b0-4c74-b4a8-b5042ba71874.png
+Status: intermediate; identity improved but coffee scene cropped Rebecca's lower legs.
+Prompt:
+Use case: stylized-concept
+Asset type: production transparent sprite atlas for the Gentle Dot desktop/mobile companion. Create ONE NEW atlas with exactly 12 separate poses/scenes, 4 columns by 3 rows, landscape 4:3, preferably 2048x1536. This corrects an earlier mistaken generic anime girl. It must unmistakably depict the real REBECCA from Cyberpunk: Edgerunners.
+
+INPUT REFERENCES:
+Image 1: existing Capri sprite atlas, IDENTITY AND STYLE reference for CAPRI ONLY. Preserve her exactly: fuchsia spiky starburst hair, black polygonal body, vivid angular green face, concentric cyan/blue eyes, thin sharp limbs with red/green panels. She is a geometrical digital character, not a human.
+Image 2: OFFICIAL CD PROJEKT RED Rebecca full body character design. Identity, hair, proportions and jacket reference.
+Image 3: OFFICIAL Rebecca head close-up. The head design is the most important reference; reproduce these exact distinctive features, NOT a generic chibi.
+Image 4: OFFICIAL Rebecca cyberhands and eye palette. The huge mechanical hands are required in every pose where her hands are visible.
+
+REBECCA IDENTITY LOCK:
+Adult petite woman with the original anime's angular face and normal compact adult proportions, approximately 4.5 to 5 heads tall, NOT a round baby chibi. Very pale icy cyan skin, mint green hair swept BACK from an exposed forehead, long two straight high side ponytails with dark navy angular mechanical clips and lime accents. NO white fluffy hair, NO short bob, NO blunt bangs across forehead, NO cat ears, NO pink cheeks. Her eyes have red/coral sclera around a green/lime ring and magenta central iris, with heavy dark lashes. Small violet lips and characteristic angular black cyberware seams beneath both eyes. Vivid pink skull-shaped neck tattoo with pale cross shapes, clearly visible above the top. Cheeky confident smile, recognizable original face shape.
+Outfit consistent in every cell: oversized dark navy/black cyberpunk jacket with tall open collar, lime lining accents and bulky segmented sleeves, opaque black fitted top and opaque dark shorts under the jacket; no cleavage, no exposed underwear, no sexualized posing. Chunky dark shoes with lime accents. Her LEFT mechanical forearm and oversized hand is pink, her RIGHT mechanical forearm and oversized hand is blue, with lime circular knuckles and segmented fingers, matching the reference. Hands big and readable, not dainty gloves. Do not add weapons.
+
+CAPRI LOCK:
+Keep the exact existing geometric character. In each duo, Capri and Rebecca are distinct peers with separate silhouettes and faces; Capri's overall height only slightly taller. Do not give Rebecca Capri's green face or spiky hair. Do not give Capri human skin. Harmonize crisp flat cel shading, but do not replace Rebecca's official face with a generic cute doll.
+
+COMPOSITION:
+Exactly four equal-width columns and three equal-height rows, strict row-major order below. Every sprite fully INSIDE its own logical cell. At least 40 pixels of truly transparent empty gutter around EACH sprite, including arms, hair, steam, props and sofa. Each scene occupies at most 80% of its cell width and height. Entire bodies, feet, coattails, hair tips and props visible. No sprite may touch any neighbor. Spacious even layout, no labels, no borders, no grid lines, no words, no background, no checkerboard, no ground/floor rectangles, no watermark. TRUE ALPHA transparency everywhere outside characters/props and between limbs. Sharp clean contours and legible flat color shapes, minimal cel shadow, no glossy doll shading, no blur, no grain. No paper/paint texture.
+
+12 CELLS:
+ROW 1 COL 1 rebecca-wave: Rebecca alone full body, friendly mischievous grin, energetically waving her oversized blue mechanical hand.
+ROW 1 COL 2 rebecca-coffee: Rebecca alone standing, holding a small mint mug delicately in her enormous pink mechanical hand, amused satisfied expression, blue hand resting by side.
+ROW 1 COL 3 rebecca-work: Rebecca alone seated on a small low stool, working with a small dark laptop on her lap; large mechanical hands typing carefully, focused expression.
+ROW 1 COL 4 rebecca-cheer: Rebecca alone full body, both oversized pink/blue mechanical fists raised near her shoulders, wide confident grin, celebration, not angry.
+ROW 2 COL 1 invite-rebecca: Capri left gently takes Rebecca's huge pink hand and beckons her over, both full bodies mid-step, Rebecca right follows smiling; clear linked hands.
+ROW 2 COL 2 duo-watch: Capri left and Rebecca right shoulder to shoulder, both leaning forward curiously to observe the user's session, Capri pointing subtly downward, Rebecca's huge hands resting naturally.
+ROW 2 COL 3 duo-coffee: Capri left and Rebecca right clink a purple mug and a mint mug, facing one another warmly; Rebecca's pink/blue cyberhands clearly visible.
+ROW 2 COL 4 duo-couch: Capri left and Rebecca right sit comfortably on a small dark indigo sofa and look at a shared tablet; entire sofa and bodies complete.
+ROW 3 COL 1 duo-high-five: Capri left and Rebecca right high-five overhead, Capri's slender hand against Rebecca's enormous blue cyberhand, separate visible arms, joy.
+ROW 3 COL 2 duo-debug: Capri left types at a tiny laptop while Rebecca right points at its screen with one giant mechanical finger, both focused.
+ROW 3 COL 3 duo-laugh: Capri left and Rebecca right laughing together, eyes closed, Rebecca's purple lips and high collar still recognizable, relaxed standing posture.
+ROW 3 COL 4 duo-sleep: Capri and Rebecca dozing at opposite ends of a compact dark indigo sofa, shared purple blanket over legs, heads and Rebecca's long mint ponytails distinct and complete, huge pink and blue hands resting above blanket.
+
+FINAL CHECK: 12 complete separated scenes. Exact official Rebecca head features and cyberhands. Capri unchanged. No generic white-haired anime girl, no chibi baby, no Lucy, no weapons, no nudity. Transparent gutters essential.
+
+CALL 2 — COMPOSITION REPAIR
+Source output: /home/egarza/.codex/generated_images/01a166ec-3f54-7611-a897-505e82394029/exec-49cb5dbd-a326-4876-86f8-06e8c989b9e6.png
+Status: intermediate; complete coffee pose restored. Review identified white sclera/amber iris mismatch against official guide.
+Prompt:
+Use case: precise-object-edit
+Asset type: transparent production sprite sheet.
+Image 1 is the EDIT TARGET, a 12-scene atlas. Image 2 is the official Rebecca head reference to preserve identity. Image 3 is the unchanged Capri identity reference.
+Keep EXACTLY the same 12 scenes, same row-major order, same characters, same poses, same colors, crisp cel shading, and the same correct Rebecca facial design and oversized pink/blue mechanical hands from image 1. Do not redesign them or add new characters.
+Make ONLY these composition repairs:
+1. Give every one of the twelve sprites abundant TRANSPARENT separation and outer margins. Four equal columns by three equal rows. Scale each scene down and center it within its own cell so it occupies no more than 75% cell width and 78% cell height. Leave at least 40 px transparent gutters around every complete scene. This is a sprite atlas, not a crowded collage. Every character and prop must stay fully inside its cell. No touching neighboring cells.
+2. In row 2 column 3 (the two coffee mugs), Rebecca currently has chopped-off legs. Extend/reconstruct her complete lower legs and both dark/lime shoes in a natural standing pose. Keep her exact upper body, face and huge hands holding the mug, and keep Capri full body beside her. Fit both entirely within that cell.
+3. Ensure the raised blue hand in row1col1 has all fingers intact and clear transparent space above it. Ensure all feet and hair tips in the bottom row have transparent margin below them.
+All twelve Rebecca versions retain mint hair swept back off the exposed forehead, long straight twin ponytails, black/lime clips, coral red eyes with green/lime iris ring and magenta center, pale cyan skin, violet lips, black cyber lines under eyes, pink neck skull tattoo, oversized dark navy jacket and pink/blue giant mechanical hands. Adult original anime proportions, not a generic chibi.
+Capri must remain exactly the angular black/red/green character with fuchsia starburst hair and concentric blue eyes.
+No labels, no text, no checkerboard, no background, no shadow rectangles, no weapons. Keep genuine alpha transparency everywhere outside the silhouettes, including gaps between limbs. Preserve clean antialiasing and full-opacity colors inside the characters. Do not replace any character with transparency.
+
+CALL 3 — TARGETED EYE IDENTITY CORRECTION
+Source output: /home/egarza/.codex/generated_images/01a166ec-3f54-7611-a897-505e82394029/exec-6ab84bfb-985a-453f-8855-84b445a13e38.png
+Selected final, copied byte-for-byte into packages/ui/src/assets/capri/friends-atlas-v2.png.
+Prompt:
+Use case: precise-object-edit
+Image 1 is the EDIT TARGET: a transparent 12-scene Rebecca-and-Capri sprite atlas.
+Image 2 is the OFFICIAL Rebecca close-up head reference from CD PROJEKT RED.
+Image 3 is the OFFICIAL cyberhands and EYE reference, with a particularly clear eye palette.
+
+Make ONE PRECISE IDENTITY CORRECTION: change Rebecca's OPEN EYES to exactly match the official references.
+The current atlas incorrectly gives Rebecca white eye whites and little amber irises. THIS IS WRONG. Rebecca has NO WHITE SCLERA. For every open eye on Rebecca in row1col1, row1col2, row1col3, row1col4, row2col1 and row2col2:
+- Recolor the ENTIRE almond-shaped eyeball area that is currently white to saturated CORAL RED, including both corners.
+- Make the iris large, occupying most of the eyeball, with a thick vivid LIME-GREEN circular ring.
+- The iris center/pupil is a large saturated MAGENTA-PINK disc, not black and not amber.
+- Only a tiny pale specular glint is allowed. There must be NO white patch around the colored iris.
+- Preserve dark upper lashes and add the thin angular BLACK cyberware seam beneath each eye as seen in the official head.
+- Preserve/reinforce the small VIOLET lips; no generic pink lips.
+The eyes need to be intensely readable red/lime/magenta even at this small sprite scale. Think exact color replacement of the mistaken eye whites, not a subtle tint. Do not leave amber/orange irises.
+Leave Rebecca's already CLOSED smiling eyes in the other scenes closed. Do not open them. Keep her mint swept-back hair, long ponytails, pink neck tattoo, oversized pink/blue mechanical hands and jacket unchanged.
+
+CRITICAL INVARIANTS:
+Preserve all twelve sprite poses, silhouettes, character sizes, positions, arrangement, feet, hands, sofas, mugs, props and TRANSPARENT alpha exactly as in image 1. Maintain the same 4 columns x 3 rows. Do not move or crop any scene. Do not change CAPRI AT ALL: Capri is the geometrical black/fuchsia/green character with blue concentric eyes; her eyes stay BLUE and must NOT become red.
+No new characters, no labels, no text, no background, no checkerboard, no blur. True alpha transparency remains outside all characters and props. Do not generate an enlarged face panel; return the full existing atlas with only Rebecca's eye/face details corrected.
+
+DELIVERY AND VALIDATION
+Files:
+- friends-atlas-v2.png — 1448 x1086 RGBA original generated image.
+- friends-atlas-v2.json — measured rectangles and absolute-coordinate clip polygons, all 12 existing keys preserved.
+- capri-art.ts — reads the new manifest/image; original Capri and reaction atlas references unchanged.
+- generation-prompts-v4.txt — this provenance.
+Old friends-atlas-v1.png and friends-atlas.json retained for history; no longer referenced by capri-art.ts.
+
+Alpha range0..255; 816981 of1572528 pixels fully transparent (51.95%). PNG metadata and component inspection only: no pixel edits. Measured connected alpha components above16, included all detached expression props, generated convex crop boundaries with2pixel padding. Checked each polygon against significant components from every other sprite: zero foreign pixels. Frame dimensions are nonuniform and must never be treated as a fixed grid.
+A Chromium page rendered all12 frames with original PNG+SVG viewBox+clipPath, as the app does. Inspected .cache/rebecca-friends-v2-gallery.png, including enlarged6 open-eye faces: full bodies/feet/cyberhands/sofas present; no neighboring sprite fragments; alpha edges clean on dark background. All original scene IDs remain unchanged.
+

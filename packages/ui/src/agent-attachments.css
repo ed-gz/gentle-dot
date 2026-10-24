@@ -1,0 +1,13 @@
+.agent-reply.agent-attachments { min-width: 0; }
+.agent-reply.agent-attachments .composer { margin: 0; min-width: 0; gap: 8px; }
+.agent-reply.agent-attachments .composer textarea { min-width: 0; width: 0; flex: 1; }
+/* The legacy reply layout hides labels; the shared clip is an interactive icon. */
+.chat-mobile .agent-reply.agent-attachments .composer-attach {
+ position: relative; width: 48px; height: 48px; margin: 0; padding: 0;
+ clip-path: none; overflow: visible; white-space: normal; flex: none;
+}
+.agent-reply.agent-attachments .composer button {
+ position: static; flex: none; width: 48px; height: 48px; min-width: 48px;
+ padding: 8px; margin: 0;
+}
+.agent-reply.agent-attachments .attachment-chips { max-height: 10rem; overflow-y: auto; }

@@ -101,7 +101,7 @@ describe("sending files to the assistant", () => {
 			seq: shown.seq,
 		});
 		await find("message_done");
-		expect(prompts()).toEqual([{ type: "prompt", message: "hello" }]);
+		expect(prompts()).toEqual([{ type: "prompt", message: "hello", streamingBehavior: "steer" }]);
 	});
 
 	it("tells the assistant each file's path, shows chips instead, and passes images to a model that sees them", async () => {

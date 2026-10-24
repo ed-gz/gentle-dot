@@ -324,3 +324,29 @@ describe("the approval guard with proxied connectors", () => {
 		expect(parsePolicy(JSON.stringify({ ...s.policy(), proxied: [7] }))).toBeUndefined();
 	});
 });
+
+it("keeps a mail source identity across refresh and restart but changes it after another interactive sign-in", async () => {
+	const { make } = setup();
+	const store = make();
+	fill(store);
+	const login = {
+		serverUrl: "https://mcp.notion.com/mcp",
+		tokens: { access_token: "account-a", token_type: "Bearer" },
+	};
+	await store.saveSignIn("notion", login, true);
+	const first = store.proxyView("notion")?.revision;
+	await store.saveSignIn("notion", { ...login, tokens: { ...login.tokens, access_token: "refreshed-a" } });
+	expect(store.proxyView("notion")?.revision).toBe(first);
+	const reopened = make();
+	await reopened.prepare("notion");
+	expect(reopened.proxyView("notion")?.revision).toBe(first);
+	await store.saveSignIn(
+		"notion",
+		{ ...login, tokens: { ...login.tokens, access_token: "account-b" } },
+		true,
+	);
+	expect(store.proxyView("notion")?.revision).not.toBe(first);
+	expect(JSON.stringify(store.proxyView("notion"))).not.toContain("account-b");
+	for (const filename of ["watchers.json", "workflows.json"])
+		expect(store.policy().protectedPaths?.some((path) => path.endsWith(filename))).toBe(true);
+});

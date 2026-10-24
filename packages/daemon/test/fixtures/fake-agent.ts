@@ -37,6 +37,7 @@
 //   FAKE_AGENT_START_DELAY_MS  answer the first get_state only after this delay
 //   FAKE_AGENT_DROP_CUSTOM  load session files without their custom messages (a format drift)
 //   FAKE_AGENT_PROMPTS_FILE  append every prompt command (message, images, streamingBehavior) as JSONL
+//   FAKE_AGENT_QUEUED_ACK_MS  delay queued receipts to exercise Stop/input acknowledgment races
 //   FAKE_AGENT_MARKER_FILE  write whether the `--home` folder held gentle-shell's `.gentle-shell-home` at launch
 //   FAKE_AGENT_PROCESS_FILE  write the whole environment, argv, and the process's uid and gid as JSON
 //   FAKE_AGENT_STDIN_FILE  append every line the daemon writes to the agent's stdin
@@ -44,7 +45,7 @@
 // get_state reports, so tests can read the last values back. A model's `input` says whether it
 // accepts images, like the engine's models.
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 type Rec = Record<string, unknown>;
@@ -73,8 +74,14 @@ const MODELS: Rec[] = [
 let model = MODELS[0] as Rec;
 let thinkingLevel = "medium";
 
+// Tests poll these snapshots across restarts. Publish complete JSON atomically.
+function writeSnapshot(path: string, value: string): void {
+	const temporary = `${path}.${process.pid}.tmp`;
+	writeFileSync(temporary, value);
+	renameSync(temporary, path);
+}
 const argv = process.argv.slice(2);
-if (process.env.FAKE_AGENT_ARGS_FILE) writeFileSync(process.env.FAKE_AGENT_ARGS_FILE, JSON.stringify(argv));
+if (process.env.FAKE_AGENT_ARGS_FILE) writeSnapshot(process.env.FAKE_AGENT_ARGS_FILE, JSON.stringify(argv));
 if (process.env.FAKE_AGENT_CWD_FILE) writeFileSync(process.env.FAKE_AGENT_CWD_FILE, process.cwd());
 if (process.env.FAKE_AGENT_MARKER_FILE) {
 	const home = argv[argv.indexOf("--home") + 1];
@@ -83,7 +90,7 @@ if (process.env.FAKE_AGENT_MARKER_FILE) {
 	writeFileSync(process.env.FAKE_AGENT_MARKER_FILE, JSON.stringify(marked));
 }
 if (process.env.FAKE_AGENT_ENV_FILE) {
-	writeFileSync(
+	writeSnapshot(
 		process.env.FAKE_AGENT_ENV_FILE,
 		JSON.stringify(
 			Object.fromEntries(
@@ -109,7 +116,7 @@ if (process.env.FAKE_AGENT_ENV_FILE) {
 	);
 }
 if (process.env.FAKE_AGENT_PROCESS_FILE) {
-	writeFileSync(
+	writeSnapshot(
 		process.env.FAKE_AGENT_PROCESS_FILE,
 		JSON.stringify({ env: process.env, argv, uid: process.getuid?.(), gid: process.getgid?.() }),
 	);
@@ -126,6 +133,7 @@ let hanging: ((stopReason: "aborted" | "error") => void) | undefined;
 /** Resolves when the current run has ended. */
 let runEnded: Promise<void> = Promise.resolve();
 let started = false;
+let steeringMode = "one-at-a-time";
 const queue = { steering: [] as string[], followUp: [] as string[] };
 /** Records collected for one stdout write while a "burst" prompt runs. */
 let batch: string[] | undefined;
@@ -137,8 +145,7 @@ function argValue(name: string): string | undefined {
 	return i >= 0 ? argv[i + 1] : undefined;
 }
 
-function recordCommand(rec: Rec): void {
-	const file = process.env.FAKE_AGENT_COMMANDS_FILE;
+function recordCommand(rec: Rec, file = process.env.FAKE_AGENT_COMMANDS_FILE): void {
 	if (!file) return;
 	const { id: _id, ...command } = rec;
 	appendFileSync(file, `${JSON.stringify({ ...command, busy })}\n`);
@@ -207,6 +214,13 @@ function remember(message: Message): void {
 	appendEntry({ type: "message", message: { role: message.role, content } });
 }
 
+function queuedReceipt(id: unknown, command: string): void {
+	const delay = Number(process.env.FAKE_AGENT_QUEUED_ACK_MS ?? 0);
+	if (Number.isFinite(delay) && delay > 0 && delay <= 5000) {
+		setTimeout(() => respond(id, command, { disposition: "queued" }), delay);
+	} else respond(id, command, { disposition: "queued" });
+}
+
 function respond(id: unknown, command: string, data?: unknown, error?: string): void {
 	const rec: Rec = { type: "response", command, success: !error };
 	if (id !== undefined) rec.id = id;
@@ -221,8 +235,12 @@ function askUi(request: Rec): Promise<Rec> {
 	return new Promise((resolve) => pendingUi.set(id, resolve));
 }
 
-function assistantText(text: string): void {
-	const message = { role: "assistant", content: [{ type: "text", text }] };
+function assistantText(text: string, stopReason?: string): void {
+	const message = {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		...(stopReason ? { stopReason } : {}),
+	};
 	out({ type: "message_start", message });
 	for (const delta of text.match(/.{1,8}/gs) ?? []) {
 		out({ type: "message_update", assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta } });
@@ -251,6 +269,7 @@ function endRun(): void {
 	if (process.env.FAKE_AGENT_DROP_QUEUE) {
 		queue.steering = [];
 		queue.followUp = [];
+		emitQueue();
 	}
 	const next = queue.steering.shift() ?? queue.followUp.shift();
 	if (next !== undefined) {
@@ -302,6 +321,51 @@ async function runPrompt(text: string, images?: Rec[]) {
 	}
 	if (text === "fail") {
 		endedAnswer("error", "Gentle Shell provider exploded: 500 Internal Server Error");
+		return endRun();
+	}
+	if (text === "tool-progress") {
+		assistantText("Revisando archivos", "toolUse");
+		assistantText("Revisión terminada", "stop");
+		return endRun();
+	}
+	if (text === "share-screenshot") {
+		const { CAPTURE_JPEG } = await import("./capture-image.ts");
+		async function tool(name: string, execute: () => Promise<Rec>) {
+			const toolCallId = randomUUID();
+			const call = {
+				role: "assistant",
+				content: [{ type: "toolCall", id: toolCallId, name, arguments: {} }],
+				stopReason: "toolUse",
+			};
+			out({ type: "message_start", message: call });
+			out({ type: "message_end", message: call });
+			appendEntry({ type: "message", message: call });
+			out({ type: "tool_execution_start", toolCallId, toolName: name, args: {} });
+			const result = await execute();
+			out({ type: "tool_execution_end", toolCallId, toolName: name, result, isError: false });
+			const message = { role: "toolResult", toolCallId, toolName: name, ...result, isError: false };
+			out({ type: "message_start", message });
+			out({ type: "message_end", message });
+			appendEntry({ type: "message", message });
+		}
+		await tool("mcp__computer__screenshot", async () => ({
+			content: [{ type: "image", mimeType: "image/jpeg", data: CAPTURE_JPEG.toString("base64") }],
+		}));
+		await tool("dot_share_screenshot", async () => {
+			const response = await fetch(process.env.GENTLE_DOT_FILES_URL ?? "", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${process.env.GENTLE_DOT_FILES_KEY}`,
+				},
+				body: JSON.stringify({ action: "share_computer_screenshot" }),
+			});
+			const publication = await response.json();
+			if (!response.ok) throw new Error(`Test capture failed: ${response.status}`);
+			return { content: [{ type: "text", text: JSON.stringify(publication) }] };
+		});
+		// Deliberately omit the link: the daemon must still deliver the published image.
+		assistantText("Acá tenés la captura.", "stop");
 		return endRun();
 	}
 	if (text === "slow") {
@@ -399,6 +463,7 @@ async function runPrompt(text: string, images?: Rec[]) {
 }
 
 function handle(rec: Rec) {
+	if (process.env.FAKE_AGENT_RPC_FILE) recordCommand(rec, process.env.FAKE_AGENT_RPC_FILE);
 	const { id, type } = rec;
 	switch (type) {
 		case "get_state": {
@@ -412,6 +477,7 @@ function handle(rec: Rec) {
 			return respond(id, "get_state", {
 				model: { id: model.id, name: model.name, provider: model.provider, input: model.input },
 				thinkingLevel,
+				steeringMode,
 				isStreaming: busy,
 				isCompacting: false,
 				sessionFile,
@@ -419,6 +485,9 @@ function handle(rec: Rec) {
 				messageCount: messages.length,
 			});
 		}
+		case "set_steering_mode":
+			steeringMode = String(rec.mode);
+			return respond(id, "set_steering_mode");
 		case "get_messages":
 			return respond(id, "get_messages", {
 				messages: messages.map((m) => {
@@ -431,8 +500,23 @@ function handle(rec: Rec) {
 				}),
 			});
 		case "get_commands":
-			return respond(id, "get_commands", { commands: [{ name: "gentle:status" }, { name: "history" }] });
+			return respond(id, "get_commands", {
+				commands: [
+					{ name: "gentle:status" },
+					{ name: "history" },
+					...(process.env.FAKE_AGENT_LIVE_INPUT ? [{ name: "dot-live-input" }] : []),
+				],
+			});
 		case "prompt": {
+			if (process.env.FAKE_AGENT_LIVE_INPUT && String(rec.message).startsWith("/dot-live-input ")) {
+				out({
+					type: "extension_ui_request",
+					method: "setStatus",
+					statusKey: "gentle-dot-live-input",
+					...(rec.message === "/dot-live-input interrupt" ? { statusText: "interrupting" } : {}),
+				});
+				return respond(id, "prompt", { disposition: "handled" });
+			}
 			if (process.env.FAKE_AGENT_PROMPTS_FILE) {
 				const { id: _id, ...command } = rec;
 				appendFileSync(process.env.FAKE_AGENT_PROMPTS_FILE, `${JSON.stringify(command)}\n`);
@@ -440,7 +524,7 @@ function handle(rec: Rec) {
 			if (busy && !rec.streamingBehavior) return respond(id, "prompt", undefined, "Agent is streaming");
 			if (busy) {
 				enqueue(String(rec.message), rec.streamingBehavior);
-				return respond(id, "prompt", { disposition: "queued" });
+				return queuedReceipt(id, "prompt");
 			}
 			if (process.env.FAKE_AGENT_NO_MODEL) return respond(id, "prompt", undefined, "No model selected");
 			const burst = String(rec.message).startsWith("burst");
@@ -457,7 +541,7 @@ function handle(rec: Rec) {
 		case "steer":
 		case "follow_up":
 			if (busy) enqueue(String(rec.message), type === "follow_up" ? "followUp" : "steer");
-			return respond(id, type, { disposition: "queued" });
+			return queuedReceipt(id, type);
 		case "abort":
 			if (!process.env.FAKE_AGENT_IGNORE_ABORT) {
 				hanging?.("aborted");

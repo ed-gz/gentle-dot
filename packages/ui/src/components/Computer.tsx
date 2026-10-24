@@ -1,6 +1,7 @@
 import type { ConnectorInfo } from "@gentle-dot/protocol";
 import { useCallback, useEffect, useState } from "react";
 import {
+	type ComputerCapabilities,
 	type ComputerPermission,
 	type ComputerPermissions,
 	type ComputerSession,
@@ -10,7 +11,7 @@ import {
 
 /** Computer control in the desktop panel (S24.5, S24.6); the web page never gets it. */
 export interface ComputerControls {
-	/** The app has a helper (macOS), so the Connectors screen offers it. */
+	/** The app has a helper (macOS or Linux), so the Connectors screen offers it. */
 	available: boolean;
 	/** The session the user allowed, while it lasts. */
 	session?: ComputerSession;
@@ -20,6 +21,7 @@ export interface ComputerControls {
 	/** Asks the app; its native confirmation decides, and the state follows. */
 	setYolo: (enabled: boolean) => Promise<unknown>;
 	permissions: () => Promise<ComputerPermissions>;
+	capabilities?: () => Promise<ComputerCapabilities>;
 	requestPermission: (kind: ComputerPermission) => Promise<unknown>;
 }
 
@@ -31,7 +33,7 @@ const PERMISSIONS: [ComputerPermission, string][] = [
 export const DEBUG_BUILD_NOTE =
 	"Debug builds lose these permissions on every rebuild because macOS ties them to the app's signature; grant them again after updating.";
 const YOLO_NOTE =
-	"Yolo mode lets the assistant send, pay, delete, and submit without asking you first. It turns itself off after 1 hour or when the app quits; Stop and ⌥⇧Esc still work.";
+	"Yolo mode lets the assistant send, pay, delete, and submit without asking you first. It turns itself off after 1 hour or when the app quits; Stop remains available in the app.";
 const NO_IMAGES_NOTE =
 	"The current model does not accept images, so the assistant cannot see your screen. Choose a model that does in Profiles.";
 
@@ -41,7 +43,7 @@ interface ComputerBannerProps {
 	stop: () => void;
 }
 
-/** "Controlling your Mac · mm:ss left" with a Stop button, while a session is active. */
+/** "Controlling your computer · mm:ss left" with a Stop button, while a session is active. */
 export function ComputerBanner({ session, yolo, stop }: ComputerBannerProps) {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
@@ -52,7 +54,7 @@ export function ComputerBanner({ session, yolo, stop }: ComputerBannerProps) {
 	return (
 		<section className="computer-banner" aria-label="Computer control">
 			<span className="computer-banner-light" aria-hidden="true" />
-			<span>Controlling your Mac{left}</span>
+			<span>Controlling your computer{left}</span>
 			{yolo ? (
 				<span className="chip computer-yolo-chip" title="Risky actions run without asking you first">
 					Yolo
@@ -73,11 +75,14 @@ interface ComputerEntryProps {
 
 /** The built-in Computer connector: the macOS permissions it needs and how to grant them. */
 export function ComputerEntry({ info, controls }: ComputerEntryProps) {
-	const { permissions, requestPermission, yolo, setYolo } = controls;
+	const { permissions, capabilities, requestPermission, yolo, setYolo } = controls;
+	const [capability, setCapability] = useState<ComputerCapabilities>();
+	const macPermissions = capability?.platform === "macos" || capabilities === undefined;
 	const [granted, setGranted] = useState<ComputerPermissions>();
 	const check = useCallback(() => {
 		permissions().then(setGranted, () => setGranted(undefined));
-	}, [permissions]);
+		capabilities?.().then(setCapability, () => setCapability(undefined));
+	}, [permissions, capabilities]);
 	useEffect(check, [check]);
 
 	return (
@@ -98,11 +103,17 @@ export function ComputerEntry({ info, controls }: ComputerEntryProps) {
 					const id = `computer-permission-${kind}`;
 					return (
 						<li key={kind} aria-labelledby={id}>
-							<span id={id}>{label}</span>
+							<span id={id}>
+								{capability?.platform === "linux"
+									? kind === "accessibility"
+										? "Keyboard and pointer"
+										: "Screen capture"
+									: label}
+							</span>
 							<span className={`chip ${allowed ? "connector-connected" : "connector-needs_setup"}`}>
 								{granted === undefined ? "Checking…" : allowed ? "Allowed" : "Not allowed"}
 							</span>
-							{granted !== undefined && !allowed ? (
+							{granted !== undefined && !allowed && macPermissions ? (
 								<button
 									type="button"
 									className="primary"
@@ -139,7 +150,22 @@ export function ComputerEntry({ info, controls }: ComputerEntryProps) {
 				</button>
 			</div>
 			<p className="connector-note">{YOLO_NOTE}</p>
-			<p className="connector-note">{DEBUG_BUILD_NOTE}</p>
+			{macPermissions ? <p className="connector-note">{DEBUG_BUILD_NOTE}</p> : null}
+			{capability?.missingDependencies.length ? (
+				<p className="connector-note">
+					Missing on this computer: {capability.missingDependencies.join(", ")}
+				</p>
+			) : null}
+			{capability?.limitations.length ? (
+				<details>
+					<summary>Compatibility</summary>
+					{capability.limitations.map((note) => (
+						<p className="connector-note" key={note}>
+							{note}
+						</p>
+					))}
+				</details>
+			) : null}
 			{info?.noImages ? <p className="connector-note computer-warning">{NO_IMAGES_NOTE}</p> : null}
 		</li>
 	);

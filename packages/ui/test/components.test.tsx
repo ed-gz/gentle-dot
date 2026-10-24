@@ -7,6 +7,7 @@ import { ChatSurface } from "../src/components/ChatSurface.tsx";
 import { Composer } from "../src/components/Composer.tsx";
 import { MessageList } from "../src/components/MessageList.tsx";
 import { type DotState, initialState } from "../src/store.ts";
+import { openDesktopOptions } from "./desktop-options.ts";
 
 function state(overrides: Partial<DotState> = {}): DotState {
 	return { ...initialState, connection: "open", agentState: "idle", ...overrides };
@@ -99,7 +100,7 @@ describe("AskCard", () => {
 });
 
 describe("MessageList", () => {
-	it("renders Markdown and summarizes activities", async () => {
+	it("renders Markdown without completed tool reports", () => {
 		render(
 			<MessageList
 				messages={[
@@ -119,10 +120,69 @@ describe("MessageList", () => {
 			/>,
 		);
 		expect(screen.getByText("good").tagName).toBe("STRONG");
-		const summary = screen.getByRole("button", { name: /Read 2 files · Ran 1 command/ });
-		await userEvent.click(summary);
-		expect(screen.getByText("Read b.md")).toBeInTheDocument();
-		expect(screen.getByText("A command failed")).toBeInTheDocument();
+		expect(screen.queryByRole("button")).toBeNull();
+		expect(screen.queryByText("Read b.md")).toBeNull();
+		expect(screen.queryByText("A command failed")).toBeNull();
+	});
+	it("shows one transient working status across tool-only messages and removes it when settled", () => {
+		const messages = [
+			{ id: "user", role: "user" as const, text: "Cómo va", streaming: false, activities: [] },
+			...["a", "b", "c"].map((id) => ({
+				id,
+				role: "assistant" as const,
+				text: "",
+				streaming: false,
+				activities: [
+					{ id, kind: "other" as const, title: "Sensitive tool arguments", status: "done" as const },
+				],
+			})),
+		];
+		const view = render(<MessageList messages={messages} mobile working />);
+		expect(screen.getAllByRole("status")).toHaveLength(1);
+		expect(screen.getByRole("status")).toHaveTextContent("Trabajando…");
+		expect(view.container.querySelectorAll("article")).toHaveLength(1);
+		expect(screen.queryByText("Sensitive tool arguments")).toBeNull();
+		view.rerender(<MessageList messages={messages} mobile working={false} />);
+		expect(screen.queryByRole("status")).toBeNull();
+		expect(view.container.querySelectorAll("article")).toHaveLength(1);
+	});
+	it("retains errors, attachments and earlier boundaries when tool-only records are hidden", () => {
+		const { container } = render(
+			<MessageList
+				messages={[
+					{
+						id: "old",
+						role: "assistant",
+						text: "Respuesta anterior",
+						earlier: true,
+						streaming: false,
+						activities: [],
+					},
+					{ id: "old-tool", role: "assistant", text: "", earlier: true, streaming: false, activities: [] },
+					{
+						id: "file",
+						role: "user",
+						text: "",
+						streaming: false,
+						activities: [],
+						attachments: [{ name: "report.txt", size: 5, mime: "text/plain" }],
+					},
+					{
+						id: "error",
+						role: "assistant",
+						text: "",
+						streaming: false,
+						activities: [],
+						note: { kind: "error", text: "No se pudo continuar" },
+					},
+				]}
+				mobile
+			/>,
+		);
+		expect(screen.getByRole("alert")).toHaveTextContent("No se pudo continuar");
+		expect(screen.getByText("report.txt")).toBeVisible();
+		expect(screen.getByRole("separator", { name: "Mensajes anteriores" })).toBeVisible();
+		expect(container.querySelectorAll("article")).toHaveLength(3);
 	});
 });
 
@@ -169,6 +229,7 @@ describe("ChatSurface", () => {
 			/>,
 		);
 		expect(screen.getByRole("heading", { name: "Current" })).toBeInTheDocument();
+		openDesktopOptions();
 		await userEvent.click(screen.getByRole("button", { name: "New conversation" }));
 		expect(send).toHaveBeenCalledWith({ type: "new_conversation" });
 		await userEvent.click(screen.getByRole("button", { name: "Conversations" }));

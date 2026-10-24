@@ -20,7 +20,11 @@ struct Entry {
 pub const GENTLE_DOT_BUNDLE: &str = "dev.gentleman.gentle-dot";
 
 const BLOCKED: &[Entry] = &[
-    Entry { label: "Gentle Dot", bundles: &[GENTLE_DOT_BUNDLE], names: &["Gentle Dot"] },
+    Entry {
+        label: "Gentle Dot",
+        bundles: &[GENTLE_DOT_BUNDLE, "gentle-dot", "gentle-dot-panel", "gentle-dot-approval"],
+        names: &["Gentle Dot", "Gentle Dot Panel", "Gentle Dot Approval", "gentle-dot", "dot-helper"],
+    },
     Entry {
         label: "System Settings",
         bundles: &["com.apple.systempreferences"],
@@ -55,6 +59,31 @@ const BLOCKED: &[Entry] = &[
     Entry { label: "Dashlane", bundles: &["com.dashlane"], names: &["Dashlane"] },
     Entry { label: "LastPass", bundles: &["com.lastpass"], names: &["LastPass"] },
     Entry { label: "Passwords", bundles: &["com.apple.Passwords"], names: &["Passwords"] },
+    Entry {
+        label: "KeePassXC",
+        bundles: &["org.keepassxc.KeePassXC", "keepassxc", "org.keepassx.keepassx"],
+        names: &["KeePassXC", "KeePassX"],
+    },
+    Entry {
+        label: "Passwords and Keys",
+        bundles: &["org.gnome.seahorse", "seahorse"],
+        names: &["Seahorse", "Passwords and Keys"],
+    },
+    Entry {
+        label: "KWallet",
+        bundles: &["org.kde.kwalletmanager", "org.kde.kwalletmanager5", "kwalletmanager5", "kwalletmanager", "kwalletd5", "kwalletd6"],
+        names: &["KWalletManager", "KWalletManager5", "KWallet", "kwalletd5", "kwalletd6"],
+    },
+    Entry {
+        label: "System authentication",
+        bundles: &["org.kde.polkit-kde-authentication-agent-1", "polkit-kde-authentication-agent-1", "polkit-gnome-authentication-agent-1", "org.gnome.PolicyKit1", "org.gcr.Prompter", "gcr-prompter", "polkit-gnome", "polkit-kde", "lxqt-policykit-agent", "mate-polkit", "hyprpolkitagent"],
+        names: &["polkit-gnome-authentication-agent-1", "polkit-kde-authentication-agent-1", "gcr-prompter", "polkit-gnome", "polkit-kde", "lxqt-policykit-agent", "mate-polkit", "hyprpolkitagent"],
+    },
+    Entry {
+        label: "Lock screen",
+        bundles: &["swaylock", "hyprlock", "gtklock", "i3lock", "kscreenlocker_greet", "org.kde.kscreenlocker_greet", "gnome-screensaver-dialog"],
+        names: &["swaylock", "hyprlock", "gtklock", "i3lock", "kscreenlocker_greet", "gnome-screensaver-dialog"],
+    },
 ];
 
 fn bundle_matches(bundle: &str, blocked: &str) -> bool {
@@ -68,17 +97,16 @@ pub fn blocked_reason(app: &AppIdentity, own_pid: i32) -> Option<&'static str> {
     if app.pid == own_pid {
         return Some(BLOCKED[0].label);
     }
-    match &app.bundle_id {
-        Some(bundle) => BLOCKED.iter().find(|e| e.bundles.iter().any(|b| bundle_matches(bundle, b))).map(|e| e.label),
-        None => blocked_name(&app.name),
-    }
+    app.bundle_id.as_ref()
+        .and_then(|bundle| BLOCKED.iter().find(|e| e.bundles.iter().any(|b| bundle_matches(bundle, b))).map(|e| e.label))
+        .or_else(|| blocked_name(&app.name))
 }
 
 /// The same check for `open_app`, which only has a name or a bundle id (`Keychain Access.app` too).
 pub fn blocked_name(name_or_bundle: &str) -> Option<&'static str> {
     let name = name_or_bundle.trim().trim_end_matches('/');
     let name = name.rsplit('/').next().unwrap_or(name);
-    let name = name.strip_suffix(".app").unwrap_or(name);
+    let name = name.strip_suffix(".app").or_else(|| name.strip_suffix(".desktop")).unwrap_or(name);
     BLOCKED
         .iter()
         .find(|e| {
@@ -153,6 +181,32 @@ mod tests {
         assert_eq!(blocked_reason(&app(None, "SecurityAgent"), OWN_PID), Some("SecurityAgent"));
         assert_eq!(blocked_reason(&app(None, "UserNotificationCenter"), OWN_PID), Some("UserNotificationCenter"));
         assert_eq!(blocked_reason(&app(None, "CoreServicesUIAgent"), OWN_PID), Some("CoreServicesUIAgent"));
+    }
+
+    #[test]
+    fn linux_credentials_authentication_and_lock_screens_are_blocked() {
+        for (id, label) in [
+            ("org.keepassxc.KeePassXC", "KeePassXC"),
+            ("org.gnome.seahorse", "Passwords and Keys"),
+            ("org.kde.kwalletmanager5", "KWallet"),
+            ("polkit-gnome-authentication-agent-1", "System authentication"),
+            ("org.kde.polkit-kde-authentication-agent-1", "System authentication"),
+            ("gcr-prompter", "System authentication"),
+            ("hyprpolkitagent", "System authentication"),
+            ("swaylock", "Lock screen"),
+            ("hyprlock", "Lock screen"),
+            ("gentle-dot", "Gentle Dot"),
+        ] {
+            assert_eq!(blocked_reason(&app(Some(id), "x"), OWN_PID), Some(label), "{id}");
+            assert_eq!(blocked_name(&format!("{id}.desktop")), Some(label), "{id}");
+        }
+    }
+
+    #[test]
+    fn a_nonmatching_window_class_does_not_override_a_sensitive_app_name() {
+        assert_eq!(blocked_reason(&app(Some("electron"), "Bitwarden"), OWN_PID), Some("Bitwarden"));
+        assert_eq!(blocked_reason(&app(Some("custom-class"), "hyprlock"), OWN_PID), Some("Lock screen"));
+        assert_eq!(blocked_reason(&app(Some("quickshell"), "Desktop Shell"), OWN_PID), None);
     }
 
     #[test]

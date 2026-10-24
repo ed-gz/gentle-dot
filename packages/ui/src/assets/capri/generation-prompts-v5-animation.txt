@@ -1,0 +1,183 @@
+Capri animation atlas provenance — 2026-10-23
+
+Generated with the built-in image_gen imagegen tool; transparent_background=true.
+These PNG files are byte-for-byte generated outputs. No raster pixels were painted, cut,
+recolored, resized, or composited by scripts. Python/Pillow/numpy were used only for
+read-only alpha/bounds measurements and writing JSON metadata.
+
+Reference artwork:
+- capri-atlas-v2.png (approved Capri identity)
+- reactions-atlas-v1.png (Capri expression, prop and furniture continuity)
+- friends-atlas-v2.png (approved Rebecca identity and duo compositions)
+- .cache/rebecca-reference/rebecca-head.png (official CD Projekt RED guide head reference)
+Official Rebecca guide: https://cdn-s-cyberpunk.cdprojektred.com/cosplay-guides/REBECCA_COSPLAY_GUIDE_EN.pdf
+
+Output files, each 1536 x 1024 RGBA, six temporal drawings per action:
+- capri-motion-core-v1.png: idle, walk, greeting, working
+  Original: /home/egarza/.codex/generated_images/01a166ec-3f54-7611-a897-505e82394029/exec-b0952940-0b10-4f17-81eb-027491e4d0e1.png
+- capri-motion-reactions-v1.png: coffee, chill, crying, angry
+  Original: /home/egarza/.codex/generated_images/01a166ec-3f54-7611-a897-505e82394029/exec-f8f1f351-5e6d-423a-a684-40a754b4a25f.png
+- capri-motion-friends-v1.png: duo-watch, duo-coffee, duo-couch, duo-high-five
+  Original: /home/egarza/.codex/generated_images/01a166ec-3f54-7611-a897-505e82394029/exec-b7e844bf-1ead-44f9-ae21-748c5914e559.png
+
+The matching JSON files describe measured source crops and absolute clip polygons,
+not assumed uniform cells. Each action has a shared canvas and frame offsets that
+register the body/feet or furniture base. Walking registers the head horizontally
+while legs alternate. Sofa base registration excludes blue shoe pixels.
+
+Alpha QA: fully transparent pixels core 815745 (51.86%), reactions 713702 (45.38%),
+friends 601541 (38.24%). The generated files contain hidden RGB data under alpha zero;
+browser checkerboard inspection confirms there is no opaque red background.
+All frames retain a minimum eight-pixel canvas margin around registered artwork.
+
+Validation: renderer contract verifies twelve actions x six frames, source PNG dimensions,
+RGBA alpha, image references, clip bounds, and source/destination rectangles. Browser
+preview uses the actual production renderer, with visible gesture and frame changes.
+Evidence: build/previews/capri-motion-preview.png and .webm;
+.cache/capri-motion/registration.json and validation.json.
+Motion timing and loop/once policies are declared in the manifests.
+
+FULL GENERATION PROMPTS
+
+===== motionCorePrompt =====
+Use case: stylized-concept
+Asset: a genuine FRAME-BY-FRAME ANIMATION SPRITE SHEET for the Gentle Dot app. This is not a pose collection.
+Reference image: the exact Capri identity and rendering style. Preserve her completely: nonhuman angular black polygon face/body, vivid green face panels, cyan/blue concentric-ring eyes, fuchsia/red spiky starburst hair, very thin angular black limbs with red/green accents. Do not draw a human woman. Crisp flat geometric cel animation, sharp edges, no blur or texture.
+
+OUTPUT: transparent landscape canvas, 3:2 ratio, target1536x1024. EXACTLY24 sprites arranged as SIX EQUAL COLUMNS and FOUR EQUAL ROWS. Each row is SIX CONSECUTIVE TEMPORAL FRAMES of ONE action, read left-to-right. Every row keeps the same camera angle, character proportions, scale, body registration, feet baseline, and prop placement from frame1 to6. Only the specified moving body parts and facial expression change. Think professional hand-drawn animation keyframes with in-between poses. Do not give each cell a different standalone pose. No labels, numbers, lines, borders, text, checkerboard or background.
+
+REGISTRATION: uniform256x256 cells. In each cell the character's hip center is near x128 and feet share baseline y228. Hair top near y32. Same head size and body dimensions in all24 cells. Whole silhouette occupies at most80% of cell width/height. Leave at least20px completely transparent empty padding on all four sides of EVERY frame. Never clip fingers/hair/feet, never cross a cell boundary. No motion blur or motion trails; depict actual changed limb positions instead. Keep Capri's feet planted in rows1,3,4. Row2 walks in place with a stationary root and floor baseline, without horizontal travel.
+
+ROW1 — IDLE BREATH AND BLINK, front-facing, arms relaxed:
+F1 neutral open eyes, relaxed shoulders.
+F2 shoulders/chest rise slightly on inhale, open eyes.
+F3 same raised shoulders, eyelids halfway closed.
+F4 eyelids fully CLOSED into two blue curved lines, shoulders begin lowering.
+F5 eyes halfway reopening, shoulders low.
+F6 eyes fully open, shoulders back to F1, seamless loop.
+Movement is subtle but visibly drawn, not six duplicates. Feet and head center remain registered.
+
+ROW2 — SIX-FRAME WALK CYCLE, fixed three-quarter view toward right, walking IN PLACE:
+F1 left foot forward heel contact, right foot behind toe-off; right arm forward, left arm back.
+F2 weight down onto left foot, right knee lifting from rear; arms swing inward.
+F3 left support leg under body, right knee passes forward; arms pass neutral.
+F4 right foot forward heel contact, left foot behind toe-off; left arm forward, right arm back.
+F5 weight down onto right foot, left knee lifting from rear; arms swing inward.
+F6 right support leg under body, left knee passes forward; arms pass neutral toward F1.
+Clearly alternate legs and opposing arms. Head, torso proportions and facing direction constant, mild natural bob only. No moonwalk, no extra limbs.
+
+ROW3 — GREETING WAVE, front-facing, body and both feet fixed:
+F1 right arm low beside body, eyes open smile.
+F2 elbow bends, right hand rises to chest.
+F3 right hand reaches beside head, palm open.
+F4 raised hand tilts outwards at wrist.
+F5 raised hand tilts inwards at wrist, brief happy blink.
+F6 hand lowers halfway, eyes reopen, friendly smile.
+Draw actual shoulder/elbow/wrist changes while all other parts match.
+
+ROW4 — WORK/TYPING LOOP, front three-quarter view, fixed glowing cyan floating keyboard across waist:
+F1 left fingers press keys, right hand raised.
+F2 left fingers lift while right hand descends.
+F3 right fingers press keys, left hand raised.
+F4 right fingers lift, both hands mid-transition.
+F5 both hands press keys on opposite sides, eyes blink.
+F6 return toward F1, eyes open, left hand descending and right rising.
+Keyboard dimensions and its location exactly constant across6frames. Capri remains standing with legs/torso/head registered; only hands/fingers/eyelids animate. No text on keyboard.
+
+Each row must read as smooth temporal animation when its six cells are shown in order. Preserve alpha transparency outside silhouettes and between limbs. Return exactly6columns x4rows with24complete frames.
+
+===== motionReactionsPrompt =====
+Use case: stylized-concept
+Asset: FRAME-BY-FRAME ANIMATION SPRITE ATLAS, not a collection of disconnected poses.
+Reference1: exact Capri identity. Reference2: her established coffee/armchair/crying/angry artwork and props, for identity/style ONLY.
+Preserve Capri's nonhuman black angular polygon face/body, bright green face panels, concentric cyan-blue eyes, fuchsia/red starburst hair, thin sharp limbs with neon red/green details. Same head/body proportions in all frames, crisp flat cel shading. No human girl.
+
+FORMAT: landscape3:2 transparent canvas, target1536x1024. EXACTLY24 complete animation frames, SIX columns and FOUR rows. Each row is one action progressing through six consecutive frames left-to-right. Uniform256x256 logical cells. Every scene centered within its cell; fixed camera, body registration and scale per row. Character/prop occupies no more than80% cell extent, at least20px clear transparent margin all sides. Entire head, feet, fingers, mug, tears and chair fit inside the cell. Real ALPHA transparency outside silhouettes and in holes; NO background, glow backdrop, colored haze, ground plane, grid, labels, numbers, text, checkerboard or watermark. No motion blur/trails; show true changed limb/eye positions.
+
+ROW1 COFFEE SIP — six sequential frames, front three-quarter standing Capri, feet and torso fixed, same purple mug in RIGHT hand:
+F1 mug at waist, eyes open relaxed.
+F2 elbow bends bringing mug halfway toward face.
+F3 mug rim meets mouth, eyes soften.
+F4 mug tilts slightly as she sips, eyes close contentedly; mouth touching rim.
+F5 mug lowers halfway, eyes reopen, satisfied smile.
+F6 mug returns to same waist position as F1, relaxed shoulders, seamless loop.
+The hand travels with mug in a coherent arc. Mug same size/color all six.
+
+ROW2 COUCH RELAX — same dark indigo polygonal ARMCHAIR placed at exactly the same size/position in all6, Capri already seated, chair feet baseline y228:
+F1 upright comfortable seat, hands on armrests, eyes open.
+F2 shoulders ease backward, hands start sliding along armrests.
+F3 body reclines a little farther, one arm bends up behind head.
+F4 reclining comfortably, both hands behind head, eyes close in a slow blink.
+F5 eyes reopen, hands begin returning down, body eases forward.
+F6 back to F1 resting position, hands on armrests.
+Chair geometry never morphs. Keep legs resting consistently in front; only torso/arms/head move naturally.
+
+ROW3 CRYING — Capri seated cross-legged at fixed position, head/torso consistent, large cyan tears:
+F1 watery eyes open, hands on knees, tears just forming below eyes.
+F2 tears run down cheeks, shoulders rise on a small sob.
+F3 right hand lifts to wipe right eye, two drops lower in air.
+F4 hand wipes across eye, eyelids squeeze shut; drops fall further down.
+F5 hand lowers, eyes begin reopening, shoulders relax; new tears forming.
+F6 hand back on knee, wet eyes open, next tears at top for seamless loop.
+Actual tear shapes and vertical positions CHANGE over six frames; do not duplicate the same streak.
+
+ROW4 ANGRY/STRESSED — Capri standing, feet and hip position fixed:
+F1 brows start furrowing, hands beside body.
+F2 fists clench and rise to waist, mouth tight.
+F3 both hands lift toward sides of hair/head, visibly frustrated.
+F4 hands on head, shoulders hunch, eyes narrowed, stressed exhale.
+F5 hands release and lower, shoulders loosen, eyes widen slightly.
+F6 arms crossed, annoyed pout but settled.
+Keep this a humorous expressive assistant reaction, no weapons, violence or threats. No extra symbols spilling into another cell.
+
+Animation consistency is the priority: six real temporal drawings per action with coherent motion arcs and the same character scale and background registration. Exactly6 columns×4 rows. Transparent gutters, not a poster.
+
+===== motionFriendsPrompt =====
+Use case: stylized-concept
+Asset: production FRAME-BY-FRAME animated duo sprite sheet for Gentle Dot. Exactly24 temporal drawings, not24 unrelated poses.
+Reference1: exact Capri identity. Reference2: APPROVED Rebecca-and-Capri identity/style and props. Reference3: official Rebecca head, especially eye colors. Preserve these exact characters throughout every cell.
+
+CAPRI: nonhuman geometric black shard body, angular green face panels, concentric cyan/blue eyes, vivid fuchsia/red starburst hair, thin angular limbs. Never human skin.
+REBECCA: recognizable adult from Cyberpunk Edgerunners, pale icy cyan skin; mint hair swept BACK exposing forehead, two long straight high ponytails with black/lime mechanical clips; CORAL RED sclera filling the whole eye, thick lime-green iris ring and large MAGENTA center, NO white sclera/amber iris; violet lips, black angular under-eye cyberware seams; pink skull neck tattoo; oversized dark navy high-collar jacket, opaque black top and shorts, chunky dark/lime shoes; oversized BLUE right mechanical hand and PINK left mechanical hand with lime round knuckles. No weapons, no sexualized anatomy. Match approved reference2, not a generic chibi.
+
+FORMAT: landscape3:2 transparent canvas, target1536x1024. SIX columns×FOUR rows, exactly24 complete duo frames. Each row depicts the SAME two characters, same relative size, fixed camera and constant prop size/position in six consecutive moments left-to-right. Uniform256x256 cells. Capri ALWAYS left, Rebecca ALWAYS right. Both characters remain present in every frame. Fixed roots/feet baseline near local y224; head/body scale identical within each row. Both fit entirely inside their own cell; total occupied width≤216px and height≤212px, ≥20px transparent margins. Do not crop spiky hair, ponytails, hands, feet or sofa. Do not cross cell boundaries.
+Crisp flat cel-animation, legible tiny shapes and sharp contours; NO blur, NO colored haze or outer glow, NO background, floor, rectangles, grid lines, words, captions, numbers, checkerboard, watermark. Genuine ALPHA transparency outside and between silhouettes.
+
+ROW1 DUO WATCH/INVITATION — both standing in fixed places, Capri slightly in front, Rebecca beside her:
+F1 Capri looks toward Rebecca, right hand near torso; Rebecca upright looking at Capri.
+F2 Capri extends hand in a small beckoning gesture; Rebecca starts turning her head toward user.
+F3 Capri's hand curls inward in 'come look', Rebecca leans forward slightly.
+F4 Capri points toward lower front as if showing a session; Rebecca leans closer, her enormous hands resting at knees.
+F5 both look forward curiously, Rebecca blinks, Capri maintains pointing.
+F6 Rebecca eyes reopen and both ease back toward F1; Capri brings hand near torso.
+Keep feet/root positions unchanged, animate actual arms/head/upper torso.
+
+ROW2 DUO COFFEE, both standing fixed side by side, Capri with purple mug and Rebecca with mint mug:
+F1 both mugs low at chest/waist, both eyes open.
+F2 Capri raises purple mug toward mouth, Rebecca holds hers low watching.
+F3 Capri sips, eyes close; Rebecca begins raising mint mug.
+F4 Capri lowers purple mug and opens eyes; Rebecca's mint mug at her lips, eyes close as she sips.
+F5 Rebecca lowers mint mug halfway, eyes reopen; Capri relaxed.
+F6 both return to F1 mug positions, seamless loop.
+Actual mugs, elbows and hands move through coherent arcs; same mugs and cyberhands every frame.
+
+ROW3 DUO COUCH — exact same compact indigo sofa, same position/size all6frames; both seated, Capri left and Rebecca right:
+F1 both upright comfortable, hands resting, eyes open.
+F2 Capri leans back a little, Rebecca adjusts giant hands on lap.
+F3 Capri reclines comfortably, one hand behind head; Rebecca leans inward slightly.
+F4 both relaxed with eyelids closed in a gentle blink.
+F5 eyes reopen, Capri lowers arm; Rebecca straightens slightly.
+F6 both ease into F1 posture.
+Do not reshape sofa or resize characters. Complete sofa feet and ponytails inside cell.
+
+ROW4 DUO HIGH FIVE — two standing roots fixed, facing each other:
+F1 both hands lowered, smiling at each other.
+F2 Capri's right hand and Rebecca's enormous BLUE right hand start rising toward one another.
+F3 raised palms approach with a small gap, elbows visibly bent.
+F4 palms CONTACT overhead at the shared center, clear small star-shaped flash only at contact.
+F5 palms separate, arms beginning to lower, joyful closed-eye smiles.
+F6 arms lowered, eyes open, satisfied smiles.
+Genuine sequential arm movement and contact; no extra hands, no merged bodies. Flash only inF4.
+
+Each row must animate coherently when the six frames play in order. Exact same character identities, no substitutions, no disconnected art poses. Preserve true transparent alpha and generous inter-frame gutters.
+

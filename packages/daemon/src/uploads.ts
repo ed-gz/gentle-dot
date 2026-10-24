@@ -1,6 +1,10 @@
 import { randomBytes } from "node:crypto";
 import {
 	createWriteStream,
+	constants,
+	closeSync,
+	fstatSync,
+	realpathSync,
 	existsSync,
 	openSync,
 	readFileSync,
@@ -45,6 +49,8 @@ interface Batch {
 	writing: Set<string>;
 	bytes: number;
 	createdAt: number;
+	/** Agent uploads are bound to a device and exact destination; ordinary Dot uploads stay unscoped. */
+	owner?: string;
 }
 
 export interface UploadStoreOptions {
@@ -89,6 +95,12 @@ const NOT_FOUND = {
 	code: "attachment_not_found",
 	message: "A file you attached is no longer available. Attach it again.",
 };
+const unauthorized = (): UploadRefusal => ({
+	ok: false,
+	status: 401,
+	code: "unauthorized",
+	message: "This device no longer has access. Link it again to upload files.",
+});
 
 function megabytes(bytes: number): string {
 	return bytes >= 1024 * 1024 ? `${Math.round(bytes / (1024 * 1024))} MB` : `${bytes} bytes`;
@@ -153,14 +165,16 @@ export class UploadStore {
 	 */
 	async receive(
 		body: Readable,
-		request: { name: string; uploadId?: string; length?: number },
+		request: { name: string; uploadId?: string; length?: number; authorize?: () => boolean; owner?: string },
 	): Promise<UploadOutcome> {
+		const authorize = request.authorize ?? (() => true);
+		if (!authorize()) return unauthorized();
 		this.access(() => this.prune());
 		const limits = this.limits;
 		if (request.length !== undefined && request.length > limits.fileBytes) return tooLarge(limits);
 		const uploadId = request.uploadId ?? `u_${randomBytes(16).toString("base64url")}`;
 		const known = this.batches.get(uploadId);
-		if (request.uploadId !== undefined && !known) {
+		if (request.uploadId !== undefined && (!known || known.owner !== request.owner)) {
 			return {
 				ok: false,
 				status: 404,
@@ -174,6 +188,7 @@ export class UploadStore {
 			writing: new Set(),
 			bytes: 0,
 			createdAt: this.now(),
+			...(request.owner ? { owner: request.owner } : {}),
 		};
 		if (batch.files.size + batch.writing.size >= limits.files) {
 			return {
@@ -207,15 +222,15 @@ export class UploadStore {
 		}
 		batch.writing.add(name);
 		this.batches.set(uploadId, batch);
-		const written = await this.write(body, fd, batch);
+		const written = await this.write(body, fd, batch, authorize);
 		batch.writing.delete(name);
-		if (!written.ok) {
+		if (!written.ok || !authorize()) {
 			batch.bytes -= written.size;
 			this.access(() => {
 				removeQuietly(path);
 				this.dropIfEmpty(uploadId, batch);
 			});
-			return written.refusal;
+			return written.ok ? unauthorized() : written.refusal;
 		}
 		const file: StoredFile = { name, size: written.size, mime: sniffMime(written.head), path };
 		batch.files.set(name, file);
@@ -226,11 +241,12 @@ export class UploadStore {
 	}
 
 	/** The stored files a message refers to, checked against the per-message limits; nothing is used up. */
-	resolve(refs: AttachmentRef[]): ResolveOutcome {
+	resolve(refs: AttachmentRef[], owner?: string): ResolveOutcome {
 		const files: StoredFile[] = [];
 		const seen = new Set<string>();
 		for (const { uploadId, name } of refs) {
-			const file = this.batches.get(uploadId)?.files.get(name);
+			const batch = this.batches.get(uploadId);
+			const file = batch && batch.owner === owner && (!owner || this.now() - batch.createdAt < this.ttlMs) ? batch.files.get(name) : undefined;
 			const key = `${uploadId}/${name}`;
 			if (!file || seen.has(key)) return { ok: false, ...NOT_FOUND };
 			seen.add(key);
@@ -242,6 +258,23 @@ export class UploadStore {
 			return { ok: false, code, message };
 		}
 		return { ok: true, files };
+	}
+
+	/** Agent transport reads only exact store records, never a client path or a followed link. */
+	readForSession(refs: AttachmentRef[], owner: string) {
+		const resolved = this.resolve(refs, owner);
+		if (!resolved.ok) throw new Error(resolved.message);
+		return this.access(() => resolved.files.map((file, index) => {
+			const ref = refs[index]!;
+			const expected = join(realpathSync(this.root), ref.uploadId, ref.name);
+			if (realpathSync(file.path) !== expected) throw new Error("El archivo adjunto cambió. Vuelve a adjuntarlo.");
+			const fd = openSync(file.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+			try {
+				const stat = fstatSync(fd);
+				if (!stat.isFile() || stat.size !== file.size) throw new Error("El archivo adjunto cambió.");
+				return { name: file.name, mime: file.mime, data: readFileSync(fd).toString("base64") };
+			} finally { closeSync(fd); }
+		}));
 	}
 
 	/** The files were sent: they stay on disk for the assistant, but no other message can send them. */
@@ -258,6 +291,7 @@ export class UploadStore {
 		body: Readable,
 		fd: number,
 		batch: Batch,
+		authorize: () => boolean,
 	): Promise<{ ok: true; size: number; head: Buffer } | { ok: false; size: number; refusal: UploadRefusal }> {
 		const limits = this.limits;
 		return new Promise((resolve) => {
@@ -282,6 +316,7 @@ export class UploadStore {
 				out.destroy();
 			};
 			const onData = (data: Buffer | string) => {
+				if (!authorize()) return fail(unauthorized());
 				const chunk = typeof data === "string" ? Buffer.from(data) : data;
 				size += chunk.length;
 				batch.bytes += chunk.length;
@@ -294,6 +329,7 @@ export class UploadStore {
 				}
 			};
 			const onEnd = () => {
+				if (!authorize()) return fail(unauthorized());
 				ended = true;
 				detach();
 				out.end();

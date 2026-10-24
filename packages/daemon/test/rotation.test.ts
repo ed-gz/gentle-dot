@@ -139,21 +139,17 @@ describe("transparent rotation", () => {
 		expect(answers().at(-1)).toBe("Echo: still here");
 	});
 
-	it("falls back to a fresh session, deleting nothing, when the engine does not load the handoff", async () => {
+	it("restores the previous session, deleting nothing, when the engine does not load the handoff", async () => {
 		const { supervisor, logs, say, answers } = await setup({
 			limits: { compactions: 1 },
 			env: { FAKE_AGENT_DROP_CUSTOM: "1" },
 		});
 		const first = supervisor.sessionFile as string;
 		await say("compact");
-		await waitFor(() => logs.some((line) => line.includes("fresh session")));
+		await waitFor(() => logs.some((line) => line.includes("restored the previous session")));
 		const seed = logs.join("\n").match(/handoff session (\S+\.jsonl)/)?.[1];
-		// The log comes before the engine is asked for the fresh session.
-		const current = await waitFor(
-			() => supervisor.sessionFile !== first && supervisor.sessionFile !== seed && supervisor.sessionFile,
-		);
-		expect(headerOf(current)).toMatchObject({ parentSession: first });
-		expect(supervisor.previousSessions).toEqual([first]);
+		expect(supervisor.sessionFile).toBe(first);
+		expect(supervisor.previousSessions).toEqual([]);
 		// The handoff file the engine could not use stays on disk.
 		expect(seed && existsSync(seed)).toBe(true);
 		await say("after");
@@ -206,6 +202,17 @@ describe("rotation guards", () => {
 			expect(await rotator.maybeRotate()).toBe(false);
 			expect(requests).toEqual(["get_state"]);
 		}
+	});
+
+	it("does not switch when new work arrives while preparing the handoff", async () => {
+		const { supervisor, requests } = stub(compactedFile(3));
+		let checks = 0;
+		const rotator = new SessionRotator(supervisor, {
+			limits: { ...DEFAULT_ROTATION, compactions: 1 },
+			canRotate: () => ++checks <= 2,
+		});
+		expect(await rotator.maybeRotate()).toBe(false);
+		expect(requests).toEqual(["get_state"]);
 	});
 
 	it("does nothing below the limits", async () => {

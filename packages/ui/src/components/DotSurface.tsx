@@ -1,6 +1,8 @@
 import type { AgentState } from "@gentle-dot/protocol";
 import { useRef } from "react";
+import type { DesktopCompanionControls } from "../desktop-companion.ts";
 import { Rose, type RoseMood } from "../rose/Rose.tsx";
+import { DesktopCompanionSurface } from "./DesktopCompanionSurface.tsx";
 
 const LABELS: Record<AgentState, string> = {
 	starting: "starting",
@@ -32,7 +34,8 @@ interface DotSurfaceProps {
 	/** Yolo mode is on (S24.9): risky actions run without asking, so the rose says so. */
 	yolo?: boolean;
 	toggle: () => void;
-	startDrag: () => void;
+	startDrag: () => void | Promise<void>;
+	desktopCompanion?: DesktopCompanionControls;
 }
 
 /** The collapsed, always-on-top rose in its black circle. A click opens the panel; a drag moves the window. */
@@ -43,10 +46,23 @@ export function DotSurface({
 	yolo = false,
 	toggle,
 	startDrag,
+	desktopCompanion,
 }: DotSurfaceProps) {
 	const press = useRef<{ x: number; y: number; dragging: boolean } | undefined>(undefined);
 	const state = connected ? agentState : "restarting";
 	const label = inControl ? "controlling your Mac" : LABELS[state];
+	if (desktopCompanion?.state.enabled)
+		return (
+			<DesktopCompanionSurface
+				controls={desktopCompanion}
+				agentState={agentState}
+				connected={connected}
+				inControl={inControl}
+				yolo={yolo}
+				toggle={toggle}
+				startDrag={startDrag}
+			/>
+		);
 
 	return (
 		<button
@@ -62,7 +78,7 @@ export function DotSurface({
 				if (!p || p.dragging) return;
 				if (Math.hypot(event.clientX - p.x, event.clientY - p.y) > DRAG_THRESHOLD_PX) {
 					p.dragging = true;
-					startDrag();
+					void Promise.resolve(startDrag()).catch(() => {});
 				}
 			}}
 			onPointerUp={() => {

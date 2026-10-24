@@ -1,0 +1,818 @@
+diff --git a/src/client/mod.rs b/src/client/mod.rs
+index d55e4c4..1aac4a5 100644
+--- a/src/client/mod.rs
++++ b/src/client/mod.rs
+@@ -465,6 +465,9 @@ async fn run_client_loop(
+         redraw_on_focus_gained: config.redraw_on_focus_gained,
+         repaint_pending: false,
+         presentation_frozen: false,
++        companion_layout: crate::platform::CompanionLayoutPublisher::from_environment(),
++        companion_presented_at: None,
++        companion_presented_overlay: false,
+         deferred_local_activation: None,
+         draw_host_cursor,
+         detached_process_children: Vec::new(),
+@@ -2156,6 +2159,7 @@ async fn run_client_loop(
+                 );
+             }
+             ClientLoopEvent::Timer => {
++                state.publish_companion_layout(now);
+                 client_timer.fired();
+                 #[cfg(unix)]
+                 if let Ok(mut matcher) = state.direct_graphics_response.lock() {
+diff --git a/src/client/shell.rs b/src/client/shell.rs
+index 2d18044..d927edc 100644
+--- a/src/client/shell.rs
++++ b/src/client/shell.rs
+@@ -6,6 +6,7 @@ mod aggregate_navigation;
+ mod machine_diagnostics;
+ mod workspace_navigation;
+ use workspace_navigation::{PendingWorkspaceHighlight, WorkspaceNavigationTarget};
++mod companion_layout;
+ mod composition;
+ mod config;
+ mod context_menu;
+diff --git a/src/client/shell/tests/mod.rs b/src/client/shell/tests/mod.rs
+index 9d96014..7b94d2d 100644
+--- a/src/client/shell/tests/mod.rs
++++ b/src/client/shell/tests/mod.rs
+@@ -88,7 +88,7 @@ fn worktree_list_result(open_workspace_id: Option<&str>) -> crate::api::schema::
+     }
+ }
+ 
+-fn surface() -> PaneSurfaceFrame {
++pub(super) fn surface() -> PaneSurfaceFrame {
+     let surface_buffer = Buffer::with_lines(["LIVE", "PANE"]);
+     PaneSurfaceFrame {
+         boot_id: "boot-1".into(),
+diff --git a/src/client/state.rs b/src/client/state.rs
+index 2cadfa6..9c17e3d 100644
+--- a/src/client/state.rs
++++ b/src/client/state.rs
+@@ -73,6 +73,9 @@ pub(super) struct ClientState {
+     /// During a source-off-first handoff the currently blitted frame remains authoritative until
+     /// an acknowledged target snapshot/surface pair commits.
+     pub(super) presentation_frozen: bool,
++    pub(super) companion_layout: Option<crate::platform::CompanionLayoutPublisher>,
++    pub(super) companion_presented_at: Option<std::time::Instant>,
++    pub(super) companion_presented_overlay: bool,
+     /// Latest explicit Local selection awaiting this client's replacement Local connection.
+     pub(super) deferred_local_activation: Option<endpoint::EndpointActivationIntent>,
+     pub(super) draw_host_cursor: bool,
+@@ -130,6 +133,9 @@ impl ClientState {
+             redraw_on_focus_gained: false,
+             repaint_pending: false,
+             presentation_frozen: false,
++            companion_layout: None,
++            companion_presented_at: None,
++            companion_presented_overlay: false,
+             deferred_local_activation: None,
+             draw_host_cursor: false,
+             detached_process_children: Vec::new(),
+@@ -139,6 +145,40 @@ impl ClientState {
+         }
+     }
+ 
++    pub(super) fn publish_companion_layout(&mut self, now: std::time::Instant) {
++        let Some(publisher) = self.companion_layout.as_mut() else {
++            return;
++        };
++        if !publisher.due(now) {
++            return;
++        }
++        let layout = self.companion_layout_snapshot();
++        if let Some(publisher) = self.companion_layout.as_ref() {
++            publisher.publish(layout);
++        }
++    }
++
++    pub(super) fn companion_layout_snapshot(&self) -> crate::platform::companion_layout::Layout {
++        let (cols, rows) = self.reported_size;
++        self.shell
++            .as_ref()
++            .map(|shell| {
++                shell.companion_layout(
++                    cols,
++                    rows,
++                    self.companion_presented_at,
++                    self.presentation_frozen
++                        || self.repaint_pending
++                        || self.companion_presented_overlay,
++                )
++            })
++            .unwrap_or_else(|| crate::platform::companion_layout::Layout {
++                columns: cols,
++                rows,
++                ..Default::default()
++            })
++    }
++
+     pub(super) fn request_repaint(&mut self) {
+         self.repaint_pending = true;
+     }
+@@ -568,6 +608,13 @@ impl ClientState {
+             return false;
+         }
+         self.blit_encoder.commit(frame_data, encoded);
++        if self.companion_layout.is_some() {
++            self.companion_presented_at = Some(std::time::Instant::now());
++            self.companion_presented_overlay = self
++                .shell
++                .as_ref()
++                .is_none_or(|shell| shell.companion_overlay_active());
++        }
+         self.repaint_pending = false;
+         true
+     }
+diff --git a/src/platform/linux.rs b/src/platform/linux.rs
+index c73584e..ae39581 100644
+--- a/src/platform/linux.rs
++++ b/src/platform/linux.rs
+@@ -26,6 +26,9 @@ pub(crate) use super::unix_common::{
+ #[cfg(test)]
+ mod config_file_tests;
+ 
++mod companion_layout;
++pub(crate) use companion_layout::CompanionLayoutPublisher;
++
+ mod shutdown;
+ pub(crate) use shutdown::monitor_host_shutdown;
+ 
+diff --git a/src/platform/mod.rs b/src/platform/mod.rs
+index 927cd32..19f964d 100644
+--- a/src/platform/mod.rs
++++ b/src/platform/mod.rs
+@@ -3,9 +3,23 @@
+ //! Centralizes OS-dependent behavior behind a clean boundary so core
+ //! modules don't scatter `#[cfg]` branches through product logic.
+ 
++pub(crate) mod companion_layout;
+ #[cfg(unix)]
+ pub(crate) mod ssh_agent;
+ 
++#[cfg(not(target_os = "linux"))]
++pub(crate) struct CompanionLayoutPublisher;
++#[cfg(not(target_os = "linux"))]
++impl CompanionLayoutPublisher {
++    pub(crate) fn from_environment() -> Option<Self> {
++        None
++    }
++    pub(crate) fn due(&mut self, _now: std::time::Instant) -> bool {
++        false
++    }
++    pub(crate) fn publish(&self, _layout: companion_layout::Layout) {}
++}
++
+ pub(crate) struct HostShutdownMonitor {
+     task: Option<tokio::task::JoinHandle<()>>,
+ }
+diff --git a/src/client/shell/companion_layout.rs b/src/client/shell/companion_layout.rs
+new file mode 100644
+index 0000000..ccf2f95
+--- /dev/null
++++ b/src/client/shell/companion_layout.rs
+@@ -0,0 +1,211 @@
++//! Geometry is copied from the last presented client hit map, never reconstructed from text.
++use super::*;
++use crate::platform::companion_layout::{Layout, Pane, SidebarRow};
++
++impl ClientShellState {
++    pub(crate) fn companion_overlay_active(&self) -> bool {
++        self.overlay.is_some()
++            || self.mode != ClientShellMode::Terminal
++            || self.popup_pending
++            || self.hits.popup.is_some()
++            || !self.hits.notification_toast.is_empty()
++    }
++
++    pub(crate) fn companion_layout(
++        &self,
++        columns: u16,
++        rows: u16,
++        presented_at: Option<std::time::Instant>,
++        presentation_blocked: bool,
++    ) -> Layout {
++        let mut out = Layout {
++            columns,
++            rows,
++            outer_focused: self.outer_focused,
++            overlay_active: presentation_blocked || self.companion_overlay_active(),
++            ..Layout::default()
++        };
++        let (Some(snapshot), Some(surface)) =
++            (self.snapshot.as_deref(), self.pane_surface.as_ref())
++        else {
++            return out;
++        };
++        out.server_boot_id = Some(snapshot.boot_id.clone());
++        out.revision = snapshot.revision;
++        let coherent = self.active_endpoint_id.is_local()
++            && self.endpoint_status(&self.active_endpoint_id) == Some(ClientEndpointStatus::Online)
++            && self.endpoint_error.is_none()
++            && self.pending_pane_surface.is_none()
++            && self.pane_surface_generation == self.active_snapshot_generation
++            && snapshot.boot_id == surface.boot_id
++            && snapshot.revision == surface.projection_revision
++            && self.last_composed_size == Some((columns, rows))
++            && self
++                .last_composed_at
++                .zip(presented_at)
++                .is_some_and(|(composed, presented)| composed <= presented);
++        if !coherent || out.overlay_active {
++            return out;
++        }
++        out.available = true;
++        out.focused_pane_id = snapshot.focused_pane_id.clone();
++        out.panes = self
++            .hits
++            .panes
++            .iter()
++            .take(128)
++            .filter(|p| {
++                !p.inner_rect.is_empty()
++                    && p.inner_rect.right() <= columns
++                    && p.inner_rect.bottom() <= rows
++            })
++            .map(|p| Pane {
++                pane_id: p.pane_id.clone(),
++                inner_rect: p.inner_rect.into(),
++                scroll_offset: p.scroll.map(|s| s.offset_from_bottom),
++                endpoint: "local",
++            })
++            .collect();
++        out.sidebar_rows = self
++            .hits
++            .agents
++            .iter()
++            .map(|(rect, id)| (rect, id))
++            .chain(
++                self.hits
++                    .endpoint_agents
++                    .iter()
++                    .filter(|(_, endpoint, _)| endpoint.is_local())
++                    .map(|(rect, _, id)| (rect, id)),
++            )
++            .take(128)
++            .filter(|(r, _)| !r.is_empty() && r.right() <= columns && r.bottom() <= rows)
++            .map(|(rect, id)| SidebarRow {
++                pane_id: id.clone(),
++                rect: (*rect).into(),
++                endpoint: "local",
++            })
++            .collect();
++        out
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::super::tests::{snapshot, surface};
++    use super::*;
++    fn ready() -> ClientShellState {
++        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
++        let mut data = snapshot();
++        data.agents.push(crate::protocol::ClientShellAgent {
++            pane_id: "pane_1".into(),
++            workspace_id: "ws_1".into(),
++            tab_id: "tab_1".into(),
++            name: Some("private-agent-title".into()),
++            display_agent: None,
++            agent: Some("pi".into()),
++            title: None,
++            terminal_title: None,
++            terminal_title_stripped: None,
++            agent_status: crate::api::schema::AgentStatus::Idle,
++            state_change_seq: 1,
++            state_labels: vec![],
++            tokens: vec![],
++            focused: true,
++        });
++        state.set_snapshot(Box::new(data));
++        state.set_pane_surface(surface());
++        state.compose(100, 30).expect("fixture frame");
++        state
++    }
++    #[test]
++    fn companion_layout_uses_actual_presented_pane_and_sidebar_coordinates_without_text() {
++        let mut state = ready();
++        state.hits.panes[0].scroll = Some(crate::pane::ScrollMetrics {
++            offset_from_bottom: 0,
++            max_offset_from_bottom: 10,
++            viewport_rows: 2,
++        });
++        let layout = state.companion_layout(100, 30, Some(std::time::Instant::now()), false);
++        assert!(layout.available);
++        assert_eq!(
++            layout.panes[0].inner_rect,
++            state.hits.panes[0].inner_rect.into()
++        );
++        assert_eq!(layout.panes[0].scroll_offset, Some(0));
++        assert_eq!(layout.sidebar_rows[0].pane_id, "pane_1");
++        assert_eq!(layout.sidebar_rows[0].rect, state.hits.agents[0].0.into());
++        assert!(layout.panes[0].inner_rect.x > layout.sidebar_rows[0].rect.x);
++        let text = serde_json::to_string(&layout).unwrap();
++        assert!(
++            !text.contains("LIVE")
++                && !text.contains("/repo")
++                && !text.contains("private-agent-title")
++        );
++    }
++    #[test]
++    fn companion_layout_rejects_unpresented_resized_frozen_overlay_and_disconnected_views() {
++        let mut state = ready();
++        let now = Some(std::time::Instant::now());
++        assert!(!state.companion_layout(100, 30, None, false).available);
++        assert!(!state.companion_layout(101, 30, now, false).available);
++        assert!(!state.companion_layout(100, 30, now, true).available);
++        state.overlay = Some(ClientShellOverlay::Onboarding);
++        let hidden = state.companion_layout(100, 30, now, false);
++        assert!(!hidden.available && hidden.overlay_active && hidden.panes.is_empty());
++        state.overlay = None;
++        state.hits.panes[0].scroll = None;
++        assert_eq!(
++            state.companion_layout(100, 30, now, false).panes[0].scroll_offset,
++            None
++        );
++        state.compose(100, 30).expect("next frame");
++        assert!(!state.companion_layout(100, 30, now, false).available);
++        state.invalidate_pane_surface();
++        assert!(!state.companion_layout(100, 30, now, false).available);
++    }
++    #[test]
++    fn companion_layout_withholds_fast_patch_geometry_until_repaint_succeeds() {
++        let mut client = crate::client::state::ClientState::test_new();
++        client.shell = Some(ready());
++        client.reported_size = (100, 30);
++        client.companion_presented_at = Some(std::time::Instant::now());
++        assert!(client.companion_layout_snapshot().available);
++
++        // The retained patch path updates its hit map before writing stdout. On a
++        // write/flush error it requests a repaint without advancing composed_at.
++        client.shell.as_mut().unwrap().hits.panes[0].scroll = Some(crate::pane::ScrollMetrics {
++            offset_from_bottom: 0,
++            max_offset_from_bottom: 10,
++            viewport_rows: 2,
++        });
++        client.request_repaint();
++        let rejected = client.companion_layout_snapshot();
++        assert!(!rejected.available && rejected.panes.is_empty());
++
++        // Only a successfully presented replacement clears this upstream flag.
++        client.repaint_pending = false;
++        client.companion_presented_at = Some(std::time::Instant::now());
++        let restored = client.companion_layout_snapshot();
++        assert!(restored.available);
++        assert_eq!(restored.panes[0].scroll_offset, Some(0));
++    }
++    #[test]
++    #[ignore = "local geometry-only scaling profile, no terminals"]
++    fn companion_layout_profile_one_and_fifteen_panes() {
++        for count in [1, 15] {
++            let mut state = ready();
++            let pane = state.hits.panes[0].clone();
++            state.hits.panes = vec![pane; count];
++            let presented = Some(std::time::Instant::now());
++            let start = std::time::Instant::now();
++            for _ in 0..20000 {
++                std::hint::black_box(state.companion_layout(100, 30, presented, false));
++            }
++            eprintln!(
++                "companion_layout panes={count} samples=20000 elapsed_us={}",
++                start.elapsed().as_micros()
++            );
++        }
++    }
++}
+diff --git a/src/platform/companion_layout.rs b/src/platform/companion_layout.rs
+new file mode 100644
+index 0000000..942d07d
+--- /dev/null
++++ b/src/platform/companion_layout.rs
+@@ -0,0 +1,82 @@
++//! Opt-in, geometry-only TUI presentation. This is not a server/wire protocol.
++use serde::Serialize;
++
++#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "camelCase")]
++pub(crate) struct Layout {
++    pub columns: u16,
++    pub rows: u16,
++    pub revision: u64,
++    pub server_boot_id: Option<String>,
++    pub overlay_active: bool,
++    pub outer_focused: Option<bool>,
++    pub available: bool,
++    pub focused_pane_id: Option<String>,
++    pub panes: Vec<Pane>,
++    pub sidebar_rows: Vec<SidebarRow>,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++pub(crate) struct Rect {
++    pub x: u16,
++    pub y: u16,
++    pub width: u16,
++    pub height: u16,
++}
++impl From<ratatui::layout::Rect> for Rect {
++    fn from(r: ratatui::layout::Rect) -> Self {
++        Self {
++            x: r.x,
++            y: r.y,
++            width: r.width,
++            height: r.height,
++        }
++    }
++}
++#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "camelCase")]
++pub(crate) struct Pane {
++    pub pane_id: String,
++    pub inner_rect: Rect,
++    pub scroll_offset: Option<usize>,
++    pub endpoint: &'static str,
++}
++#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "camelCase")]
++pub(crate) struct SidebarRow {
++    pub pane_id: String,
++    pub rect: Rect,
++    pub endpoint: &'static str,
++}
++
++/// Acquisition as well as I/O is capped at once per second, independent of pane output rate.
++#[derive(Default)]
++pub(crate) struct Throttle {
++    last: Option<std::time::Instant>,
++}
++impl Throttle {
++    pub fn due(&mut self, now: std::time::Instant) -> bool {
++        if self.last.is_some_and(|last| {
++            now.saturating_duration_since(last) < std::time::Duration::from_secs(1)
++        }) {
++            return false;
++        }
++        self.last = Some(now);
++        true
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn companion_layout_throttle_does_not_accumulate_per_render_work() {
++        let mut throttle = Throttle::default();
++        let now = std::time::Instant::now();
++        assert!(throttle.due(now));
++        for millis in 0..1000 {
++            assert!(!throttle.due(now + std::time::Duration::from_millis(millis)));
++        }
++        assert!(throttle.due(now + std::time::Duration::from_secs(1)));
++        assert!(!throttle.due(now + std::time::Duration::from_secs(1)));
++    }
++}
+diff --git a/src/platform/linux/companion_layout.rs b/src/platform/linux/companion_layout.rs
+new file mode 100644
+index 0000000..cb7598c
+--- /dev/null
++++ b/src/platform/linux/companion_layout.rs
+@@ -0,0 +1,339 @@
++//! Linux-only opt-in publisher. No I/O occurs in rendering or pane loops.
++use crate::platform::companion_layout::{Layout, Throttle};
++use serde::Serialize;
++use std::{
++    fs::{File, OpenOptions},
++    io::{self, Read, Write},
++    os::{
++        fd::AsRawFd,
++        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
++    },
++    path::{Path, PathBuf},
++    sync::mpsc::{self, SyncSender},
++    time::Instant,
++};
++
++#[derive(Serialize)]
++#[serde(rename_all = "camelCase")]
++struct Identity {
++    version: u8,
++    client_pid: u32,
++    process_identity: String,
++    tty: String,
++    kitty_window_id: u64,
++    herdr_socket_path: String,
++}
++#[derive(Serialize)]
++#[serde(rename_all = "camelCase")]
++struct Report<'a> {
++    #[serde(flatten)]
++    identity: &'a Identity,
++    observed_at: &'a str,
++    #[serde(flatten)]
++    layout: &'a Layout,
++}
++pub(crate) struct CompanionLayoutPublisher {
++    sender: SyncSender<(Layout, String)>,
++    throttle: Throttle,
++}
++impl CompanionLayoutPublisher {
++    pub(crate) fn from_environment() -> Option<Self> {
++        let directory = std::env::var_os("GENTLE_DOT_COMPANION_LAYOUT_DIR")?;
++        match Self::start(Path::new(&directory)) {
++            Ok(publisher) => Some(publisher),
++            Err(error) => {
++                tracing::warn!(%error,"optional companion geometry unavailable");
++                None
++            }
++        }
++    }
++    fn start(directory: &Path) -> io::Result<Self> {
++        let directory = private_directory(directory)?;
++        let identity = identity()?;
++        cleanup_dead_reports(&directory);
++        let (sender, receiver) = mpsc::sync_channel::<(Layout, String)>(1);
++        std::thread::Builder::new()
++            .name("companion-layout".into())
++            .spawn(move || {
++                let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
++                let name = format!("{}.json", identity.client_pid);
++                let mut sequence = 0_u64;
++                for (layout, observed_at) in receiver {
++                    sequence = sequence.wrapping_add(1);
++                    let report = Report {
++                        identity: &identity,
++                        observed_at: &observed_at,
++                        layout: &layout,
++                    };
++                    let result = serde_json::to_vec(&report)
++                        .map_err(io::Error::other)
++                        .and_then(|bytes| atomic_write(&anchor, &name, sequence, &bytes));
++                    if let Err(error) = result {
++                        tracing::debug!(%error,"optional companion layout publication skipped");
++                    }
++                }
++                let _ = std::fs::remove_file(anchor.join(name));
++            })?;
++        Ok(Self {
++            sender,
++            throttle: Throttle::default(),
++        })
++    }
++    pub(crate) fn due(&mut self, now: Instant) -> bool {
++        self.throttle.due(now)
++    }
++    pub(crate) fn publish(&self, layout: Layout) {
++        let Ok(now) =
++            time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)
++        else {
++            return;
++        };
++        // Bounded and nonblocking. A stalled writer drops updates; stale consumers fail closed.
++        let _ = self.sender.try_send((layout, now));
++    }
++}
++fn private_directory(path: &Path) -> io::Result<File> {
++    if !path.is_absolute() {
++        return Err(io::Error::other(
++            "companion layout directory must be absolute",
++        ));
++    }
++    match std::fs::DirBuilder::new().mode(0o700).create(path) {
++        Ok(()) => {}
++        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
++        Err(e) => return Err(e),
++    }
++    let file = OpenOptions::new()
++        .read(true)
++        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
++        .open(path)?;
++    let meta = file.metadata()?;
++    // SAFETY: geteuid has no arguments or memory effects.
++    if meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o777 != 0o700 {
++        return Err(io::Error::other(
++            "companion layout directory must be owned by this user and mode 0700",
++        ));
++    }
++    Ok(file)
++}
++/// Abrupt terminal exit can leave a report behind. Cleanup is startup-only and
++/// never removes a live process, an unrecognized file, or a changed inode.
++fn cleanup_dead_reports(directory: &File) {
++    let anchor = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
++    let Ok(entries) = std::fs::read_dir(&anchor) else {
++        return;
++    };
++    let Ok(owner) = directory.metadata() else {
++        return;
++    };
++    for entry in entries.take(4096).flatten() {
++        let name = entry.file_name();
++        let Some(name) = name.to_str() else {
++            continue;
++        };
++        let Some(pid) = name
++            .strip_suffix(".json")
++            .and_then(|s| s.parse::<u32>().ok())
++        else {
++            continue;
++        };
++        if pid == 0 || name != format!("{pid}.json") {
++            continue;
++        }
++        let process = PathBuf::from(format!("/proc/{pid}"));
++        if !matches!(process.try_exists(), Ok(false)) {
++            continue;
++        }
++        let path = anchor.join(name);
++        let Ok(file) = OpenOptions::new()
++            .read(true)
++            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
++            .open(&path)
++        else {
++            continue;
++        };
++        let Ok(metadata) = file.metadata() else {
++            continue;
++        };
++        if !metadata.is_file()
++            || metadata.uid() != owner.uid()
++            || metadata.mode() & 0o777 != 0o600
++            || metadata.len() > 65536
++        {
++            continue;
++        }
++        let mut bytes = Vec::new();
++        if file.take(65537).read_to_end(&mut bytes).is_err() || bytes.len() > 65536 {
++            continue;
++        }
++        let Ok(report) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
++            continue;
++        };
++        let recognized = report.get("version").and_then(|v| v.as_u64()) == Some(1)
++            && report.get("clientPid").and_then(|v| v.as_u64()) == Some(u64::from(pid))
++            && report
++                .get("processIdentity")
++                .and_then(|v| v.as_str())
++                .is_some_and(|v| {
++                    v.split_once(':').is_some_and(|(boot, start)| {
++                        boot.len() == 36
++                            && !start.is_empty()
++                            && start.bytes().all(|c| c.is_ascii_digit())
++                    })
++                })
++            && report
++                .get("herdrSocketPath")
++                .and_then(|v| v.as_str())
++                .is_some_and(|v| v.starts_with('/'))
++            && report
++                .get("observedAt")
++                .and_then(|v| v.as_str())
++                .is_some_and(|v| {
++                    v.len() >= 20
++                        && v.len() <= 36
++                        && v.as_bytes().get(10) == Some(&b'T')
++                        && v.ends_with('Z')
++                });
++        if !recognized {
++            continue;
++        }
++        let unchanged = std::fs::symlink_metadata(&path).is_ok_and(|current| {
++            current.is_file() && current.dev() == metadata.dev() && current.ino() == metadata.ino()
++        });
++        if unchanged && matches!(process.try_exists(), Ok(false)) {
++            let _ = std::fs::remove_file(path);
++        }
++    }
++}
++fn identity() -> io::Result<Identity> {
++    // SAFETY: isatty only queries the inherited stdin descriptor.
++    if unsafe { libc::isatty(0) } != 1 {
++        return Err(io::Error::other("companion layout requires a real TTY"));
++    }
++    let tty = std::fs::read_link("/proc/self/fd/0")?
++        .to_string_lossy()
++        .into_owned();
++    if !tty.starts_with("/dev/") {
++        return Err(io::Error::other("unknown client TTY"));
++    }
++    let pid = std::process::id();
++    let stat = std::fs::read_to_string("/proc/self/stat")?;
++    let start = stat
++        .rsplit_once(") ")
++        .and_then(|(_, rest)| rest.split_whitespace().nth(19))
++        .ok_or_else(|| io::Error::other("missing client start time"))?;
++    if !start.bytes().all(|c| c.is_ascii_digit()) {
++        return Err(io::Error::other("invalid client start time"));
++    }
++    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
++    let kitty = std::env::var("KITTY_WINDOW_ID")
++        .ok()
++        .and_then(|v| v.parse::<u64>().ok())
++        .filter(|id| *id > 0 && *id <= 9_007_199_254_740_991)
++        .ok_or_else(|| io::Error::other("companion layout requires Kitty identity"))?;
++    let socket = crate::api::socket_path().canonicalize()?;
++    let client = crate::server::socket_paths::client_socket_path().canonicalize()?;
++    if client
++        != crate::server::socket_paths::derive_client_socket_from_api_socket(&socket)
++            .canonicalize()?
++    {
++        return Err(io::Error::other("client/API socket identity mismatch"));
++    }
++    Ok(Identity {
++        version: 1,
++        client_pid: pid,
++        process_identity: format!("{}:{start}", boot.trim()),
++        tty,
++        kitty_window_id: kitty,
++        herdr_socket_path: socket.to_string_lossy().into_owned(),
++    })
++}
++fn atomic_write(directory: &Path, name: &str, sequence: u64, bytes: &[u8]) -> io::Result<()> {
++    let temporary = directory.join(format!(".{name}-{sequence}.tmp"));
++    let result = (|| {
++        let mut output = OpenOptions::new()
++            .write(true)
++            .create_new(true)
++            .mode(0o600)
++            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
++            .open(&temporary)?;
++        output.write_all(bytes)?;
++        output.flush()?;
++        std::fs::rename(&temporary, directory.join(name))
++    })();
++    if result.is_err() {
++        let _ = std::fs::remove_file(&temporary);
++    }
++    result
++}
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::os::unix::fs::{symlink, PermissionsExt};
++    #[test]
++    fn companion_layout_cleanup_removes_only_private_recognized_dead_reports() {
++        let base =
++            std::env::temp_dir().join(format!("herdr-companion-cleanup-{}", std::process::id()));
++        let directory = private_directory(&base).unwrap();
++        let dead = 1_000_000_000_u32;
++        assert!(!Path::new(&format!("/proc/{dead}")).exists());
++        let report = |pid: u32| {
++            serde_json::json!({"version":1,"clientPid":pid,
++            "processIdentity":"00000000-0000-0000-0000-000000000000:1",
++            "herdrSocketPath":"/fixture/qa.sock","observedAt":"2020-01-01T00:00:00Z"})
++        };
++        let put = |pid: u32, value: serde_json::Value| {
++            let path = base.join(format!("{pid}.json"));
++            std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
++            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
++            path
++        };
++        let dead_path = put(dead, report(dead));
++        let alive = put(std::process::id(), report(std::process::id()));
++        let unknown = put(
++            dead + 1,
++            serde_json::json!({"version":1,"clientPid":dead+1}),
++        );
++        let shared = put(dead + 2, report(dead + 2));
++        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o644)).unwrap();
++        let target = put(dead + 3, report(dead + 4));
++        let link = base.join(format!("{}.json", dead + 4));
++        symlink(&target, &link).unwrap();
++        cleanup_dead_reports(&directory);
++        assert!(!dead_path.exists());
++        for path in [&alive, &unknown, &shared, &target, &link] {
++            assert!(path.exists());
++        }
++        std::fs::remove_dir_all(base).unwrap();
++    }
++    #[test]
++    fn companion_layout_output_is_private_atomic_and_rejects_symlinks_or_shared_dirs() {
++        let base = std::env::temp_dir().join(format!(
++            "herdr-companion-layout-{}-{}",
++            std::process::id(),
++            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
++        ));
++        std::fs::create_dir(&base).unwrap();
++        let target = base.join("private");
++        let dir = private_directory(&target).unwrap();
++        let anchor = PathBuf::from(format!("/proc/self/fd/{}", dir.as_raw_fd()));
++        atomic_write(&anchor, "123.json", 1, b"{\"revision\":1}").unwrap();
++        atomic_write(&anchor, "123.json", 2, b"{\"revision\":2}").unwrap();
++        assert_eq!(
++            std::fs::read(target.join("123.json")).unwrap(),
++            b"{\"revision\":2}"
++        );
++        assert_eq!(
++            std::fs::metadata(target.join("123.json")).unwrap().mode() & 0o777,
++            0o600
++        );
++        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 1);
++        let link = base.join("link");
++        symlink(&target, &link).unwrap();
++        assert!(private_directory(&link).is_err());
++        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
++        assert!(private_directory(&target).is_err());
++        assert!(private_directory(Path::new("relative")).is_err());
++        std::fs::remove_dir_all(base).unwrap();
++    }
++}

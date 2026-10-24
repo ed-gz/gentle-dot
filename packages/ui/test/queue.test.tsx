@@ -37,8 +37,8 @@ function surface(state: DotState) {
 	return <ChatSurface variant="web" state={state} send={vi.fn()} dismiss={vi.fn()} />;
 }
 
-describe("queued messages in the chat", () => {
-	it("shows queued messages after the running answer as dimmed, labeled user bubbles", () => {
+describe("received instructions in the chat", () => {
+	it("shows engine receipts as ordinary user bubbles while the engine applies the instruction", () => {
 		const s = apply(
 			{ ...open, agentState: "thinking" },
 			{ type: "user_message", messageId: "u1", text: "write the report" },
@@ -50,11 +50,11 @@ describe("queued messages in the chat", () => {
 		expect(articles.map((a) => a.className)).toEqual([
 			"message message-user",
 			"message message-assistant",
-			"message message-user message-queued",
-			"message message-user message-queued",
+			"message message-user message-received",
+			"message message-user message-received",
 		]);
-		const queued = screen.getAllByRole("article", { name: "Queued message" });
-		expect(queued.map((q) => within(q).getByText("Queued").textContent)).toEqual(["Queued", "Queued"]);
+		const queued = screen.getAllByRole("article", { name: "Received message" });
+		expect(queued.map((q) => within(q).getByText("Received").textContent)).toEqual(["Received", "Received"]);
 		expect(queued.map((q) => q.querySelector(".message-body")?.textContent)).toEqual([
 			"add a summary",
 			"then email it",
@@ -65,7 +65,7 @@ describe("queued messages in the chat", () => {
 	it("shows a queued message even before any answer exists, without the greeting", () => {
 		render(surface(apply(open, { type: "queue", steering: ["hello?"], followUp: [] })));
 		expect(screen.queryByText("Hi! What can I do for you?")).not.toBeInTheDocument();
-		expect(screen.getByRole("article", { name: "Queued message" })).toHaveTextContent("hello?");
+		expect(screen.getByRole("article", { name: "Received message" })).toHaveTextContent("hello?");
 	});
 
 	it("turns a queued message into a normal one when the assistant takes it", () => {
@@ -75,7 +75,7 @@ describe("queued messages in the chat", () => {
 			{ type: "queue", steering: ["queued one"], followUp: [] },
 		);
 		const { container, rerender } = render(surface(s));
-		expect(screen.getByRole("article", { name: "Queued message" })).toHaveTextContent("queued one");
+		expect(screen.getByRole("article", { name: "Received message" })).toHaveTextContent("queued one");
 		s = apply(
 			s,
 			{ type: "message_done", messageId: "m1", text: "Echo: slow" },
@@ -83,10 +83,10 @@ describe("queued messages in the chat", () => {
 			{ type: "user_message", messageId: "u2", text: "queued one" },
 		);
 		rerender(surface(s));
-		expect(screen.queryByRole("article", { name: "Queued message" })).not.toBeInTheDocument();
-		expect(screen.queryByText("Queued")).not.toBeInTheDocument();
+		expect(screen.queryByRole("article", { name: "Received message" })).not.toBeInTheDocument();
+		expect(screen.queryByText("Received")).not.toBeInTheDocument();
 		const users = [...container.querySelectorAll(".message-user")];
 		expect(users.map((u) => u.textContent)).toEqual(["slow", "queued one"]);
-		expect(users.every((u) => !u.classList.contains("message-queued"))).toBe(true);
+		expect(users.every((u) => !u.classList.contains("message-received"))).toBe(true);
 	});
 });

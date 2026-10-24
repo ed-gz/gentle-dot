@@ -1,0 +1,266 @@
+.watchers-panel {
+	display: grid;
+	gap: 12px;
+	min-width: 0;
+}
+.watchers-panel p {
+	margin: 0;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+.watchers-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.watchers-toolbar p,
+.watchers-empty {
+	color: var(--muted);
+	font-size: 14px;
+}
+.watchers-panel button {
+	min-height: 48px;
+	padding: 10px 14px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: var(--surface);
+	color: var(--text);
+	font-size: 14px;
+	line-height: 1.5;
+	white-space: normal;
+	cursor: pointer;
+}
+.watchers-panel button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.watchers-panel button:not(:disabled):active {
+	background: var(--surface-2);
+}
+.watchers-panel :is(button, summary):focus-visible,
+.watchers-settings > summary:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 3px;
+}
+.watcher-card {
+	min-width: 0;
+	padding: 16px;
+	border: 1px solid var(--line);
+	border-radius: 18px;
+	background: var(--surface);
+	overflow-wrap: anywhere;
+}
+.watcher-card > header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 6px 12px;
+	font-size: 13px;
+	line-height: 1.5;
+}
+.watcher-source {
+	font-weight: 600;
+	color: var(--accent);
+}
+.watcher-state {
+	color: var(--muted);
+}
+.watcher-state-error,
+.watchers-error {
+	color: var(--chat-error, var(--red));
+}
+.watcher-card h3 {
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	margin: 10px 0;
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 1.5;
+	white-space: pre-wrap;
+}
+.watcher-card .watcher-issue {
+	margin-bottom: 12px;
+	color: var(--muted);
+	font-size: 13px;
+}
+.watcher-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.watcher-actions button {
+	flex: 1 1 120px;
+}
+.watcher-details {
+	margin-top: 10px;
+	border-top: 1px solid var(--line);
+}
+.watcher-details > summary,
+.watchers-settings > summary {
+	min-height: 48px;
+	padding: 12px 0;
+	line-height: 24px;
+	cursor: pointer;
+}
+.watcher-details > summary {
+	color: var(--muted);
+	font-size: 13px;
+}
+.watcher-details .watcher-instruction {
+	margin-bottom: 12px;
+	font-size: 14px;
+	white-space: pre-wrap;
+}
+.watcher-details dl {
+	display: grid;
+	gap: 4px;
+	margin: 0 0 12px;
+	font-size: 13px;
+	line-height: 1.5;
+}
+.watcher-details dt {
+	color: var(--muted);
+}
+.watcher-details dd {
+	margin: 0 0 8px;
+}
+.watcher-delete-confirm p {
+	margin-bottom: 10px;
+	font-size: 14px;
+}
+.watchers-settings {
+	border-top: 1px solid var(--line);
+	margin-top: 20px;
+}
+.watchers-settings > summary {
+	font-weight: 600;
+}
+.watchers-settings[open] > summary {
+	margin-bottom: 12px;
+}
+.watchers-explanation {
+	color: var(--muted);
+	font-size: 13px;
+}
+.watchers-add {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+}
+.watchers-add svg {
+	width: 20px;
+	height: 20px;
+}
+.watcher-create {
+	display: grid;
+	gap: 16px;
+	padding: 16px;
+	border: 1px solid var(--line);
+	border-radius: 18px;
+	background: var(--surface);
+	min-width: 0;
+}
+.watcher-create h3 {
+	margin: 0;
+	font-size: 16px;
+}
+.watcher-create fieldset {
+	display: grid;
+	gap: 16px;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+.watcher-create legend {
+	padding: 0 0 8px;
+	font-size: 13px;
+	color: var(--muted);
+}
+.watcher-kind {
+	display: flex;
+	gap: 8px;
+}
+.watcher-kind label {
+	flex: 1;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+}
+.watcher-kind label:has(input:checked) {
+	border-color: var(--accent);
+	background: var(--surface-2);
+}
+.watcher-kind label,
+.watcher-session-choices label {
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	min-height: 48px;
+	padding: 10px 12px;
+	box-sizing: border-box;
+	font-size: 14px;
+	cursor: pointer;
+}
+.watcher-kind input,
+.watcher-session-choices input {
+	width: 18px;
+	height: 18px;
+	flex: 0 0 auto;
+	accent-color: var(--accent);
+}
+.watcher-create fieldset.watcher-session-choices {
+	display: block;
+	gap: 0;
+	max-height: 220px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+}
+.watcher-session-choices label + label {
+	border-top: 1px solid var(--line);
+}
+.watcher-session-choices label span {
+	overflow-wrap: anywhere;
+	min-width: 0;
+}
+.watcher-session-choices > p {
+	padding: 12px;
+}
+.watcher-field {
+	display: grid;
+	gap: 8px;
+	font-size: 14px;
+	min-width: 0;
+}
+.watcher-field :is(select, textarea) {
+	box-sizing: border-box;
+	min-height: 48px;
+	width: 100%;
+	min-width: 0;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: 12px;
+	background: var(--bg);
+	color: var(--text);
+	font: inherit;
+	font-size: 16px;
+	line-height: 1.5;
+}
+.watcher-field textarea {
+	resize: vertical;
+}
+.watcher-field :is(select, textarea):focus-visible,
+.watcher-create input:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 3px;
+}
+.watchers-panel button.watchers-primary {
+	border-color: var(--accent);
+	color: var(--accent);
+}

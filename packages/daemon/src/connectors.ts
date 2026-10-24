@@ -355,7 +355,7 @@ const COMPUTER_INFO = {
 	name: "Computer",
 	reads: "See your screen during a session you allow in the app.",
 	sends:
-		"Click, type, and open apps on this Mac during that session. The app asks you again before risky actions.",
+		"Click, type, and open apps on this computer when its desktop supports them. The app asks you again before risky actions.",
 } as const;
 
 /** A server the user added from the assistant's draft or an import. */
@@ -380,6 +380,8 @@ export interface SavedConnector {
 	custom?: CustomConnector;
 	/** The OAuth sign-in: a reference to its item in the app's secure store. */
 	signIn?: string;
+	/** Changes only after an interactive authorization, never a token refresh. */
+	signInGeneration?: string;
 }
 
 export interface ConnectorsState {
@@ -967,6 +969,7 @@ export class ConnectorStore {
 			revision: createHash("sha256")
 				.update(JSON.stringify(server))
 				.update(locked ?? "")
+				.update(saved.signInGeneration ?? "")
 				.digest("hex"),
 			...(locked ? { unavailable: locked } : {}),
 		};
@@ -1017,13 +1020,19 @@ export class ConnectorStore {
 	}
 
 	/** Stores a sign-in (new, or refreshed) in the app's store and refers to it from the state. */
-	async saveSignIn(id: string, state: McpOAuthState): Promise<void> {
+	async saveSignIn(id: string, state: McpOAuthState, newAuthorization = false): Promise<void> {
 		const secretId = signInId(id);
 		await this.keep(secretId, JSON.stringify(state));
-		if (this.saved.connectors[id] && this.saved.connectors[id].signIn !== secretRef(secretId))
+		if (
+			this.saved.connectors[id] &&
+			(newAuthorization || this.saved.connectors[id].signIn !== secretRef(secretId))
+		)
 			this.update((current) => {
 				const saved = current.connectors[id];
-				if (saved) saved.signIn = secretRef(secretId);
+				if (saved) {
+					saved.signIn = secretRef(secretId);
+					if (newAuthorization) saved.signInGeneration = randomUUID();
+				}
 			});
 	}
 
@@ -1146,6 +1155,8 @@ export class ConnectorStore {
 				join(this.options.agentHome, "models.json"),
 				this.file,
 				join(this.options.dataDir, "token"),
+				join(this.options.dataDir, "watchers.json"),
+				join(this.options.dataDir, "workflows.json"),
 				...(this.options.guardPath ? [this.options.guardPath] : []),
 				...(this.childGuard ? [this.childGuard.file] : []),
 			],
@@ -1599,6 +1610,8 @@ export class ConnectorStore {
 			if (values) entry.values = values;
 			if (custom) entry.custom = custom;
 			if (typeof value?.signIn === "string" && refId(value.signIn)) entry.signIn = value.signIn;
+			if (typeof value?.signInGeneration === "string" && /^[a-f0-9-]{36}$/.test(value.signInGeneration))
+				entry.signInGeneration = value.signInGeneration;
 			connectors[id] = mapSecrets(id, entry, (secretId, text) => {
 				if (refId(text) !== undefined) return text;
 				this.pending.set(secretId, text);
@@ -2374,7 +2387,7 @@ export class ConnectorManager {
 				onAuthorizationUrl: (url) => this.onAuthorizationUrl(flow, url),
 			});
 			const state = await flow.signIn.done;
-			await store.saveSignIn(flow.connectorId, state);
+			await store.saveSignIn(flow.connectorId, state, true);
 			this.log(`signed in to connector ${flow.connectorId}`);
 			flow.emit({ ...done, ok: true });
 		} catch (error) {

@@ -9,3 +9,5 @@ allowBuilds:
   # Not needed: optional extras of the Pi SDK.
   '@google/genai': false
   protobufjs: false
+patchedDependencies:
+  gentle-pi@4.0.0: patches/gentle-pi@4.0.0.patch

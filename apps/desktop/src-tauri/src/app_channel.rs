@@ -19,6 +19,7 @@
 //! about a secret request is logged. The answer goes back over this channel only.
 
 use crate::approvals::ApprovalRequest;
+use crate::approvals::cancellation::{Cancellations, Token};
 use crate::secure_store::{check_id, Secret, SecretStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -44,7 +45,8 @@ const MAX_FRAME: u64 = 1024 * 1024;
 const TOO_LARGE: &str = "too large to send to the assistant";
 
 /// What the panel may ask the daemon through the app (S25.2): connector changes, approving a draft
-/// (declining one any window may), and importing. The computer helper is registered by the app.
+/// (declining one any window may), importing, and exact pending approval replies. The computer
+/// helper is registered by the app.
 pub const PANEL_COMMANDS: &[&str] = &[
     "connector_connect",
     "connector_signin",
@@ -54,6 +56,7 @@ pub const PANEL_COMMANDS: &[&str] = &[
     "connector_mode",
     "connector_draft_reply",
     "connector_import",
+    "app_approval_reply",
 ];
 
 /// Why the panel cannot change connectors: the daemon was not started by this app.
@@ -80,6 +83,10 @@ pub enum Frame {
 
 /// True for a panel message the app forwards: one of [`PANEL_COMMANDS`] with an object shape.
 pub fn is_panel_command(message: &Value) -> bool {
+    if message.get("type").and_then(Value::as_str) == Some("app_approval_reply") {
+        return message.get("requestId").and_then(Value::as_str).is_some_and(|id| id.starts_with("app-") && id.len() <= 200)
+            && message.get("approved").and_then(Value::as_bool).is_some();
+    }
     message.get("type").and_then(Value::as_str).is_some_and(|kind| PANEL_COMMANDS.contains(&kind))
 }
 
@@ -87,8 +94,38 @@ pub fn is_panel_command(message: &Value) -> bool {
 pub trait Handler: Send + Sync {
     /// Shows the native dialog and blocks until the answer; true only when the user allowed it.
     fn approve(&self, request: &ApprovalRequest) -> bool;
+    fn approve_cancellable(&self, request: &ApprovalRequest, cancelled: Token) -> bool {
+        !cancelled.load(Ordering::SeqCst) && self.approve(request)
+    }
+    /// A typed system operation. Unsupported shells fail closed; passwords never use this channel.
+    fn privileged_operation(
+        &self,
+        request: crate::privileged::Request,
+    ) -> crate::privileged::Reply {
+        crate::privileged::Reply::new(
+            &request.request_id,
+            "unsupported",
+            "This desktop cannot install system applications.",
+        )
+    }
+    fn privileged_cancel(&self, request: crate::privileged::Cancel) -> crate::privileged::Reply {
+        crate::privileged::Reply::new(
+            &request.request_id,
+            "not_found",
+            "No system installation is pending.",
+        )
+    }
+    /// Read-only state and emergency stop. No granting operation exists on this surface.
+    fn computer_status(&self) -> Result<Value, String> {
+        Err("Computer control is unavailable on this desktop.".into())
+    }
+    fn computer_stop(&self) -> Result<Value, String> {
+        Err("Computer control is unavailable on this desktop.".into())
+    }
     /// The channel to a freshly spawned daemon is open (for example, register the computer helper).
     fn opened(&self, _channel: &Arc<AppChannel>) {}
+    /// Cancel authentication still waiting when its requesting daemon disconnects.
+    fn closed(&self) {}
     /// Where connector secrets live (the Keychain on macOS); `None` refuses secret requests.
     fn secrets(&self) -> Option<&dyn SecretStore> {
         None
@@ -148,6 +185,7 @@ type Reply = mpsc::Sender<Result<Value, String>>;
 pub struct AppChannel {
     writer: Mutex<UnixStream>,
     pending: Mutex<HashMap<u64, Reply>>,
+    approvals: Mutex<Cancellations>,
     next: AtomicU64,
     open: AtomicBool,
 }
@@ -159,6 +197,7 @@ impl AppChannel {
         let channel = Arc::new(AppChannel {
             writer: Mutex::new(stream),
             pending: Mutex::new(HashMap::new()),
+            approvals: Mutex::new(Cancellations::default()),
             next: AtomicU64::new(0),
             open: AtomicBool::new(true),
         });
@@ -200,13 +239,14 @@ impl AppChannel {
     /// A panel message on behalf of the window `client_id`; anything but [`PANEL_COMMANDS`] is refused here.
     pub fn command(&self, client_id: &str, message: Value) -> Result<(), String> {
         if !is_panel_command(&message) {
-            return Err("Only connector changes go through the app.".into());
+            return Err("Only trusted panel commands go through the app.".into());
         }
         self.request("command", json!({"clientId": client_id, "message": message}), COMMAND_TIMEOUT).map(|_| ())
     }
 
     pub fn close(&self) {
         self.open.store(false, Ordering::SeqCst);
+        self.approvals.lock().unwrap_or_else(PoisonError::into_inner).cancel_all();
         let _ = self.writer.lock().unwrap_or_else(PoisonError::into_inner).shutdown(Shutdown::Both);
         // Dropping the senders wakes every waiting request.
         self.pending().clear();
@@ -248,12 +288,34 @@ impl AppChannel {
                     }
                 }
                 Ok(Frame::Request { id, method, params }) => {
+                    if method == "approve_cancel" {
+                        let cancelled = params.as_object().filter(|params| params.len() == 1)
+                            .and_then(|params| params.get("requestId")).and_then(Value::as_str)
+                            .is_some_and(|id| self.approvals.lock().unwrap_or_else(PoisonError::into_inner).cancel(id));
+                        let _ = self.write(&Frame::Response { id, result: Some(json!({"cancelled":cancelled})), error: None });
+                        continue;
+                    }
+                    // Register synchronously. A cancellation in the next frame must survive even
+                    // when its dialog's worker has not started yet.
+                    let approval = if method == "approve" {
+                        let entry = self.approvals.lock().unwrap_or_else(PoisonError::into_inner).begin(&params, id);
+                        let Some(entry) = entry else {
+                            let _ = self.write(&Frame::Response { id, result: Some(json!({"approved":false})), error: None });
+                            continue;
+                        };
+                        Some(entry)
+                    } else { None };
+                    let cleanup = approval.as_ref().map(|(id, _)| id.clone());
                     let (channel, handler) = (self.clone(), handler.clone());
                     // A dialog blocks until the user answers: never on this thread or the main one.
                     let spawned = std::thread::Builder::new()
                         .name("app-channel-request".into())
-                        .spawn(move || channel.answer(id, &method, params, handler.as_ref()));
+                        .spawn(move || {
+                            channel.answer(id, &method, params, handler.as_ref(), approval.as_ref().map(|(_, token)| token.clone()), approval.as_ref().map(|(id, _)| id.as_str()));
+                            if let Some((id, _)) = approval { channel.approvals.lock().unwrap_or_else(PoisonError::into_inner).finish(&id); }
+                        });
                     if spawned.is_err() {
+                        if let Some(id) = cleanup { self.approvals.lock().unwrap_or_else(PoisonError::into_inner).finish(&id); }
                         let _ = self.write(&Frame::Response { id, result: None, error: Some("busy".into()) });
                     }
                 }
@@ -261,13 +323,52 @@ impl AppChannel {
             }
         }
         self.close();
+        handler.closed();
     }
 
-    fn answer(&self, id: u64, method: &str, params: Value, handler: &dyn Handler) {
+    fn answer(&self, id: u64, method: &str, params: Value, handler: &dyn Handler, cancelled: Option<Token>, approval_id: Option<&str>) {
+        if !self.is_open() { return; }
         let frame = match method {
             "approve" => {
-                let approved = serde_json::from_value::<ApprovalRequest>(params).is_ok_and(|r| handler.approve(&r));
+                let cancelled = cancelled.unwrap_or_else(|| Arc::new(AtomicBool::new(true)));
+                let approved = !cancelled.load(Ordering::SeqCst) && serde_json::from_value::<ApprovalRequest>(params)
+                    .is_ok_and(|r| handler.approve_cancellable(&r, cancelled.clone())) && !cancelled.load(Ordering::SeqCst);
                 Frame::Response { id, result: Some(json!({"approved": approved})), error: None }
+            }
+            "computer_status" | "computer_stop" => {
+                let answer = if !params.as_object().is_some_and(|fields| fields.is_empty()) {
+                    Err("Invalid computer-control request.".into())
+                } else if method == "computer_stop" {
+                    handler.computer_stop()
+                } else {
+                    handler.computer_status()
+                };
+                match answer {
+                    Ok(result) => Frame::Response { id, result: Some(result), error: None },
+                    Err(error) => Frame::Response { id, result: None, error: Some(error) },
+                }
+            }
+            "privileged_operation" | "privileged_cancel" => {
+                // Strict typed decoding rejects passwords, arbitrary commands, and unknown fields.
+                let reply = if method == "privileged_operation" {
+                    serde_json::from_value::<crate::privileged::Request>(params)
+                        .map(|request| handler.privileged_operation(request))
+                } else {
+                    serde_json::from_value::<crate::privileged::Cancel>(params)
+                        .map(|request| handler.privileged_cancel(request))
+                };
+                match reply {
+                    Ok(reply) => Frame::Response {
+                        id,
+                        result: serde_json::to_value(reply).ok(),
+                        error: None,
+                    },
+                    Err(_) => Frame::Response {
+                        id,
+                        result: None,
+                        error: Some("Invalid system operation.".into()),
+                    },
+                }
             }
             "secret_get" | "secret_put" | "secret_delete" | "secret_list" => {
                 let answer = match handler.secrets() {
@@ -281,6 +382,7 @@ impl AppChannel {
             }
             other => Frame::Response { id, result: None, error: Some(format!("Unknown request: {other}")) },
         };
+        if let Some(id) = approval_id { self.approvals.lock().unwrap_or_else(PoisonError::into_inner).finish(id); }
         if self.write(&frame).is_err_and(|error| error.kind() == io::ErrorKind::InvalidInput) {
             let refused = Frame::Response { id, result: None, error: Some(format!("The answer is {TOO_LARGE}.")) };
             let _ = self.write(&refused);
@@ -352,10 +454,20 @@ mod tests {
     }
 
     #[test]
-    fn only_connector_changes_are_panel_commands() {
+    fn only_connector_changes_and_exact_approval_replies_are_panel_commands() {
         for kind in PANEL_COMMANDS {
+            if *kind == "app_approval_reply" { continue; }
             assert!(is_panel_command(&json!({"type": kind})), "{kind}");
         }
+        for approved in [true, false] {
+            assert!(is_panel_command(&json!({"type":"app_approval_reply","requestId":"app-fixture","approved":approved})));
+        }
+        for invalid in [
+            json!({"type":"app_approval_reply"}),
+            json!({"type":"app_approval_reply","requestId":"app-fixture","approved":"true"}),
+            json!({"type":"app_approval_reply","requestId":"pin-fixture","approved":true}),
+            json!({"type":"app_approval_reply","requestId":format!("app-{}", "x".repeat(200)),"approved":true}),
+        ] { assert!(!is_panel_command(&invalid)); }
         for kind in ["send", "ui_response", "computer_register", "computer_unregister", "connectors_list", "auth_reply"] {
             assert!(!is_panel_command(&json!({"type": kind})), "{kind}");
         }
@@ -411,6 +523,64 @@ mod tests {
         assert_eq!(daemon.next(), Frame::Response { id: 8, result: Some(json!({"approved": false})), error: None });
         assert_eq!(recorder.asked.lock().unwrap()[0].connector, "Notion");
         assert!(!recorder.main_thread.load(Ordering::SeqCst));
+    }
+
+    struct CancellableApproval;
+    impl Handler for CancellableApproval {
+        fn approve(&self, _: &ApprovalRequest) -> bool { panic!("cancellation-aware path required") }
+        fn approve_cancellable(&self, request: &ApprovalRequest, cancelled: Token) -> bool {
+            if request.action == "first" {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while !cancelled.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+            true // Simulates a late Allow on the request that has already been answered remotely.
+        }
+    }
+
+    #[test]
+    fn cancelling_exact_approval_id_wins_over_late_allow_and_cannot_cancel_next() {
+        let (_channel, mut daemon) = pair(Arc::new(CancellableApproval));
+        let params = |id: &str, action: &str| json!({"requestId":id,"connector":"Test","action":action,"preview":[]});
+        daemon.send(&Frame::Request { id: 41, method:"approve".into(), params:params("first-id", "first") });
+        daemon.send(&Frame::Request { id: 42, method:"approve_cancel".into(), params:json!({"requestId":"first-id"}) });
+        let mut replies = HashMap::new();
+        for _ in 0..2 { let Frame::Response {id, result:Some(value), ..} = daemon.next() else { panic!("missing response") }; replies.insert(id,value); }
+        assert_eq!(replies[&41]["approved"], false);
+        assert_eq!(replies[&42]["cancelled"], true);
+        daemon.send(&Frame::Request { id: 43, method:"approve".into(), params:params("second-id", "second") });
+        daemon.send(&Frame::Request { id: 44, method:"approve_cancel".into(), params:json!({"requestId":"first-id"}) });
+        for _ in 0..2 { let Frame::Response {id, result:Some(value), ..} = daemon.next() else { panic!("missing response") }; replies.insert(id,value); }
+        assert_eq!(replies[&43]["approved"], true);
+        assert_eq!(replies[&44]["cancelled"], false);
+        daemon.send(&Frame::Request { id: 45, method:"approve".into(), params:params("second-id", "second") });
+        let Frame::Response {result:Some(value), ..} = daemon.next() else { panic!("missing response") };
+        assert_eq!(value["approved"], false, "replaying an existing request cannot open or approve another dialog");
+    }
+
+    #[test]
+    fn channel_close_revokes_pending_approval_tokens() {
+        let (channel, _daemon) = pair(Arc::new(Recorder::default()));
+        let (_, token) = channel.approvals.lock().unwrap().begin(&json!({"requestId":"pending"}), 1).unwrap();
+        channel.close();
+        assert!(token.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn system_install_requests_are_strict_and_never_echo_password_fields() {
+        let (_channel, mut daemon) = pair(Arc::new(Recorder::default()));
+        daemon.send(&Frame::Request { id: 31, method: "privileged_operation".into(), params:
+            json!({"requestId":"browser-1", "operation":"install_browser", "browser":"chromium"}) });
+        let Frame::Response { result: Some(value), error: None, .. } = daemon.next() else { panic!("missing typed reply") };
+        assert_eq!(value["status"], "unsupported");
+        assert_eq!(value["requestId"], "browser-1");
+        daemon.send(&Frame::Request { id: 32, method: "privileged_operation".into(), params:
+            json!({"requestId":"browser-1", "operation":"install_browser", "browser":"chromium", "password":"never-echo-this"}) });
+        assert_eq!(daemon.next(), Frame::Response { id: 32, result: None, error: Some("Invalid system operation.".into()) });
+        daemon.send(&Frame::Request { id: 33, method: "privileged_cancel".into(), params: json!({"requestId":"browser-1"}) });
+        let Frame::Response { result: Some(value), .. } = daemon.next() else { panic!("missing cancel reply") };
+        assert_eq!(value["status"], "not_found");
     }
 
     #[test]
@@ -526,6 +696,29 @@ mod tests {
         let store = MemoryStore::new();
         serve_secret(&store, "secret_put", &json!({"id": "slack/bot", "secret": "xoxb-very-secret"})).unwrap();
         assert!(!format!("{store:?}").contains("xoxb"));
+    }
+
+    #[test]
+    fn computer_status_and_stop_are_strict_and_never_grant_control() {
+        struct ComputerHandler(AtomicBool);
+        impl Handler for ComputerHandler {
+            fn approve(&self, _: &ApprovalRequest) -> bool { false }
+            fn computer_status(&self) -> Result<Value, String> {
+                Ok(json!({"active": self.0.load(Ordering::SeqCst)}))
+            }
+            fn computer_stop(&self) -> Result<Value, String> {
+                self.0.store(false, Ordering::SeqCst);
+                self.computer_status()
+            }
+        }
+        let handler = Arc::new(ComputerHandler(AtomicBool::new(true)));
+        let (_channel, mut daemon) = pair(handler.clone());
+        assert!(matches!(ask(&mut daemon, 1, "computer_status", json!({})), Frame::Response { result: Some(value), error: None, .. } if value["active"] == true));
+        for (id, method, params) in [(2,"computer_stop",json!({"grant":true})), (3,"computer_stop",json!(null)), (4,"computer_grant",json!({}))] {
+            assert!(matches!(ask(&mut daemon, id, method, params), Frame::Response { result: None, error: Some(_), .. }));
+            assert!(handler.0.load(Ordering::SeqCst));
+        }
+        assert!(matches!(ask(&mut daemon, 5, "computer_stop", json!({})), Frame::Response { result: Some(value), error: None, .. } if value["active"] == false));
     }
 
     #[test]

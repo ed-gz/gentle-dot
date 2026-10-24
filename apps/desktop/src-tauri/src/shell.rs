@@ -10,6 +10,7 @@ use crate::computer::session::Reason;
 use crate::computer::working::{self, Part};
 use crate::config::{self, ConnectionInfo, DesktopConfig, DEFAULT_SHORTCUT};
 use crate::daemon::{self, Daemon, RestartOutcome};
+use crate::desktop_companion;
 use crate::geometry::{self, Rect};
 use crate::platform::{self, LaunchRequest, Os, DOT_TITLE, PANEL_TITLE};
 use crate::position::{self, DotPosition};
@@ -72,31 +73,117 @@ struct Shell {
 /// The Dot and the panel as computer control hides them during a call (S1, S5): never through
 /// `hide_panel` or `show_panel`, so the remembered spot, the full-screen frame, the rose choice,
 /// and the keyboard focus stay as they were. Main thread only.
-struct ShellWindows(AppHandle);
+struct ShellWindows {
+    app: AppHandle,
+    /// Linux compositors may reposition a window every time it is mapped. Keep
+    /// the rose mapped during a computer step; hide only its painted contents
+    /// and input region. The saved opacity is released even if the user hides it.
+    #[cfg(target_os = "linux")]
+    dot_opacity: Mutex<Option<f64>>,
+    #[cfg(target_os = "linux")]
+    prepared_dot_id: Mutex<Option<String>>,
+    #[cfg(target_os = "linux")]
+    launcher_opacity: Mutex<Option<f64>>,
+    #[cfg(target_os = "linux")]
+    prepared_launcher_id: Mutex<Option<String>>,
+}
 
 impl ShellWindows {
     fn get(&self, part: Part) -> Option<WebviewWindow> {
-        self.0.get_webview_window(match part {
+        self.app.get_webview_window(match part {
             Part::Dot => DOT,
             Part::Panel => PANEL,
         })
     }
+
+    #[cfg(target_os = "linux")]
+    fn hide_dot_content(&self) -> Result<(), String> {
+        let dot = self.get(Part::Dot).ok_or("the rose window is missing")?;
+        let native: gtk::Window = dot.gtk_window().map_err(err)?.into();
+        let id = self.prepared_dot_id.lock().unwrap().take().ok_or("the rose window identity is unavailable")?;
+        if let Some(id) = self.prepared_launcher_id.lock().unwrap().take() {
+            let launcher = self.app.get_webview_window(desktop_companion::LAUNCHER).ok_or("the launcher is missing")?;
+            let native: gtk::Window = launcher.gtk_window().map_err(err)?.into();
+            let opacity = mask_dot_content(&native)?;
+            self.launcher_opacity.lock().unwrap().get_or_insert(opacity);
+            crate::computer::LinuxDesktop::set_hidden_companion_launcher(Some(id));
+        }
+        let mut saved = self.dot_opacity.lock().unwrap();
+        let original = mask_dot_content(&native)?;
+        saved.get_or_insert(original);
+        crate::computer::LinuxDesktop::set_hidden_rose(Some(id));
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn restore_dot_content(&self) -> Result<(), String> {
+        crate::computer::LinuxDesktop::set_hidden_rose(None);
+        let mut saved = self.dot_opacity.lock().unwrap();
+        let Some(opacity) = *saved else { return Ok(()) };
+        let dot = self.get(Part::Dot).ok_or("the rose window is missing")?;
+        let native: gtk::Window = dot.gtk_window().map_err(err)?.into();
+        unmask_dot_content(&native, opacity)?;
+        *saved = None;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn restore_launcher_content(&self) -> Result<(), String> {
+        crate::computer::LinuxDesktop::set_hidden_companion_launcher(None);
+        let mut saved = self.launcher_opacity.lock().unwrap();
+        if let Some(opacity) = *saved {
+            let launcher = self.app.get_webview_window(desktop_companion::LAUNCHER).ok_or("the launcher is missing")?;
+            unmask_dot_content(&launcher.gtk_window().map_err(err)?.into(), opacity)?;
+            *saved = None;
+        }
+        desktop_companion::restore_shape(&self.app);
+        Ok(())
+    }
 }
 
 impl working::Windows for ShellWindows {
+    fn prepare_hide(&self, operation: u64) -> Result<(), String> {
+        desktop_companion::prepare_control(&self.app, operation)?;
+        #[cfg(target_os = "linux")]
+        {
+            *self.prepared_dot_id.lock().unwrap() = None;
+            *self.prepared_launcher_id.lock().unwrap() = None;
+            // A previous finish may have queued restoration on GTK. Its rose
+            // is still mapped even while logical visibility is temporarily false.
+            let mapped = self.get(Part::Dot).and_then(|dot| dot.is_visible().ok()).unwrap_or(false);
+            if !self.rose_hidden() && mapped {
+                let id = crate::computer::LinuxDesktop::resolve_rose_window(DOT_TITLE)?;
+                *self.prepared_dot_id.lock().unwrap() = Some(id);
+                if desktop_companion::enabled(&self.app) {
+                    let id = crate::computer::LinuxDesktop::resolve_rose_window(desktop_companion::LAUNCHER_TITLE)?;
+                    *self.prepared_launcher_id.lock().unwrap() = Some(id);
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn is_visible(&self, part: Part) -> bool {
+        #[cfg(target_os = "linux")]
+        if part == Part::Dot && self.dot_opacity.lock().unwrap().is_some() {
+            return false;
+        }
         self.get(part).and_then(|window| window.is_visible().ok()).unwrap_or(false)
     }
 
     fn hide(&self, part: Part) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if part == Part::Dot {
+            return self.hide_dot_content();
+        }
         self.get(part).ok_or_else(|| format!("window {part:?} is missing"))?.hide().map_err(err)
     }
 
     fn show(&self, part: Part) {
         let Some(window) = self.get(part) else { return };
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let shown = computer::show_without_focus(&window);
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let shown = window.show().map_err(err);
         if let Err(error) = shown {
             eprintln!("gentle-dot: cannot show the {part:?} again: {error}");
@@ -104,8 +191,113 @@ impl working::Windows for ShellWindows {
     }
 
     fn rose_hidden(&self) -> bool {
-        self.0.try_state::<Shell>().is_some_and(|shell| shell.rose_hidden.load(Ordering::SeqCst))
+        !desktop_companion::enabled(&self.app) && self.app.try_state::<Shell>().is_some_and(|shell| shell.rose_hidden.load(Ordering::SeqCst))
     }
+
+    fn restore(&self, part: Part, show: bool) {
+        #[cfg(target_os = "linux")]
+        if part == Part::Dot {
+            // Its map state was never changed by working. If the user explicitly
+            // hid it, restoring content leaves that window unmapped and hidden.
+            if let Err(error) = self.restore_dot_content() {
+                eprintln!("gentle-dot: cannot restore the rose content: {error}");
+            }
+            return;
+        }
+        if show {
+            self.show(part);
+        }
+    }
+
+    fn after_hidden(&self, ready: working::Task) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if self.dot_opacity.lock().unwrap().is_some() {
+            let dot = self.get(Part::Dot).ok_or("the rose window is missing")?;
+            if self.launcher_opacity.lock().unwrap().is_some() {
+                let launcher = self.app.get_webview_window(desktop_companion::LAUNCHER).ok_or("the launcher is missing")?;
+                let native: gtk::Window = launcher.gtk_window().map_err(err)?.into();
+                return after_dot_paint(&native, Box::new(move || {
+                    let result = dot.gtk_window().map_err(err).and_then(|native| after_dot_paint(&native.into(), ready));
+                    if let Err(error) = result { eprintln!("gentle-dot: companion capture frame: {error}"); }
+                }));
+            }
+            return after_dot_paint(&dot.gtk_window().map_err(err)?.into(), ready);
+        }
+        ready();
+        Ok(())
+    }
+
+    fn cancel_prepare(&self, operation: u64) { desktop_companion::restore_control(&self.app, operation); }
+
+    fn after_restore(&self, operation: u64) {
+        #[cfg(target_os = "linux")]
+        if let Err(error) = self.restore_launcher_content() { eprintln!("gentle-dot: cannot restore launcher: {error}"); }
+        desktop_companion::restore_control(&self.app, operation);
+    }
+}
+
+/// Change the child, not the toplevel's opacity: compositor rules can force the
+/// latter to 1. No hide/show, move, resize, or focus request, on either path.
+#[cfg(target_os = "linux")]
+fn mask_dot_content(native: &gtk::Window) -> Result<f64, String> {
+    use gtk::prelude::*;
+    let content = native.child().ok_or("the rose content is missing")?;
+    let opacity = content.opacity();
+    native.input_shape_combine_region(Some(&gtk::cairo::Region::create()));
+    content.set_opacity(0.0);
+    native.queue_draw();
+    native.display().flush();
+    Ok(opacity)
+}
+
+#[cfg(target_os = "linux")]
+fn unmask_dot_content(native: &gtk::Window, opacity: f64) -> Result<(), String> {
+    use gtk::prelude::*;
+    let content = native.child().ok_or("the rose content is missing")?;
+    native.input_shape_combine_region(None);
+    content.set_opacity(opacity);
+    native.queue_draw();
+    native.display().flush();
+    Ok(())
+}
+
+/// The screenshot worker is released only after GTK has painted the transparent
+/// content. No sleeps or nested GTK loop on the main thread; timeout removes the
+/// listener, and Working's existing deadline refuses the capture if no frame ran.
+#[cfg(target_os = "linux")]
+fn after_dot_paint(native: &gtk::Window, ready: working::Task) -> Result<(), String> {
+    use gtk::prelude::*;
+    use std::{cell::RefCell, rc::Rc};
+    if !native.is_visible() {
+        ready();
+        return Ok(());
+    }
+    let clock = native.frame_clock().ok_or("the rose frame clock is unavailable")?;
+    let callback = Rc::new(RefCell::new(Some(ready)));
+    let handler = Rc::new(RefCell::new(None));
+    let timeout = Rc::new(RefCell::new(None::<gtk::glib::SourceId>));
+    let (paint_callback, paint_handler, paint_timeout) = (callback.clone(), handler.clone(), timeout.clone());
+    *handler.borrow_mut() = Some(clock.connect_after_paint(move |clock| {
+        if let Some(id) = paint_handler.borrow_mut().take() {
+            clock.disconnect(id);
+        }
+        if let Some(id) = paint_timeout.borrow_mut().take() {
+            id.remove();
+        }
+        if let Some(ready) = paint_callback.borrow_mut().take() {
+            ready();
+        }
+    }));
+    let weak_clock = clock.downgrade();
+    *timeout.borrow_mut() = Some(gtk::glib::timeout_add_local_once(working::READY_TIMEOUT, move || {
+        if let (Some(clock), Some(id)) = (weak_clock.upgrade(), handler.borrow_mut().take()) {
+            clock.disconnect(id);
+        }
+        callback.borrow_mut().take();
+    }));
+    native.queue_draw();
+    clock.request_phase(gtk::gdk::FrameClockPhase::AFTER_PAINT);
+    Ok(())
 }
 
 /// The tray's rose item, relabeled when the rose is hidden or shown.
@@ -170,21 +362,50 @@ fn read_connection_info(config: &DesktopConfig) -> CommandResult<ConnectionInfo>
 /// from the secure store (S25.5), and registering the computer helper with a daemon this app just
 /// spawned (S24.7, L61).
 struct ChannelService {
+    app: AppHandle,
     approvals: Approvals,
     computer: Option<Endpoint>,
     secrets: Box<dyn SecretStore>,
+    privileged: crate::privileged::Privileged,
 }
 
 impl app_channel::Handler for ChannelService {
+    fn privileged_operation(&self, request: crate::privileged::Request) -> crate::privileged::Reply {
+        self.privileged.perform(request)
+    }
+
+    fn privileged_cancel(&self, request: crate::privileged::Cancel) -> crate::privileged::Reply {
+        self.privileged.cancel(request)
+    }
+
     fn approve(&self, request: &ApprovalRequest) -> bool {
         self.approvals.confirm(request) == Decision::Approved
+    }
+
+    fn approve_cancellable(&self, request: &ApprovalRequest, cancelled: crate::approvals::cancellation::Token) -> bool {
+        self.approvals.confirm_cancellable(request, cancelled) == Decision::Approved
     }
 
     fn secrets(&self) -> Option<&dyn SecretStore> {
         Some(self.secrets.as_ref())
     }
 
+    fn closed(&self) {
+        self.privileged.disconnected();
+        computer::stop(&self.app, Reason::Panic);
+    }
+
+    fn computer_status(&self) -> Result<serde_json::Value, String> {
+        computer::public_status(&self.app)
+    }
+
+    fn computer_stop(&self) -> Result<serde_json::Value, String> {
+        computer::stop(&self.app, Reason::Panic);
+        computer::public_status(&self.app)
+    }
+
     fn opened(&self, channel: &Arc<AppChannel>) {
+        self.privileged.connected();
         let Some(endpoint) = self.computer.clone() else {
             return;
         };
@@ -196,6 +417,26 @@ impl app_channel::Handler for ChannelService {
             }
         });
     }
+}
+
+/// A computer helper asks for a human decision through the daemon's existing native/mobile
+/// broker. The private channel is available only to this app; a failed or stale request refuses.
+/// Called by a helper worker, never by a webview command or model tool directly.
+pub(crate) fn computer_approval(app: &AppHandle, params: serde_json::Value) -> bool {
+    let Some(shell) = app.try_state::<Shell>() else { return false };
+    let Some(channel) = shell.daemon.channel() else { return false };
+    channel.request("computer_approval", params, app_channel::COMMAND_TIMEOUT)
+        .is_ok_and(|answer| channel.is_open() && approved_computer_answer(&answer))
+}
+
+pub(crate) fn cancel_computer_approval(app: &AppHandle, request_id: String) {
+    let Some(shell) = app.try_state::<Shell>() else { return };
+    let Some(channel) = shell.daemon.channel() else { return };
+    let _ = channel.request("computer_approval_cancel", serde_json::json!({ "requestId": request_id }), Duration::from_secs(5));
+}
+
+fn approved_computer_answer(answer: &serde_json::Value) -> bool {
+    answer.as_object().is_some_and(|fields| fields.len() == 1 && fields.get("approved") == Some(&serde_json::Value::Bool(true)))
 }
 
 /// A connector change from the panel (S25.2), sent over the app's channel on behalf of the panel's
@@ -257,6 +498,7 @@ fn rose_hidden(app: AppHandle) -> bool {
 /// Hides or shows the Dot window and remembers the choice. Returns whether it is hidden.
 #[tauri::command]
 fn set_rose_hidden(app: AppHandle, hidden: bool) -> CommandResult<bool> {
+    if desktop_companion::enabled(&app) { return Err("Desactiva Capri en el escritorio para cambiar la flor".into()); }
     let shell = app.state::<Shell>();
     position::save_rose_hidden(&desktop_file(&shell.config), hidden).map_err(err)?;
     shell.rose_hidden.store(hidden, Ordering::SeqCst);
@@ -264,6 +506,10 @@ fn set_rose_hidden(app: AppHandle, hidden: bool) -> CommandResult<bool> {
     if hidden {
         dot.hide().map_err(err)?;
     } else {
+        #[cfg(target_os = "linux")]
+        if let Some(windows) = app.try_state::<Arc<ShellWindows>>() {
+            windows.restore_dot_content()?;
+        }
         dot.show().map_err(err)?;
     }
     if let Some(item) = app.try_state::<RoseMenuItem>() {
@@ -468,7 +714,7 @@ fn place_panel_next_to_dot(app: &AppHandle) -> CommandResult {
     move_to(&panel, position)
 }
 
-fn show_panel(app: &AppHandle) -> CommandResult {
+pub(crate) fn show_panel(app: &AppHandle) -> CommandResult {
     place_panel(app)?;
     let panel = window(app, PANEL)?;
     panel.show().map_err(err)?;
@@ -478,6 +724,7 @@ fn show_panel(app: &AppHandle) -> CommandResult {
 
 /// Snaps the Dot to the nearest edge and persists the position.
 fn snap_dot(app: &AppHandle) -> CommandResult {
+    if desktop_companion::enabled(app) { return Ok(()); }
     let dot = window(app, DOT)?;
     let mut current = rect_of(&dot)?;
     keep_dot_size(&dot, current)?;
@@ -521,6 +768,7 @@ fn build_windows(
     rose_hidden: bool,
 ) -> tauri::Result<()> {
     let dot = WebviewWindowBuilder::new(app, DOT, WebviewUrl::App("index.html?surface=dot".into()))
+        .on_page_load(crate::frontend::page_loaded)
         .title(DOT_TITLE)
         .inner_size(DOT_SIZE.0, DOT_SIZE.1)
         .transparent(true)
@@ -538,8 +786,25 @@ fn build_windows(
     #[cfg(target_os = "linux")]
     let dot = dot.resizable(true).min_inner_size(DOT_SIZE.0, DOT_SIZE.1).max_inner_size(DOT_SIZE.0, DOT_SIZE.1);
     let dot = dot.build()?;
+    WebviewWindowBuilder::new(app, desktop_companion::LAUNCHER, WebviewUrl::App("index.html?surface=companion-launcher".into()))
+        .on_page_load(crate::frontend::page_loaded)
+        .title(desktop_companion::LAUNCHER_TITLE)
+        .inner_size(56., 56.).min_inner_size(56., 56.).max_inner_size(56., 56.)
+        .transparent(true).decorations(false).always_on_top(true).resizable(true)
+        .skip_taskbar(true).visible_on_all_workspaces(true).shadow(false).visible(false)
+        .build()?;
+    WebviewWindowBuilder::new(app, desktop_companion::BUBBLE, WebviewUrl::App("index.html?surface=companion-bubble".into()))
+        .on_page_load(crate::frontend::page_loaded)
+        .title(desktop_companion::BUBBLE_TITLE)
+        .inner_size(desktop_companion::BUBBLE_WIDTH as f64, desktop_companion::BUBBLE_HEIGHT as f64)
+        .min_inner_size(desktop_companion::BUBBLE_WIDTH as f64, desktop_companion::BUBBLE_HEIGHT as f64)
+        .max_inner_size(desktop_companion::BUBBLE_WIDTH as f64, desktop_companion::BUBBLE_HEIGHT as f64)
+        .transparent(true).decorations(false).always_on_top(true).resizable(true)
+        .skip_taskbar(true).visible_on_all_workspaces(true).shadow(false).visible(false)
+        .build()?;
     // Linux has no window effects; the panel URL tells the UI to paint an opaque background.
     let panel = WebviewWindowBuilder::new(app, PANEL, WebviewUrl::App(platform::panel_url(Os::CURRENT).into()))
+        .on_page_load(crate::frontend::page_loaded)
         .title(PANEL_TITLE)
         .inner_size(PANEL_SIZE.0, PANEL_SIZE.1)
         .transparent(true)
@@ -557,7 +822,7 @@ fn build_windows(
 
     if !places_windows {
         // Native Wayland ignores positions; Hyprland window rules place and pin the Dot.
-        if !rose_hidden {
+        if !rose_hidden && !desktop_companion::starts_enabled(app) {
             dot.show()?;
         }
         return Ok(());
@@ -577,7 +842,7 @@ fn build_windows(
     // Set the size again once the window is in place, so it is exactly DOT_SIZE points there.
     dot.set_size(LogicalSize::new(DOT_SIZE.0, DOT_SIZE.1))?;
     // A hidden rose stays placed, ready for "Show the rose".
-    if !rose_hidden {
+    if !rose_hidden && !desktop_companion::starts_enabled(app) {
         dot.show()?;
     }
     Ok(())
@@ -622,6 +887,11 @@ fn build_tray(app: &AppHandle, config: &DesktopConfig, rose_hidden: bool) -> tau
                 let item = MenuItem::with_id(app, "rose", rose_menu_label(rose_hidden), true, None::<&str>)?;
                 menu.append(&item)?;
                 app.manage(RoseMenuItem(item));
+                let capri = CheckMenuItem::with_id(app, "desktop-companion", "Capri en el escritorio", true, false, None::<&str>)?;
+                let recall = MenuItem::with_id(app, "desktop-companion-recall", "Traer Capri aquí", false, None::<&str>)?;
+                menu.append(&capri)?;
+                menu.append(&recall)?;
+                app.manage(CompanionMenuItems { toggle: capri, recall });
             }
             "computer-stop" => menu.append(&MenuItem::with_id(
                 app,
@@ -663,6 +933,8 @@ fn build_tray(app: &AppHandle, config: &DesktopConfig, rose_hidden: bool) -> tau
                 "new" => show_panel(app).and_then(|()| app.emit("dot://new-conversation", ()).map_err(err)),
                 "browser" => open_in_browser(app),
                 "rose" => set_rose_hidden(app.clone(), !rose_hidden_state(app)).map(|_| ()),
+                "desktop-companion" => { desktop_companion::tray_toggle(app); Ok(()) },
+                "desktop-companion-recall" => { desktop_companion::tray_recall(app); Ok(()) },
                 "computer-stop" => {
                     computer::stop(app, Reason::Stopped);
                     Ok(())
@@ -689,9 +961,20 @@ fn build_tray(app: &AppHandle, config: &DesktopConfig, rose_hidden: bool) -> tau
         .build(app)
 }
 
-fn rose_hidden_state(app: &AppHandle) -> bool {
+pub(crate) fn rose_hidden_state(app: &AppHandle) -> bool {
     app.state::<Shell>().rose_hidden.load(Ordering::SeqCst)
 }
+
+struct CompanionMenuItems { toggle: CheckMenuItem<tauri::Wry>, recall: MenuItem<tauri::Wry> }
+pub(crate) fn update_companion_menu(app: &AppHandle, enabled: bool, available: bool) {
+    if let Some(items) = app.try_state::<CompanionMenuItems>() {
+        let _ = items.toggle.set_checked(enabled);
+        let _ = items.toggle.set_enabled(available || enabled);
+        let _ = items.recall.set_enabled(enabled);
+    }
+    if let Some(rose) = app.try_state::<RoseMenuItem>() { let _ = rose.0.set_enabled(!enabled); }
+}
+pub(crate) fn companion_error(app: &AppHandle, text: &str) { show_message(app, MessageDialogKind::Error, text); }
 
 fn show_message(app: &AppHandle, kind: MessageDialogKind, text: &str) {
     app.dialog().message(text).title("Gentle Dot").kind(kind).show(|_| {});
@@ -728,8 +1011,8 @@ fn restart_daemon(app: AppHandle) {
     });
 }
 
-/// ⌥⇧Esc ends computer control from anywhere, even while another app is in front.
-#[cfg(target_os = "macos")]
+/// Alt/Option+Shift+Escape ends control on desktops that permit native global shortcuts.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn register_panic_shortcut(app: &AppHandle) {
     let handler = |app: &AppHandle, _: &_, event: tauri_plugin_global_shortcut::ShortcutEvent| {
         if event.state() == ShortcutState::Pressed {
@@ -767,6 +1050,10 @@ fn handle_launch(app: &AppHandle, args: &[String]) {
     let result = match platform::launch_request(args) {
         LaunchRequest::Toggle => toggle_panel(app.clone()),
         LaunchRequest::Show => show_panel(app),
+        LaunchRequest::StopComputer => {
+            computer::stop(app, Reason::Panic);
+            Ok(())
+        },
     };
     if let Err(error) = result {
         eprintln!("gentle-dot: cannot show the panel: {error}");
@@ -800,8 +1087,20 @@ pub fn run() {
             shortcut_get,
             shortcut_set,
             connector_command,
+            desktop_companion::desktop_companion_get,
+            desktop_companion::desktop_companion_set,
+            desktop_companion::desktop_companion_interaction,
+            desktop_companion::desktop_companion_recall,
+            desktop_companion::desktop_companion_move,
+            desktop_companion::desktop_companion_hide,
+            desktop_companion::desktop_companion_menu,
+            desktop_companion::desktop_companion_context,
+            desktop_companion::desktop_companion_context_dismiss,
+            desktop_companion::desktop_companion_context_ready,
+            desktop_companion::desktop_companion_context_open,
             computer::computer_endpoint,
             computer::computer_permissions,
+            computer::computer_capabilities,
             computer::computer_request_permission,
             computer::computer_stop,
             computer::computer_status,
@@ -822,11 +1121,25 @@ pub fn run() {
             let handle = app.handle().clone();
 
             // Computer control first: a daemon this app spawns gets the helper over its channel.
-            let computer = computer::start(&handle, Arc::new(ShellWindows(handle.clone())));
+            let control_windows = Arc::new(ShellWindows {
+                app: handle.clone(),
+                #[cfg(target_os = "linux")]
+                dot_opacity: Mutex::new(None),
+                #[cfg(target_os = "linux")]
+                prepared_dot_id: Mutex::new(None),
+                #[cfg(target_os = "linux")]
+                launcher_opacity: Mutex::new(None),
+                #[cfg(target_os = "linux")]
+                prepared_launcher_id: Mutex::new(None),
+            });
+            app.manage(control_windows.clone());
+            let computer = computer::start(&handle, control_windows);
             let service = ChannelService {
+                app: handle.clone(),
                 approvals: Approvals::new(Arc::new(NativePrompt::new(handle.clone())), APPROVAL_TIMEOUT),
                 computer: computer.endpoint(),
                 secrets: secure_store::connector_store(),
+                privileged: crate::privileged::Privileged::default(),
             };
             app.manage(computer);
             let runtime_dir = daemon::runtime_dir(|key| std::env::var(key).ok(), app.path().resource_dir().ok());
@@ -864,11 +1177,17 @@ pub fn run() {
             let (voice_input, voice_model) = voice::start(&handle);
             app.manage(voice_input);
             app.manage(voice_model);
-            #[cfg(target_os = "macos")]
-            register_panic_shortcut(&handle);
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            if places_windows { register_panic_shortcut(&handle); }
 
+            desktop_companion::init(&handle, &config.data_dir);
             build_windows(&handle, &config, places_windows, rose_hidden)?;
             build_tray(&handle, &config, rose_hidden)?;
+            desktop_companion::start(&handle);
+            let moved = handle.clone();
+            window(&handle, DOT)?.on_window_event(move |event| {
+                if matches!(event, WindowEvent::Moved(_)) { desktop_companion::movement_observed(&moved); }
+            });
             if places_windows {
                 let bound = register_shortcut(&handle, &config.shortcut);
                 if let Some(bound) = &bound {
@@ -889,7 +1208,7 @@ pub fn run() {
             }
             // Started by the shortcut while not running: open the panel right away.
             let args: Vec<String> = std::env::args().collect();
-            if platform::launch_request(&args) == LaunchRequest::Toggle {
+            if matches!(platform::launch_request(&args), LaunchRequest::Toggle | LaunchRequest::StopComputer) {
                 handle_launch(&handle, &args);
             }
             Ok(())
@@ -898,6 +1217,7 @@ pub fn run() {
         .expect("failed to build Gentle Dot")
         .run(|app, event| {
             if let RunEvent::Exit = event {
+                desktop_companion::stop(app);
                 app.state::<Shell>().daemon.stop();
             }
         });
@@ -906,6 +1226,105 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Uses the production GTK helpers on a fixture never presented to the desktop.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "Requires GTK display; only creates an offscreen fixture"]
+    fn rose_control_mask_keeps_mapping_geometry_and_restores_hidden_content() {
+        use gtk::prelude::*;
+        use std::time::Instant;
+        gtk::init().expect("GTK display for offscreen fixture");
+        let offscreen = gtk::OffscreenWindow::new();
+        let native = offscreen.upcast_ref::<gtk::Window>();
+        native.set_default_size(72, 72);
+        native.set_app_paintable(true);
+        if let Some(visual) = gtk::prelude::GtkWindowExt::screen(native).and_then(|screen| screen.rgba_visual()) {
+            native.set_visual(Some(&visual));
+        }
+        // Same transparent-background draw used by Tao for .transparent(true).
+        native.connect_draw(|window, cr| {
+            let rect = window.allocation();
+            cr.rectangle(0.0, 0.0, rect.width() as f64, rect.height() as f64);
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+            cr.set_operator(gtk::cairo::Operator::Source);
+            cr.fill().unwrap();
+            cr.set_operator(gtk::cairo::Operator::Over);
+            gtk::glib::Propagation::Proceed
+        });
+        let rose = gtk::DrawingArea::new();
+        rose.set_size_request(72, 72);
+        rose.connect_draw(|_, cr| {
+            cr.set_source_rgba(1.0, 0.0, 0.2, 1.0);
+            cr.paint().unwrap();
+            gtk::glib::Propagation::Proceed
+        });
+        native.add(&rose);
+        let mappings = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let unmappings = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let maps = mappings.clone();
+        let unmaps = unmappings.clone();
+        native.connect_map(move |_| { maps.fetch_add(1, Ordering::SeqCst); });
+        native.connect_unmap(move |_| { unmaps.fetch_add(1, Ordering::SeqCst); });
+        let painted = |native: &gtk::Window| {
+            let ready = Arc::new(AtomicBool::new(false));
+            let done = ready.clone();
+            after_dot_paint(native, Box::new(move || { done.store(true, Ordering::SeqCst); })).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !ready.load(Ordering::SeqCst) && Instant::now() < deadline {
+                while gtk::events_pending() { gtk::main_iteration_do(false); }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(ready.load(Ordering::SeqCst), "GTK must paint before releasing capture");
+        };
+        let pixel = || {
+            let pixbuf = offscreen.pixbuf().expect("offscreen rendered pixels");
+            let bytes = pixbuf.read_pixel_bytes();
+            let at = (36 * pixbuf.rowstride() + 36 * pixbuf.n_channels()) as usize;
+            let channels = pixbuf.n_channels() as usize;
+            bytes.as_ref()[at..at + channels].to_vec()
+        };
+        native.show_all();
+        painted(native);
+        let original = pixel();
+        assert!(original[0] > 240 && original[1] < 10, "fixture paints rose pixels: {original:?}");
+        let geometry = (native.position(), native.size());
+        let focused = native.is_active();
+        let map_count = mappings.load(Ordering::SeqCst);
+        let unmap_count = unmappings.load(Ordering::SeqCst);
+        for _ in 0..5 {
+            let opacity = mask_dot_content(native).unwrap();
+            painted(native);
+            let masked = pixel();
+            assert!(masked.len() == 4 && masked[3] == 0, "rose pixels must be transparent before capture: {masked:?}");
+            assert_eq!((native.position(), native.size()), geometry);
+            assert_eq!(native.is_active(), focused);
+            assert!(native.is_visible());
+            unmask_dot_content(native, opacity).unwrap();
+            painted(native);
+            assert_eq!(pixel(), original);
+        }
+        assert_eq!(mappings.load(Ordering::SeqCst), map_count, "control never remaps the rose");
+        assert_eq!(unmappings.load(Ordering::SeqCst), unmap_count, "control never unmaps the rose");
+        let opacity = mask_dot_content(native).unwrap();
+        native.hide(); // the user's explicit choice during a computer step
+        unmask_dot_content(native, opacity).unwrap();
+        assert!(!native.is_visible(), "automatic restoration must preserve the user's hide");
+        native.show_all(); // the user's later explicit choice
+        painted(native);
+        assert_eq!(pixel(), original, "explicit show restores the original rose contents");
+        native.hide();
+    }
+
+    #[test]
+    fn computer_approval_requires_an_exact_positive_human_answer() {
+        use serde_json::json;
+        assert!(approved_computer_answer(&json!({"approved": true})));
+        for reply in [json!(true), json!({"approved":false}), json!({"approved":"true"}),
+            json!({}), json!({"approved":true,"expired":true}), serde_json::Value::Null] {
+            assert!(!approved_computer_answer(&reply), "{reply}");
+        }
+    }
 
     #[test]
     fn tray_hides_new_conversation_in_the_single_chat() {

@@ -1,0 +1,153 @@
+diff --git a/extensions/gentle-ai.ts b/extensions/gentle-ai.ts
+index 9b24a61519972f4226f7372ba7e448aed6e39781..2baba99c94c35e5097d9b2d66d60e32dd4898201 100644
+--- a/extensions/gentle-ai.ts
++++ b/extensions/gentle-ai.ts
+@@ -9309,7 +9309,28 @@ function createGentleAiExtensionForTesting(
+ 						? undefined
+ 						: permissionAlreadyActive
+ 							? { kind: "host-session" as const }
+-							: await presentReviewConsentUi(ctx, eligiblePending.consent);
++							: await presentReviewConsentUi(ctx, eligiblePending.consent, {
++								toolCallId: _toolCallId,
++								sessionId: reviewSessionManagerAndId(ctx)?.sessionId ?? "",
++								consentBinding: eligiblePending.id,
++								expiresAt: eligiblePending.expiresAt,
++								isPending: () => !signal?.aborted &&
++									pendingReviewConsentSessionKey(ctx, pendingReviewConsentFallbackKey) === sessionKey &&
++									pendingReviewConsentRegistry.resolve(eligiblePending.id)?.pending === eligiblePending &&
++									eligiblePending.expiresAt > reviewConsentNow() &&
++									reviewSessionManagerAndId(ctx)?.sessionId === initialIdentity.sessionId,
++								answer: async (answer) => {
++									const current = await capturePermissionIdentity(ctx, permissionWorkspaceRoot);
++									if (signal?.aborted || current === undefined ||
++										!sameReviewSessionIdentity(initialIdentity, current) ||
++										reviewSessionPermissionEpoch(current) !== initialEpoch ||
++										pendingReviewConsentRegistry.resolve(eligiblePending.id)?.pending !== eligiblePending ||
++										eligiblePending.expiresAt <= reviewConsentNow()) return false;
++									details = await answerPendingConsent(answer);
++									return answer === "granted" ? completedGrantedReviewConsent(details)
++										: details.outcome === "consent-declined-this-candidate";
++								},
++							});
+ 					if (selection !== undefined) {
+ 						const confirmedIdentity = await capturePermissionIdentity(ctx, permissionWorkspaceRoot);
+ 						if (initialEpoch !== undefined && confirmedIdentity !== undefined && sameReviewSessionIdentity(initialIdentity, confirmedIdentity) && reviewSessionPermissionEpoch(confirmedIdentity) === initialEpoch) {
+diff --git a/lib/review-consent-ui.ts b/lib/review-consent-ui.ts
+index 914520f6733f681e543a7b59beaa7c73b80c6696..b87222cd5913792afef16b36e4cba1b5d3022bdb 100644
+--- a/lib/review-consent-ui.ts
++++ b/lib/review-consent-ui.ts
+@@ -70,23 +70,92 @@ export function formatReviewConsentUi(consent: ReviewConsentV3): ReviewConsentUi
+ 	};
+ }
+ 
++/** In-process capability. Never serialize the opaque binding or callbacks to a transcript. */
++export interface LiveReviewConsent {
++	readonly toolCallId: string;
++	readonly sessionId: string;
++	readonly consentBinding: string;
++	readonly expiresAt: number;
++	readonly consent: ReviewConsentV3;
++	respond(input: { consentBinding: string; answer: "granted" | "declined" }): Promise<boolean>;
++	/** Withdraws remote access only. The original local dialog remains available. */
++	detach(): void;
++}
++export interface ReviewConsentBridgeAuthority {
++	toolCallId: string;
++	sessionId: string;
++	consentBinding: string;
++	expiresAt: number;
++	isPending(): boolean;
++	answer(answer: "granted" | "declined"): Promise<boolean>;
++}
++type ReviewConsentReceiver = (request: LiveReviewConsent) => (() => void) | undefined;
++const BRIDGE = Symbol.for("gentle-pi.review-consent.bridge/v1");
++
++/** The shared UI object crosses Pi's separate extension module roots. No event-bus authority. */
++export function connectReviewConsentBridge(ui: object, receive: ReviewConsentReceiver): () => void {
++	if (Reflect.get(ui, BRIDGE)) throw new Error("Review consent bridge already owned");
++	Object.defineProperty(ui, BRIDGE, { value: receive, configurable: true });
++	return () => { if (Reflect.get(ui, BRIDGE) === receive) Reflect.deleteProperty(ui, BRIDGE); };
++}
++
+ export async function presentReviewConsentUi(
+ 	context: ExtensionContext,
+ 	consent: ReviewConsentEnvelope,
++	authority?: ReviewConsentBridgeAuthority,
+ ): Promise<ReviewConsentUiSelection | undefined> {
+ 	if (!isPiConsentV3(consent)) return undefined;
+ 	const model = formatReviewConsentUi(consent);
++	let closeLocal: (() => void) | undefined;
++	let withdraw: (() => void) | undefined;
++	let live = false;
++	let remoteStarted = false;
++	let remoteResult: Promise<boolean> | undefined;
++	let timer: ReturnType<typeof setTimeout> | undefined;
++	const detach = () => { live = false; withdraw?.(); withdraw = undefined; };
++	const receive = Reflect.get(context.ui, BRIDGE) as ReviewConsentReceiver | undefined;
+ 	try {
++		if (context.mode === "tui" && authority && typeof receive === "function" && authority.isPending()) {
++			live = true;
++			const request: LiveReviewConsent = Object.freeze({
++				toolCallId: authority.toolCallId,
++				sessionId: authority.sessionId,
++				consentBinding: authority.consentBinding,
++				expiresAt: authority.expiresAt,
++				consent: structuredClone(consent),
++				detach,
++				async respond(input) {
++					if (!input || Object.keys(input).length !== 2 ||
++						Object.keys(input).some(key => key !== "consentBinding" && key !== "answer") ||
++						input.consentBinding !== authority.consentBinding ||
++						(input.answer !== "granted" && input.answer !== "declined") ||
++						!live || remoteStarted || Date.now() >= authority.expiresAt || !authority.isPending()) return false;
++					remoteStarted = true;
++					detach();
++					remoteResult = authority.answer(input.answer);
++					try { return await remoteResult; }
++					finally { closeLocal?.(); }
++				},
++			});
++			withdraw = receive(request);
++			if (!withdraw) live = false;
++			else timer = setTimeout(() => { detach(); closeLocal?.(); }, Math.max(1, authority.expiresAt - Date.now()));
++		}
+ 		if (context.mode === "tui") {
+-			return await context.ui.custom<ReviewConsentUiSelection | undefined>((tui, theme, keybindings, done) => {
++			const selection = await context.ui.custom<ReviewConsentUiSelection | undefined>((tui, theme, keybindings, done) => {
++				closeLocal = () => done(undefined);
+ 				const component = new ReviewConsentComponent({
+ 					content: model.content,
+ 					theme,
+ 					keybindings,
+ 					terminalRows: () => tui.terminal.rows,
+-					onSelect: (index) => done(index === 0 ? { kind: "provider", answer: "granted" }
+-						: index === 1 ? { kind: "provider", answer: "declined" } : { kind: "host-session" }),
+-					onCancel: () => done(undefined),
++					onSelect: (index) => {
++						if (remoteStarted) return;
++						detach();
++						done(index === 0 ? { kind: "provider", answer: "granted" }
++							: index === 1 ? { kind: "provider", answer: "declined" } : { kind: "host-session" });
++					},
++					onCancel: () => { if (!remoteStarted) { detach(); done(undefined); } },
+ 				});
+ 				return {
+ 					getActionOptions: () => component.getActionOptions(),
+@@ -98,6 +167,8 @@ export async function presentReviewConsentUi(
+ 					},
+ 				};
+ 			});
++			if (remoteStarted) { await remoteResult; return undefined; }
++			return selection;
+ 		}
+ 		const selected = await context.ui.select(model.title, [...model.options]);
+ 		if (selected === model.options[0]) return { kind: "provider", answer: "granted" };
+@@ -106,5 +177,8 @@ export async function presentReviewConsentUi(
+ 		return undefined;
+ 	} catch {
+ 		return undefined;
++	} finally {
++		detach();
++		if (timer) clearTimeout(timer);
+ 	}
+ }

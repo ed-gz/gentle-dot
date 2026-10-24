@@ -1,0 +1,10 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"composite": false,
+		"types": ["vite/client"],
+		"jsx": "react-jsx"
+	},
+	"include": ["src", "capacitor.config.ts", "vite.config.ts"]
+}

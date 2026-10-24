@@ -1407,11 +1407,14 @@ dependencies = [
  "base64 0.22.1",
  "block2",
  "bzip2 0.6.1",
+ "cairo-rs",
  "core-foundation",
  "dbus",
  "dbus-secret-service",
  "getrandom 0.3.4",
+ "gtk",
  "image",
+ "javascriptcore-rs",
  "libc",
  "objc2",
  "objc2-app-kit",
@@ -1438,6 +1441,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tiny_http",
  "ureq",
+ "webkit2gtk",
 ]
 
 [[package]]

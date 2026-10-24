@@ -1,5 +1,4 @@
 import { APP_REQUIRED, type ConnectorDraft } from "@gentle-dot/protocol";
-import { useEffect, useRef } from "react";
 import type { Send } from "./types.ts";
 
 /**
@@ -18,15 +17,11 @@ export function ConnectorDraftCard({
 	appSend?: Send;
 	approved: () => void;
 }) {
-	const card = useRef<HTMLElement>(null);
-	useEffect(() => {
-		card.current?.scrollIntoView?.({ block: "nearest" });
-	}, []);
 	const decline = () => send({ type: "connector_draft_reply", draftId: draft.draftId, approve: false });
 	const runs = draft.transport === "http" ? draft.url : [draft.command, ...(draft.args ?? [])].join(" ");
 
 	return (
-		<section ref={card} className="ask-card connector-draft" aria-label={`Add ${draft.name}?`}>
+		<section className="ask-card connector-draft" aria-label={`Add ${draft.name}?`}>
 			<p className="eyebrow">New connector</p>
 			<p className="ask-title">Add {draft.name}?</p>
 			{draft.description ? <p className="connector-note">{draft.description}</p> : null}

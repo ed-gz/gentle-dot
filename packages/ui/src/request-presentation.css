@@ -1,0 +1,9 @@
+.request-controls { border: 0; margin: 0; padding: 0; min-width: 0; }
+.request-mode { display: grid; gap: 12px; margin: 16px 0; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.request-mode label { display: flex; align-items: center; gap: 12px; min-height: 48px; }
+.request-mode input { flex: 0 0 auto; }
+.request-dialog { box-sizing: border-box; width: min(640px, calc(100% - 32px)); max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 48px); overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 16px; padding: 16px; color: var(--text); background: var(--bg); }
+.request-dialog::backdrop { background: rgb(0 0 0 / 75%); }
+.request-dialog header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.request-dialog button, .request-presentation > button { min-height: 48px; }
+.request-dialog .card { min-width: 0; overflow-wrap: anywhere; }

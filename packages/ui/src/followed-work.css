@@ -1,0 +1,124 @@
+.followed-work {
+	border: 1px solid var(--line);
+	border-radius: 18px;
+	margin-top: 16px;
+	background: var(--surface);
+}
+.followed-work > summary {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-height: 72px;
+	padding: 14px;
+	cursor: pointer;
+	list-style: none;
+}
+.followed-work > summary::-webkit-details-marker {
+	display: none;
+}
+.followed-work > summary > span:nth-child(2) {
+	min-width: 0;
+	flex: 1;
+}
+.followed-work-mark {
+	display: grid;
+	place-items: center;
+	color: var(--accent);
+	background: var(--accent-soft);
+	border-radius: 12px;
+	width: 40px;
+	height: 40px;
+	flex: 0 0 40px;
+}
+.followed-work-mark svg {
+	width: 23px;
+	height: 23px;
+}
+.followed-work-caption {
+	display: block;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.5;
+	margin-top: 2px;
+}
+.followed-work-chevron {
+	font-size: 20px;
+	color: var(--muted);
+}
+.followed-work[open] > summary .followed-work-chevron {
+	transform: rotate(180deg);
+}
+.followed-work-body {
+	padding: 0 14px 14px;
+}
+.followed-work-body > p {
+	margin: 6px 0 10px;
+	line-height: 1.5;
+}
+.followed-work-card {
+	padding: 16px 0;
+	border-top: 1px solid var(--line);
+	min-width: 0;
+}
+.followed-work-state {
+	color: var(--accent);
+	font-size: 13px;
+	font-weight: 600;
+}
+.followed-work-state-paused,
+.followed-work-state-failed {
+	color: var(--red);
+}
+.followed-work-objective {
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	font-weight: 600;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+	margin: 6px 0;
+	white-space: pre-wrap;
+}
+.followed-work-note {
+	color: var(--muted);
+	font-size: 14px;
+	overflow-wrap: anywhere;
+	line-height: 1.5;
+	margin: 6px 0;
+}
+.followed-work-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+	color: var(--muted);
+	font-size: 13px;
+}
+.followed-work-details > summary,
+.followed-work-history > summary {
+	min-height: 48px;
+	padding: 12px 0;
+	cursor: pointer;
+	font-size: 14px;
+}
+.followed-work-details p,
+.followed-work-details ul {
+	margin: 0 0 10px;
+	line-height: 1.5;
+	font-size: 14px;
+	overflow-wrap: anywhere;
+}
+.followed-work-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.followed-work-actions button {
+	flex: 1 1 145px;
+	min-height: 48px;
+	white-space: normal;
+}
+.followed-work-footnote {
+	font-size: 13px;
+	color: var(--muted);
+}

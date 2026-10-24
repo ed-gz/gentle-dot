@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 /**
- * Computer control on macOS (S24): the desktop app's helper, reached through its Tauri commands.
+ * Computer control on macOS and Linux (S24): the desktop app's helper, reached through its Tauri commands.
  * Outside the desktop app (the web page, a VPS) every call is a no-op, so computer control is never offered.
  */
 
@@ -16,7 +16,17 @@ export interface ComputerPermissions {
 	screenRecording: boolean;
 }
 
-export type ComputerPermission = keyof ComputerPermissions;
+export type ComputerPermission = "accessibility" | "screenRecording";
+export interface ComputerCapabilities {
+	platform: string;
+	backend: string;
+	supported: boolean;
+	missingDependencies: string[];
+	limitations: string[];
+}
+export function computerCapabilities(): Promise<ComputerCapabilities> {
+	return invoke<ComputerCapabilities>("computer_capabilities");
+}
 
 /** A control session the user allowed; `endsAt` in milliseconds since the epoch. */
 export interface ComputerSession {
@@ -42,7 +52,7 @@ interface ComputerStateEvent {
 	yoloEndsAt?: unknown;
 }
 
-/** The helper's endpoint, or null when the app has none (off macOS, or the helper did not start). */
+/** The helper's endpoint, or null when the app has none (on unsupported systems, or the helper did not start). */
 export async function computerEndpoint(): Promise<ComputerEndpoint | null> {
 	if (!isTauri()) return null;
 	const endpoint = await invoke<Partial<ComputerEndpoint> | null>("computer_endpoint");

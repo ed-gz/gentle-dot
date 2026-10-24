@@ -1,0 +1,67 @@
+CAPRI + REBECCA SPRITE GENERATION V3
+Date: 2026-10-23 local session
+Mode: built-in image_gen.imagegen, transparent_background=true. One call per sheet. No raster post-processing.
+Reference: capri-atlas-v2.png (identity and style reference, not edited or replaced).
+
+REACTIONS
+Source output: /home/egarza/.codex/generated_images/01a166ec-3f54-7611-a897-505e82394029/exec-000eac0d-52d9-4897-b585-0988ba6243c2.png
+Project output: reactions-atlas-v1.png
+Prompt:
+Use case: stylized-concept
+Asset type: production transparent companion sprite atlas for the Gentle Dot app. Create ONE NEW sprite sheet, not a poster.
+Input image 1 is an IDENTITY AND RENDERING STYLE REFERENCE ONLY: preserve this exact Capri character from Cyberpunk Edgerunners, angular black shard body, very bright fuchsia/red jagged starburst hair, green angular face markings, huge black eyes with cyan/blue concentric rings and white pupils, slender sharp hands, neon green/red accents and thin violet edges. Keep her geometrical nonhuman face and proportions. Do not make her into a human anime girl.
+Composition: landscape 4:3 canvas, EXACTLY 12 separate complete sprites, in exactly four columns and three rows. Uniform logical grid. Each cell holds one complete centered pose with generous truly TRANSPARENT gutters on all four sides; no pixels crossing any cell boundary. Each pose includes the full character and all its props. Keep consistent character scale and generous blank space between sprites. No dividers, labels, words, speech bubbles, frames, numbers, background, gradient or contact sheet paper.
+Style: match the reference's crisp flat polygonal animation style and vivid colors; sharp contours, minimal crisp cel shading, no texture grain, no blur, no huge glow. Clearly readable and expressive at tiny app-companion size. Cute humorous workplace emotions.
+
+Strict row-major order:
+Row 1 col 1 CRYING: Capri sitting with knees bent, giant flowing cyan tears, rubbing one eye with a hand, sad scrunched mouth; whimsical frustration.
+Row 1 col 2 WORKING: Capri intent and focused at a small cyan floating keyboard and small angular laptop, fast typing, both hands visible.
+Row 1 col 3 STRESSED: Capri standing with both hands holding her spiky hair, wide worried eyes, two tiny angular stress/sweat marks.
+Row 1 col 4 ANGRY: Capri arms crossed, leaned forward, visibly furrowed eyes and angular frown, feet planted, tiny red anger symbol.
+Row 2 col 1 COFFEE: Capri standing cradling a small purple ceramic mug with rising steam, relaxed eyes, sipping.
+Row 2 col 2 CHILL: Capri reclining in her dark indigo polygonal armchair, hands behind her head and feet stretched comfortably.
+Row 2 col 3 STRETCH: Capri standing doing an overhead morning stretch, hands joined high overhead, happy closed eyes.
+Row 2 col 4 SLEEPY COFFEE: Capri slumped sitting on a small low stool holding an oversized warm mug with both hands, drooping heavy eyelids, exhausted but cozy.
+Row 3 col 1 VICTORY: Capri joyfully jumping in place with both hands raised in a V, broad grin, a few tiny geometric cyan/green confetti shapes inside her cell.
+Row 3 col 2 CONFUSED: Capri tilting her head, one hand scratching the side of her hair, other palm upwards, asymmetric raised eyebrow, one tiny abstract geometric question mark.
+Row 3 col 3 HACKER: Capri wearing simple chunky cyan visor glasses while intensely typing on a cyan holographic keyboard; two tiny floating translucent cyan panels with ABSTRACT unreadable geometric glyphs, no text.
+Row 3 col 4 SNACK: Capri sitting cross-legged, happily eating a small triangular crunchy snack from a small violet snack bowl held in one hand.
+
+Constraints: all 12 cells distinct, all complete and entirely separated by empty transparent space; no cropped hair or fingers or furniture. No other characters, no weapons, no sexualization, no watermark. Real alpha transparency everywhere outside the sprites and props, including gaps between limbs and within furniture. Preserve the recognizable character from the reference exactly.
+
+FRIENDS
+Source output: /home/egarza/.codex/generated_images/01a166ec-3f54-7611-a897-505e82394029/exec-656fd3a1-2490-4178-997b-08cf4450f741.png
+Project output: friends-atlas-v1.png
+Prompt:
+Use case: stylized-concept
+Asset type: production transparent character companion sprite atlas for the Gentle Dot app. Create ONE NEW sprite sheet of Rebecca and Capri friendship moments.
+Input image 1 is an IDENTITY AND RENDERING STYLE REFERENCE ONLY for Capri: preserve exactly her fuchsia/red jagged starburst hair, green angular nonhuman face, enormous black eyes with cyan/blue concentric rings and white pupils, black geometric shard body with red/green panels and violet outlines, slim angular arms and hands. Do not turn Capri into a human.
+Second character is recognizable adult REBECCA from Cyberpunk: Edgerunners, depicted in a compact cute stylized anime form harmonizing with Capri's flat angular rendering: pale skin, white hair with pale mint/green tips styled in two small side ponytails, red/pink eyes, characteristic vivid pink/blue facial cyberware markings, energetic cheeky smile. Consistent outfit across every frame: roomy black bomber jacket with red inner collar and mint trim, opaque black top, dark shorts over opaque charcoal leggings and chunky black/mint boots. Fully dressed, nonsexual, no weapons. Maintain her recognizable face and color palette, not an unrelated generic girl.
+
+Composition: landscape 4:3 canvas, EXACTLY 12 separate complete sprites/scenes arranged in exactly four columns by three rows. Uniform logical grid. Generous truly TRANSPARENT gutters on all sides of each cell. Each cell contains exactly the described character(s) and their small props, all complete and centered. Entire silhouettes and furniture inside their cells, no touching neighboring cells, no clipping. Solo Rebecca in first four cells; both characters in next eight. In duo scenes Capri is slightly taller, Rebecca approximately 80% Capri height; they are friendly peers. Do NOT accidentally merge their faces, hair or bodies. Keep individual identities clear.
+Style: crisp flat polygonal animation with clean strong outlines, vivid mint/cyan/fuchsia and dark indigo palette from the reference, minimal cel shading, no texture grain or blur. No background, floor rectangle, frame borders, grid lines, captions, labels, letters, watermarks or speech bubbles. Readable at small app-companion size.
+
+Strict row-major order:
+Row 1 col 1 REBECCA WAVE: Rebecca alone, whole body, smiling and energetically waving one hand to greet the user.
+Row 1 col 2 REBECCA COFFEE: Rebecca alone, standing with a mint mug raised near her face, satisfied expression, one hand in jacket pocket.
+Row 1 col 3 REBECCA WORK: Rebecca alone seated on a small stool leaning toward a violet laptop on her lap, focused typing.
+Row 1 col 4 REBECCA CHEER: Rebecca alone, both fists raised above her shoulders, joyous grin, boots planted.
+Row 2 col 1 INVITE REBECCA: whole Capri on left excitedly beckons toward the right while gently holding Rebecca's hand, playfully inviting her over to see something; Rebecca on right happily follows, mid-step, both smiling. Clearly show linked hands.
+Row 2 col 2 DUO WATCH: Capri and Rebecca stand shoulder to shoulder, both lean forward looking with curiosity toward the user, Capri points subtly downward as if watching a session together.
+Row 2 col 3 DUO COFFEE: Capri and Rebecca facing each other, clinking one purple and one mint coffee mug, smiles and tiny steam curls.
+Row 2 col 4 DUO COUCH: Capri and Rebecca comfortably sitting side by side on a compact dark indigo angular sofa, watching a small shared tablet; Capri is relaxed and Rebecca leans in curious.
+Row 3 col 1 DUO HIGH FIVE: Capri and Rebecca joyfully high-five each other overhead, clearly separate bodies and arms, small cyan starburst at hands.
+Row 3 col 2 DUO DEBUG: Capri types on a tiny laptop while Rebecca leans beside her and points at the screen, both focused, small warm teamwork scene.
+Row 3 col 3 DUO LAUGH: Capri and Rebecca laughing together, eyes closed with joy, one hand to their mouths, relaxed bodies.
+Row 3 col 4 DUO SLEEP: Capri and Rebecca peacefully dozing at opposite sides of a compact indigo couch with a shared purple blanket over their legs, heads distinct and fully visible, cozy, fully clothed.
+
+Constraints: exactly 12 complete separated cells; only the requested characters and props; no weapons, no exposed underwear, no sexualized anatomy or pose. Real alpha transparency everywhere outside silhouettes and in negative spaces. Preserve Capri's exact reference appearance across all eight duo cells. Rebecca's hair, markings and fully dressed outfit remain consistent in all twelve scenes.
+
+VALIDATION
+Both atlases are 1448 x 1086 RGBA PNGs with alpha range 0..255.
+reactions-atlas-v1.png: 898791 / 1572528 pixels fully transparent (57.2%).
+friends-atlas-v1.png: 732105 / 1572528 pixels fully transparent (46.6%).
+Each manifest has exactly 12 requested frame keys, measured nonuniform x/y/width/height rectangles and optional absolute-coordinate clip polygon arrays. Polygons are convex crop boundaries measured from meaningful alpha components (threshold16), padded by approximately2 pixels. Detached tears, steam, stress marks and confetti are included. No pixels were edited, recolored, resized, or composited.
+A browser rendered all24 frames using the original PNGs, SVG viewBox rectangles, and clipPath polygons. Inspected full screenshot .cache/capri-new-atlases.png: all requested poses visible; no neighboring sprite fragments; characters, hands, boots, props and sofas complete; transparent margins clean over a dark blue background.
+Rendering contract: use frame.clip.map(point => point.join(',')).join(' ') for SVG polygon points in atlas coordinate space. Keep clipPath units userSpaceOnUse. Existing base atlas was not changed.
+

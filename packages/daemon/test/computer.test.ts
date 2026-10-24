@@ -132,6 +132,39 @@ async function restarted(d: DotDaemon, pid: number | undefined) {
 }
 
 describe("computer control registration (S24.7)", () => {
+	it("registers through the private app channel before a phone or chat window connects", async () => {
+		const { d, app, ws, servers, policy, connect: reconnect } = await setup();
+		ws.close();
+		await settle();
+		const pid = d.supervisor.pid;
+		await app.request("computer_register", { url: HELPER, token: KEY });
+		await restarted(d, pid);
+		expect(servers().computer).toMatchObject({ url: HELPER, exposure: "direct" });
+		expect(policy().builtin).toEqual(["computer"]);
+
+		const phone = await reconnect();
+		expect(computerOf(await phone.list())).toMatchObject({
+			builtin: true,
+			status: "connected",
+		});
+	});
+
+	it("rejects remote helper addresses on the private channel without replacing the registered helper", async () => {
+		const { app, servers } = await setup();
+		await app.request("computer_register", { url: HELPER, token: KEY });
+		await waitFor(() => servers().computer);
+		for (const url of [
+			"https://remote.example/mcp",
+			"http://100.64.0.1:4317/mcp",
+			"http://127.0.0.1:51234/mcp?token=another-key",
+		]) {
+			await expect(app.request("computer_register", { url, token: KEY })).rejects.toThrow(
+				"That is not the computer helper's address.",
+			);
+		}
+		expect(servers().computer).toMatchObject({ url: HELPER });
+	});
+
 	it("registering on an install with no saved connectors is not reported as a blocked change", async () => {
 		const { send, logs, messages, servers, dataDir } = await setup();
 		send({ type: "computer_register", url: HELPER, token: KEY });

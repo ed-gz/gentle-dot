@@ -68,17 +68,19 @@ pub fn compositor_places_windows(env: impl Fn(&str) -> Option<String>) -> bool {
     }
 }
 
-/// What a launch asks for: `--toggle` toggles the panel (bind it to a desktop shortcut);
-/// any other launch shows it.
+/// Desktop shortcuts can toggle the panel or stop control without opening/focusing any window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchRequest {
     Toggle,
     Show,
+    StopComputer,
 }
 
 /// Reads the arguments of a launch, `args[0]` being the program.
 pub fn launch_request(args: &[String]) -> LaunchRequest {
-    if args.iter().skip(1).any(|arg| arg == "--toggle") {
+    if args.iter().skip(1).any(|arg| arg == "--stop-computer") {
+        LaunchRequest::StopComputer
+    } else if args.iter().skip(1).any(|arg| arg == "--toggle") {
         LaunchRequest::Toggle
     } else {
         LaunchRequest::Show
@@ -173,6 +175,14 @@ mod tests {
         // The program path is never read as an argument.
         assert_eq!(launch_request(&args(&["--toggle"])), LaunchRequest::Show);
         assert_eq!(launch_request(&[]), LaunchRequest::Show);
+    }
+
+    #[test]
+    fn emergency_stop_takes_priority_and_does_not_open_the_panel() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(launch_request(&args(&["gentle-dot", "--stop-computer"])), LaunchRequest::StopComputer);
+        assert_eq!(launch_request(&args(&["gentle-dot", "--toggle", "--stop-computer"])), LaunchRequest::StopComputer);
+        assert_eq!(launch_request(&args(&["--stop-computer"])), LaunchRequest::Show);
     }
 
     #[test]

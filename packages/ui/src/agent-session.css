@@ -1,0 +1,117 @@
+/* A compact control shelf is separate from the conversation scroll area. */
+.agent-session-work {
+	max-height: 50%;
+	overflow: auto;
+	overscroll-behavior: contain;
+	flex: 0 1 auto;
+	min-height: 0;
+	padding: 0 16px;
+	background: var(--bg);
+}
+.agent-session-work:empty {
+	display: none;
+}
+.agent-session-work .agent-plan {
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+.agent-session-work .agent-plan summary {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-height: 48px;
+	padding: 8px 0;
+	color: var(--text);
+	list-style: none;
+}
+.agent-session-work .agent-plan summary::-webkit-details-marker {
+	display: none;
+}
+.agent-session-work .agent-plan-count {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+.agent-session-work .agent-plan progress {
+	width: 48px;
+	margin: 0;
+	flex: none;
+}
+.agent-session-work .agent-plan-source {
+	color: var(--muted);
+	font-size: 0.85em;
+	margin-left: auto;
+}
+.agent-session-work .agent-plan details[open] .agent-work-chevron {
+	transform: rotate(180deg);
+}
+.agent-session-work .agent-workflow {
+	margin: 0;
+	border: 0;
+	border-top: 1px solid var(--line);
+	border-radius: 0;
+	background: transparent;
+}
+.agent-session-work .agent-workflow > summary {
+	min-height: 48px;
+	padding: 8px 0;
+}
+.agent-session-work :is(.agent-plan .agent-work-list, .agent-delegates) {
+	max-height: min(32dvh, 300px);
+	overflow: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	padding: 8px 2px 12px;
+}
+.agent-current-session {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.agent-current-session h3 {
+	flex: 1;
+}
+.agent-status-icon {
+	display: inline-grid;
+	place-items: center;
+	width: 24px;
+	height: 24px;
+	flex: none;
+	color: var(--muted);
+}
+.agent-current-session > .agent-status-icon {
+	color: var(--muted);
+}
+.agent-status-working,
+.agent-current-session > .agent-status-working {
+	color: var(--accent);
+}
+.agent-status-blocked,
+.agent-current-session > .agent-status-blocked {
+	color: var(--yellow);
+}
+.agent-status-idle,
+.agent-current-session > .agent-status-idle,
+.agent-status-done,
+.agent-current-session > .agent-status-done {
+	color: var(--green);
+}
+.agent-status-spinner {
+	transform-origin: center;
+	animation: agent-status-turn 1.2s linear infinite;
+}
+@keyframes agent-status-turn {
+	to {
+		transform: rotate(360deg);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.agent-status-spinner {
+		animation: none;
+	}
+}
+@media (max-height: 480px) {
+	.agent-session-work :is(.agent-plan .agent-work-list, .agent-delegates) {
+		max-height: 28dvh;
+	}
+}

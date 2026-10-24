@@ -311,7 +311,7 @@ describe("gateway", () => {
 		expect(after.messages.some((m) => m.type === "queue")).toBe(false);
 	});
 
-	it("clears the queue when the run settles without the engine emptying it", async () => {
+	it("clears received messages when the engine explicitly drops its queue", async () => {
 		const d = await daemon({ ...process.env, FAKE_AGENT_DROP_QUEUE: "1" });
 		const a = await authed(d);
 		send(a, { type: "send", text: "slow" });

@@ -9,10 +9,12 @@ interface AccountsPanelProps {
 	send: Send;
 	dispatch: (action: DotAction) => void;
 	openUrl: (url: string) => void;
+	mobile?: boolean;
 }
 
 /** Sign-in for subscriptions and API keys, without a terminal. */
-export function AccountsPanel({ auth, send, dispatch, openUrl }: AccountsPanelProps) {
+export function AccountsPanel({ auth, send, dispatch, openUrl, mobile = false }: AccountsPanelProps) {
+	const copy = (en: string, es: string) => (mobile ? es : en);
 	const [filter, setFilter] = useState("");
 	const [method, setMethod] = useState<"oauth" | "api_key" | undefined>(undefined);
 	const flow = auth.flow;
@@ -28,36 +30,48 @@ export function AccountsPanel({ auth, send, dispatch, openUrl }: AccountsPanelPr
 	const providerName = (id: string) => auth.providers?.find((p) => p.id === id)?.name ?? id;
 
 	return (
-		<section className="accounts" aria-label="Accounts">
+		<section className="accounts" aria-label={copy("Accounts", "Cuentas")}>
 			<header className="accounts-header">
-				<h2>Accounts</h2>
+				<h2>{copy("Accounts", "Cuentas")}</h2>
 				<button
 					type="button"
 					className="icon"
-					aria-label="Close accounts"
+					aria-label={copy("Close accounts", "Cerrar cuentas")}
 					onClick={() => dispatch({ type: "accounts", open: false })}
 				>
 					×
 				</button>
 			</header>
 			<p className="muted">
-				Connect the AI service you already pay for, or paste an API key. Your sign-in stays on this computer.
+				{copy(
+					"Connect the AI service you already pay for, or paste an API key. Your sign-in stays on this computer.",
+					"Conecta tu suscripción de IA o usa una clave de API. El acceso se guarda en tu equipo.",
+				)}
 			</p>
 
 			{flow ? (
 				<div className="auth-flow">
-					<p className="auth-flow-title">Signing in to {providerName(flow.providerId)}</p>
+					<p className="auth-flow-title">
+						{copy("Signing in to", "Conectando con")} {providerName(flow.providerId)}
+					</p>
 					{flow.events.map((event, i) => (
 						// biome-ignore lint/suspicious/noArrayIndexKey: events are append-only and never reordered
-						<FlowEvent key={`${event.kind}-${i}`} event={event} openUrl={openUrl} />
+						<FlowEvent key={`${event.kind}-${i}`} event={event} openUrl={openUrl} mobile={mobile} />
 					))}
-					{flow.prompt ? <FlowPrompt key={flow.prompt.message} prompt={flow.prompt} send={send} /> : null}
-					{busy && !flow.prompt && flow.events.length === 0 ? <p className="muted">Starting…</p> : null}
+					{flow.prompt ? (
+						<FlowPrompt key={flow.prompt.message} prompt={flow.prompt} send={send} mobile={mobile} />
+					) : null}
+					{busy && !flow.prompt && flow.events.length === 0 ? (
+						<p className="muted">{copy("Starting…", "Iniciando…")}</p>
+					) : null}
 					{flow.done ? (
 						<p className={`auth-result ${flow.done.ok ? "ok" : "failed"}`} role="status">
 							{flow.done.ok
-								? `Connected to ${providerName(flow.providerId)}.`
-								: (flow.done.message ?? "Sign-in did not finish.")}
+								? copy(
+										`Connected to ${providerName(flow.providerId)}.`,
+										`Conectado con ${providerName(flow.providerId)}.`,
+									)
+								: (flow.done.message ?? copy("Sign-in did not finish.", "No se pudo completar el acceso."))}
 						</p>
 					) : null}
 					<div className="auth-actions">
@@ -66,7 +80,7 @@ export function AccountsPanel({ auth, send, dispatch, openUrl }: AccountsPanelPr
 								type="button"
 								onClick={() => send({ type: "auth_reply", flowId: flow.flowId ?? "", cancelled: true })}
 							>
-								Cancel
+								{copy("Cancel", "Cancelar")}
 							</button>
 						) : null}
 						{flow.done ? (
@@ -78,7 +92,7 @@ export function AccountsPanel({ auth, send, dispatch, openUrl }: AccountsPanelPr
 									dispatch({ type: "accounts", open: true });
 								}}
 							>
-								Back to accounts
+								{copy("Back to accounts", "Volver a cuentas")}
 							</button>
 						) : null}
 					</div>
@@ -87,7 +101,7 @@ export function AccountsPanel({ auth, send, dispatch, openUrl }: AccountsPanelPr
 				<>
 					{connected.length > 0 ? (
 						<section className="provider-section" aria-labelledby="accounts-connected">
-							<h3 id="accounts-connected">Connected</h3>
+							<h3 id="accounts-connected">{copy("Connected", "Cuentas conectadas")}</h3>
 							<ul className="providers">
 								{connected.map((provider) => (
 									<li key={provider.id} className="connected-row">
@@ -96,13 +110,15 @@ export function AccountsPanel({ auth, send, dispatch, openUrl }: AccountsPanelPr
 											<button
 												type="button"
 												className="link"
-												aria-label={`Sign out of ${provider.name}`}
+												aria-label={copy(`Sign out of ${provider.name}`, `Cerrar sesión de ${provider.name}`)}
 												onClick={() => send({ type: "auth_logout", providerId: provider.id })}
 											>
-												Sign out
+												{copy("Sign out", "Cerrar sesión")}
 											</button>
 										) : (
-											<span className="muted">from your computer's settings</span>
+											<span className="muted">
+												{copy("from your computer's settings", "desde la configuración del equipo")}
+											</span>
 										)}
 									</li>
 								))}
@@ -111,12 +127,22 @@ export function AccountsPanel({ auth, send, dispatch, openUrl }: AccountsPanelPr
 					) : null}
 					<div className="method-choices">
 						<button type="button" className="method-choice" onClick={() => setMethod("oauth")}>
-							<b>Use a subscription</b>
-							<span>Sign in with a plan you already pay for, like ChatGPT, GitHub Copilot, or Grok.</span>
+							<b>{copy("Use a subscription", "Usar una suscripción")}</b>
+							<span>
+								{copy(
+									"Sign in with a plan you already pay for, like ChatGPT, GitHub Copilot, or Grok.",
+									"Conecta tu plan de ChatGPT, GitHub Copilot, Grok u otro servicio.",
+								)}
+							</span>
 						</button>
 						<button type="button" className="method-choice" onClick={() => setMethod("api_key")}>
-							<b>Use an API key</b>
-							<span>Paste a key from the provider's website. Works with every service.</span>
+							<b>{copy("Use an API key", "Usar una clave de API")}</b>
+							<span>
+								{copy(
+									"Paste a key from the provider's website. Works with every service.",
+									"Pega una clave generada en la página de tu proveedor.",
+								)}
+							</span>
 						</button>
 					</div>
 				</>
@@ -130,20 +156,24 @@ export function AccountsPanel({ auth, send, dispatch, openUrl }: AccountsPanelPr
 							setFilter("");
 						}}
 					>
-						Back
+						{copy("Back", "Volver")}
 					</button>
 					<input
 						type="search"
 						className="accounts-search"
-						aria-label="Search providers"
-						placeholder="Search providers"
+						aria-label={copy("Search providers", "Buscar proveedor")}
+						placeholder={copy("Search providers", "Buscar proveedor")}
 						value={filter}
 						onChange={(event) => setFilter(event.target.value)}
 					/>
 					{method === "oauth" ? (
 						<ProviderSection
-							title="Use a subscription"
-							hint="Sign in with a plan you already pay for."
+							title={copy("Use a subscription", "Usar una suscripción")}
+							hint={copy(
+								"Sign in with a plan you already pay for.",
+								"Conecta una suscripción que ya tengas.",
+							)}
+							mobile={mobile}
 							providers={providers.filter((p) => p.methods.includes("oauth"))}
 							label={(p) => p.name}
 							plan={(p) => (p.oauthName && p.oauthName !== p.name ? p.oauthName : undefined)}
@@ -151,27 +181,31 @@ export function AccountsPanel({ auth, send, dispatch, openUrl }: AccountsPanelPr
 								<button
 									type="button"
 									className="primary"
-									aria-label={`Sign in with ${p.oauthName ?? p.name}`}
+									aria-label={copy(
+										`Sign in with ${p.oauthName ?? p.name}`,
+										`Conectar ${p.oauthName ?? p.name}`,
+									)}
 									onClick={() => login(p, "oauth")}
 								>
-									Sign in
+									{copy("Sign in", "Conectar")}
 								</button>
 							)}
 							send={send}
 						/>
 					) : (
 						<ProviderSection
-							title="Use an API key"
-							hint="Paste the key from the provider's website."
+							title={copy("Use an API key", "Usar una clave de API")}
+							hint={copy("Paste the key from the provider's website.", "Pega la clave de tu proveedor.")}
+							mobile={mobile}
 							providers={providers.filter((p) => p.methods.includes("api_key"))}
 							label={(p) => p.name}
 							action={(p) => (
 								<button
 									type="button"
-									aria-label={`Use an API key for ${p.name}`}
+									aria-label={copy(`Use an API key for ${p.name}`, `Usar clave de API de ${p.name}`)}
 									onClick={() => login(p, "api_key")}
 								>
-									Use an API key
+									{copy("Use an API key", "Usar clave de API")}
 								</button>
 							)}
 							send={send}
@@ -184,6 +218,7 @@ export function AccountsPanel({ auth, send, dispatch, openUrl }: AccountsPanelPr
 }
 
 interface ProviderSectionProps {
+	mobile?: boolean;
 	title: string;
 	hint: string;
 	providers: AuthProvider[];
@@ -194,7 +229,16 @@ interface ProviderSectionProps {
 	send: Send;
 }
 
-function ProviderSection({ title, hint, providers, label, plan, action, send }: ProviderSectionProps) {
+function ProviderSection({
+	title,
+	hint,
+	providers,
+	label,
+	plan,
+	action,
+	send,
+	mobile = false,
+}: ProviderSectionProps) {
 	if (providers.length === 0) return null;
 	const id = `providers-${title.toLowerCase().replace(/\W+/g, "-")}`;
 	return (
@@ -206,7 +250,9 @@ function ProviderSection({ title, hint, providers, label, plan, action, send }: 
 					<li key={provider.id}>
 						<div className="provider-name">
 							<b>{label(provider)}</b>
-							{provider.configured ? <span className="chip ok">Connected</span> : null}
+							{provider.configured ? (
+								<span className="chip ok">{mobile ? "Conectado" : "Connected"}</span>
+							) : null}
 						</div>
 						{plan?.(provider) ? <p className="provider-plan">{plan(provider)}</p> : null}
 						<div className="provider-actions">
@@ -217,7 +263,7 @@ function ProviderSection({ title, hint, providers, label, plan, action, send }: 
 									className="link"
 									onClick={() => send({ type: "auth_logout", providerId: provider.id })}
 								>
-									Sign out
+									{mobile ? "Cerrar sesión" : "Sign out"}
 								</button>
 							) : null}
 						</div>
@@ -228,24 +274,39 @@ function ProviderSection({ title, hint, providers, label, plan, action, send }: 
 	);
 }
 
-export function FlowEvent({ event, openUrl }: { event: AuthEvent; openUrl: (url: string) => void }) {
+export function FlowEvent({
+	event,
+	openUrl,
+	mobile = false,
+}: {
+	event: AuthEvent;
+	openUrl: (url: string) => void;
+	mobile?: boolean;
+}) {
 	switch (event.kind) {
 		case "auth_url":
 			return (
 				<div className="auth-step">
-					<p>{event.instructions ?? "Finish signing in on the provider's page."}</p>
+					<p>
+						{event.instructions ??
+							(mobile
+								? "Termina el acceso en la página del proveedor."
+								: "Finish signing in on the provider's page.")}
+					</p>
 					<button type="button" className="primary" onClick={() => openUrl(event.url)}>
-						Open the sign-in page
+						{mobile ? "Abrir página de acceso" : "Open the sign-in page"}
 					</button>
 				</div>
 			);
 		case "device_code":
 			return (
 				<div className="auth-step">
-					<p>Open the page below and enter this code:</p>
+					<p>
+						{mobile ? "Abre la página e introduce este código:" : "Open the page below and enter this code:"}
+					</p>
 					<code className="device-code">{event.userCode}</code>
 					<button type="button" className="primary" onClick={() => openUrl(event.verificationUri)}>
-						Open the page
+						{mobile ? "Abrir página" : "Open the page"}
 					</button>
 				</div>
 			);
@@ -255,7 +316,15 @@ export function FlowEvent({ event, openUrl }: { event: AuthEvent; openUrl: (url:
 	}
 }
 
-export function FlowPrompt({ prompt, send }: { prompt: AuthPrompt; send: Send }) {
+export function FlowPrompt({
+	prompt,
+	send,
+	mobile = false,
+}: {
+	prompt: AuthPrompt;
+	send: Send;
+	mobile?: boolean;
+}) {
 	const [value, setValue] = useState("");
 	const answer = (text: string) => send({ type: "auth_reply", flowId: prompt.flowId, value: text });
 	if (prompt.kind === "select") {
@@ -292,18 +361,22 @@ export function FlowPrompt({ prompt, send }: { prompt: AuthPrompt; send: Send })
 					autoComplete="off"
 					placeholder={
 						prompt.placeholder ??
-						(prompt.kind === "manual_code" ? "Paste the code or the full address here" : "")
+						(prompt.kind === "manual_code"
+							? mobile
+								? "Pega el código o la dirección completa"
+								: "Paste the code or the full address here"
+							: "")
 					}
 					value={value}
 					onChange={(event) => setValue(event.target.value)}
 				/>
 			</label>
 			<button type="submit" className="primary" disabled={!value.trim()}>
-				Continue
+				{mobile ? "Continuar" : "Continue"}
 			</button>
 			{prompt.optional ? (
 				<button type="button" onClick={() => answer("")}>
-					Skip
+					{mobile ? "Omitir" : "Skip"}
 				</button>
 			) : null}
 		</form>

@@ -1,0 +1,96 @@
+.usage-badges {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	/* Reserve the same inline space while loading or refreshing. */
+	inline-size: 11rem;
+	min-block-size: 28px;
+	flex: 0 0 auto;
+	color: var(--text);
+}
+.usage-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.usage-badge .usage-brand-logo {
+	width: 16px;
+	height: 16px;
+	object-fit: contain;
+}
+.usage-badge svg {
+	width: 12px;
+	height: 12px;
+	flex-shrink: 0;
+}
+.usage-badge-stale {
+	text-decoration: underline dotted;
+	text-underline-offset: 4px;
+}
+.usage-badge-placeholder {
+	font-size: 12px;
+}
+.usage-badge-settings {
+	margin-block: 16px;
+	color: var(--text);
+}
+.usage-badge-settings summary {
+	cursor: pointer;
+	padding-block: 12px;
+}
+.usage-badge-settings p {
+	font-size: 13px;
+	line-height: 1.5;
+}
+.usage-badge-settings label {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 44px;
+	flex-wrap: wrap;
+}
+.usage-badge-settings input {
+	width: 18px;
+	height: 18px;
+	flex: 0 0 auto;
+}
+.usage-badge-settings fieldset {
+	margin-block: 12px;
+	min-width: 0;
+	border: 1px solid var(--line);
+	border-radius: 8px;
+}
+.usage-badge-settings legend .usage-brand-logo {
+	width: 18px;
+	height: 18px;
+	vertical-align: middle;
+	margin-inline-end: 8px;
+}
+.usage-badge-settings select {
+	max-width: 100%;
+	min-height: 44px;
+}
+.chat-usage-utilities {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	gap: 8px;
+	min-height: 44px;
+}
+.chat-usage-utilities > button {
+	min-width: 44px;
+	min-height: 44px;
+}
+.chat-usage-details {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	padding: 16px;
+}
+.chat-usage-details[hidden] {
+	display: none;
+}

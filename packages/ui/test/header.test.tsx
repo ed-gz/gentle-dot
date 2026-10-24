@@ -5,6 +5,7 @@ import { useReducer } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatSurface } from "../src/components/ChatSurface.tsx";
 import { type DotState, initialState, reduce } from "../src/store.ts";
+import { openDesktopOptions } from "./desktop-options.ts";
 
 function apply(state: DotState, ...payloads: ServerPayload[]): DotState {
 	return payloads.reduce(
@@ -42,6 +43,8 @@ const box = () => screen.getByRole("textbox", { name: "Message" });
 describe("header icons", () => {
 	it("uses one set of 18 px stroke SVG icons with names and tooltips instead of text glyphs", () => {
 		const { container } = render(<Harness initial={ready} send={vi.fn()} />);
+		expect(screen.queryByRole("button", { name: "Accounts" })).not.toBeInTheDocument();
+		openDesktopOptions();
 		const names = ["Conversations", "Accounts", "Profiles", "New conversation", "Hide"];
 		for (const name of names) {
 			const button = screen.getByRole("button", { name });
@@ -54,7 +57,7 @@ describe("header icons", () => {
 			expect(icon).toHaveAttribute("fill", "none");
 			expect(icon).toHaveAttribute("stroke", "currentColor");
 			expect(icon).toHaveAttribute("aria-hidden", "true");
-			expect(button.textContent).toBe("");
+			expect(button.textContent).toBe(["Conversations", "Hide"].includes(name) ? "" : name);
 		}
 		const header = container.querySelector(".chat-header");
 		for (const glyph of ["☰", "⚿", "◐", "＋", "–"]) expect(header?.textContent).not.toContain(glyph);
@@ -66,6 +69,7 @@ describe("header icons", () => {
 	it("shows no Hide button in the browser", () => {
 		render(<ChatSurface variant="web" state={ready} send={vi.fn()} dismiss={vi.fn()} />);
 		expect(screen.queryByRole("button", { name: "Hide" })).not.toBeInTheDocument();
+		openDesktopOptions();
 		expect(screen.getByRole("button", { name: "Profiles" })).toHaveAttribute("title", "Profiles");
 	});
 });
@@ -83,12 +87,14 @@ describe("typing closes open options", () => {
 		expect(box()).toHaveValue("h");
 
 		await userEvent.clear(box());
+		openDesktopOptions();
 		await userEvent.click(screen.getByRole("button", { name: "Accounts" }));
 		expect(screen.getByRole("region", { name: "Accounts" })).toBeInTheDocument();
 		await userEvent.type(box(), "hi");
 		expect(screen.queryByRole("region", { name: "Accounts" })).not.toBeInTheDocument();
 
 		await userEvent.clear(box());
+		openDesktopOptions();
 		await userEvent.click(screen.getByRole("button", { name: "Profiles" }));
 		expect(screen.getByRole("region", { name: "Profiles" })).toBeInTheDocument();
 		await userEvent.type(box(), "x");
@@ -100,6 +106,7 @@ describe("typing closes open options", () => {
 	it("leaves an option opened while text is already typed until the box is emptied and typing starts again", async () => {
 		render(<Harness initial={ready} send={vi.fn()} />);
 		await userEvent.type(box(), "draft");
+		openDesktopOptions();
 		await userEvent.click(screen.getByRole("button", { name: "Profiles" }));
 		await userEvent.type(box(), " more");
 		expect(screen.getByRole("region", { name: "Profiles" })).toBeInTheDocument();

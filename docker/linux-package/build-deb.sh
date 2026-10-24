@@ -30,11 +30,14 @@ step "Staging the $target runtime"
 node scripts/package/stage-runtime.mjs --target "$target" --out "$runtime" \
 	${ENGRAM_VERSION:+--engram-version "$ENGRAM_VERSION"}
 
+step "Building the fixed system helper (without running or installing it)"
+node scripts/package/build-system-helper.mjs /work/build/system-helper
+
 step "Building the .deb"
 # The runtime is mapped here rather than in tauri.linux.conf.json: Tauri merges that file into
 # every Linux build, and tauri-build fails when a resource is missing, as in source builds.
 resources="{\"bundle\":{\"resources\":{\"$runtime/\":\"runtime/\"}}}"
-pnpm --filter @gentle-dot/desktop tauri build --bundles deb --config "$resources"
+pnpm --filter @gentle-dot/desktop tauri build --bundles deb --config "$resources" --config /work/build/system-helper/tauri-system-helper.json
 
 step "Checking the result"
 binary=apps/desktop/src-tauri/target/release/gentle-dot

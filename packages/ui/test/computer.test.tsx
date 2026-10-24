@@ -103,6 +103,14 @@ beforeEach(() => {
 				return new Promise(() => {});
 			case "computer_endpoint":
 				return h.endpoint;
+			case "computer_capabilities":
+				return {
+					platform: "macos",
+					backend: "macos",
+					supported: true,
+					missingDependencies: [],
+					limitations: [],
+				};
 			case "computer_permissions":
 				return h.permissions;
 			case "computer_status":
@@ -223,9 +231,9 @@ describe("while the assistant controls the Mac (S24.6)", () => {
 		vi.setSystemTime(1_800_000_000_000);
 		await emitState({ active: true, endsAt: Date.now() + 90_000, reason: "granted" });
 		const banner = screen.getByRole("region", { name: "Computer control" });
-		expect(banner).toHaveTextContent("Controlling your Mac · 01:30 left");
+		expect(banner).toHaveTextContent("Controlling your computer · 01:30 left");
 		await act(async () => vi.advanceTimersByTime(1000));
-		expect(banner).toHaveTextContent("Controlling your Mac · 01:29 left");
+		expect(banner).toHaveTextContent("Controlling your computer · 01:29 left");
 
 		within(banner).getByRole("button", { name: "Stop" }).click();
 		expect(invoked("computer_stop")).toHaveLength(1);
@@ -239,7 +247,7 @@ describe("while the assistant controls the Mac (S24.6)", () => {
 		h.status = { active: true, endsAt: 1_800_000_000 + 25 * 60 };
 		await renderApp("?surface=panel");
 		const banner = await screen.findByRole("region", { name: "Computer control" });
-		expect(banner).toHaveTextContent("Controlling your Mac · 25:00 left");
+		expect(banner).toHaveTextContent("Controlling your computer · 25:00 left");
 	});
 
 	it("the rose shows the in-control state and goes back when the session ends", async () => {

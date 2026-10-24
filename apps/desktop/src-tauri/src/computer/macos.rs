@@ -521,7 +521,7 @@ impl Desktop for MacDesktop {
             .filter(|app| app.activationPolicy() == NSApplicationActivationPolicy::Regular)
             .map(|app| {
                 let id = identity(&app);
-                AppInfo { name: id.name, bundle_id: id.bundle_id, active: app.isActive() }
+                AppInfo { name: id.name, bundle_id: id.bundle_id, active: app.isActive(), windows: None }
             })
             .collect())
     }

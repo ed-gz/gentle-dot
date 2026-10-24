@@ -24,6 +24,7 @@ type Frame =
 export function fakeApp(answers: Answer[] = [], otherwise: Answer = "decline") {
 	const [daemonEnd, appEnd] = duplexPair();
 	const asked: AskedApproval[] = [];
+	const nativeHandlers = new Map<string, (params: unknown) => unknown | Promise<unknown>>();
 	/** The app's Keychain, by secret id; `secretCalls` records the methods and ids only. */
 	const secrets = new Map<string, string>();
 	const secretCalls: string[] = [];
@@ -32,6 +33,8 @@ export function fakeApp(answers: Answer[] = [], otherwise: Answer = "decline") {
 	const queue = [...answers];
 	const pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>();
 	const held: number[] = [];
+	const approvalIds = new Map<string, number>();
+	const cancelledApprovals: string[] = [];
 	let nextId = 0;
 	let buffer = "";
 	const write = (frame: Frame) => appEnd.write(`${JSON.stringify(frame)}\n`);
@@ -46,6 +49,16 @@ export function fakeApp(answers: Answer[] = [], otherwise: Answer = "decline") {
 				pending.delete(frame.id);
 				if (frame.error !== undefined) waiting?.reject(new Error(frame.error));
 				else waiting?.resolve(frame.result);
+				continue;
+			}
+			const nativeHandler = nativeHandlers.get(frame.method);
+			if (nativeHandler) {
+				void Promise.resolve()
+					.then(() => nativeHandler(frame.params))
+					.then(
+						(result) => write({ kind: "response", id: frame.id, result }),
+						(error) => write({ kind: "response", id: frame.id, error: String(error) }),
+					);
 				continue;
 			}
 			if (frame.method.startsWith("secret_")) {
@@ -65,12 +78,27 @@ export function fakeApp(answers: Answer[] = [], otherwise: Answer = "decline") {
 				write({ kind: "response", id: frame.id, result });
 				continue;
 			}
+			if (frame.method === "approve_cancel") {
+				const requestId = (frame.params as { requestId?: string })?.requestId ?? "";
+				const pendingId = approvalIds.get(requestId);
+				if (pendingId !== undefined) {
+					approvalIds.delete(requestId);
+					const position = held.indexOf(pendingId);
+					if (position >= 0) held.splice(position, 1);
+					cancelledApprovals.push(requestId);
+					write({ kind: "response", id: pendingId, result: { approved: false } });
+				}
+				write({ kind: "response", id: frame.id, result: { cancelled: pendingId !== undefined } });
+				continue;
+			}
 			if (frame.method !== "approve") {
 				write({ kind: "response", id: frame.id, error: `unknown method ${frame.method}` });
 				continue;
 			}
-			asked.push(frame.params as AskedApproval);
+			const { requestId, ...preview } = frame.params as AskedApproval & { requestId?: string };
+			asked.push(preview);
 			const answer = queue.shift() ?? otherwise;
+			if (requestId && ["hold", "hang"].includes(answer)) approvalIds.set(requestId, frame.id);
 			if (answer === "hold") held.push(frame.id);
 			else if (answer !== "hang")
 				write({ kind: "response", id: frame.id, result: { approved: answer === "allow" } });
@@ -85,6 +113,8 @@ export function fakeApp(answers: Answer[] = [], otherwise: Answer = "decline") {
 	return {
 		daemonEnd: daemonEnd as Duplex,
 		asked,
+		nativeHandlers,
+		cancelledApprovals,
 		secrets,
 		secretCalls,
 		failSecrets: (error: string | undefined) => {
@@ -93,7 +123,10 @@ export function fakeApp(answers: Answer[] = [], otherwise: Answer = "decline") {
 		/** Answers the oldest held approval, as a user clicking in the dialog later. */
 		release: (approved: boolean) => {
 			const id = held.shift();
-			if (id !== undefined) write({ kind: "response", id, result: { approved } });
+			if (id !== undefined) {
+				for (const [requestId, frameId] of approvalIds) if (frameId === id) approvalIds.delete(requestId);
+				write({ kind: "response", id, result: { approved } });
+			}
 		},
 		/** Queues the answers to the next approvals. */
 		answer: (...next: Answer[]) => queue.push(...next),

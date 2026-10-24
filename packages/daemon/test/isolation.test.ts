@@ -66,6 +66,15 @@ describe("isolatedAgentEnv memory", () => {
 		expect(env.ENGRAM_DATA_DIR).toBe("/data/engram");
 	});
 
+	it("does not inherit another terminal's memory project into Dot or its helpers", () => {
+		for (const mode of [undefined, "private"]) {
+			const base = { HOME: tempDir(), ENGRAM_PROJECT: "another-workspace", GENTLE_DOT_ENGRAM: mode };
+			const env = isolatedAgentEnv(base, tempDir());
+			expect(env.ENGRAM_PROJECT).toBeUndefined();
+			expect(base.ENGRAM_PROJECT).toBe("another-workspace");
+		}
+	});
+
 	it("runs a private memory on its own port with GENTLE_DOT_ENGRAM=private", () => {
 		const dataDir = tempDir();
 		const base = {

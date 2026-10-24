@@ -10,10 +10,12 @@
 #[cfg(test)]
 pub(crate) mod fake;
 pub mod native;
+pub(crate) mod cancellation;
 
 use crate::alert::Choice;
 use serde::Deserialize;
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -177,6 +179,11 @@ pub fn clip(text: &str, max_chars: usize, max_lines: usize) -> String {
 pub trait Prompt: Send + Sync {
     /// Shows the dialog and blocks until the user answers; true only for the allowing button.
     fn ask(&self, dialog: &ApprovalDialog) -> bool;
+    /// The cancellation also reaches the UI before it is scheduled, so a cancelled queued
+    /// request cannot appear later. Native implementations must re-check before displaying.
+    fn ask_cancellable(&self, dialog: &ApprovalDialog, cancelled: Arc<AtomicBool>) -> bool {
+        !cancelled.load(Ordering::SeqCst) && self.ask(dialog)
+    }
     /// Closes the dialog still on screen after the timeout (best effort). Its answer, if any,
     /// is ignored.
     fn dismiss(&self);
@@ -196,33 +203,40 @@ impl Approvals {
 
     /// Asks the user. Blocks until the answer or the timeout, so call it off the main thread.
     pub fn confirm(&self, request: &ApprovalRequest) -> Decision {
+        self.confirm_cancellable(request, Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn confirm_cancellable(&self, request: &ApprovalRequest, cancelled: Arc<AtomicBool>) -> Decision {
         let deadline = Instant::now() + self.timeout;
         let dialog = ApprovalDialog::new(request, self.timeout);
-        let Some(ticket) = self.gate.acquire(deadline) else {
+        let Some(ticket) = self.gate.acquire(deadline, &cancelled) else {
             return Decision::Declined;
         };
-        // The dialog runs on a thread of its own that holds the screen until the dialog closes,
-        // so a stale dialog left after the timeout still keeps the next one waiting.
         let (answer, answered) = mpsc::channel();
-        let (prompt, gate) = (self.prompt.clone(), self.gate.clone());
+        let (prompt, gate, cancel) = (self.prompt.clone(), self.gate.clone(), cancelled.clone());
         let spawned = std::thread::Builder::new().name("approval-dialog".into()).spawn(move || {
             let _screen = Ticket { gate, ticket };
-            let _ = answer.send(prompt.ask(&dialog));
+            let _ = answer.send(prompt.ask_cancellable(&dialog, cancel));
         });
         if spawned.is_err() {
             self.gate.release(ticket);
             return Decision::Declined;
         }
-        match answered.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(true) => Decision::Approved,
-            // Declined, or the dialog failed (its thread panicked).
-            Ok(false) | Err(RecvTimeoutError::Disconnected) => Decision::Declined,
-            Err(RecvTimeoutError::Timeout) => {
+        loop {
+            if cancelled.load(Ordering::SeqCst) || Instant::now() >= deadline {
+                cancelled.store(true, Ordering::SeqCst);
                 self.gate.while_held(ticket, || self.prompt.dismiss());
-                Decision::Declined
+                return Decision::Declined;
+            }
+            let wait = deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(25));
+            match answered.recv_timeout(wait) {
+                Ok(true) if !cancelled.load(Ordering::SeqCst) => return Decision::Approved,
+                Ok(_) | Err(RecvTimeoutError::Disconnected) => return Decision::Declined,
+                Err(RecvTimeoutError::Timeout) => {},
             }
         }
     }
+
 }
 
 /// Who holds the screen: at most one dialog, identified by a ticket.
@@ -244,12 +258,14 @@ impl Gate {
     }
 
     /// Waits for the screen until the deadline.
-    fn acquire(&self, deadline: Instant) -> Option<u64> {
+    fn acquire(&self, deadline: Instant, cancelled: &AtomicBool) -> Option<u64> {
         let mut state = self.lock();
         while state.holder.is_some() {
+            if cancelled.load(Ordering::SeqCst) { return None; }
             let left = deadline.checked_duration_since(Instant::now()).filter(|left| !left.is_zero())?;
-            state = self.freed.wait_timeout(state, left).unwrap_or_else(PoisonError::into_inner).0;
+            state = self.freed.wait_timeout(state, left.min(Duration::from_millis(25))).unwrap_or_else(PoisonError::into_inner).0;
         }
+        if cancelled.load(Ordering::SeqCst) || Instant::now() >= deadline { return None; }
         state.next += 1;
         state.holder = Some(state.next);
         Some(state.next)

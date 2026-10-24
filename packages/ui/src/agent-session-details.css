@@ -1,0 +1,353 @@
+.orchestration .session-context-trigger {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-width: 0;
+	min-height: 48px;
+	padding: 8px 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	color: var(--muted);
+	font-size: max(12px, calc(var(--chat-font-size, 16px) * 0.8125));
+	font-weight: 400;
+	line-height: 1.45;
+	text-align: left;
+	touch-action: manipulation;
+}
+.session-context-trigger:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+.orchestration .session-context-trigger:active {
+	background: var(--surface-2);
+}
+.session-context-model {
+	flex: 1;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	color: var(--text);
+}
+.session-context-effort {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.session-context-meter {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	flex: none;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+.session-context-meter svg,
+.session-context-chevron {
+	flex: none;
+}
+.session-context-high {
+	color: var(--yellow);
+}
+.session-menu-anchor {
+	position: relative;
+	flex: none;
+}
+.agent-session-menu-content.session-action-list {
+	padding: 6px;
+	width: min(288px, calc(100vw - 32px));
+	max-height: min(65dvh, 500px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+.session-action-list > button,
+.session-menu-policy > button {
+	display: block;
+	width: 100%;
+	min-height: 48px;
+	border: 0;
+	border-radius: 10px;
+	padding: 12px;
+	text-align: left;
+	color: var(--text);
+	background: transparent;
+	box-shadow: none;
+	font-size: 14px;
+	line-height: 1.45;
+}
+.session-action-list > button:active:not(:disabled),
+.session-menu-policy > button:active:not(:disabled) {
+	background: var(--surface-2);
+}
+.session-action-list .session-menu-note {
+	margin: 0;
+	padding: 0 12px 12px;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--muted);
+}
+.session-menu-policy {
+	border-top: 1px solid var(--line);
+	padding-top: 8px;
+}
+.session-menu-policy > span {
+	display: block;
+	padding: 4px 12px 0;
+	font-size: 12px;
+	color: var(--muted);
+}
+.session-action-list .session-close-action,
+.session-confirm-actions .session-close-action {
+	color: var(--chat-error, var(--red));
+}
+.session-menu-receipt {
+	position: absolute;
+	top: 100%;
+	right: 0;
+	width: min(288px, calc(100vw - 32px));
+	z-index: 8;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 8px 8px 16px;
+	border: 1px solid var(--line);
+	border-radius: 14px;
+	background: var(--surface);
+	font-size: 13px;
+	line-height: 1.5;
+}
+.session-menu-receipt button {
+	margin-left: auto;
+	flex: none;
+	width: 48px;
+	height: 48px;
+	background: transparent;
+	border: 0;
+}
+.agent-session-dialog {
+	width: min(480px, calc(100% - 24px));
+	max-width: none;
+	max-height: calc(
+		100dvh -
+		32px -
+		var(--safe-area-inset-top, env(safe-area-inset-top, 0px)) -
+		var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))
+	);
+	margin: auto;
+	padding: 0;
+	border: 1px solid var(--line);
+	border-radius: 22px;
+	color: var(--text);
+	background: var(--bg);
+	box-shadow: 0 20px 80px #0005;
+	overflow: hidden;
+	font-size: max(14px, var(--chat-font-size, 16px));
+}
+.agent-session-dialog[open] {
+	display: flex;
+	flex-direction: column;
+}
+.agent-session-dialog::backdrop {
+	background: #0008;
+}
+.agent-session-dialog > header {
+	display: flex;
+	flex: none;
+	align-items: center;
+	gap: 8px;
+	padding: 12px 12px 12px 20px;
+	border-bottom: 1px solid var(--line);
+}
+.agent-session-dialog > header h2 {
+	flex: 1;
+	min-width: 0;
+	margin: 0;
+	font-size: 1.1em;
+	font-weight: 650;
+	line-height: 1.35;
+	letter-spacing: -0.02em;
+}
+.agent-session-dialog > header button {
+	display: grid;
+	place-items: center;
+	flex: none;
+	width: 48px;
+	height: 48px;
+	padding: 0;
+	border: 0;
+	border-radius: 12px;
+	background: transparent;
+	color: var(--muted);
+}
+.agent-session-dialog :is(button, summary):focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+.session-dialog-scroll {
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	scroll-padding-block: 12px;
+}
+.session-info-content,
+.session-confirm-content {
+	padding: 20px;
+	overflow-wrap: anywhere;
+}
+.session-info-content > .session-info-name {
+	margin: 0 0 20px;
+	font-size: 1.1em;
+	font-weight: 600;
+	line-height: 1.5;
+}
+.session-info-facts {
+	display: grid;
+	grid-template-columns: minmax(112px, 1fr) minmax(0, 1.7fr);
+	gap: 16px;
+	margin: 0 0 24px;
+	font-size: 0.9em;
+	line-height: 1.5;
+}
+.session-info-facts dt {
+	color: var(--muted);
+	font-size: max(13px, 0.875em);
+	overflow-wrap: normal;
+}
+.session-info-facts dd {
+	margin: 0;
+}
+.session-info-facts small {
+	display: block;
+	font-size: 0.85em;
+	color: var(--muted);
+}
+.session-context {
+	margin-bottom: 20px;
+	padding: 16px;
+	border: 1px solid var(--line);
+	border-radius: 16px;
+	background: var(--surface);
+}
+.session-context > div {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+}
+.session-context h3 {
+	margin: 0;
+	font-size: 0.95em;
+}
+.session-context strong {
+	font-size: 1.15em;
+	font-variant-numeric: tabular-nums;
+}
+.session-context progress {
+	display: block;
+	width: 100%;
+	height: 6px;
+	margin: 12px 0;
+	accent-color: var(--accent);
+}
+.session-context p {
+	margin: 8px 0 0;
+	color: var(--muted);
+	font-size: 0.8em;
+	line-height: 1.5;
+}
+.session-info-disclosure {
+	border-top: 1px solid var(--line);
+}
+.session-info-disclosure summary {
+	min-height: 52px;
+	padding: 14px 0;
+	font-size: 0.9em;
+	cursor: pointer;
+}
+.session-info-disclosure summary > span {
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	margin-left: 8px;
+}
+.session-info-disclosure ul {
+	display: grid;
+	gap: 16px;
+	list-style: none;
+	margin: 0 0 20px;
+	padding: 0;
+	font-size: 0.85em;
+	line-height: 1.5;
+}
+.session-info-disclosure li > :is(strong, span) {
+	display: block;
+}
+.session-info-disclosure li > span,
+.session-info-disclosure p {
+	color: var(--muted);
+	font-size: 0.85em;
+	line-height: 1.5;
+}
+.session-info-disclosure .session-tool-names {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px 12px;
+	font-family: var(--font-mono);
+}
+.session-copy-row {
+	display: grid;
+	gap: 8px;
+	margin-bottom: 20px;
+}
+.session-copy-row code {
+	user-select: all;
+	font-size: 0.85em;
+	line-height: 1.6;
+}
+.agent-session-dialog .session-copy-row button {
+	justify-self: start;
+	min-height: 48px;
+	font-size: 0.85em;
+}
+.session-detail-note {
+	color: var(--muted);
+	font-size: 0.85em;
+	line-height: 1.5;
+}
+.session-confirm-content p {
+	margin: 0 0 16px;
+	font-size: 0.95em;
+	line-height: 1.6;
+}
+.session-confirm-actions {
+	display: flex;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 24px;
+}
+.agent-session-dialog .session-confirm-actions button {
+	min-height: 48px;
+	padding: 10px 16px;
+	font-size: 0.9em;
+}
+.session-detail-error {
+	color: var(--chat-error, var(--red));
+}
+@media (max-width: 350px) {
+	.session-info-facts {
+		grid-template-columns: 1fr;
+		gap: 4px;
+	}
+	.session-info-facts dd {
+		margin-bottom: 12px;
+	}
+	.session-info-disclosure .session-tool-names {
+		grid-template-columns: 1fr;
+	}
+}
+
+.agent-session-dialog .session-confirm-actions button.primary {
+	background: var(--accent);
+	color: var(--accent-ink);
+}

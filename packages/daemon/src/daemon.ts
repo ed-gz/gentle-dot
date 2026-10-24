@@ -1,9 +1,11 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { ComposerGeometry } from "./orchestration/composer-geometry.ts";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { extname, join, resolve, sep } from "node:path";
 import type { Duplex } from "node:stream";
+import { fileURLToPath } from "node:url";
 import type { McpTransport } from "@earendil-works/pi-mcp";
 import {
 	type AttachmentLimits,
@@ -13,10 +15,21 @@ import {
 	parseClientMessage,
 } from "@gentle-dot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
+import { CompanionPreference } from "./companion.ts";
+import { TerminalMoodController } from "./terminal-mood.ts";
 import { AppChannel } from "./app-channel.ts";
 import { AuthManager, type AuthRuntime, createModelAuthRuntime, resolveAgentHome } from "./auth.ts";
 import { AuthHelper } from "./auth-helper.ts";
 import { type BridgeClient, DotBridge } from "./bridge.ts";
+import { BROWSER_EXTENSION_PATH, BrowserController, BrowserError } from "./browser.ts";
+import { BrowserRequests } from "./browser-requests.ts";
+import {
+	COMPLETIONS_EXTENSION_PATH,
+	CompletionReports,
+	CompletionReportsError,
+} from "./completion-reports.ts";
+import { computerApproval, computerSnapshot } from "./computer-access.ts";
+import { ComputerCaptureStore } from "./computer-capture.ts";
 import {
 	APPROVAL_GUARD,
 	ConnectorManager,
@@ -33,18 +46,36 @@ import {
 	isolatedAgentEnv,
 	privateMemory,
 } from "./isolation.ts";
-import { MCP_PREFIX, McpProxy, type ProxiedConnector, type UpstreamCredentials } from "./mcp-proxy.ts";
+import { MailWatch, MailWatchError } from "./mail-watch.ts";
+import {
+	MCP_PREFIX,
+	McpProxy,
+	McpReadError,
+	type ProxiedConnector,
+	type UpstreamCredentials,
+} from "./mcp-proxy.ts";
+import { allowApi, bearer, jsonResponse, MobileAccess, MobileAccessError, readJson } from "./mobile.ts";
+import { MobileApprovals } from "./mobile-approvals.ts";
+import { ORCHESTRATOR_EXTENSION_PATH, OrchestrationError, Orchestrator } from "./orchestration/index.ts";
 import { writePrivateFile } from "./private-file.ts";
 import { defaultImportPath, ProfileStore } from "./profiles.ts";
 import { type RotationLimits, rotationLimits } from "./rotation.ts";
+import { runtimeDir } from "./runtime.ts";
 import { FileSecretSource, SECRETS_FILE, SECRETS_KEY_VAR } from "./secret-file.ts";
 import { AppSecretSource } from "./secret-source.ts";
+import { sessionNotice } from "./session-notifications.ts";
+import { SHARE_FILE_EXTENSION_PATH, SharedFileStore } from "./shared-files.ts";
+import { SharedFilesGateway } from "./shared-files-http.ts";
 import { AgentSupervisor } from "./supervisor.ts";
 import { UploadStore } from "./uploads.ts";
+import { SubscriptionUsage } from "./usage.ts";
 import { VoiceService } from "./voice.ts";
 import { CONNECTOR_HOME, chownHandOver, prepareVpsLayout, type VpsOptions } from "./vps.ts";
+import { WATCH_EXTENSION_PATH, WatcherError, Watchers, WatchSourceError } from "./watchers.ts";
 import { PIN_FILE, PinGate } from "./web-pin.ts";
 import { identityArgs } from "./white-label.ts";
+import { WorkflowAuthorization } from "./workflow-authorization.ts";
+import { WORKFLOWS_EXTENSION_PATH, WorkflowContinuations, WorkflowError } from "./workflows.ts";
 
 export interface DaemonOptions {
 	port: number;
@@ -68,6 +99,10 @@ export interface DaemonOptions {
 	authRuntime?: () => Promise<AuthRuntime>;
 	/** The fetch for voice requests to OpenAI; tests pass a fake one. */
 	voiceFetch?: typeof fetch;
+	/** Read-only subscription usage; tests provide a deterministic local source. */
+	subscriptionUsage?: Pick<SubscriptionUsage, "read">;
+	/** Fixed per-window palette controller; tests supply an isolated Kitty fixture. */
+	terminalMood?: Pick<TerminalMoodController, "read" | "apply">;
 	/** How connector sign-ins reach the provider and the browser; tests pass stand-ins. */
 	connectorOAuth?: ConnectorOAuthOptions;
 	/** The home folder "Import my MCP servers" reads other apps' configs from; default `GENTLE_DOT_IMPORT_HOME` or the user's. */
@@ -165,6 +200,67 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		claimEngineHome(options.agentHome, log, access);
 	access(() => mkdirSync(options.workspace, { recursive: true, mode: 0o700 }));
 	ensureMemoryProject(options.workspace, access);
+	const mobile = new MobileAccess(options.dataDir);
+	const mobileApprovals = new MobileApprovals({ waitMs: options.approvalWaitMs });
+	const computerApprovals = new Map<string, AbortController>();
+	const pairingInProgress = new Set<string>();
+	const acceptsToken = (value: string) => sameToken(value, token) || mobile.accepts(value);
+	const orchestrationKey = randomBytes(32).toString("base64url");
+	const browserKey = randomBytes(32).toString("base64url");
+	const completionsKey = randomBytes(32).toString("base64url");
+	let completionReports: CompletionReports | undefined;
+	const workflowsKey = randomBytes(32).toString("base64url");
+	let workflows: WorkflowContinuations | undefined;
+	const workflowAuthorization = new WorkflowAuthorization();
+	const watchersKey = randomBytes(32).toString("base64url");
+	let watchers: Watchers | undefined;
+	let watcherTimer: ReturnType<typeof setInterval> | undefined;
+	const filesKey = randomBytes(32).toString("base64url");
+	const browser = vps ? undefined : new BrowserController({ dataDir: options.dataDir });
+	const subscriptionUsage = vps
+		? undefined
+		: (options.subscriptionUsage ??
+			new SubscriptionUsage({
+				env: options.agentEnv ?? process.env,
+				...(options.agentHome ? { agentHome: options.agentHome } : {}),
+			}));
+	let notifySession: DotBridge["notifySession"] | undefined;
+	// Local display adapters must never launch processes as a VPS daemon user (which may be root).
+	const orchestrator = vps
+		? undefined
+		: new Orchestrator({
+				dataDir: options.dataDir,
+				piCommand: process.env.GENTLE_DOT_PI_BIN,
+				onApproval: (approval) => workflows?.tryApprove(approval) ?? Promise.resolve(false),
+				onEvent: (event) => {
+					const followed = workflows?.onEvent(event);
+					const watched = watchers?.onEvent(event, followed ?? false);
+					if (watched) void watchers?.prepare();
+					if (!followed && !watched) {
+						completionReports?.onEvent(event);
+						completionReports?.prepare();
+					}
+					const notice = sessionNotice(event);
+					if (notice) notifySession?.(notice);
+				},
+			});
+	if (orchestrator)
+		completionReports = new CompletionReports({
+			dataDir: options.dataDir,
+			snapshot: () => orchestrator.snapshot(),
+			inspect: (paneId, sessionId) =>
+				orchestrator.dispatch({ action: "inspect", paneId, sessionId }, "agent"),
+		});
+	if (orchestrator)
+		workflows = new WorkflowContinuations({
+			dataDir: options.dataDir,
+			snapshot: () => orchestrator.snapshot(),
+			inspect: (paneId, sessionId) =>
+				orchestrator.dispatch({ action: "inspect", paneId, sessionId }, "agent"),
+			prompt: (paneId, sessionId, text, authorize) =>
+				orchestrator.dispatch({ action: "prompt", paneId, sessionId, text }, "agent", authorize),
+			approve: (request, authorize) => orchestrator.answerForWorkflow(request, authorize),
+		});
 	const folderArgs = options.preferredFolder
 		? [
 				"--append-system-prompt",
@@ -174,6 +270,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 	let agentEnv = { ...(options.agentEnv ?? process.env) };
 	// The server's secrets key is the daemon's only, whatever the engine is (S25.8).
 	delete agentEnv[SECRETS_KEY_VAR];
+	delete agentEnv.GENTLE_DOT_FILES_URL;
+	delete agentEnv.GENTLE_DOT_FILES_KEY;
+	delete agentEnv.GENTLE_DOT_COMPLETIONS_URL;
+	delete agentEnv.GENTLE_DOT_COMPLETIONS_KEY;
+	delete agentEnv.GENTLE_DOT_WORKFLOWS_URL;
+	delete agentEnv.GENTLE_DOT_WORKFLOWS_KEY;
+	delete agentEnv.GENTLE_DOT_WATCHERS_URL;
+	delete agentEnv.GENTLE_DOT_WATCHERS_KEY;
+	delete agentEnv.GENTLE_DOT_HISTORY_DIR;
+	delete agentEnv.GENTLE_DOT_COMPANION_URL;
+	delete agentEnv.GENTLE_DOT_COMPANION_KEY;
 	const homeArgs: string[] = [];
 	const memory = options.agentHome ? await privateMemory(agentEnv, options.dataDir, log, access) : undefined;
 	if (options.agentHome) {
@@ -232,10 +339,102 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		log,
 	});
 	connectorStore.onUpdated = () => proxy.sync();
+	const mailWatch = new MailWatch({ proxy, connector: (id) => connectorStore.proxyView(id) });
+	if (orchestrator)
+		watchers = new Watchers({
+			dataDir: options.dataDir,
+			snapshot: () => orchestrator.snapshot(),
+			inspect: (paneId, sessionId) =>
+				orchestrator.dispatch({ action: "inspect", paneId, sessionId }, "agent"),
+			email: async (id, cursor, signal) => {
+				try {
+					return await mailWatch.email(id, cursor, signal);
+				} catch (error) {
+					if (error instanceof MailWatchError || error instanceof McpReadError) {
+						const requiresAction = [
+							"MAIL_GAP",
+							"MAIL_ACCOUNT_CHANGED",
+							"MAIL_SCHEMA",
+							"MAIL_FORMAT",
+							"MAIL_CURSOR",
+							"MAIL_LIMIT",
+							"MAIL_UNSUPPORTED",
+						].includes(error.code);
+						throw new WatchSourceError(error.code, error.message, !requiresAction);
+					}
+					throw error;
+				}
+			},
+			isFollowed: (paneId, sessionId) =>
+				!!workflows
+					?.status()
+					.workflows.some(
+						(work) =>
+							work.mode !== "session" &&
+							["waiting", "running"].includes(work.state) &&
+							work.sessions.some((session) => session.paneId === paneId && session.sessionId === sessionId),
+					),
+		});
+	const watchSources = () => [
+		{ id: "agents", kind: "agents", label: "Sesiones", available: !!orchestrator },
+		...mailWatch.available().map((source) => ({ ...source, kind: "email" })),
+	];
+	// Independent extensions share one background turn. Do not lease two continuations at once.
+	let backgroundClaiming = false;
+	const claimBackground = async <T>(
+		available: () => boolean,
+		status: () => T,
+		take: () => Promise<T>,
+	): Promise<T> => {
+		if (backgroundClaiming || !available()) return status();
+		backgroundClaiming = true;
+		try {
+			return await take();
+		} finally {
+			backgroundClaiming = false;
+		}
+	};
+	const workflowDelivering = () => !!workflows?.status().workflows.some((work) => work.state === "running");
 	// The assistant's own engine loads the approval guard for connector actions.
-	const guardArgs = options.agentHome ? ["-e", APPROVAL_GUARD] : [];
+	const companion = new CompanionPreference(options.dataDir);
+	const terminalMood = options.terminalMood ?? new TerminalMoodController(orchestrator);
+	const composerGeometry = new ComposerGeometry(
+		new TerminalMoodController(orchestrator),
+		() => orchestrator?.companionGeometryBindings() ?? [],
+		(paneId) => orchestrator?.observeCompanionPane(paneId),
+	);
+	const companionKey = randomBytes(32).toString("base64url");
+	const runtime = runtimeDir();
+	const companionExtension = runtime
+		? join(runtime, "daemon", "extensions", "dot-companion.ts")
+		: fileURLToPath(new URL("./extensions/dot-companion.ts", import.meta.url));
+	const liveInputExtension = runtime
+		? join(runtime, "daemon", "extensions", "dot-live-input.ts")
+		: fileURLToPath(new URL("./extensions/dot-live-input.ts", import.meta.url));
+	const historyExtension = runtime
+		? join(runtime, "daemon", "extensions", "dot-history.ts")
+		: fileURLToPath(new URL("./extensions/dot-history.ts", import.meta.url));
+	const guardArgs = options.agentHome
+		? [
+				"-e",
+				liveInputExtension,
+				"-e",
+				companionExtension,
+				"-e",
+				historyExtension,
+				...(!vps
+					? ["-e", COMPLETIONS_EXTENSION_PATH, "-e", WORKFLOWS_EXTENSION_PATH, "-e", WATCH_EXTENSION_PATH]
+					: []),
+				"-e",
+				APPROVAL_GUARD,
+				...(!vps
+					? ["-e", ORCHESTRATOR_EXTENSION_PATH, "-e", BROWSER_EXTENSION_PATH, "-e", SHARE_FILE_EXTENSION_PATH]
+					: []),
+			]
+		: [];
 	const supervisor = new AgentSupervisor({
 		command: options.agentCommand,
+		...(options.agentHome ? { steeringMode: "all" as const, liveInput: true } : {}),
 		args: [...(options.agentArgs ?? []), ...homeArgs],
 		extraArgs: [
 			...identityArgs(options.dataDir),
@@ -259,13 +458,34 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 				log("subagents are off for this engine start: their approval guard is not in place");
 				env.GENTLE_PI_AGENTS = "0";
 			}
-			return env;
+			return {
+				...env,
+				...(options.agentHome ? { GENTLE_DOT_COMPANION_URL: `http://127.0.0.1:${port}/api/companion/agent`, GENTLE_DOT_COMPANION_KEY: companionKey, GENTLE_DOT_HISTORY_DIR: join(options.dataDir, "sessions") } : {}),
+				...(!vps
+					? {
+							GENTLE_DOT_ORCHESTRATION_URL: `http://127.0.0.1:${port}/api/orchestration/agent`,
+							GENTLE_DOT_ORCHESTRATION_KEY: orchestrationKey,
+							GENTLE_DOT_BROWSER_URL: `http://127.0.0.1:${port}/api/browser/agent`,
+							GENTLE_DOT_BROWSER_KEY: browserKey,
+							GENTLE_DOT_FILES_URL: `http://127.0.0.1:${port}/api/files/agent`,
+							GENTLE_DOT_FILES_KEY: filesKey,
+							GENTLE_DOT_COMPLETIONS_URL: `http://127.0.0.1:${port}/api/completions/agent`,
+							GENTLE_DOT_COMPLETIONS_KEY: completionsKey,
+							GENTLE_DOT_WORKFLOWS_URL: `http://127.0.0.1:${port}/api/workflows/agent`,
+							GENTLE_DOT_WORKFLOWS_KEY: workflowsKey,
+							GENTLE_DOT_WATCHERS_URL: `http://127.0.0.1:${port}/api/watchers/agent`,
+							GENTLE_DOT_WATCHERS_KEY: watchersKey,
+						}
+					: {}),
+			};
 		},
 		// The first start in a new home installs the engine's companion packages.
 		...(options.agentHome ? { startTimeoutMs: 180_000 } : {}),
 		...(options.backoffMs ? { backoffMs: options.backoffMs } : {}),
 		log: (line) => log(`[agent] ${line}`),
 	});
+	const computerCaptures = new ComputerCaptureStore();
+	supervisor.onEvent((event) => computerCaptures.observe(event));
 	// In server mode Pi's ModelRuntime runs in a helper as the engine's user, never as root (B1).
 	const authHelper =
 		vps?.authHelper && !options.authRuntime
@@ -312,19 +532,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		...(vps ? { access } : {}),
 		...(options.uploadLimits ? { limits: options.uploadLimits } : {}),
 	});
+	orchestrator?.setUploadStore(uploads);
 	const historyPage = options.historyPage ?? Number(process.env.GENTLE_DOT_HISTORY_PAGE);
 	const bridge = new DotBridge(supervisor, {
 		dataDir: options.dataDir,
+		onCaptureInvalidated: () => computerCaptures.clear(),
 		log,
 		auth,
 		profiles,
 		connectors,
 		voice,
 		uploads,
-		...(app ? { app } : {}),
+		...(app
+			? { app, ...(!vps ? { mobileApprovals, hasApprovalClient: () => hasApprovalClient() } : {}) }
+			: {}),
 		...(vps && !app ? { pin: new PinGate({ file: join(options.dataDir, PIN_FILE) }) } : {}),
 		...(options.approvalWaitMs ? { approvalWaitMs: options.approvalWaitMs } : {}),
 		...(vps ? { engineAccess: access } : {}),
+		onHumanPrompt: (text, engineText) => workflowAuthorization.record(text, engineText),
 		features: { conversations: options.conversations ?? process.env.GENTLE_DOT_CONVERSATIONS === "1" },
 		rotation: options.rotation ?? rotationLimits(process.env),
 		...(Number.isInteger(historyPage) && historyPage > 0 ? { historyPage } : {}),
@@ -335,15 +560,21 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 	const integrity = connectorStore
 		.checkIntegrity()
 		.catch((error: Error) => log(`could not check connectors.json: ${error.message}`));
+	notifySession = (notice) => bridge.notifySession(notice);
+
 	if (app) {
 		// Nothing the app asks changes connectors before connectors.json was checked (S25.6).
 		app.handler = async (method, params) => {
 			await integrity;
-			return appRequest(method, params, bridge, connectors, app);
+			if (method === "computer_unregister" || method === "computer_register") computerCaptures.clear();
+			return appRequest(method, params, bridge, connectors, app, computerApprovals);
 		};
 		// The computer helper belongs to the app that registered it (S24.7).
 		app.onClose(() => {
 			log("the desktop app's channel closed");
+			computerCaptures.clear();
+			for (const pending of computerApprovals.values()) pending.abort();
+			mobileApprovals.cancelAll();
 			connectors.unregisterComputer(app);
 			// Secrets read from the app are forgotten; connectors that need one fail closed until it is back.
 			connectorStore.lock();
@@ -357,10 +588,535 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 			"no desktop app channel: connector changes and approvals are refused, and connectors that need a secret fail closed; to use them, stop this assistant and open the Gentle Dot app, which starts its own",
 		);
 
+	const fileStore = vps ? undefined : new SharedFileStore(options.dataDir);
+	const browserRequests =
+		browser && fileStore
+			? new BrowserRequests({
+					browser,
+					files: fileStore,
+					ask: (request, signal) => {
+						if (app?.connected) return bridge.askInApp(request, signal);
+						// A previously desktop-trusted phone can decide this browser request even
+						// when the model or the native app is unavailable. Connector trust is unchanged.
+						const pending = mobileApprovals.begin(`browser-${randomUUID()}`, request, signal);
+						return pending.answer.finally(pending.cancel);
+					},
+					...(app
+						? {
+								installAvailable: () => app.connected,
+								install: (requestId: string) =>
+									app.request(
+										"privileged_operation",
+										{ requestId, operation: "install_browser", browser: "chromium" },
+										960_000,
+									),
+								cancelInstall: (requestId: string) => app.request("privileged_cancel", { requestId }, 10_000),
+							}
+						: {}),
+				})
+			: undefined;
+	const files = new SharedFilesGateway({
+		store: fileStore,
+		...(fileStore
+			? { shareComputerCapture: () => fileStore.publishCapture(computerCaptures.latest(), "computer") }
+			: {}),
+		acceptsHuman: acceptsToken,
+		acceptsAgent: (key) => sameToken(key, filesKey),
+		origins: () => allowedOrigins(port, options),
+	});
 	const server = createServer((req, res) => {
 		const { pathname } = new URL(req.url ?? "/", "http://localhost");
+		if (pathname.startsWith("/api/files/")) {
+			void files.handle(req, res);
+			return;
+		}
+		if (
+			pathname.startsWith("/api/mobile/") ||
+			(pathname === "/orchestration" || pathname.startsWith("/orchestration/companion")) ||
+			pathname === "/api/orchestration/agent" ||
+			pathname === "/browser" ||
+			pathname === "/api/browser/agent" ||
+			pathname === "/api/completions/agent" ||
+			pathname === "/api/workflows/agent" ||
+			pathname === "/api/watchers/agent" ||
+			pathname === "/api/companion/agent"
+		) {
+			void (async () => {
+				if (!allowApi(req, res, allowedOrigins(port, options))) return;
+				const key = bearer(req);
+				if (pathname === "/api/mobile/pair" && req.method === "POST") {
+					const body = await readJson(req);
+					if (typeof body.code !== "string" || body.code.length > 100 || typeof body.deviceName !== "string")
+						return jsonResponse(res, 400, { error: "Invalid pairing request" });
+					mobile.assertCanRedeem(body.code);
+					if (pairingInProgress.has(body.code))
+						return jsonResponse(res, 409, {
+							code: "PAIRING_IN_PROGRESS",
+							error: "This pairing is already awaiting confirmation on the computer.",
+						});
+					pairingInProgress.add(body.code);
+					try {
+						let approvalAccess = false;
+						if (app?.connected && !vps) {
+							const controller = new AbortController();
+							const disconnected = () => {
+								if (!res.writableEnded) controller.abort();
+							};
+							res.once("close", disconnected);
+							try {
+								approvalAccess = await app.approve(
+									{
+										connector: "Gentle Dot Mobile",
+										action: "vincular este teléfono",
+										title: "¿Permitir acceso a este teléfono?",
+										summary:
+											"Podrá conversar, controlar sesiones y responder solicitudes concretas de permisos. Acepta sólo si acabas de escanear el QR en tu teléfono.",
+										preview: [{ name: "Teléfono", value: body.deviceName.slice(0, 80) }],
+									},
+									controller.signal,
+								);
+							} finally {
+								res.off("close", disconnected);
+							}
+							if (res.destroyed) return;
+							if (!approvalAccess)
+								return jsonResponse(res, 403, {
+									code: "PAIRING_DECLINED",
+									error:
+										"El equipo no autorizó este teléfono. Confirma la vinculación en Gentle Dot y vuelve a intentar.",
+								});
+						}
+						jsonResponse(res, 200, mobile.redeem(body.code, body.deviceName, approvalAccess));
+					} finally {
+						pairingInProgress.delete(body.code);
+					}
+					return;
+				}
+				if (pathname === "/api/companion/agent") {
+					if (!sameToken(key, companionKey)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					if (req.headers.origin || !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? ""))
+						return jsonResponse(res, 403, { error: "Local engine only" });
+					if (req.method === "GET") return jsonResponse(res, 200, companion.read());
+					if (req.method !== "POST") return jsonResponse(res, 405, { error: "Use GET or POST" });
+					return jsonResponse(res, 200, await terminalMood.apply(await readJson(req), () => sameToken(key, companionKey) && !res.destroyed));
+				}
+				if (pathname === "/api/orchestration/agent") {
+					if (!orchestrator)
+						return jsonResponse(res, 503, { error: "Local session control is unavailable in VPS mode" });
+					if (!sameToken(key, orchestrationKey)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					if (req.method !== "POST") return jsonResponse(res, 405, { error: "Use POST" });
+					return jsonResponse(res, 200, await orchestrator.dispatch(await readJson(req), "agent"));
+				}
+				if (pathname === "/api/browser/agent") {
+					if (!browser)
+						return jsonResponse(res, 503, { error: "Local browser control is unavailable in VPS mode" });
+					if (!sameToken(key, browserKey)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					if (req.method !== "POST") return jsonResponse(res, 405, { error: "Use POST" });
+					const input = await readJson(req);
+					const controller = new AbortController();
+					const disconnected = () => controller.abort();
+					res.once("close", disconnected);
+					try {
+						const result = await browserRequests?.action(input, "agent", () => true, controller.signal);
+						if (!res.destroyed) return jsonResponse(res, 200, result);
+					} finally {
+						res.off("close", disconnected);
+					}
+					return;
+				}
+				if (pathname === "/api/completions/agent") {
+					if (!sameToken(key, completionsKey)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					const peer = req.socket.remoteAddress;
+					if (
+						!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer ?? "") ||
+						req.headers.origin ||
+						Object.keys(req.headers).some((name) => name === "forwarded" || name.startsWith("x-forwarded-"))
+					)
+						return jsonResponse(res, 403, { error: "Completion reports are local to the assistant engine" });
+					if (!completionReports)
+						return jsonResponse(res, 503, { error: "Reports are unavailable in VPS mode" });
+					if (req.method !== "GET") return jsonResponse(res, 405, { error: "Use GET" });
+					const reports = completionReports;
+					const statusOnly = new URL(req.url ?? "/", "http://localhost").searchParams.get("status") === "1";
+					return jsonResponse(
+						res,
+						200,
+						statusOnly
+							? { ...completionReports.status(), reports: [] }
+							: await claimBackground(
+									() => !watchers?.hasDelivery() && !workflowDelivering(),
+									() => ({ ...reports.status(), reports: [] }),
+									async () => reports.takeReady(),
+								),
+					);
+				}
+				if (pathname === "/api/workflows/agent") {
+					if (!sameToken(key, workflowsKey)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					const peer = req.socket.remoteAddress;
+					if (
+						!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer ?? "") ||
+						req.headers.origin ||
+						Object.keys(req.headers).some((name) => name === "forwarded" || name.startsWith("x-forwarded-"))
+					)
+						return jsonResponse(res, 403, { error: "Workflow control is local to the assistant engine" });
+					if (!workflows) return jsonResponse(res, 503, { error: "Workflows are unavailable in VPS mode" });
+					const coordinator = workflows;
+					if (req.method === "GET") {
+						const statusOnly = new URL(req.url ?? "/", "http://localhost").searchParams.get("status") === "1";
+						return jsonResponse(
+							res,
+							200,
+							statusOnly
+								? workflows.status()
+								: await claimBackground(
+										() => !watchers?.hasDelivery(),
+										() => coordinator.status(),
+										() => coordinator.poll(true),
+									),
+						);
+					}
+					if (req.method === "POST") {
+						const body = await readJson(req);
+						// The engine cannot invent the original human instruction. Only authenticated chat sends enter this ledger.
+						delete body.authorization;
+						delete body.claimId;
+						if (["start", "update", "resume", "claim"].includes(String(body.action))) {
+							const instruction = workflowAuthorization.resolve(body.sourceHash);
+							if (instruction) {
+								body.authorization = instruction;
+								if (body.action === "claim") body.claimId = body.sourceHash;
+							}
+						}
+						delete body.sourceHash;
+						if (body.action === "claim") {
+							if (!body.authorization)
+								return jsonResponse(res, 403, {
+									error: "Se necesita una instrucción humana actual verificada.",
+								});
+							if (backgroundClaiming || watchers?.hasDelivery())
+								return jsonResponse(res, 409, {
+									error: "Hay otra continuación en curso; el permiso sigue pendiente.",
+								});
+							backgroundClaiming = true;
+							try {
+								return jsonResponse(res, 200, await workflows.dispatch(body, "agent"));
+							} finally {
+								backgroundClaiming = false;
+							}
+						}
+						return jsonResponse(res, 200, await workflows.dispatch(body, "agent"));
+					}
+					return jsonResponse(res, 405, { error: "Use GET or POST" });
+				}
+				if (pathname === "/api/watchers/agent") {
+					if (!sameToken(key, watchersKey)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					const peer = req.socket.remoteAddress;
+					if (
+						!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer ?? "") ||
+						req.headers.origin ||
+						Object.keys(req.headers).some((name) => name === "forwarded" || name.startsWith("x-forwarded-"))
+					)
+						return jsonResponse(res, 403, { error: "Event watches are local to the assistant engine" });
+					if (!watchers) return jsonResponse(res, 503, { error: "Watches are unavailable in VPS mode" });
+					const observer = watchers;
+					if (req.method === "GET") {
+						const statusOnly = new URL(req.url ?? "/", "http://localhost").searchParams.get("status") === "1";
+						return jsonResponse(res, 200, {
+							...(statusOnly
+								? watchers.status()
+								: await claimBackground(
+										() => !workflowDelivering(),
+										() => observer.status(),
+										() => observer.poll(true),
+									)),
+							sources: watchSources(),
+						});
+					}
+					if (req.method !== "POST") return jsonResponse(res, 405, { error: "Use GET or POST" });
+					const body = await readJson(req);
+					delete body.authorization;
+					if (["start", "resume"].includes(String(body.action))) {
+						const instruction = workflowAuthorization.resolve(body.sourceHash);
+						if (instruction) body.authorization = instruction;
+					}
+					delete body.sourceHash;
+					// Unconfigured accounts are reported once at setup, never silently enabled.
+					if (body.action === "start" && typeof body.source === "object" && body.source !== null) {
+						const source = body.source as Record<string, unknown>;
+						if (
+							source.kind === "email" &&
+							!mailWatch.available().some((item) => item.id === source.connectorId && item.configured)
+						)
+							return jsonResponse(res, 409, {
+								error: "Conecta primero una cuenta Gmail compatible en Conexiones.",
+							});
+					}
+					const result = await watchers.dispatch(body, "agent");
+					return jsonResponse(res, 200, {
+						...(typeof result === "object" && result !== null ? result : {}),
+						sources: watchSources(),
+					});
+				}
+				if (!acceptsToken(key)) {
+					req.resume();
+					return jsonResponse(res, 401, { error: "Unauthorized" });
+				}
+				if (pathname === "/api/mobile/terminal-mood") {
+					const authorize = () => acceptsToken(key) && !res.destroyed;
+					if (req.method === "GET")
+						return jsonResponse(res, 200, await terminalMood.read(new URL(req.url ?? "/", "http://localhost").searchParams.get("paneId"), authorize));
+					if (req.method !== "POST") return jsonResponse(res, 405, { error: "Use GET or POST" });
+					return jsonResponse(res, 200, await terminalMood.apply(await readJson(req), authorize));
+				}
+				if (pathname === "/api/mobile/companion") {
+					if (req.method === "GET") return jsonResponse(res, 200, companion.read());
+					if (req.method !== "POST") return jsonResponse(res, 405, { error: "Use GET or POST" });
+					const body = await readJson(req);
+					if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					if (body.mode !== "gentle" && body.mode !== "capri") return jsonResponse(res, 400, { error: "Elige Gentle Dot o Capri." });
+					return jsonResponse(res, 200, companion.set(body.mode));
+				}
+				if (pathname === "/api/mobile/watchers") {
+					if (!watchers) return jsonResponse(res, 503, { error: "Watches are unavailable in VPS mode" });
+					if (req.method === "GET") {
+						const setup = new URL(req.url ?? "/", "http://localhost").searchParams.get("setup") === "1";
+						const sessions =
+							setup && orchestrator
+								? (await orchestrator.snapshot()).sessions
+										.filter((session) => session.connected && session.sessionId)
+										.map((session) => ({
+											paneId: session.paneId,
+											sessionId: session.sessionId,
+											label: session.label,
+										}))
+								: undefined;
+						if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+						return jsonResponse(res, 200, {
+							...watchers.status(),
+							sources: watchSources(),
+							...(sessions ? { sessions } : {}),
+						});
+					}
+					if (req.method !== "POST") return jsonResponse(res, 405, { error: "Use GET or POST" });
+					const body = await readJson(req);
+					if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					if (!["start", "pause", "resume", "delete"].includes(String(body.action)))
+						return jsonResponse(res, 400, {
+							error: "Elige crear, pausar, reanudar o eliminar el seguimiento.",
+						});
+					if (body.action === "start" && typeof body.source === "object" && body.source !== null) {
+						const source = body.source as Record<string, unknown>;
+						if (
+							source.kind === "email" &&
+							!mailWatch.available().some((item) => item.id === source.connectorId && item.available)
+						)
+							return jsonResponse(res, 409, {
+								error: "Conecta primero Gmail en Conexiones y comprueba que esté disponible.",
+							});
+					}
+					// Only these explicit settings are accepted. Creating a watch never grants action or approval authority.
+					const action =
+						body.action === "start"
+							? {
+									action: "start",
+									source: body.source,
+									instruction: body.instruction,
+									intervalMs: body.intervalMs,
+								}
+							: { action: body.action, watchId: body.watchId };
+					const result = await watchers.dispatch(action, "human", () => acceptsToken(key));
+					if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					return jsonResponse(res, 200, result);
+				}
+				if (pathname === "/api/mobile/workflows") {
+					if (!workflows) return jsonResponse(res, 503, { error: "Workflows are unavailable in VPS mode" });
+					if (req.method === "GET") return jsonResponse(res, 200, workflows.status());
+					if (req.method !== "POST") return jsonResponse(res, 405, { error: "Use GET or POST" });
+					const body = await readJson(req);
+					if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					if (!["pause", "resume", "stop", "pauseAll"].includes(String(body.action)))
+						return jsonResponse(res, 400, { error: "Elige pausar, reanudar o finalizar el seguimiento." });
+					const result = await workflows.dispatch(body, "human", () => acceptsToken(key));
+					if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					return jsonResponse(res, 200, result);
+				}
+				if (pathname === "/api/mobile/usage") {
+					if (!subscriptionUsage)
+						return jsonResponse(res, 503, { error: "Subscription usage is unavailable in VPS mode" });
+					if (req.method !== "GET") return jsonResponse(res, 405, { error: "Use GET" });
+					let result: Awaited<ReturnType<SubscriptionUsage["read"]>>;
+					try {
+						result = await subscriptionUsage.read();
+					} catch {
+						return jsonResponse(res, 502, { error: "No se pudo consultar el consumo de suscripciones." });
+					}
+					if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					return jsonResponse(res, 200, result);
+				}
+				if (pathname === "/api/mobile/completions") {
+					if (!completionReports)
+						return jsonResponse(res, 503, { error: "Reports are unavailable in VPS mode" });
+					if (req.method === "GET") return jsonResponse(res, 200, completionReports.status());
+					if (req.method !== "POST") return jsonResponse(res, 405, { error: "Use GET or POST" });
+					const body = await readJson(req);
+					if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					return jsonResponse(res, 200, completionReports.configure(body.enabled));
+				}
+				if (pathname === "/api/mobile/computer") {
+					if (vps || !app?.connected)
+						return jsonResponse(res, 503, {
+							error: "Abre Gentle Dot en el equipo para controlar el escritorio.",
+						});
+					if (req.method !== "GET" && req.method !== "POST")
+						return jsonResponse(res, 405, { error: "Use GET or POST" });
+					if (req.method === "POST") {
+						if (!sameToken(key, token) && !mobile.canApprove(key))
+							return jsonResponse(res, 403, { error: "Este teléfono necesita autorización del equipo." });
+						const body = await readJson(req);
+						if (body.action !== "stop" || Object.keys(body).length !== 1)
+							return jsonResponse(res, 400, { error: "Sólo se permite detener el control del equipo." });
+						if (!sameToken(key, token) && !mobile.canApprove(key))
+							return jsonResponse(res, 401, { error: "Unauthorized" });
+					}
+					if (req.method === "POST") {
+						computerCaptures.clear();
+						for (const pending of computerApprovals.values()) pending.abort();
+					}
+					const result = await app.request(
+						req.method === "POST" ? "computer_stop" : "computer_status",
+						{},
+						10_000,
+					);
+					if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					return jsonResponse(res, 200, computerSnapshot(result));
+				}
+				if (pathname === "/api/mobile/approvals" || pathname === "/api/mobile/answer") {
+					if (!mobile.canApprove(key) || vps)
+						return jsonResponse(res, 403, {
+							error:
+								"Vincula el teléfono con autorización de la app de escritorio para responder permisos de Dot.",
+						});
+					if (pathname === "/api/mobile/approvals" && req.method === "GET")
+						return jsonResponse(res, 200, {
+							approvals: mobileApprovals
+								.list()
+								.filter((approval) => app?.connected || approval.id.startsWith("browser-")),
+						});
+					if (pathname === "/api/mobile/answer" && req.method === "POST") {
+						const body = await readJson(req);
+						if (!mobile.canApprove(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+						if (typeof body.requestId !== "string" || typeof body.approved !== "boolean")
+							return jsonResponse(res, 400, { error: "Invalid approval response" });
+						if (!app?.connected && !body.requestId.startsWith("browser-"))
+							return jsonResponse(res, 403, { error: "Esta solicitud requiere la app de escritorio." });
+						if (!mobileApprovals.answer(body.requestId, body.approved))
+							return jsonResponse(res, 409, { error: "Esta solicitud ya terminó o venció." });
+						return jsonResponse(res, 200, { ok: true });
+					}
+					return jsonResponse(res, 405, { error: "Method not allowed" });
+				}
+				if (pathname === "/browser") {
+					if (!browser)
+						return jsonResponse(res, 503, { error: "Local browser control is unavailable in VPS mode" });
+					if (req.method === "GET") return jsonResponse(res, 200, browserRequests?.status());
+					if (req.method === "POST") {
+						const input = await readJson(req);
+						const controller = new AbortController();
+						const disconnected = () => controller.abort();
+						res.once("close", disconnected);
+						try {
+							const result = await browserRequests?.action(
+								input,
+								"human",
+								() => acceptsToken(key),
+								controller.signal,
+							);
+							if (!res.destroyed) return jsonResponse(res, 200, result);
+						} finally {
+							res.off("close", disconnected);
+						}
+						return;
+					}
+					return jsonResponse(res, 405, { error: "Use GET or POST" });
+				}
+				if (pathname === "/orchestration/companion" || pathname === "/orchestration/companion/focus") {
+					if (!orchestrator) return jsonResponse(res, 503, { error: "Local session control is unavailable in VPS mode" });
+					if (pathname === "/orchestration/companion" && req.method === "GET") {
+						const state = await composerGeometry.enrich(orchestrator.companion(), () => acceptsToken(key) && !res.destroyed);
+						if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+						if (!res.destroyed) return jsonResponse(res, 200, state);
+						return;
+					}
+					if (pathname === "/orchestration/companion/focus" && req.method === "POST")
+						return jsonResponse(res, 200, await orchestrator.focusCompanion(await readJson(req), () => acceptsToken(key) && !res.destroyed));
+					return jsonResponse(res, 405, { error: "Method not allowed" });
+				}
+				if (pathname === "/orchestration") {
+					if (!orchestrator)
+						return jsonResponse(res, 503, { error: "Local session control is unavailable in VPS mode" });
+					if (req.method === "GET") {
+						const snapshot = await orchestrator.snapshot();
+						if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+						return jsonResponse(res, 200, snapshot);
+					}
+					if (req.method === "POST")
+						return jsonResponse(
+							res,
+							200,
+							await orchestrator.dispatch(await readJson(req), "human", () => acceptsToken(key) && !res.destroyed, key),
+						);
+					return jsonResponse(res, 405, { error: "Use GET or POST" });
+				}
+				if (pathname === "/api/mobile/disconnect" && req.method === "POST") {
+					await readJson(req);
+					if (!mobile.accepts(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+					mobile.revokeToken(key);
+					for (const client of wss.clients)
+						if (clientKeys.has(client) && !acceptsToken(clientKeys.get(client) ?? ""))
+							client.close(CloseCode.unauthorized, "device revoked");
+					if (!hasApprovalClient()) mobileApprovals.cancelAll();
+					return jsonResponse(res, 200, { ok: true });
+				}
+				// Pairing administration belongs to the computer's owner key.
+				if (!sameToken(key, token))
+					return jsonResponse(res, 403, { error: "Manage devices from the computer" });
+				if (pathname === "/api/mobile/code" && req.method === "POST")
+					return jsonResponse(res, 200, mobile.issue());
+				if (pathname === "/api/mobile/devices" && req.method === "GET")
+					return jsonResponse(res, 200, { devices: mobile.list() });
+				if (pathname === "/api/mobile/revoke" && req.method === "POST") {
+					const body = await readJson(req);
+					if (typeof body.deviceId !== "string") return jsonResponse(res, 400, { error: "Missing deviceId" });
+					mobile.revoke(body.deviceId);
+					// Recheck live sessions immediately; a revoked connection must stop receiving data.
+					for (const client of wss.clients)
+						if (clientKeys.has(client) && !acceptsToken(clientKeys.get(client) ?? ""))
+							client.close(CloseCode.unauthorized, "device revoked");
+					if (!hasApprovalClient()) mobileApprovals.cancelAll();
+					return jsonResponse(res, 200, { ok: true });
+				}
+				jsonResponse(res, 404, { error: "Unknown endpoint" });
+			})().catch((error: Error) =>
+				jsonResponse(
+					res,
+					error instanceof OrchestrationError ||
+						error instanceof MobileAccessError ||
+						error instanceof BrowserError ||
+						error instanceof CompletionReportsError ||
+						error instanceof WorkflowError ||
+						error instanceof WatcherError
+						? error.status
+						: 400,
+					{
+						error: error.message,
+						...(error instanceof MobileAccessError || error instanceof OrchestrationError ? { code: error.code } : {}),
+					},
+				),
+			);
+			return;
+		}
 		if (pathname === "/upload") {
-			void handleUpload(req, res, token, allowedOrigins(port, options), uploads);
+			void handleUpload(req, res, acceptsToken, allowedOrigins(port, options), uploads, orchestrator);
 			return;
 		}
 		if (pathname.startsWith(MCP_PREFIX)) {
@@ -369,7 +1125,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		}
 		handleHttp(req, res, options.uiDir, bridge);
 	});
+	const clientKeys = new WeakMap<WebSocket, string>();
 	const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+	const hasApprovalClient = () =>
+		[...wss.clients].some(
+			(client) => client.readyState === client.OPEN && mobile.canApprove(clientKeys.get(client) ?? ""),
+		);
 
 	server.on("upgrade", (req, socket, head) => {
 		const url = new URL(req.url ?? "/", "http://localhost");
@@ -378,7 +1139,15 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 			socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
 			return;
 		}
-		wss.handleUpgrade(req, socket, head, (ws) => acceptClient(ws, token, bridge));
+		wss.handleUpgrade(req, socket, head, (ws) =>
+			acceptClient(
+				ws,
+				acceptsToken,
+				bridge,
+				(key) => clientKeys.set(ws, key),
+				() => {},
+			),
+		);
 	});
 
 	await new Promise<void>((done, fail) => {
@@ -392,9 +1161,17 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		stopped = done;
 	});
 	const shutdown = async () => {
+		files.close();
+		browserRequests?.close();
 		// Not listening any more first, so an app relaunched meanwhile starts a daemon of its own.
 		const serverClosed = new Promise<void>((done) => server.close(() => done()));
 		app?.close();
+		mobileApprovals.close();
+		completionReports?.close();
+		workflows?.close();
+		if (watcherTimer) clearInterval(watcherTimer);
+		watchers?.close();
+		await Promise.all([orchestrator?.close(), browser?.close()]);
 		for (const client of wss.clients) client.terminate();
 		wss.close();
 		// Stops waiting approvals and the connectors' servers (stdio ones are processes of the daemon).
@@ -434,6 +1211,18 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 	if (!stopping) {
 		connectorStore.enforce(false);
 		connectorStore.watch();
+		if (watchers) {
+			watcherTimer = setInterval(() => {
+				void watchers
+					?.tick()
+					.then(() => watchers?.prepare())
+					.catch(() => {});
+				void watchers?.prepare();
+				void workflows?.prepare();
+				completionReports?.prepare();
+			}, 15_000);
+			watcherTimer.unref();
+		}
 		await supervisor
 			.start()
 			.catch((error: Error) => log(`agent failed to start: ${error.message}; retrying`));
@@ -457,6 +1246,7 @@ async function appRequest(
 	bridge: DotBridge,
 	connectors: ConnectorManager,
 	app: AppChannel,
+	computerApprovals: Map<string, AbortController>,
 ): Promise<object> {
 	const fields = (typeof params === "object" && params !== null ? params : {}) as Record<string, unknown>;
 	switch (method) {
@@ -469,7 +1259,29 @@ async function appRequest(
 			connectors.registerComputer(app, { url: parsed.url, token: parsed.token });
 			return {};
 		}
+		case "computer_approval": {
+			const preview = computerApproval(params);
+			const requestId = fields.requestId as string;
+			if (computerApprovals.has(requestId)) throw new Error("Duplicate computer approval");
+			const controller = new AbortController();
+			computerApprovals.set(requestId, controller);
+			try {
+				return { approved: await bridge.askInApp(preview, controller.signal) };
+			} finally {
+				computerApprovals.delete(requestId);
+			}
+		}
+		case "computer_approval_cancel":
+			if (
+				Object.keys(fields).length !== 1 ||
+				typeof fields.requestId !== "string" ||
+				!/^[a-f0-9]{64}$/.test(fields.requestId)
+			)
+				throw new Error("Invalid cancellation");
+			computerApprovals.get(fields.requestId)?.abort();
+			return {};
 		case "computer_unregister":
+			for (const pending of computerApprovals.values()) pending.abort();
 			connectors.unregisterComputer(app);
 			return {};
 		default:
@@ -483,12 +1295,20 @@ function allowedOrigins(port: number, options: DaemonOptions): Set<string> {
 		`http://localhost:${port}`,
 		"tauri://localhost",
 		"http://tauri.localhost",
+		"https://localhost",
 		...(options.allowedOrigins ?? []),
 	]);
 }
 
-function acceptClient(ws: WebSocket, token: string, bridge: DotBridge): void {
+function acceptClient(
+	ws: WebSocket,
+	acceptsToken: (key: string) => boolean,
+	bridge: DotBridge,
+	onAuth: (key: string) => void,
+	onDisconnect: () => void,
+): void {
 	let seq = 0;
+	let clientKey: string | undefined;
 	let detach: (() => void) | undefined;
 	const client: BridgeClient = {
 		send(payload) {
@@ -498,10 +1318,14 @@ function acceptClient(ws: WebSocket, token: string, bridge: DotBridge): void {
 	const helloTimer = setTimeout(() => ws.close(CloseCode.unauthorized, "hello required"), HELLO_TIMEOUT_MS);
 
 	ws.on("message", (data) => {
+		if (clientKey !== undefined && !acceptsToken(clientKey)) {
+			ws.close(CloseCode.unauthorized, "device revoked");
+			return;
+		}
 		const message = parseClientMessage(String(data));
 		if (!detach) {
 			clearTimeout(helloTimer);
-			if (message?.type !== "hello" || !sameToken(message.token, token)) {
+			if (message?.type !== "hello" || !acceptsToken(message.token)) {
 				ws.close(CloseCode.unauthorized, "unauthorized");
 				return;
 			}
@@ -509,6 +1333,8 @@ function acceptClient(ws: WebSocket, token: string, bridge: DotBridge): void {
 				ws.close(CloseCode.badProtocol, "unsupported protocol");
 				return;
 			}
+			clientKey = message.token;
+			onAuth(message.token);
 			detach = bridge.attach(client);
 			return;
 		}
@@ -525,6 +1351,7 @@ function acceptClient(ws: WebSocket, token: string, bridge: DotBridge): void {
 	ws.on("close", () => {
 		clearTimeout(helloTimer);
 		detach?.();
+		onDisconnect();
 	});
 }
 
@@ -543,9 +1370,10 @@ function sameToken(given: string, expected: string): boolean {
 async function handleUpload(
 	req: IncomingMessage,
 	res: ServerResponse,
-	token: string,
+	acceptsToken: (key: string) => boolean,
 	origins: Set<string>,
 	uploads: UploadStore,
+	orchestrator?: Orchestrator,
 ): Promise<void> {
 	res.setHeader("X-Content-Type-Options", "nosniff");
 	res.setHeader("Cache-Control", "no-store");
@@ -565,7 +1393,7 @@ async function handleUpload(
 	if (req.method === "OPTIONS") {
 		res.writeHead(204, {
 			"Access-Control-Allow-Methods": "POST",
-			"Access-Control-Allow-Headers": "Authorization, Content-Type, X-File-Name, X-Upload-Id",
+			"Access-Control-Allow-Headers": "Authorization, Content-Type, X-File-Name, X-Upload-Id, X-Agent-Pane, X-Agent-Session",
 			"Access-Control-Max-Age": "600",
 		});
 		res.end();
@@ -573,8 +1401,7 @@ async function handleUpload(
 	}
 	if (req.method !== "POST") return refuse(405, "method_not_allowed", "Upload files with POST.");
 	const bearer = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1];
-	if (!bearer || !sameToken(bearer, token))
-		return refuse(401, "unauthorized", "The access key is not valid.");
+	if (!bearer || !acceptsToken(bearer)) return refuse(401, "unauthorized", "The access key is not valid.");
 	let name: string;
 	try {
 		name = decodeURIComponent(String(req.headers["x-file-name"] ?? ""));
@@ -586,9 +1413,21 @@ async function handleUpload(
 	if (uploadId !== undefined && (typeof uploadId !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(uploadId))) {
 		return refuse(400, "bad_request", "That upload is not valid.");
 	}
+	let owner: string | undefined;
+	if (req.headers["x-agent-pane"] !== undefined || req.headers["x-agent-session"] !== undefined) {
+		try {
+			if (!orchestrator) return refuse(409, "unsupported_attachments", "Esta conexión no admite archivos de agentes.");
+			const target = await orchestrator.attachmentDestination({ paneId: req.headers["x-agent-pane"], sessionId: req.headers["x-agent-session"] }, bearer, () => acceptsToken(bearer) && !res.destroyed);
+			owner = target.owner;
+		} catch (error) {
+			return refuse(error instanceof OrchestrationError ? error.status : 409, error instanceof OrchestrationError ? error.code : "unavailable", error instanceof Error ? error.message : "La sesión no está disponible.");
+		}
+	}
 	const declared = Number(req.headers["content-length"]);
 	const outcome = await uploads.receive(req, {
 		name,
+		...(owner ? { owner } : {}),
+		authorize: () => acceptsToken(bearer) && !res.destroyed,
 		...(uploadId ? { uploadId } : {}),
 		...(Number.isFinite(declared) && req.headers["content-length"] !== undefined ? { length: declared } : {}),
 	});

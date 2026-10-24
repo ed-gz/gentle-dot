@@ -1,0 +1,21 @@
+Capri action animation provenance — 2026-10-23
+
+Generated with the built-in image_gen tool, transparent_background=true.
+Reference: capri-atlas-v2.png, used for established character identity and palette.
+Output copied unchanged; no raster pixels or alpha values were edited.
+
+FULL PROMPT
+
+Use case: stylized-concept.
+Asset type: production 2D sprite animation atlas for a tiny desktop companion.
+Reference image 1 is the established Capri character and absolute identity/style reference. Do not redraw its background. Create NEW animation drawings of this SAME character: chibi geometric black body, huge angular magenta spiked hair, sharply triangular electric green eye mask, vivid blue circular pupils, small zigzag smile, black limbs with green/magenta angular accents. Preserve exact recognizable identity and polished crisp flat graphic silhouette. No other characters.
+Canvas/layout: landscape 1536x1024, precisely 6 columns by 3 rows, exactly 18 equally spaced frames, one character per cell. Each virtual cell is 256x341 pixels. Each drawing entirely inside its cell with generous 22-pixel empty transparent gutters on every side, no overlaps. Whole body visible, consistent character size and camera. Each row is one six-frame animation read left to right. Absolutely genuine transparent RGBA background: no colored background, no white panel, no gradient, no glow haze, no scene, no cast shadow, no text, no labels, no borders. Crisp silhouettes. Draw all 18 distinct temporal poses.
+ROW 1 FILE-AWAY: Capri silently files away a newly saved document. She holds one small pale cyan sheet with a folded corner and one small vivid purple folder, no text. Sequence: (1) holds sheet over open folder at waist; (2) looks at paper and tilts it toward folder; (3) slides paper halfway inside; (4) paper disappears inside and she gently closes folder; (5) hugs closed folder with pleased closed-eye blink; (6) relaxed return, holding closed folder at her side. Hands and paper visibly move; feet/body stay registered.
+ROW 2 PERCH: Capri sits ON AN INVISIBLE HORIZONTAL EDGE, no actual edge/seat/chair or furniture drawn. Her bottom is fixed at 68% of cell height, torso above, knees forward and both small feet hanging BELOW her bottom to 90% cell height. Three-quarter view facing viewer's right, leaning slightly to watch someone typing BELOW AND RIGHT of her. Hands rest beside her hips, never holding an object. Sequence (1) watches lower right, relaxed dangling feet; (2) head leans down and to right, legs swing slightly; (3) close-eye blink while feet swing back; (4) eyes reopen and look down; (5) curious slight head tilt toward right, feet swing; (6) returns to first relaxed position. Butt and hands remain at exactly the same seat height in every frame; head/eyes/feet change. Must read as perched above a text field, NOT standing, not cross-legged, no chair, no laptop.
+ROW 3 STEP-ASIDE: Capri notices the person needs space and playfully takes a small side-step to viewer's right. Front-facing with head watching down-left; six successive distinct poses: (1) notices; (2) shifts weight left and raises right foot; (3) extends right foot sideways; (4) transfers weight to right; (5) brings left foot in and gestures 'go ahead' with one open hand; (6) settles, friendly blink. Keep her centered within each cell, movement is in drawn limbs rather than moving the entire character across cells. No props.
+Constraints: all frames must be clean cutouts on alpha=0 around the character; no generated frame or boxed UI, no stray noise. Same hair design, face design, palette and proportions in every frame. Do not render this instruction or any labels.
+
+Original source: /home/egarza/.codex/generated_images/01a16ad5-ac60-7a93-85ec-88129671a20b/exec-d6a59a97-1e3e-488f-8267-4d8f6989d7e0.png
+Project asset: capri-motion-actions-v1.png
+Manifest registration and alpha validation: .cache/capri-actions/registration.json, .cache/capri-actions/validation.json
+Browser-rendered contact sheet: .cache/capri-actions/contact.png

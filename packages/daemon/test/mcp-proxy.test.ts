@@ -546,3 +546,120 @@ describe("MCP proxy: upstream connections", () => {
 		expect(error.message).toMatch(/sign in/i);
 	});
 });
+
+describe("MCP proxy: daemon-owned background readers", () => {
+	it("lists curated declared reads and never upgrades writes or custom annotations into approval prompts", async () => {
+		const { proxy, previews, upstream } = await setup({ connectors: [connector({ mode: "read_write" })] });
+		const signal = new AbortController().signal;
+		expect((await proxy.readOnlyTools("notes", signal)).map((tool) => tool.name)).toEqual([
+			"search",
+			"explode",
+		]);
+		for (const tool of ["send", "peek", "fetch"])
+			await expect(proxy.readOnly("notes", tool, {}, signal)).rejects.toMatchObject({
+				code: "READ_FORBIDDEN",
+			});
+		await expect(proxy.readOnly("notes", "search", { text: "new mail" }, signal)).resolves.toMatchObject({
+			content: [{ text: "ran search" }],
+		});
+		expect(upstream.called()).toEqual(["search"]);
+		expect(previews).toEqual([]);
+	});
+	it("checks revocation after credentials resolve, before creating a transport or forwarding a tool", async () => {
+		let release: ((value: UpstreamCredentials) => void) | undefined;
+		const { proxy, views, upstream } = await setup({
+			credentials: () =>
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+		});
+		const result = proxy.readOnly("notes", "search", {}, new AbortController().signal);
+		await waitFor(() => release);
+		views.set("notes", connector({ enabled: false }));
+		release?.({});
+		await expect(result).rejects.toMatchObject({ code: "READ_CHANGED" });
+		expect(upstream.state.connects).toBe(0);
+		expect(upstream.called()).toEqual([]);
+	});
+	it("bounds concurrent readers and cancellation prevents later credential completion from connecting", async () => {
+		let release: ((value: UpstreamCredentials) => void) | undefined;
+		const { proxy, upstream } = await setup({
+			credentials: () =>
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+		});
+		const controller = new AbortController();
+		const result = proxy.readOnly("notes", "search", {}, controller.signal);
+		await waitFor(() => release);
+		await expect(proxy.readOnlyTools("notes", new AbortController().signal)).rejects.toMatchObject({
+			code: "READ_BUSY",
+		});
+		controller.abort();
+		await expect(result).rejects.toMatchObject({ code: "READ_CANCELLED" });
+		release?.({});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(upstream.state.connects).toBe(0);
+		expect(upstream.called()).toEqual([]);
+	});
+	it("does no credentials work for disabled, uncurated or pre-cancelled readers and sanitizes upstream failure", async () => {
+		let calls = 0;
+		const { proxy, views, previews } = await setup({
+			credentials: async () => {
+				calls++;
+				throw new Error("Bearer secret-token https://private.invalid/path private message");
+			},
+		});
+		views.set("notes", connector({ enabled: false }));
+		await expect(proxy.readOnly("notes", "search", {}, new AbortController().signal)).rejects.toMatchObject({
+			code: "READ_UNAVAILABLE",
+		});
+		views.set("notes", connector({ readOnlyTools: [], mode: "read_write" }));
+		await expect(proxy.readOnlyTools("notes", new AbortController().signal)).rejects.toMatchObject({
+			code: "READ_UNAVAILABLE",
+		});
+		views.set("notes", connector());
+		await expect(proxy.readOnly("notes", "search", {}, AbortSignal.abort())).rejects.toMatchObject({
+			code: "READ_CANCELLED",
+		});
+		expect(calls).toBe(0);
+		await expect(proxy.readOnly("notes", "search", {}, new AbortController().signal)).rejects.toThrow(
+			"No se pudo consultar el conector de correo. Revisa su conexión.",
+		);
+		expect(calls).toBe(1);
+		expect(previews).toEqual([]);
+	});
+});
+
+it("prepares a cold curated reader through the existing secret loader without connecting or asking approval", async () => {
+	let view = connector({ unavailable: "Existing values are not loaded", revision: "cold" });
+	let prepared = 0;
+	let credentials = 0;
+	let approvals = 0;
+	const upstream = memoryUpstream();
+	const proxy = new McpProxy({
+		connector: () => view,
+		prepare: async () => {
+			prepared++;
+			view = connector();
+		},
+		credentials: async () => {
+			credentials++;
+			return {};
+		},
+		approve: async () => {
+			approvals++;
+			return false;
+		},
+		transport: upstream.transport,
+	});
+	proxies.push(proxy);
+	await proxy.prepareRead("notes", new AbortController().signal);
+	expect(prepared).toBe(1);
+	expect(credentials).toBe(0);
+	expect(approvals).toBe(0);
+	expect(upstream.state.connects).toBe(0);
+	await proxy.readOnly("notes", "search", {}, new AbortController().signal);
+	expect(upstream.called()).toEqual(["search"]);
+	expect(approvals).toBe(0);
+});

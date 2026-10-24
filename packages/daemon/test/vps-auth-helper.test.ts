@@ -140,8 +140,15 @@ describe("server mode: sign-in runs as the engine's user (S25.8, B1)", () => {
 			source: "stored",
 		});
 		expect(listed.voice).toMatchObject({ transcribe: true });
+		const beforeLogout = s.messages.length;
 		s.send({ type: "auth_logout", providerId: "openai" });
-		await waitFor(() => !JSON.parse(readFileSync(join(s.agentHome, "auth.json"), "utf8")).openai);
+		// Wait for the operation's public completion, not an intermediate truncate/write in the helper process.
+		await s.find(
+			"auth_providers",
+			(message) => message.providers.some((provider) => provider.id === "openai" && !provider.configured),
+			beforeLogout,
+		);
+		expect(JSON.parse(readFileSync(join(s.agentHome, "auth.json"), "utf8")).openai).toBeUndefined();
 		expect((await s.accounts()).providers.find((p) => p.id === "openai")).toMatchObject({
 			configured: false,
 		});
@@ -173,8 +180,14 @@ describe("on the desktop, sign-in stays in the daemon (regression)", () => {
 			source: "stored",
 		});
 		expect(listed.voice).toMatchObject({ transcribe: true });
+		const beforeLogout = s.messages.length;
 		s.send({ type: "auth_logout", providerId: "openai" });
-		await waitFor(() => !JSON.parse(readFileSync(join(s.agentHome, "auth.json"), "utf8")).openai);
+		await s.find(
+			"auth_providers",
+			(message) => message.providers.some((provider) => provider.id === "openai" && !provider.configured),
+			beforeLogout,
+		);
+		expect(JSON.parse(readFileSync(join(s.agentHome, "auth.json"), "utf8")).openai).toBeUndefined();
 		expect((await s.accounts()).voice).toMatchObject({ transcribe: false });
 	});
 });

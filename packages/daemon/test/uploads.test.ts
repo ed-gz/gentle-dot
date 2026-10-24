@@ -57,6 +57,31 @@ const listUploads = (workspace: string) => {
 };
 
 describe("upload store", () => {
+	it("refuses revoked uploads before allocating a file", async () => {
+		const { workspace, uploads } = store();
+		const outcome = await uploads.receive(Readable.from(["private"]), {
+			name: "revoked.txt",
+			authorize: () => false,
+		});
+		expect(outcome).toMatchObject({ ok: false, status: 401, code: "unauthorized" });
+		expect(listUploads(workspace)).toEqual([]);
+	});
+
+	it("cleans up when authorization is revoked while the final file write settles", async () => {
+		const { workspace, uploads } = store();
+		let authorized = true;
+		const body = new Readable({ read() {} });
+		const pending = uploads.receive(body, { name: "revoked.txt", authorize: () => authorized });
+		// Runs after the store's end listener, while the file descriptor is still closing.
+		body.on("end", () => {
+			authorized = false;
+		});
+		body.push("private");
+		body.push(null);
+		expect(await pending).toMatchObject({ ok: false, status: 401, code: "unauthorized" });
+		expect(listUploads(workspace)).toEqual([]);
+	});
+
 	it("stores a file privately under uploads/<id>/<name> and reports its metadata", async () => {
 		const { workspace, uploads } = store();
 		const outcome = await uploads.receive(Readable.from([PNG]), { name: "../shot.png" });
@@ -334,6 +359,67 @@ const auth = (d: DotDaemon, name = "notes.txt", extra: Record<string, string> = 
 });
 
 describe("POST /upload", () => {
+	it.each([false, true])(
+		"rejects a revoked phone's split upload and preserves earlier files (existing batch: %s)",
+		async (existing) => {
+			const { d, workspace } = await daemon();
+			const api = (path: string, token: string | undefined, body: object) =>
+				post(d, {
+					path,
+					headers: {
+						"Content-Type": "application/json",
+						...(token ? { Authorization: `Bearer ${token}` } : {}),
+					},
+					body: JSON.stringify(body),
+				});
+			const { code } = JSON.parse((await api("/api/mobile/code", d.token, {})).body);
+			const phone = JSON.parse(
+				(await api("/api/mobile/pair", undefined, { code, deviceName: "Phone" })).body,
+			);
+			const first = existing
+				? (JSON.parse((await post(d, { headers: auth(d, "keep.txt"), body: "keep" })).body) as UploadedFile)
+				: undefined;
+			let complete!: () => void;
+			const pending = new Promise<number>((resolve, reject) => {
+				const req = request(
+					{
+						host: "127.0.0.1",
+						port: d.port,
+						path: "/upload",
+						method: "POST",
+						headers: {
+							...auth(d, "partial.txt", { Authorization: `Bearer ${phone.token}` }),
+							...(first ? { "X-Upload-Id": first.uploadId } : {}),
+						},
+					},
+					(res) => {
+						res.resume();
+						res.on("end", () => resolve(res.statusCode ?? 0));
+					},
+				);
+				req.on("error", reject);
+				req.write("before");
+				complete = () => {
+					if (!req.writableEnded) req.end("after");
+				};
+			});
+			try {
+				await waitFor(() =>
+					listUploads(workspace).some(
+						(path) => path.endsWith("/partial.txt") && statSync(join(workspace, "uploads", path)).size > 0,
+					),
+				);
+				expect((await api("/api/mobile/revoke", d.token, { deviceId: phone.deviceId })).status).toBe(200);
+				complete();
+				expect(await pending).toBe(401);
+				expect(listUploads(workspace)).toEqual(first ? [first.uploadId, `${first.uploadId}/keep.txt`] : []);
+				if (first) expect(readFileSync(join(workspace, first.path), "utf8")).toBe("keep");
+			} finally {
+				complete();
+			}
+		},
+	);
+
 	it("requires the access key in the Authorization header, never in the address", async () => {
 		const { d, workspace } = await daemon();
 		const missing = await post(d, { headers: { "X-File-Name": "a.txt" }, body: "x" });

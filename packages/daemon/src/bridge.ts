@@ -24,7 +24,7 @@ import {
 } from "@gentle-dot/protocol";
 import { APPROVAL_WAIT_MS, type AppApproval, type AppLink } from "./app-channel.ts";
 import type { AuthManager } from "./auth.ts";
-import type { ConnectorManager, ConnectorRefusal } from "./connectors.ts";
+import { type ConnectorManager, type ConnectorRefusal, INTEGRITY_UNCHECKED } from "./connectors.ts";
 import {
 	conversationIdOf,
 	type HistoryPage,
@@ -34,6 +34,7 @@ import {
 } from "./conversations.ts";
 import { directAccess, type EngineAccess } from "./engine-access.ts";
 import { DRAFT_STATUS_KEY } from "./extensions/approval-guard.ts";
+import { MobileApprovals } from "./mobile-approvals.ts";
 import { describeTool, textOf } from "./presentation.ts";
 import {
 	LiveModelSwitch,
@@ -45,6 +46,7 @@ import {
 	toModelOptions,
 } from "./profiles.ts";
 import { DEFAULT_ROTATION, type RotationLimits, SessionRotator } from "./rotation.ts";
+import { hasToolCalls, ScreenshotDelivery } from "./screenshot-delivery.ts";
 import type { AgentRecord, AgentSupervisor, SupervisorEvent } from "./supervisor.ts";
 import { composePrompt, type StoredFile, splitAttachments, type UploadStore } from "./uploads.ts";
 import type { VoiceService } from "./voice.ts";
@@ -67,7 +69,7 @@ export interface BridgeOptions {
 	uploads?: UploadStore;
 	/**
 	 * The desktop app that launched the daemon, over its private channel (S25.1): the only source of
-	 * connector changes and the only place approvals are answered. Without it they fail closed.
+	 * connector changes and desktop approval replies. Without it they fail closed.
 	 */
 	app?: AppLink;
 	/**
@@ -75,6 +77,10 @@ export interface BridgeOptions {
 	 * sending actions with this PIN instead. Never set together with `app`.
 	 */
 	pin?: PinGate;
+	/** A phone explicitly trusted by the native app may answer an exact pending approval. */
+	mobileApprovals?: MobileApprovals;
+	/** At least one native-approved phone currently has an authenticated live connection. */
+	hasApprovalClient?: () => boolean;
 	/** How long a PIN approval waits for an answer. Default 130 s, like the app's. */
 	approvalWaitMs?: number;
 	/**
@@ -90,6 +96,10 @@ export interface BridgeOptions {
 	rotation?: RotationLimits;
 	/** How many messages `history` and each `get_earlier` page carry. Default 100. */
 	historyPage?: number;
+	/** Authenticated client text, before engine delivery; engine events never establish human authority. */
+	onHumanPrompt?: (originalText: string, engineText: string) => void;
+	/** Forget unpublished native screenshots immediately when Stop or a session switch is requested. */
+	onCaptureInvalidated?: () => void;
 }
 
 type ProfileCommand = Extract<
@@ -112,7 +122,7 @@ const DECLINED = { code: "declined", message: "Nothing was changed." } as const;
 
 /**
  * An open dialog; `options` keeps the agent's original option strings for the answer. An `app` ask
- * only shows that the desktop app is asking; windows cannot answer it.
+ * can only be answered through the native channel or the trusted phone's approval broker.
  */
 type PendingAsk = {
 	ask: Ask;
@@ -134,6 +144,8 @@ export class DotBridge {
 	/** Each window's id, for the app's commands on its behalf. */
 	private readonly clientIds = new Map<string, BridgeClient>();
 	private readonly asks = new Map<string, PendingAsk>();
+	/** One decision shared by the native dialog, desktop card, and any trusted phone. */
+	private readonly appApprovals: MobileApprovals;
 	/** The answer each open PIN approval waits for, by request id (S25.8). */
 	private readonly pinWaiters = new Map<string, (allowed: boolean) => void>();
 	/** Connector changes a window confirmed with the PIN: their own confirmation is not asked again. */
@@ -141,6 +153,7 @@ export class DotBridge {
 	/** Told to every window that connects during this run (a connectors file set aside at start). */
 	private readonly notices: ServerPayload[] = [];
 	private readonly runningTools = new Set<string>();
+	private readonly screenshotDelivery = new ScreenshotDelivery();
 	private readonly seenRequestIds: string[] = [];
 	private readonly sessionDir: string;
 	private readonly supervisor: AgentSupervisor;
@@ -154,6 +167,8 @@ export class DotBridge {
 	private restartAgain = false;
 	/** The running answer is being stopped on purpose, so its end is not an error. */
 	private stopRequested = false;
+	/** The engine is replacing only its current inference to incorporate a new human message. */
+	private liveInputHandoff = false;
 	/** The conversation switch in progress; messages sent meanwhile wait for it. */
 	private switching: Promise<void> = Promise.resolve();
 	/** Messages waiting for the agent, as shown to the user. */
@@ -169,13 +184,18 @@ export class DotBridge {
 	constructor(supervisor: AgentSupervisor, options: BridgeOptions) {
 		this.supervisor = supervisor;
 		this.options = options;
+		this.appApprovals = options.mobileApprovals ?? new MobileApprovals({ waitMs: options.approvalWaitMs });
 		this.liveSwitch = new LiveModelSwitch(supervisor, (line) => this.log(line));
 		this.sessionDir = join(options.dataDir, "sessions");
 		this.features = options.features ?? { conversations: false };
 		this.rotator = new SessionRotator(supervisor, {
 			limits: options.rotation ?? DEFAULT_ROTATION,
 			canRotate: () =>
-				supervisor.state === "ready" && !supervisor.busy && this.asks.size === 0 && this.sending === 0,
+				supervisor.state === "ready" &&
+				!supervisor.busy &&
+				this.asks.size === 0 &&
+				this.sending === 0 &&
+				!this.queued(),
 			...(options.engineAccess ? { access: options.engineAccess } : {}),
 			log: (line) => this.log(line),
 		});
@@ -190,12 +210,17 @@ export class DotBridge {
 		this.state = this.deriveState();
 	}
 
+	/** Status from a real external session, never a model-generated approval. */
+	notifySession(notice: Extract<ServerPayload, { type: "toast" }>): void {
+		this.broadcast(notice);
+	}
+
 	get agentState(): AgentState {
 		return this.state;
 	}
 
 	/**
-	 * Asks the user in the desktop app's native dialog (S25.3); windows only see that it waits there.
+	 * Asks the user through the trusted desktop or phone. The first valid answer wins across both.
 	 * Resolves true only when the user allows it; declining, no answer, `signal`, or the app quitting
 	 * resolve false. Rejects when there is no app to ask (fail closed).
 	 */
@@ -203,17 +228,41 @@ export class DotBridge {
 		const app = this.options.app;
 		if (!app?.connected && this.options.pin) return this.askWithPin(request, signal);
 		if (!app?.connected) return Promise.reject(new Error(APP_REQUIRED));
+		if (signal?.aborted) return Promise.resolve(false);
+		const phoneOnline = this.options.mobileApprovals && this.options.hasApprovalClient?.() === true;
 		const requestId = `app-${randomUUID()}`;
-		const ask: Ask = {
-			requestId,
-			method: "app",
-			title: presentText(request.title ?? `Allow ${request.connector} to ${request.action}?`),
-			message: WAITING_IN_APP,
-		};
-		this.asks.set(requestId, { ask });
-		this.broadcast({ type: "ask", ask });
-		this.refreshState();
-		return app.approve(request, signal).finally(() => this.resolveAsk(requestId));
+		try {
+			const waiting = this.appApprovals.begin(requestId, request, signal);
+			const preview = this.appApprovals.list().find((item) => item.id === requestId);
+			if (!preview) return waiting.answer;
+			const ask: Ask = {
+				requestId,
+				method: "app",
+				title: presentText(request.title ?? `Allow ${request.connector} to ${request.action}?`),
+				message: preview.message,
+				expiresAt: preview.expiresAt,
+			};
+			this.asks.set(requestId, { ask });
+			this.broadcast({ type: "ask", ask });
+			this.refreshState();
+			const native = new AbortController();
+			const nativeSignal = signal ? AbortSignal.any([signal, native.signal]) : native.signal;
+			// Avoid a redundant desktop popup while using the phone; the desktop card stays actionable.
+			if (!phoneOnline) {
+				void app.approve(request, nativeSignal).then(
+					(approved) => this.appApprovals.answer(requestId, approved === true),
+					() => this.appApprovals.answer(requestId, false),
+				);
+			}
+			return waiting.answer.finally(() => {
+				native.abort();
+				waiting.cancel();
+				this.resolveAsk(requestId);
+			});
+		} catch (error) {
+			this.resolveAsk(requestId);
+			return Promise.reject(error);
+		}
 	}
 
 	/**
@@ -303,7 +352,7 @@ export class DotBridge {
 			clientId,
 			...this.conversationRef(),
 			...(this.supervisor.model ? { model: this.supervisor.model } : {}),
-			features: this.features,
+			features: { ...this.features, historyRefresh: true },
 			...(this.options.voice ? { voice: this.options.voice.capability() } : {}),
 			...(this.options.pin && !this.options.app?.connected ? { pin: this.options.pin.status() } : {}),
 		});
@@ -346,7 +395,17 @@ export class DotBridge {
 		const client = this.clientIds.get(clientId);
 		if (!client) throw new Error("That window is not connected to the assistant any more.");
 		const message = parseClientMessage(JSON.stringify(raw ?? null));
-		if (!message || !isAppCommand(message)) throw new Error("Only connector changes come from the app.");
+		if (!message || !isAppCommand(message)) throw new Error("Only trusted commands come from the app.");
+		if (message.type === "app_approval_reply") {
+			if (!this.options.app?.connected) throw new Error(APP_REQUIRED);
+			if (
+				this.asks.get(message.requestId)?.ask.method !== "app" ||
+				!this.appApprovals.answer(message.requestId, message.approved)
+			)
+				throw new Error("Este permiso ya fue respondido, cancelado o venció.");
+			this.resolveAsk(message.requestId);
+			return;
+		}
 		await this.run(client, message);
 	}
 
@@ -403,7 +462,6 @@ export class DotBridge {
 				if (files.length === 0 && (await this.openScreen(client, message.text))) return;
 				await this.switching;
 				this.interrupted = false;
-				const busy = this.supervisor.busy;
 				const prompt =
 					files.length > 0
 						? composePrompt(message.text, files, {
@@ -414,9 +472,11 @@ export class DotBridge {
 						: { message: message.text };
 				this.sending += 1;
 				try {
-					await this.supervisor.request(
-						busy ? { type: "prompt", ...prompt, streamingBehavior: "steer" } : { type: "prompt", ...prompt },
-					);
+					if (this.clients.has(client)) this.options.onHumanPrompt?.(message.text, prompt.message);
+					// Let the engine choose atomically: a second message can arrive before
+					// agent_start reaches this process. Every human message has priority over
+					// continuing the old answer, including messages with attachments.
+					await this.supervisor.request({ type: "prompt", ...prompt, streamingBehavior: "steer" });
 					if (message.attachments) this.options.uploads?.consume(message.attachments);
 				} finally {
 					this.sending -= 1;
@@ -429,9 +489,11 @@ export class DotBridge {
 				return;
 			}
 			case "steer":
+				if (this.clients.has(client)) this.options.onHumanPrompt?.(message.text, message.text);
 				await this.supervisor.request({ type: "steer", message: message.text });
 				return;
 			case "abort":
+				this.invalidateCapture();
 				if (this.supervisor.busy) this.stopRequested = true;
 				await this.supervisor.request({ type: "abort" });
 				return;
@@ -624,6 +686,7 @@ export class DotBridge {
 				await this.whenReady();
 				this.deliver(client, {
 					type: "history",
+					...(message.requestId !== undefined ? { requestId: message.requestId } : {}),
 					...this.conversationRef(),
 					...(await this.currentHistory()),
 				});
@@ -694,6 +757,7 @@ export class DotBridge {
 	 * the run to settle, then switch; that stop is intentional, not an error.
 	 */
 	private async switchAfterStop(switchTo: () => Promise<unknown>): Promise<void> {
+		this.invalidateCapture();
 		if (!this.supervisor.busy) {
 			await switchTo();
 			return;
@@ -843,7 +907,13 @@ export class DotBridge {
 	 * window is open: every window of this run is told once, when it connects.
 	 */
 	private connectorsSetAside(message: string): void {
-		const notice: ServerPayload = { type: "toast", level: "warning", message };
+		if (this.notices.some((notice) => notice.type === "toast" && notice.message === message)) return;
+		const notice: ServerPayload = {
+			type: "toast",
+			level: "warning",
+			message,
+			...(message === INTEGRITY_UNCHECKED ? { code: "connectors_unchecked" as const } : {}),
+		};
 		this.notices.push(notice);
 		this.broadcast(notice);
 		this.broadcast({ type: "connectors", connectors: this.requireConnectors().list() });
@@ -1114,6 +1184,7 @@ export class DotBridge {
 	}
 
 	private afterConversationChange(page: HistoryPage = { messages: [], hasEarlier: false }): void {
+		this.screenshotDelivery.reset();
 		this.interrupted = false;
 		this.assistantId = undefined;
 		this.broadcast({ type: "history", ...this.conversationRef(), ...page });
@@ -1156,7 +1227,9 @@ export class DotBridge {
 	private conversationsPayload(): ServerPayload {
 		return {
 			type: "conversations",
-			conversations: this.engine(() => listConversations(this.sessionDir)),
+			// A continuous chat has no conversation picker. Scanning every archived
+			// file here would make each completed turn slower as the years accumulate.
+			conversations: this.features.conversations ? this.engine(() => listConversations(this.sessionDir)) : [],
 			...this.activeRef(),
 		};
 	}
@@ -1176,6 +1249,7 @@ export class DotBridge {
 			case "supervisor_state":
 				if (event.state !== "ready") {
 					this.stopRequested = false;
+					this.liveInputHandoff = false;
 					this.clearRun();
 					this.clearQueue();
 				} else {
@@ -1186,6 +1260,7 @@ export class DotBridge {
 				}
 				break;
 			case "interrupted":
+				this.invalidateCapture();
 				this.interrupted = true;
 				this.broadcast({ type: "interrupted" });
 				break;
@@ -1206,15 +1281,19 @@ export class DotBridge {
 				this.onQueueUpdate(event);
 				break;
 			case "agent_settled":
+				this.screenshotDelivery.reset();
 				// The run may have changed the connector files.
 				this.options.connectors?.enforce();
 				this.runningTools.clear();
 				this.assistantId = undefined;
 				this.stopRequested = false;
-				// Anything still queued will not be taken by this run.
-				this.clearQueue();
+				// Settlement does not empty Pi's steering queue (notably after Stop).
+				// Keep received messages visible until the engine consumes or clears them.
 				// The title of a new conversation comes from its first message.
 				this.broadcast(this.conversationsPayload());
+				// A new human prompt is already owned by the engine. Do not rotate its
+				// conversation or restart it in the brief gap before that prompt starts.
+				if (this.liveInputHandoff) break;
 				this.settleModelSwitch();
 				if (this.restartPending) this.restartAgent();
 				else if (this.sending > 0) this.rotationDeferred = true;
@@ -1249,6 +1328,7 @@ export class DotBridge {
 	private onMessageStart(event: AgentRecord): void {
 		const message = event.message as { role?: string } | undefined;
 		if (message?.role === "user") {
+			this.screenshotDelivery.reset();
 			const { text, attachments } = splitAttachments(textOf(message));
 			this.broadcast({
 				type: "user_message",
@@ -1272,16 +1352,29 @@ export class DotBridge {
 			| { role?: string; stopReason?: string; errorMessage?: string }
 			| undefined;
 		if (message?.role !== "assistant") return;
+		if (message.stopReason === "aborted" || message.stopReason === "error") this.invalidateCapture();
 		const messageId = this.assistantId ?? `m${++this.nextMessage}`;
-		const text = presentText(textOf(message));
+		const intermediate = ["toolUse", "deferred"].includes(message.stopReason ?? "") || hasToolCalls(message);
+		const text = this.screenshotDelivery.finish(
+			presentText(textOf(message)),
+			this.stopRequested ? "aborted" : message.stopReason,
+			intermediate,
+		);
 		// The engine ends a stopped answer as "aborted", or as an error when a session switch tore it down.
-		if (message.stopReason === "aborted" || (message.stopReason === "error" && this.stopRequested)) {
+		if (message.stopReason === "aborted" && this.liveInputHandoff && !this.stopRequested) {
+			this.broadcast({ type: "message_done", messageId, text, intermediate: true });
+		} else if (message.stopReason === "aborted" || (message.stopReason === "error" && this.stopRequested)) {
 			this.broadcast({ type: "message_done", messageId, text, stopped: true });
 		} else if (message.stopReason === "error") {
 			this.log(`assistant error: ${message.errorMessage ?? "unknown"}`);
 			this.broadcast({ type: "message_done", messageId, text, error: ANSWER_FAILED });
 		} else {
-			this.broadcast({ type: "message_done", messageId, text });
+			this.broadcast({
+				type: "message_done",
+				messageId,
+				text,
+				...(intermediate ? { intermediate: true as const } : {}),
+			});
 		}
 	}
 
@@ -1290,6 +1383,10 @@ export class DotBridge {
 		const started = event.type === "tool_execution_start";
 		if (started) this.runningTools.add(id);
 		else this.runningTools.delete(id);
+		if (!this.stopRequested) {
+			if (started) this.screenshotDelivery.start(event.toolCallId, event.toolName);
+			else this.screenshotDelivery.result(event.toolCallId, event.result, event.isError);
+		}
 		const status = started ? "running" : event.isError ? "failed" : "done";
 		// Start and end of one tool call must land on the same message.
 		this.assistantId ??= `m${++this.nextMessage}`;
@@ -1303,6 +1400,10 @@ export class DotBridge {
 	private onUiRequest(event: AgentRecord): void {
 		const method = String(event.method ?? "");
 		const requestId = String(event.id ?? "");
+		if (method === "setStatus" && event.statusKey === "gentle-dot-live-input") {
+			this.liveInputHandoff = event.statusText === "interrupting";
+			return;
+		}
 		if (method === "notify") {
 			const level =
 				event.notifyType === "error" ? "error" : event.notifyType === "warning" ? "warning" : "info";
@@ -1341,6 +1442,7 @@ export class DotBridge {
 		const entry = this.asks.get(requestId);
 		if (!entry) return;
 		clearTimeout(entry.timer);
+		this.appApprovals.answer(requestId, false);
 		this.asks.delete(requestId);
 		// A PIN approval still waiting is refused: declined, timed out, or the run ended.
 		this.pinWaiters.get(requestId)?.(false);
@@ -1349,7 +1451,13 @@ export class DotBridge {
 		this.refreshState();
 	}
 
+	private invalidateCapture(): void {
+		this.screenshotDelivery.reset();
+		this.options.onCaptureInvalidated?.();
+	}
+
 	private clearRun(): void {
+		this.invalidateCapture();
 		for (const requestId of [...this.asks.keys()]) this.resolveAsk(requestId);
 		this.runningTools.clear();
 		this.assistantId = undefined;

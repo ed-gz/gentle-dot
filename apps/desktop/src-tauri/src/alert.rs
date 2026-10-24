@@ -15,6 +15,10 @@
 //! closing, a dialog that failed) arrives as the refusing label. rfd's GTK dialog sets no default
 //! response, so Return does not pick the allowing button either (not verified on a Linux desktop).
 
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tauri::AppHandle;
 use tauri_plugin_dialog::{MessageDialogButtons, MessageDialogResult};
 
@@ -56,8 +60,24 @@ impl Choice {
 /// Shows the alert and waits for the answer. Blocks, so it never runs on the main thread (there it
 /// refuses at once).
 pub fn ask(app: &AppHandle, title: &str, message: &str, choice: Choice) -> bool {
+    ask_cancellable(app, title, message, choice, Arc::new(AtomicBool::new(false)))
+}
+
+/// Carry cancellation through the main-thread queue. A mobile answer can arrive before the
+/// desktop is ready to display its alert; that stale alert must never appear afterwards.
+pub fn ask_cancellable(
+    app: &AppHandle,
+    title: &str,
+    message: &str,
+    choice: Choice,
+    cancelled: Arc<AtomicBool>,
+) -> bool {
+    if cancelled.load(Ordering::SeqCst) {
+        return false;
+    }
     #[cfg(target_os = "macos")]
-    return macos::ask(app, title, message, choice);
+    return macos::ask(app, title, message, choice, cancelled, &std::sync::atomic::AtomicU64::new(0));
+
     #[cfg(not(target_os = "macos"))]
     {
         use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
@@ -68,36 +88,93 @@ pub fn ask(app: &AppHandle, title: &str, message: &str, choice: Choice) -> bool 
             .kind(MessageDialogKind::Warning)
             .buttons(choice.buttons())
             .blocking_show_with_result();
-        choice.allowed(&result)
+        !cancelled.load(Ordering::SeqCst) && choice.allowed(&result)
     }
+}
+
+/// An owned macOS approval uses an exact dialog id for cancellation; other alerts are untouched.
+#[cfg(target_os = "macos")]
+pub fn ask_owned_cancellable(
+    app: &AppHandle,
+    title: &str,
+    message: &str,
+    choice: Choice,
+    cancelled: Arc<AtomicBool>,
+    active: &std::sync::atomic::AtomicU64,
+) -> bool {
+    macos::ask(app, title, message, choice, cancelled, active)
+}
+
+#[cfg(target_os = "macos")]
+pub fn dismiss_owned(app: &AppHandle, id: u64) {
+    macos::dismiss(app, id);
 }
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::Choice;
+    use super::{Arc, AtomicBool, Choice, Ordering};
+    use block2::RcBlock;
+    use objc2::{msg_send, runtime::AnyObject};
     use objc2_app_kit::{NSAlert, NSAlertStyle, NSApplication};
     use objc2_foundation::{MainThreadMarker, NSString};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::ffi::c_void;
+    use std::sync::atomic::AtomicU64;
     use tauri::AppHandle;
 
-    pub fn ask(app: &AppHandle, title: &str, message: &str, choice: Choice) -> bool {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    // Window pointers stay valid while their owning NSAlert is on the `run` stack. Only the
+    // main thread reads this table, and an ended alert removes its entry before being dropped.
+    thread_local! { static DIALOGS: RefCell<HashMap<u64, usize>> = RefCell::new(HashMap::new()); }
+
+    pub fn ask(
+        app: &AppHandle,
+        title: &str,
+        message: &str,
+        choice: Choice,
+        cancelled: Arc<AtomicBool>,
+        active: &AtomicU64,
+    ) -> bool {
         if MainThreadMarker::new().is_some() {
             eprintln!("gentle-dot: a confirmation was asked on the main thread, so it was refused");
             return false;
         }
-        let (answer, answered) = std::sync::mpsc::channel();
-        let (title, message) = (title.to_owned(), message.to_owned());
-        let scheduled = app.run_on_main_thread(move || {
-            let response = MainThreadMarker::new().map(|mtm| run(mtm, &title, &message, choice));
-            let _ = answer.send(response);
-        });
-        if scheduled.is_err() {
+        if cancelled.load(Ordering::SeqCst) {
             return false;
         }
+        let id = NEXT.fetch_add(1, Ordering::SeqCst);
+        if active.compare_exchange(0, id, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            return false;
+        }
+        let (answer, answered) = std::sync::mpsc::channel();
+        let (title, message) = (title.to_owned(), message.to_owned());
+        let pending = cancelled.clone();
+        let scheduled = app.run_on_main_thread(move || {
+            let response = if pending.load(Ordering::SeqCst) {
+                None
+            } else {
+                MainThreadMarker::new().and_then(|mtm| run(mtm, id, &title, &message, choice, &pending))
+            };
+            let _ = answer.send(response);
+        });
         // The task dropped without running (the app is quitting) reads as no answer.
-        choice.allows_response(answered.recv().ok().flatten())
+        let response = if scheduled.is_ok() { answered.recv().ok().flatten() } else { None };
+        let _ = active.compare_exchange(id, 0, Ordering::SeqCst, Ordering::SeqCst);
+        !cancelled.load(Ordering::SeqCst) && choice.allows_response(response)
     }
 
-    fn run(mtm: MainThreadMarker, title: &str, message: &str, choice: Choice) -> isize {
+    fn run(
+        mtm: MainThreadMarker,
+        id: u64,
+        title: &str,
+        message: &str,
+        choice: Choice,
+        cancelled: &AtomicBool,
+    ) -> Option<isize> {
+        if cancelled.load(Ordering::SeqCst) {
+            return None;
+        }
         let alert = NSAlert::new(mtm);
         alert.setAlertStyle(NSAlertStyle::Warning);
         alert.setMessageText(&NSString::from_str(title));
@@ -108,7 +185,69 @@ mod macos {
         // Gentle Dot is an accessory app; without this the alert can open behind the front app.
         #[allow(deprecated)]
         NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
-        alert.runModal()
+        if cancelled.load(Ordering::SeqCst) {
+            return None;
+        }
+        // SAFETY: NSAlert owns its window; it stays alive until this synchronous run returns.
+        let window: *mut AnyObject = unsafe { msg_send![&*alert, window] };
+        if window.is_null() {
+            return None;
+        }
+        DIALOGS.with(|dialogs| {
+            dialogs.borrow_mut().insert(id, window as usize);
+        });
+        let response = alert.runModal();
+        // Make dismissal explicit after an aborted modal loop as well as a button response.
+        // SAFETY: the same NSAlert still owns this window on the main thread.
+        unsafe {
+            let _: () = msg_send![window, orderOut: std::ptr::null::<AnyObject>()];
+        }
+        DIALOGS.with(|dialogs| {
+            dialogs.borrow_mut().remove(&id);
+        });
+        Some(response)
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRunLoopGetMain() -> *mut c_void;
+        fn CFRunLoopPerformBlock(run_loop: *mut c_void, mode: *const c_void, block: *const c_void);
+        fn CFRunLoopWakeUp(run_loop: *mut c_void);
+        static kCFRunLoopCommonModes: *const c_void;
+    }
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {
+        static NSModalPanelRunLoopMode: *const c_void;
+    }
+
+    pub fn dismiss(_app: &AppHandle, id: u64) {
+        if id == 0 {
+            return;
+        }
+        let close = RcBlock::new(move || {
+            let Some(mtm) = MainThreadMarker::new() else { return };
+            let owned = DIALOGS.with(|dialogs| dialogs.borrow().get(&id).copied());
+            let Some(owned) = owned else { return };
+            let application = NSApplication::sharedApplication(mtm);
+            // SAFETY: AppKit is queried on the main thread, and `owned` belongs to a still-live
+            // NSAlert. Identity comparison does not dereference the stored pointer.
+            let current: *mut AnyObject = unsafe { msg_send![&*application, modalWindow] };
+            if !current.is_null() && current as usize == owned {
+                application.abortModal();
+            }
+        });
+        // Tao deliberately defers user-message callbacks while a callback is in a nested modal
+        // loop. Schedule directly in that loop instead of `run_on_main_thread`, which would
+        // only dismiss after the alert had already closed. Core Foundation copies the block;
+        // it captures only a Send/Sync id, and runs exclusively on the main run loop. The two
+        // mode registrations are idempotent and also handle a modal ending before dispatch.
+        unsafe {
+            let run_loop = CFRunLoopGetMain();
+            let block = RcBlock::as_ptr(&close).cast::<c_void>();
+            CFRunLoopPerformBlock(run_loop, NSModalPanelRunLoopMode, block);
+            CFRunLoopPerformBlock(run_loop, kCFRunLoopCommonModes, block);
+            CFRunLoopWakeUp(run_loop);
+        }
     }
 }
 
@@ -124,7 +263,8 @@ mod tests {
         // The refusing button (also Return), an aborted alert (a stale one dismissed after the
         // timeout), a stopped or cancelled modal session, an OK nobody can press, a button that
         // does not exist, and an alert that never ran: every one refuses.
-        for response in [Some(REFUSE_RESPONSE), Some(-1001), Some(-1000), Some(0), Some(1), Some(1002), Some(-1), None] {
+        for response in [Some(REFUSE_RESPONSE), Some(-1001), Some(-1000), Some(0), Some(1), Some(1002), Some(-1), None]
+        {
             assert!(!CHOICE.allows_response(response), "{response:?}");
         }
         let same = Choice { allow: "OK", refuse: "OK" };
@@ -149,7 +289,9 @@ mod tests {
     fn plugin_result(rfd_ok: Option<bool>, buttons: &MessageDialogButtons) -> MessageDialogResult {
         match (rfd_ok, buttons) {
             (Some(true), MessageDialogButtons::OkCancelCustom(ok, _)) => MessageDialogResult::Custom(ok.clone()),
-            (Some(false), MessageDialogButtons::OkCancelCustom(_, cancel)) => MessageDialogResult::Custom(cancel.clone()),
+            (Some(false), MessageDialogButtons::OkCancelCustom(_, cancel)) => {
+                MessageDialogResult::Custom(cancel.clone())
+            }
             (Some(true), _) => MessageDialogResult::Ok,
             _ => MessageDialogResult::Cancel,
         }
@@ -158,7 +300,9 @@ mod tests {
     #[test]
     fn with_the_plugin_cancelling_closing_or_failing_refuses() {
         let buttons = CHOICE.buttons();
-        assert!(matches!(&buttons, MessageDialogButtons::OkCancelCustom(ok, cancel) if ok == "Allow" && cancel == "Cancel"));
+        assert!(
+            matches!(&buttons, MessageDialogButtons::OkCancelCustom(ok, cancel) if ok == "Allow" && cancel == "Cancel")
+        );
         // Only the allowing button.
         assert!(CHOICE.allowed(&plugin_result(Some(true), &buttons)));
         // The refusing button, Escape, closing, and failures all arrive as rfd's Cancel.

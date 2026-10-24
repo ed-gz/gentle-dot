@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
 	formatShortcut,
 	isMac,
@@ -24,7 +24,7 @@ function reasonOf(error: unknown): string {
 }
 
 /** The desktop panel's settings (S33.1); for now, the shortcut that opens the panel. */
-export function SettingsPanel({ close }: { close: () => void }) {
+export function SettingsPanel({ close, children }: { close: () => void; children?: ReactNode }) {
 	const [language, setLanguage] = useState(() => voiceLanguage() ?? "");
 	const mac = isMac();
 	const show = (accelerator: string) => formatShortcut(accelerator, mac);
@@ -89,6 +89,7 @@ export function SettingsPanel({ close }: { close: () => void }) {
 				</button>
 			</header>
 
+			{children ? <div className="settings-companion">{children}</div> : null}
 			<section className="provider-section" aria-labelledby="settings-shortcut">
 				<h3 id="settings-shortcut">Keyboard shortcut</h3>
 				<p className="muted">Opens and hides the panel from any app.</p>

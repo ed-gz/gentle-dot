@@ -15,6 +15,7 @@ import type { Send } from "./types.ts";
 import "../profiles.css";
 
 interface ProfilesPanelProps {
+	mobile?: boolean;
 	profiles: ProfilesState;
 	/** Account names, used to label model groups. */
 	providers?: AuthProvider[];
@@ -50,20 +51,27 @@ function nameProblem(name: string, taken: string[]): string | undefined {
 }
 
 /** Profiles pick the model each part of the assistant uses; managed here without a terminal. */
-export function ProfilesPanel({ profiles, providers = [], send, dispatch }: ProfilesPanelProps) {
+export function ProfilesPanel({
+	profiles,
+	providers = [],
+	send,
+	dispatch,
+	mobile = false,
+}: ProfilesPanelProps) {
+	const copy = (en: string, es: string) => (mobile ? es : en);
 	const [mode, setMode] = useState<Mode>({ kind: "list" });
 	const list = profiles.list ?? [];
 	const names = list.map((p) => p.name);
 	const back = () => setMode({ kind: "list" });
 
 	return (
-		<section className="profiles" aria-label="Profiles">
+		<section className="profiles" aria-label={copy("Profiles", "Perfiles")}>
 			<header className="profiles-header">
-				<h2>Profiles</h2>
+				<h2>{copy("Profiles", "Perfiles")}</h2>
 				<button
 					type="button"
 					className="icon"
-					aria-label="Close profiles"
+					aria-label={copy("Close profiles", "Cerrar perfiles")}
 					onClick={() => dispatch({ type: "profiles", open: false })}
 				>
 					×
@@ -72,6 +80,7 @@ export function ProfilesPanel({ profiles, providers = [], send, dispatch }: Prof
 
 			{mode.kind === "edit" ? (
 				<ProfileEditor
+					mobile={mobile}
 					profile={mode.profile}
 					roles={profiles.roles}
 					models={profiles.models}
@@ -85,6 +94,7 @@ export function ProfilesPanel({ profiles, providers = [], send, dispatch }: Prof
 				/>
 			) : mode.kind === "name" ? (
 				<NameForm
+					mobile={mobile}
 					mode={mode}
 					taken={names}
 					onCancel={back}
@@ -99,7 +109,10 @@ export function ProfilesPanel({ profiles, providers = [], send, dispatch }: Prof
 			) : (
 				<>
 					<p className="muted">
-						A profile chooses the AI model each part of the assistant uses. Switch profiles any time.
+						{copy(
+							"A profile chooses the AI model each part of the assistant uses. Switch profiles any time.",
+							"Elige el modelo de IA para cada parte del asistente. Puedes cambiar de perfil cuando quieras.",
+						)}
 					</p>
 					{profiles.lastImport ? (
 						<ImportResult
@@ -110,8 +123,10 @@ export function ProfilesPanel({ profiles, providers = [], send, dispatch }: Prof
 							}}
 						/>
 					) : null}
-					{profiles.list === undefined ? <p className="muted">Loading…</p> : null}
-					{profiles.list?.length === 0 ? <p className="muted">No profiles yet.</p> : null}
+					{profiles.list === undefined ? <p className="muted">{copy("Loading…", "Cargando…")}</p> : null}
+					{profiles.list?.length === 0 ? (
+						<p className="muted">{copy("No profiles yet.", "Aún no tienes perfiles.")}</p>
+					) : null}
 					<ul className="profile-list">
 						{list.map((profile) => {
 							const inUse = profile.name === profiles.active;
@@ -120,12 +135,23 @@ export function ProfilesPanel({ profiles, providers = [], send, dispatch }: Prof
 								<li key={profile.name} className={inUse ? "in-use" : undefined}>
 									<div className="profile-name">
 										<b>{profile.name}</b>
-										{inUse ? <span className="chip ok">In use</span> : null}
+										{inUse ? <span className="chip ok">{copy("In use", "En uso")}</span> : null}
 									</div>
-									<p className="profile-summary">{summary(profile, profiles.roles, profiles.models)}</p>
+									<p className="profile-summary">
+										{summary(profile, profiles.roles, profiles.models, mobile)}
+									</p>
 									{deleting ? (
-										<div className="profile-confirm" role="alertdialog" aria-label="Delete profile">
-											<p>{`Delete “${profile.name}”? This cannot be undone.`}</p>
+										<div
+											className="profile-confirm"
+											role="alertdialog"
+											aria-label={copy("Delete profile", "Eliminar perfil")}
+										>
+											<p>
+												{copy(
+													`Delete “${profile.name}”? This cannot be undone.`,
+													`¿Eliminar “${profile.name}”? No se puede deshacer.`,
+												)}
+											</p>
 											<button
 												type="button"
 												className="primary danger"
@@ -134,10 +160,10 @@ export function ProfilesPanel({ profiles, providers = [], send, dispatch }: Prof
 													back();
 												}}
 											>
-												Delete
+												{copy("Delete", "Eliminar")}
 											</button>
 											<button type="button" onClick={back}>
-												Keep it
+												{copy("Keep it", "Conservar")}
 											</button>
 										</div>
 									) : (
@@ -148,32 +174,39 @@ export function ProfilesPanel({ profiles, providers = [], send, dispatch }: Prof
 													className="primary"
 													onClick={() => send({ type: "profile_apply", name: profile.name })}
 												>
-													Use
+													{copy("Use", "Usar")}
 												</button>
 											)}
 											<button type="button" onClick={() => setMode({ kind: "edit", profile })}>
-												Edit
+												{copy("Edit", "Editar")}
 											</button>
 											<button
 												type="button"
 												onClick={() => setMode({ kind: "name", action: "duplicate", from: profile.name })}
 											>
-												Duplicate
+												{copy("Duplicate", "Duplicar")}
 											</button>
 											<button
 												type="button"
 												onClick={() => setMode({ kind: "name", action: "rename", from: profile.name })}
 											>
-												Rename
+												{copy("Rename", "Renombrar")}
 											</button>
 											<button
 												type="button"
 												className="link"
 												disabled={inUse}
-												title={inUse ? "Switch to another profile before deleting this one." : undefined}
+												title={
+													inUse
+														? copy(
+																"Switch to another profile before deleting this one.",
+																"Cambia de perfil antes de eliminar este.",
+															)
+														: undefined
+												}
 												onClick={() => setMode({ kind: "delete", name: profile.name })}
 											>
-												Delete
+												{copy("Delete", "Eliminar")}
 											</button>
 										</div>
 									)}
@@ -183,14 +216,14 @@ export function ProfilesPanel({ profiles, providers = [], send, dispatch }: Prof
 					</ul>
 					<div className="profiles-footer">
 						<button type="button" className="primary" onClick={() => setMode({ kind: "edit" })}>
-							New profile
+							{copy("New profile", "Nuevo perfil")}
 						</button>
 						<button type="button" onClick={() => setMode({ kind: "name", action: "save_current" })}>
-							Save my current setup
+							{copy("Save my current setup", "Guardar configuración actual")}
 						</button>
 						{profiles.importable ? (
 							<button type="button" onClick={() => send({ type: "profile_import" })}>
-								Import my Gentle Shell profiles
+								{copy("Import my Gentle Shell profiles", "Importar perfiles de Gentle Shell")}
 							</button>
 						) : null}
 					</div>
@@ -206,17 +239,22 @@ function modelLabel(model: string | undefined, models: ModelOption[]): string {
 }
 
 /** One line per routed role the screen knows, for example "Main assistant: Fake Model · High". */
-function summary(profile: Profile, roles: ProfileRole[], models: ModelOption[]): string {
+function summary(profile: Profile, roles: ProfileRole[], models: ModelOption[], mobile = false): string {
 	const lines = roles.flatMap((role) => {
 		const route = profile.roles[role.id];
 		if (!route) return [];
 		const thinking = route.thinking ? ` · ${THINKING_LABELS[route.thinking]}` : "";
 		return [`${role.label}: ${modelLabel(route.model, models)}${thinking}`];
 	});
-	return lines.length > 0 ? lines.join(", ") : "Uses the default model everywhere.";
+	return lines.length > 0
+		? lines.join(", ")
+		: mobile
+			? "Usa el modelo predeterminado."
+			: "Uses the default model everywhere.";
 }
 
 function ProfileEditor({
+	mobile = false,
 	profile,
 	roles,
 	models,
@@ -225,6 +263,7 @@ function ProfileEditor({
 	onSave,
 	onCancel,
 }: {
+	mobile?: boolean;
 	profile?: Profile;
 	roles: ProfileRole[];
 	models: ModelOption[];
@@ -233,6 +272,7 @@ function ProfileEditor({
 	onSave: (name: string, roles: ProfileRoles) => void;
 	onCancel: () => void;
 }) {
+	const copy = (en: string, es: string) => (mobile ? es : en);
 	const [name, setName] = useState("");
 	// Starts from every saved route, so roles this screen does not show are kept.
 	const [routes, setRoutes] = useState<ProfileRoles>(() => structuredClone(profile?.roles ?? {}));
@@ -259,19 +299,21 @@ function ProfileEditor({
 	return (
 		<form
 			className="profile-editor"
-			aria-label={profile ? `Edit ${profile.name}` : "New profile"}
+			aria-label={
+				profile ? copy(`Edit ${profile.name}`, `Editar ${profile.name}`) : copy("New profile", "Nuevo perfil")
+			}
 			onSubmit={submit}
 		>
 			{profile ? (
 				<h3>{profile.name}</h3>
 			) : (
 				<label className="profile-field">
-					<span>Name</span>
+					<span>{copy("Name", "Nombre")}</span>
 					<input
 						type="text"
-						aria-label="Profile name"
+						aria-label={copy("Profile name", "Nombre del perfil")}
 						autoComplete="off"
-						placeholder="for example deep-work"
+						placeholder={copy("for example deep-work", "por ejemplo trabajo-diario")}
 						value={name}
 						onChange={(event) => setName(event.target.value)}
 					/>
@@ -286,11 +328,11 @@ function ProfileEditor({
 						<div className="role-route" key={role.id}>
 							<span className="role-label">{role.label}</span>
 							<select
-								aria-label={`${role.label} model`}
+								aria-label={copy(`${role.label} model`, `Modelo de ${role.label}`)}
 								value={route.model ?? ""}
 								onChange={(event) => update(role.id, { model: event.target.value })}
 							>
-								<option value="">Default</option>
+								<option value="">{copy("Default", "Predeterminado")}</option>
 								{[...groups].map(([provider, options]) => (
 									<optgroup key={provider} label={providerName(provider)}>
 										{options.map((m) => (
@@ -303,7 +345,7 @@ function ProfileEditor({
 								{known ? null : <option value={route.model}>{`${route.model} (not available)`}</option>}
 							</select>
 							<select
-								aria-label={`${role.label} thinking`}
+								aria-label={copy(`${role.label} thinking`, `Razonamiento de ${role.label}`)}
 								value={route.thinking ?? ""}
 								onChange={(event) =>
 									update(role.id, {
@@ -311,7 +353,7 @@ function ProfileEditor({
 									})
 								}
 							>
-								<option value="">Default</option>
+								<option value="">{copy("Default", "Predeterminado")}</option>
 								{THINKING_LEVELS.map((level) => (
 									<option key={level} value={level}>
 										{THINKING_LABELS[level]}
@@ -324,10 +366,10 @@ function ProfileEditor({
 			</div>
 			<div className="profile-form-actions">
 				<button type="submit" className="primary" disabled={!valid}>
-					Save
+					{copy("Save", "Guardar")}
 				</button>
 				<button type="button" onClick={onCancel}>
-					Cancel
+					{copy("Cancel", "Cancelar")}
 				</button>
 			</div>
 		</form>
@@ -339,13 +381,20 @@ const NAME_FORMS = {
 	duplicate: { label: "Name for the copy", submit: "Duplicate" },
 	save_current: { label: "Name for your current setup", submit: "Save" },
 } as const;
+const MOBILE_NAME_FORMS = {
+	rename: { label: "Nuevo nombre", submit: "Renombrar" },
+	duplicate: { label: "Nombre de la copia", submit: "Duplicar" },
+	save_current: { label: "Nombre de la configuración", submit: "Guardar" },
+} as const;
 
 function NameForm({
+	mobile = false,
 	mode,
 	taken,
 	onSubmit,
 	onCancel,
 }: {
+	mobile?: boolean;
 	mode: Extract<Mode, { kind: "name" }>;
 	taken: string[];
 	onSubmit: (name: string) => void;
@@ -353,7 +402,7 @@ function NameForm({
 }) {
 	const initial = mode.action === "duplicate" ? `${mode.from}-copy` : (mode.from ?? "");
 	const [name, setName] = useState(initial);
-	const text = NAME_FORMS[mode.action];
+	const text = (mobile ? MOBILE_NAME_FORMS : NAME_FORMS)[mode.action];
 	const problem = name === mode.from ? undefined : nameProblem(name, taken);
 	const valid = name !== "" && name !== mode.from && problem === undefined;
 	return (
@@ -381,7 +430,7 @@ function NameForm({
 					{text.submit}
 				</button>
 				<button type="button" onClick={onCancel}>
-					Cancel
+					{mobile ? "Cancelar" : "Cancel"}
 				</button>
 			</div>
 		</form>

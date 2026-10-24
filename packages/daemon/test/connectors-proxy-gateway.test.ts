@@ -193,7 +193,8 @@ describe("connectors through the daemon's proxy (regression, S25.4)", () => {
 			requestId: expect.any(String),
 			method: "app",
 			title: "Allow Notion to create pages?",
-			message: "Waiting for your answer in the Gentle Dot app.",
+			message: expect.stringContaining(args.content),
+			expiresAt: expect.any(String),
 		});
 		await waitFor(() => d.bridge.agentState === "needs_you");
 		raw({ type: "ui_response", requestId: ask.ask.requestId, confirmed: true });
@@ -262,7 +263,7 @@ describe("connectors through the daemon's proxy (regression, S25.4)", () => {
 		);
 		app.close();
 		// Refused by the app being gone, or cancelled by the daemon stopping: either way nothing is sent.
-		expect((await pending)?.message).toMatch(/did not allow|Nothing was sent/);
+		expect((await pending)?.message).toMatch(/did not allow|Nothing was sent|request was cancelled/);
 
 		// The daemon the app launched stops with it: nothing reaches the server afterwards either.
 		await d.closed;

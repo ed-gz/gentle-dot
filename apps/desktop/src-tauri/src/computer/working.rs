@@ -17,9 +17,9 @@ use std::time::{Duration, Instant};
 pub const WORKING_EVENT: &str = "computer://working";
 /// How long the overlay has to acknowledge the rings, and the main thread to hide the windows.
 pub const READY_TIMEOUT: Duration = Duration::from_secs(2);
-pub const UNAVAILABLE: &str =
-    "Gentle Dot could not show that it is working, so nothing was done. Try again.";
-pub const NOT_HIDDEN: &str = "Gentle Dot could not move its own windows out of the way, so nothing was done. Try again.";
+pub const UNAVAILABLE: &str = "Gentle Dot could not show that it is working, so nothing was done. Try again.";
+pub const NOT_HIDDEN: &str =
+    "Gentle Dot could not move its own windows out of the way, so nothing was done. Try again.";
 
 /// The `computer://working` payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -66,12 +66,35 @@ pub fn to_restore(hidden: Visibility, now: Visibility, rose_hidden: bool) -> Vis
     Visibility { dot: hidden.dot && !now.dot && !rose_hidden, panel: hidden.panel && !now.panel }
 }
 
-/// The Dot and the panel. Main thread only.
+/// The Dot and the panel. Main thread only, except `prepare_hide`.
 pub trait Windows: Send + Sync {
+    /// Worker thread: bounded platform preparation that must not block GTK or
+    /// AppKit (for example, resolving the compositor's exact window identity).
+    fn prepare_hide(&self, _operation: u64) -> Result<(), String> {
+        Ok(())
+    }
     fn is_visible(&self, part: Part) -> bool;
     fn hide(&self, part: Part) -> Result<(), String>;
     /// Orders the window in without focusing it or activating the app.
     fn show(&self, part: Part);
+    /// Releases temporary hiding even when the user no longer wants this window
+    /// shown. A compositor-preserving implementation restores its paint/input
+    /// state without remapping a window the user explicitly hid meanwhile.
+    fn restore(&self, part: Part, show: bool) {
+        if show {
+            self.show(part);
+        }
+    }
+    /// Release native companion pauses even when preparation failed before hiding a part.
+    fn after_restore(&self, _operation: u64) {}
+    /// Worker cleanup when an operation ended during native preparation.
+    fn cancel_prepare(&self, _operation: u64) {}
+    /// A visual hide may need a frame before it is safe to capture. Schedules
+    /// the acknowledgement without blocking the main thread; `begin` bounds it.
+    fn after_hidden(&self, ready: Task) -> Result<(), String> {
+        ready();
+        Ok(())
+    }
     /// The user's "Hide the rose" choice, as it is now.
     fn rose_hidden(&self) -> bool;
 }
@@ -136,7 +159,7 @@ enum Gave {
 
 struct Inner {
     windows: Arc<dyn Windows>,
-    rings: Arc<dyn Rings>,
+    rings: Option<Arc<dyn Rings>>,
     main: Arc<dyn MainThread>,
     timeout: Duration,
     state: Mutex<State>,
@@ -149,7 +172,20 @@ impl Working {
     pub fn new(windows: Arc<dyn Windows>, rings: Arc<dyn Rings>, main: Arc<dyn MainThread>, timeout: Duration) -> Self {
         Working(Arc::new(Inner {
             windows,
-            rings,
+            rings: Some(rings),
+            main,
+            timeout,
+            state: Mutex::new(State::default()),
+            changed: Condvar::new(),
+        }))
+    }
+
+    /// Compositors without the macOS glow still hide and restore Dot's windows around each
+    /// operation. There is deliberately no overlay or synthetic acknowledgement in this mode.
+    pub fn without_overlay(windows: Arc<dyn Windows>, main: Arc<dyn MainThread>, timeout: Duration) -> Self {
+        Working(Arc::new(Inner {
+            windows,
+            rings: None,
             main,
             timeout,
             state: Mutex::new(State::default()),
@@ -220,7 +256,7 @@ impl Inner {
     }
 
     /// On the main thread: hides the visible windows for `operation`, unless it already ended.
-    fn hide(&self, operation: u64) {
+    fn hide(self: &Arc<Self>, operation: u64) {
         let mut state = self.lock();
         if !state.current.as_ref().is_some_and(|op| op.id == operation) {
             return;
@@ -236,20 +272,33 @@ impl Inner {
             }
             state.hidden.set(part, true);
         }
-        if let Some(op) = state.current.as_mut() {
-            op.hid = Some(outcome);
+        drop(state);
+        if let Err(error) = outcome {
+            self.hidden_ready(operation, Err(error));
+            return;
         }
+        let inner = self.clone();
+        if let Err(error) = self.windows.after_hidden(Box::new(move || inner.hidden_ready(operation, Ok(())))) {
+            self.hidden_ready(operation, Err(error));
+        }
+    }
+
+    fn hidden_ready(&self, operation: u64, outcome: Result<(), String>) {
+        let mut state = self.lock();
+        let Some(op) = state.current.as_mut().filter(|op| op.id == operation) else { return };
+        op.hid = Some(outcome);
         self.changed.notify_all();
     }
 
     /// On the main thread: shows again what operations hid, as the user left things meanwhile.
-    fn restore(&self) {
+    fn restore(&self, operation: u64) {
         let hidden = std::mem::take(&mut self.lock().hidden);
         let now = Visibility { dot: self.windows.is_visible(Part::Dot), panel: self.windows.is_visible(Part::Panel) };
         let show = to_restore(hidden, now, self.windows.rose_hidden());
-        for part in PARTS.into_iter().filter(|part| show.get(*part)) {
-            self.windows.show(part);
+        for part in PARTS.into_iter().filter(|part| hidden.get(*part)) {
+            self.windows.restore(part, show.get(part));
         }
+        self.windows.after_restore(operation);
     }
 }
 
@@ -263,11 +312,22 @@ impl Preparation for Working {
             state.current = Some(Op { id: state.last, ready: false, hid: None });
             state.last
         };
-        if let Err(error) = self.0.rings.show(operation) {
-            eprintln!("gentle-dot: cannot show the working rings: {error}");
-            return Err(self.abandon(operation, UNAVAILABLE));
+        if let Some(rings) = &self.0.rings {
+            if let Err(error) = rings.show(operation) {
+                eprintln!("gentle-dot: cannot show the working rings: {error}");
+                return Err(self.abandon(operation, UNAVAILABLE));
+            }
+            if self.wait(operation, |op| op.ready).is_err() {
+                return Err(self.abandon(operation, UNAVAILABLE));
+            }
         }
-        if self.wait(operation, |op| op.ready).is_err() {
+        if let Err(error) = self.0.windows.prepare_hide(operation) {
+            eprintln!("gentle-dot: cannot prepare to hide its windows: {error}");
+            self.0.windows.cancel_prepare(operation);
+            return Err(self.abandon(operation, NOT_HIDDEN));
+        }
+        if !self.is_current(operation) {
+            self.0.windows.cancel_prepare(operation);
             return Err(self.abandon(operation, UNAVAILABLE));
         }
         let inner = self.0.clone();
@@ -303,9 +363,11 @@ impl Preparation for Working {
         }
         // No lock held from here: on the main thread, `run` runs the task at once.
         self.0.changed.notify_all();
-        self.0.rings.end(operation);
+        if let Some(rings) = &self.0.rings {
+            rings.end(operation);
+        }
         let inner = self.0.clone();
-        if let Err(error) = self.0.main.run(Box::new(move || inner.restore())) {
+        if let Err(error) = self.0.main.run(Box::new(move || inner.restore(operation))) {
             eprintln!("gentle-dot: cannot show the Dot and the panel again: {error}");
         }
     }
@@ -328,6 +390,14 @@ mod tests {
         visible: Mutex<Visibility>,
         rose_hidden: AtomicBool,
         fails: Mutex<Option<Part>>,
+        restored: Mutex<Vec<(Part, bool)>>,
+        defer_paint: AtomicBool,
+        paint_ready: Mutex<Option<Task>>,
+        preserve_map: AtomicBool,
+        masked: AtomicBool,
+        prepared_mapped: AtomicBool,
+        pause: crate::desktop_companion::ControlPause,
+        on_prepare: Mutex<Option<Hook>>,
     }
 
     fn name(part: Part) -> &'static str {
@@ -338,7 +408,21 @@ mod tests {
     }
 
     impl Windows for FakeWindows {
+        fn prepare_hide(&self, operation: u64) -> Result<(), String> {
+            if let Some(hook) = self.on_prepare.lock().unwrap().as_ref() { hook(operation); }
+            self.pause.begin(operation);
+            if self.preserve_map.load(Ordering::SeqCst) {
+                // Preparation must inspect native mapping, including while a
+                // previous operation's paint restoration is still queued.
+                self.prepared_mapped.store(self.visible.lock().unwrap().dot, Ordering::SeqCst);
+            }
+            Ok(())
+        }
+
         fn is_visible(&self, part: Part) -> bool {
+            if part == Part::Dot && self.masked.load(Ordering::SeqCst) {
+                return false;
+            }
             self.visible.lock().unwrap().get(part)
         }
 
@@ -346,7 +430,14 @@ mod tests {
             if *self.fails.lock().unwrap() == Some(part) {
                 return Err(format!("cannot hide the {}", name(part)));
             }
-            self.visible.lock().unwrap().set(part, false);
+            if part == Part::Dot && self.preserve_map.load(Ordering::SeqCst) {
+                if !self.prepared_mapped.swap(false, Ordering::SeqCst) {
+                    return Err("no prepared native rose identity".into());
+                }
+                self.masked.store(true, Ordering::SeqCst);
+            } else {
+                self.visible.lock().unwrap().set(part, false);
+            }
             self.log.lock().unwrap().push(format!("hide {}", name(part)));
             Ok(())
         }
@@ -358,6 +449,29 @@ mod tests {
 
         fn rose_hidden(&self) -> bool {
             self.rose_hidden.load(Ordering::SeqCst)
+        }
+
+        fn restore(&self, part: Part, show: bool) {
+            self.restored.lock().unwrap().push((part, show));
+            if part == Part::Dot && self.preserve_map.load(Ordering::SeqCst) {
+                self.masked.store(false, Ordering::SeqCst);
+                return;
+            }
+            if show {
+                self.show(part);
+            }
+        }
+
+        fn after_restore(&self, operation: u64) { self.pause.end(operation); }
+        fn cancel_prepare(&self, operation: u64) { self.pause.end(operation); }
+
+        fn after_hidden(&self, ready: Task) -> Result<(), String> {
+            if self.defer_paint.load(Ordering::SeqCst) {
+                *self.paint_ready.lock().unwrap() = Some(ready);
+            } else {
+                ready();
+            }
+            Ok(())
         }
     }
 
@@ -432,10 +546,21 @@ mod tests {
             visible: Mutex::new(visible),
             rose_hidden: AtomicBool::new(!visible.dot),
             fails: Mutex::new(None),
+            restored: Mutex::new(Vec::new()),
+            defer_paint: AtomicBool::new(false),
+            paint_ready: Mutex::new(None),
+            preserve_map: AtomicBool::new(false),
+            masked: AtomicBool::new(false),
+            prepared_mapped: AtomicBool::new(false),
+            pause: crate::desktop_companion::ControlPause::default(),
+            on_prepare: Mutex::new(None),
         });
         let rings = Arc::new(FakeRings { log: log.clone(), fails: AtomicBool::new(false), on_show: Mutex::new(None) });
-        let main =
-            Arc::new(FakeMain { deferred: AtomicBool::new(false), queue: Mutex::new(Vec::new()), after_queue: Mutex::new(None) });
+        let main = Arc::new(FakeMain {
+            deferred: AtomicBool::new(false),
+            queue: Mutex::new(Vec::new()),
+            after_queue: Mutex::new(None),
+        });
         let working = Arc::new(Working::new(windows.clone(), rings.clone(), main.clone(), timeout));
         let rig = Rig { working, windows, rings, main, log };
         rig.on_show(|working, operation| {
@@ -500,7 +625,10 @@ mod tests {
         let hidden = BOTH;
         // "Hide the rose" during the call keeps the Dot hidden; a reopened panel is left alone.
         assert_eq!(to_restore(hidden, Visibility::default(), true), Visibility { dot: false, panel: true });
-        assert_eq!(to_restore(hidden, Visibility { dot: false, panel: true }, false), Visibility { dot: true, panel: false });
+        assert_eq!(
+            to_restore(hidden, Visibility { dot: false, panel: true }, false),
+            Visibility { dot: true, panel: false }
+        );
         assert_eq!(to_restore(hidden, Visibility::default(), false), BOTH);
         // What the operation did not hide is never shown.
         assert_eq!(to_restore(Visibility::default(), Visibility::default(), false), Visibility::default());
@@ -512,6 +640,94 @@ mod tests {
         rig.working.finish(operation);
         assert_eq!(rig.log(), ["rings on 1", "hide dot", "hide panel", "rings off 1"]);
         assert_eq!(rig.visible(), Visibility { dot: false, panel: true });
+        // Temporary paint/input must be released even though neither window
+        // should be shown: the user hid the rose and reopened the panel.
+        assert_eq!(*rig.windows.restored.lock().unwrap(), [(Part::Dot, false), (Part::Panel, false)]);
+    }
+
+    #[test]
+    fn a_new_step_prepares_the_mapped_rose_before_its_previous_restore_has_run() {
+        let rig = rig_with(BOTH, Duration::from_secs(2));
+        rig.windows.preserve_map.store(true, Ordering::SeqCst);
+        let first = rig.working.begin().unwrap();
+        rig.main.deferred.store(true, Ordering::SeqCst);
+        rig.working.finish(first); // restoration queued; the rose is still transparent
+        assert!(rig.windows.masked.load(Ordering::SeqCst));
+        assert!(!rig.windows.is_visible(Part::Dot));
+        assert!(rig.visible().dot, "native mapping remains available to the next preparation");
+        let working = rig.working.clone();
+        let (done, result) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || done.send(working.begin()).unwrap());
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while rig.main.queue.lock().unwrap().len() < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(rig.main.queue.lock().unwrap().len(), 2, "restore then next hide are queued in order");
+        rig.main.drain();
+        let second = result.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+        worker.join().unwrap();
+        assert!(rig.windows.masked.load(Ordering::SeqCst));
+        assert!(rig.windows.pause.active(), "previous restoration must not release the next operation pause");
+        assert!(rig.visible().dot);
+        rig.working.finish(second);
+        rig.main.drain();
+        assert!(!rig.windows.masked.load(Ordering::SeqCst));
+        assert!(!rig.windows.pause.active());
+        assert_eq!(rig.visible(), BOTH);
+        assert_eq!(rig.windows.restored.lock().unwrap().iter().filter(|(part, _)| *part == Part::Dot).count(), 2);
+    }
+
+    #[test]
+    fn cancellation_during_native_preparation_releases_only_that_operation_pause() {
+        let rig = rig();
+        let working = Arc::downgrade(&rig.working);
+        *rig.windows.on_prepare.lock().unwrap() = Some(Box::new(move |_| { working.upgrade().unwrap().session_ended(); }));
+        assert!(rig.working.begin().is_err());
+        assert!(!rig.windows.pause.active(), "cancelled preparation must not leave Capri paused");
+        assert_eq!(rig.visible(), BOTH);
+    }
+
+    #[test]
+    fn captures_wait_for_the_hidden_frame_and_a_late_frame_cannot_revive_a_cancelled_step() {
+        let rig = rig_with(BOTH, Duration::from_secs(2));
+        rig.windows.defer_paint.store(true, Ordering::SeqCst);
+        let working = rig.working.clone();
+        let (done, result) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || done.send(working.begin()).unwrap());
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while rig.windows.paint_ready.lock().unwrap().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(rig.windows.paint_ready.lock().unwrap().is_some());
+        assert!(result.try_recv().is_err(), "capture must not run before transparent pixels were painted");
+        rig.working.session_ended();
+        assert!(result.recv_timeout(Duration::from_secs(1)).unwrap().is_err());
+        worker.join().unwrap();
+        rig.windows.paint_ready.lock().unwrap().take().unwrap()();
+        assert_eq!(rig.visible(), BOTH);
+        assert!(!rig.working.is_current(1));
+    }
+
+    #[test]
+    fn a_hidden_rose_stays_hidden_through_repeated_computer_steps() {
+        let rig = rig_with(Visibility { dot: false, panel: true }, SHORT);
+        for _ in 0..5 {
+            let operation = rig.working.begin().unwrap();
+            rig.working.finish(operation);
+        }
+        assert!(!rig.visible().dot);
+        assert!(rig.windows.restored.lock().unwrap().iter().all(|(part, _)| *part != Part::Dot));
+        assert!(!rig.log().iter().any(|entry| entry == "show dot"));
+    }
+
+    #[test]
+    fn missing_hidden_frame_times_out_and_restores_without_capturing() {
+        let rig = rig_with(BOTH, SHORT);
+        rig.windows.defer_paint.store(true, Ordering::SeqCst);
+        assert_eq!(rig.working.begin(), Err(NOT_HIDDEN.to_string()));
+        assert_eq!(rig.visible(), BOTH);
+        rig.windows.paint_ready.lock().unwrap().take().unwrap()();
+        assert!(!rig.working.is_current(1));
     }
 
     #[test]
@@ -635,6 +851,43 @@ mod tests {
         rig.working.finish(second);
         assert_eq!(rig.visible(), BOTH);
         assert_eq!(rig.log().iter().filter(|line| line.starts_with("rings off")).count(), 2);
+    }
+
+    #[test]
+    fn a_compositor_without_overlay_hides_and_restores_without_faking_ready() {
+        let rig = rig();
+        let working = Working::without_overlay(rig.windows.clone(), rig.main.clone(), SHORT);
+        let operation = working.begin().unwrap();
+        assert_eq!(rig.visible(), Visibility::default());
+        assert!(!working.0.lock().current.as_ref().unwrap().ready);
+        working.finish(operation);
+        assert_eq!(rig.visible(), BOTH);
+        assert_eq!(rig.log(), ["hide dot", "hide panel", "show dot", "show panel"]);
+    }
+
+    #[test]
+    fn without_overlay_a_partial_hide_failure_is_still_rolled_back() {
+        let rig = rig();
+        let working = Working::without_overlay(rig.windows.clone(), rig.main.clone(), SHORT);
+        *rig.windows.fails.lock().unwrap() = Some(Part::Panel);
+        assert_eq!(working.begin(), Err(NOT_HIDDEN.to_string()));
+        assert_eq!(rig.visible(), BOTH);
+        assert_eq!(rig.log(), ["hide dot", "show dot"]);
+    }
+
+    #[test]
+    fn without_overlay_panic_fences_a_late_queued_hide() {
+        let rig = rig();
+        rig.main.deferred.store(true, Ordering::SeqCst);
+        let working = Arc::new(Working::without_overlay(rig.windows.clone(), rig.main.clone(), SHORT));
+        let weak = Arc::downgrade(&working);
+        *rig.main.after_queue.lock().unwrap() = Some(Box::new(move || {
+            weak.upgrade().unwrap().session_ended();
+        }));
+        assert!(working.begin().is_err());
+        rig.main.drain();
+        assert_eq!(rig.visible(), BOTH);
+        assert!(rig.log().is_empty());
     }
 
     #[test]

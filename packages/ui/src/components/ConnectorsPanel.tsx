@@ -13,6 +13,7 @@ import type { Send } from "./types.ts";
 import { VoiceModelEntry } from "./VoiceModel.tsx";
 
 interface ConnectorsPanelProps {
+	mobile?: boolean;
 	connectors: ConnectorsState;
 	send: Send;
 	/**
@@ -22,7 +23,7 @@ interface ConnectorsPanelProps {
 	appSend?: Send;
 	dispatch: (action: DotAction) => void;
 	openUrl: (url: string) => void;
-	/** Computer control, in the desktop app on macOS only. */
+	/** Computer control, in the desktop app on supported systems. */
 	computer?: ComputerControls;
 	/** The desktop app's voice engine and optional local model (S30.5). */
 	voiceModel?: boolean;
@@ -34,6 +35,13 @@ const STATUS_LABELS: Record<ConnectorStatus, string> = {
 	needs_signin: "Needs sign-in",
 	connected: "Connected",
 	error: "Sign-in failed",
+};
+const MOBILE_STATUS_LABELS: Record<ConnectorStatus, string> = {
+	off: "Desactivado",
+	needs_setup: "Falta configurar",
+	needs_signin: "Falta iniciar sesión",
+	connected: "Conectado",
+	error: "Error de acceso",
 };
 
 /** What the chat says for "Add another connector"; the assistant answers with a draft to review. */
@@ -49,7 +57,10 @@ export function ConnectorsPanel({
 	openUrl,
 	computer,
 	voiceModel,
+	mobile = false,
 }: ConnectorsPanelProps) {
+	const copy = (en: string, es: string) => (mobile ? es : en);
+	const readOnlyPhone = mobile && !appSend;
 	const [guideFor, setGuideFor] = useState<string>();
 	const [adding, setAdding] = useState(false);
 	const flow = connectors.flow;
@@ -69,39 +80,66 @@ export function ConnectorsPanel({
 	const settingUp = flow?.flowId?.startsWith("connector-setup-") && flow.events.length === 0;
 
 	return (
-		<section className="accounts connectors" aria-label="Connectors">
+		<section className="accounts connectors" aria-label={copy("Connectors", "Conexiones")}>
 			<header className="accounts-header">
-				<h2>Connectors</h2>
+				<h2>{copy("Connectors", "Conexiones")}</h2>
 				<button
 					type="button"
 					className="icon"
-					aria-label="Close connectors"
+					aria-label={copy("Close connectors", "Cerrar conexiones")}
 					onClick={() => dispatch({ type: "connectors", open: false })}
 				>
 					×
 				</button>
 			</header>
+			{connectors.issue ? (
+				<div className="connector-access-issue" role="status">
+					<strong>{copy("Some connections need attention", "Algunas conexiones necesitan atención")}</strong>
+					<p>
+						{copy(
+							"Unlock your computer's credential store, then restart Gentle Dot to check access again.",
+							"Desbloquea el llavero de credenciales del equipo y reinicia Gentle Dot para comprobar el acceso.",
+						)}
+					</p>
+					<details>
+						<summary>{copy("View details", "Ver detalle")}</summary>
+						<p>{connectors.issue}</p>
+					</details>
+				</div>
+			) : null}
 			<p className="muted">
-				Let the assistant use your other apps. It always asks you before it sends or changes anything.
+				{copy(
+					"Let the assistant use your other apps. It always asks you before it sends or changes anything.",
+					"Servicios que Gentle Dot puede usar. Te pedirá permiso antes de enviar o cambiar algo.",
+				)}
 			</p>
-			{appSend ? null : <p className="connector-note">{APP_REQUIRED}</p>}
+			{appSend ? null : (
+				<p className="connector-note">
+					{copy(APP_REQUIRED, "Para cambiar conexiones, abre Gentle Dot en tu equipo.")}
+				</p>
+			)}
 
 			{flow ? (
 				<div className="auth-flow">
 					<p className="auth-flow-title">
-						{settingUp ? "Setting up" : "Signing in to"} {name(flow.providerId)}
+						{settingUp ? copy("Setting up", "Configurando") : copy("Signing in to", "Conectando con")}{" "}
+						{name(flow.providerId)}
 					</p>
 					{flow.events.map((event, i) => (
 						// biome-ignore lint/suspicious/noArrayIndexKey: events are append-only and never reordered
-						<FlowEvent key={`${event.kind}-${i}`} event={event} openUrl={openUrl} />
+						<FlowEvent key={`${event.kind}-${i}`} event={event} openUrl={openUrl} mobile={mobile} />
 					))}
-					{flow.prompt ? <FlowPrompt key={flow.prompt.message} prompt={flow.prompt} send={send} /> : null}
-					{busy && !flow.prompt && flow.events.length === 0 ? <p className="muted">Starting…</p> : null}
+					{flow.prompt ? (
+						<FlowPrompt key={flow.prompt.message} prompt={flow.prompt} send={send} mobile={mobile} />
+					) : null}
+					{busy && !flow.prompt && flow.events.length === 0 ? (
+						<p className="muted">{copy("Starting…", "Iniciando…")}</p>
+					) : null}
 					{flow.done ? (
 						<p className={`auth-result ${flow.done.ok ? "ok" : "failed"}`} role="status">
 							{flow.done.ok
-								? `Connected to ${name(flow.providerId)}.`
-								: (flow.done.message ?? "Sign-in did not finish.")}
+								? copy(`Connected to ${name(flow.providerId)}.`, `Conectado con ${name(flow.providerId)}.`)
+								: (flow.done.message ?? copy("Sign-in did not finish.", "No se pudo completar el acceso."))}
 						</p>
 					) : null}
 					<div className="auth-actions">
@@ -110,12 +148,12 @@ export function ConnectorsPanel({
 								type="button"
 								onClick={() => send({ type: "auth_reply", flowId: flow.flowId ?? "", cancelled: true })}
 							>
-								Cancel
+								{copy("Cancel", "Cancelar")}
 							</button>
 						) : null}
 						{flow.done ? (
 							<button type="button" onClick={() => dispatch({ type: "connectors", open: true })}>
-								Back to connectors
+								{copy("Back to connectors", "Volver a conexiones")}
 							</button>
 						) : null}
 					</div>
@@ -130,14 +168,16 @@ export function ConnectorsPanel({
 				/>
 			) : (
 				<>
-					<div className="connector-actions">
-						<button type="button" onClick={() => setAdding(!adding)} aria-expanded={adding}>
-							Add another connector
-						</button>
-						<button type="button" onClick={() => send({ type: "connectors_scan" })}>
-							Import my MCP servers
-						</button>
-					</div>
+					{!readOnlyPhone ? (
+						<div className="connector-actions">
+							<button type="button" onClick={() => setAdding(!adding)} aria-expanded={adding}>
+								{copy("Add another connector", "Añadir conexión")}
+							</button>
+							<button type="button" onClick={() => send({ type: "connectors_scan" })}>
+								{copy("Import my MCP servers", "Importar conexiones")}
+							</button>
+						</div>
+					) : null}
 					{adding ? (
 						<AddAnother
 							cancel={() => setAdding(false)}
@@ -148,7 +188,7 @@ export function ConnectorsPanel({
 							}}
 						/>
 					) : null}
-					{connectors.imports ? (
+					{connectors.imports && !readOnlyPhone ? (
 						<ImportList
 							found={connectors.imports}
 							{...(appSend
@@ -170,6 +210,7 @@ export function ConnectorsPanel({
 							.filter((c) => !c.builtin)
 							.map((connector) => (
 								<ConnectorRow
+									mobile={mobile}
 									key={connector.id}
 									connector={connector}
 									{...(appSend ? { appSend } : {})}
@@ -365,6 +406,7 @@ function ImportNames({ label, names }: { label: string; names: string[] }) {
 }
 
 interface ConnectorRowProps {
+	mobile?: boolean;
 	connector: ConnectorInfo;
 	/** Missing outside the desktop app: every control is disabled. */
 	appSend?: Send;
@@ -373,18 +415,27 @@ interface ConnectorRowProps {
 	setUp: () => void;
 }
 
-function ConnectorRow({ connector: c, appSend, connect, signIn, setUp }: ConnectorRowProps) {
+function ConnectorRow({ connector: c, appSend, connect, signIn, setUp, mobile = false }: ConnectorRowProps) {
 	const locked = !appSend;
+	const readOnlyPhone = mobile && locked;
 	const nameId = `connector-${c.id}`;
-	const readOnlyNote = c.custom
-		? "Its tools stay hidden until you choose Read and send. Then it asks you before every action."
-		: "It cannot send or change anything.";
+	const readOnlyNote = mobile
+		? c.custom
+			? "Sus herramientas están ocultas mientras tenga acceso de solo lectura."
+			: "No puede enviar ni cambiar nada."
+		: c.custom
+			? "Its tools stay hidden until you choose Read and send. Then it asks you before every action."
+			: "It cannot send or change anything.";
 	const canSignIn = c.enabled && !c.noSignIn && c.status !== "needs_setup";
 	return (
 		<li aria-labelledby={nameId}>
 			<div className="provider-name">
 				<b id={nameId}>{c.name}</b>
-				{c.added ? <span className={`chip connector-${c.status}`}>{STATUS_LABELS[c.status]}</span> : null}
+				{c.added ? (
+					<span className={`chip connector-${c.status}`}>
+						{(mobile ? MOBILE_STATUS_LABELS : STATUS_LABELS)[c.status]}
+					</span>
+				) : null}
 			</div>
 			{c.custom ? (
 				<p className="connector-origin">
@@ -394,7 +445,12 @@ function ConnectorRow({ connector: c, appSend, connect, signIn, setUp }: Connect
 			) : null}
 			<p className="connector-note">{c.reads}</p>
 			<p className="connector-note">{c.mode === "read_write" ? c.sends : readOnlyNote}</p>
-			{c.enabled ? (
+			{readOnlyPhone && c.enabled ? (
+				<p className="connector-note">
+					{c.mode === "read_write" ? "Acceso: lectura y acciones con tu permiso." : "Acceso: solo lectura."}
+				</p>
+			) : null}
+			{c.enabled && !readOnlyPhone ? (
 				<fieldset className="connector-mode">
 					<legend>What {c.name} may do</legend>
 					{(
@@ -416,67 +472,74 @@ function ConnectorRow({ connector: c, appSend, connect, signIn, setUp }: Connect
 					))}
 				</fieldset>
 			) : null}
-			<div className="provider-actions">
-				{c.enabled ? null : (
-					<button
-						type="button"
-						className="primary"
-						aria-label={`Connect ${c.name}`}
-						disabled={locked}
-						onClick={connect}
-					>
-						Connect
-					</button>
-				)}
-				{c.enabled && c.status === "needs_setup" ? (
-					<button
-						type="button"
-						className="primary"
-						aria-label={`Set up ${c.name}`}
-						disabled={locked}
-						onClick={setUp}
-					>
-						Set up
-					</button>
-				) : null}
-				{canSignIn && c.status !== "connected" ? (
-					<button
-						type="button"
-						className="primary"
-						aria-label={`Sign in to ${c.name}`}
-						disabled={locked}
-						onClick={signIn}
-					>
-						Sign in
-					</button>
-				) : null}
-				{canSignIn && c.status === "connected" ? (
-					<button type="button" aria-label={`Sign in to ${c.name} again`} disabled={locked} onClick={signIn}>
-						Sign in again
-					</button>
-				) : null}
-				{c.enabled ? (
-					<button
-						type="button"
-						aria-label={`Disconnect ${c.name}`}
-						disabled={locked}
-						onClick={() => appSend?.({ type: "connector_disconnect", connectorId: c.id })}
-					>
-						Disconnect
-					</button>
-				) : null}
-				{c.added ? (
-					<button
-						type="button"
-						className="link"
-						aria-label={`Remove ${c.name}`}
-						disabled={locked}
-						onClick={() => appSend?.({ type: "connector_remove", connectorId: c.id })}
-					>
-						Remove
-					</button>
-				) : null}
-			</div>
+			{!readOnlyPhone ? (
+				<div className="provider-actions">
+					{c.enabled ? null : (
+						<button
+							type="button"
+							className="primary"
+							aria-label={`Connect ${c.name}`}
+							disabled={locked}
+							onClick={connect}
+						>
+							Connect
+						</button>
+					)}
+					{c.enabled && c.status === "needs_setup" ? (
+						<button
+							type="button"
+							className="primary"
+							aria-label={`Set up ${c.name}`}
+							disabled={locked}
+							onClick={setUp}
+						>
+							Set up
+						</button>
+					) : null}
+					{canSignIn && c.status !== "connected" ? (
+						<button
+							type="button"
+							className="primary"
+							aria-label={`Sign in to ${c.name}`}
+							disabled={locked}
+							onClick={signIn}
+						>
+							Sign in
+						</button>
+					) : null}
+					{canSignIn && c.status === "connected" ? (
+						<button
+							type="button"
+							aria-label={`Sign in to ${c.name} again`}
+							disabled={locked}
+							onClick={signIn}
+						>
+							Sign in again
+						</button>
+					) : null}
+					{c.enabled ? (
+						<button
+							type="button"
+							aria-label={`Disconnect ${c.name}`}
+							disabled={locked}
+							onClick={() => appSend?.({ type: "connector_disconnect", connectorId: c.id })}
+						>
+							Disconnect
+						</button>
+					) : null}
+					{c.added ? (
+						<button
+							type="button"
+							className="link"
+							aria-label={`Remove ${c.name}`}
+							disabled={locked}
+							onClick={() => appSend?.({ type: "connector_remove", connectorId: c.id })}
+						>
+							Remove
+						</button>
+					) : null}
+				</div>
+			) : null}
 		</li>
 	);
 }

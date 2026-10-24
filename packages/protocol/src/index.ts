@@ -21,8 +21,8 @@ export interface Activity {
 export interface Ask {
 	requestId: string;
 	/**
-	 * `app`: an approval the desktop app asks in a native dialog (S25.3). Windows only show that it
-	 * waits there; it cannot be answered with `ui_response`. `pin`: an approval on a server (S25.8),
+	 * `app`: an exact approval answered through the desktop app's private channel or a trusted phone;
+	 * it cannot be answered with `ui_response`. `pin`: an approval on a server (S25.8),
 	 * allowed with `pin_approve` and the web PIN; `ui_response` with `confirmed: false` declines it.
 	 */
 	method: "select" | "confirm" | "input" | "editor" | "app" | "pin";
@@ -32,6 +32,8 @@ export interface Ask {
 	placeholder?: string;
 	prefill?: string;
 	timeoutMs?: number;
+	/** Absolute deadline of a trusted approval; reconnecting does not renew it. */
+	expiresAt?: string;
 }
 
 /** A file the user sent with a message, as its chip shows it (S31). */
@@ -79,6 +81,8 @@ export interface HistoryMessage {
 export interface Features {
 	/** Several conversations (list, new conversation); off means one continuous chat. */
 	conversations: boolean;
+	/** Correlates background history refreshes so a late response cannot move a reader. */
+	historyRefresh?: boolean;
 }
 
 /** The web PIN on a server (S25.8): whether it was set, and whether wrong tries locked it for now. */
@@ -341,10 +345,12 @@ export type ClientMessage =
 	| { type: "steer"; text: string }
 	| { type: "abort" }
 	| { type: "ui_response"; requestId: string; value?: string; confirmed?: boolean; cancelled?: boolean }
+	/** An exact pending human approval, only through the native app's private channel. */
+	| { type: "app_approval_reply"; requestId: string; approved: boolean }
 	| { type: "new_conversation" }
 	| { type: "list_conversations" }
 	| { type: "open_conversation"; conversationId: string }
-	| { type: "get_history" }
+	| { type: "get_history"; requestId?: string }
 	/** The page of messages before `before`, the id of the oldest message the window shows. */
 	| { type: "get_earlier"; before: string }
 	| { type: "auth_list" }
@@ -414,6 +420,8 @@ export type ServerPayload =
 			type: "message_done";
 			messageId: string;
 			text: string;
+			/** The assistant continues with tools; this is not a completed reply alert. */
+			intermediate?: true;
 			/** The answer was stopped on purpose (Stop, or switching conversations). */
 			stopped?: true;
 			/** The answer failed; a plain-language explanation for the chat. */
@@ -422,9 +430,27 @@ export type ServerPayload =
 	| { type: "activity"; messageId: string; activity: Activity }
 	| { type: "ask"; ask: Ask }
 	| { type: "ask_resolved"; requestId: string }
-	| { type: "toast"; level: "info" | "warning" | "error"; message: string }
+	| {
+			type: "toast";
+			level: "info" | "warning" | "error";
+			message: string;
+			code?: "connectors_unchecked";
+			notificationEvent?:
+				| "dotReply"
+				| "dotError"
+				| "agentCompleted"
+				| "agentAttention"
+				| "agentError"
+				| "agentAvailable"
+				| "permission";
+			notificationId?: string;
+			session?: { paneId: string; sessionId?: string };
+			title?: string;
+	  }
 	| {
 			type: "history";
+			/** Echoed only for a correlated request; reconnect/rotation histories remain authoritative. */
+			requestId?: string;
 			conversationId?: string;
 			/** Only the most recent messages; `hasEarlier` says whether `get_earlier` has more. */
 			messages: HistoryMessage[];
@@ -492,6 +518,7 @@ export const APP_COMMANDS = [
 	"connector_import",
 	"computer_register",
 	"computer_unregister",
+	"app_approval_reply",
 ] as const satisfies readonly ClientMessage["type"][];
 
 export function isAppCommand(message: ClientMessage): boolean {
@@ -502,10 +529,13 @@ export function isAppCommand(message: ClientMessage): boolean {
 /** Why a window on a server must give the PIN first (S25.8). */
 export const PIN_REQUIRED = "Enter your PIN to change connectors or allow this action.";
 
-/** What a web PIN may confirm on a server (S25.8): the app commands, except the desktop's computer helper. */
+/** A server PIN cannot answer desktop approvals or register the desktop's computer helper. */
 export function isPinCommand(message: ClientMessage): boolean {
 	return (
-		isAppCommand(message) && message.type !== "computer_register" && message.type !== "computer_unregister"
+		isAppCommand(message) &&
+		message.type !== "computer_register" &&
+		message.type !== "computer_unregister" &&
+		message.type !== "app_approval_reply"
 	);
 }
 
@@ -609,6 +639,10 @@ export function parseClientMessage(raw: string): ClientMessage | undefined {
 			}
 			return undefined;
 		}
+		case "app_approval_reply":
+			return isShortString(m.requestId) && m.requestId.startsWith("app-") && typeof m.approved === "boolean"
+				? { type: "app_approval_reply", requestId: m.requestId, approved: m.approved }
+				: undefined;
 		case "auth_login":
 			return isString(m.providerId) && (m.method === "oauth" || m.method === "api_key")
 				? { type: "auth_login", providerId: m.providerId, method: m.method }
@@ -700,6 +734,9 @@ export function parseClientMessage(raw: string): ClientMessage | undefined {
 			return isShortString(m.requestId) && isPin(m.pin)
 				? { type: "pin_approve", requestId: m.requestId, pin: m.pin }
 				: undefined;
+		case "get_history":
+			if (m.requestId !== undefined && (!isShortString(m.requestId) || !m.requestId)) return undefined;
+			return { type: "get_history", ...(m.requestId !== undefined ? { requestId: m.requestId } : {}) };
 		case "computer_unregister":
 		case "connectors_list":
 		case "connectors_scan":
@@ -709,7 +746,6 @@ export function parseClientMessage(raw: string): ClientMessage | undefined {
 		case "abort":
 		case "new_conversation":
 		case "list_conversations":
-		case "get_history":
 			return { type: m.type };
 		default:
 			return undefined;

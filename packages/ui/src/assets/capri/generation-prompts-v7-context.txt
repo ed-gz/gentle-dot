@@ -1,0 +1,203 @@
+Capri context animation provenance — 2026-10-23
+
+Generated using the built-in image_gen tool with transparent_background=true.
+Reference images: capri-atlas-v2.png and capri-motion-life-v1.png, unchanged.
+No scripts paint or edit the PNG; scripts only inspect alpha/bounds and write manifests.
+
+FULL PROMPT
+
+undefined
+
+
+
+FINAL OUTPUT AND VALIDATION
+
+{
+  "image": "capri-motion-context-v1.png",
+  "source": "/home/egarza/.codex/generated_images/01a166ec-3f54-7611-a897-505e82394029/exec-613206b6-9c4e-4045-b19a-d90832d5f30c.png",
+  "sourceUnmodified": true,
+  "sha256": "ef1197e2f54ca6581f87a7379bf5332b4a3d223d8a39410c2be07ff201cfd222",
+  "width": 1536,
+  "height": 1024,
+  "mode": "RGBA",
+  "fullyTransparentPixels": 796603,
+  "alphaRange": [
+    0,
+    254
+  ],
+  "opaquePixelsAtOuterBorder": 0,
+  "animations": [
+    {
+      "action": "headphones",
+      "frames": 6,
+      "uniqueCrops": 6,
+      "canvas": {
+        "width": 276,
+        "height": 282
+      },
+      "playback": "loop",
+      "clipping": [
+        {
+          "frame": 0,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 1,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 2,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 3,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 4,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 5,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        }
+      ]
+    },
+    {
+      "action": "dancing",
+      "frames": 6,
+      "uniqueCrops": 6,
+      "canvas": {
+        "width": 280,
+        "height": 267
+      },
+      "playback": "loop",
+      "clipping": [
+        {
+          "frame": 0,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 1,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 2,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 3,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 4,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 5,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        }
+      ]
+    },
+    {
+      "action": "capture",
+      "frames": 6,
+      "uniqueCrops": 6,
+      "canvas": {
+        "width": 272,
+        "height": 256
+      },
+      "playback": "loop",
+      "clipping": [
+        {
+          "frame": 0,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 1,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 2,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 3,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 4,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 5,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        }
+      ]
+    },
+    {
+      "action": "follow-message",
+      "frames": 6,
+      "uniqueCrops": 6,
+      "canvas": {
+        "width": 275,
+        "height": 253
+      },
+      "playback": "loop",
+      "clipping": [
+        {
+          "frame": 0,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 1,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 2,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 3,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 4,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        },
+        {
+          "frame": 5,
+          "foreignOpaquePixels": 0,
+          "missingOpaquePixels": 0
+        }
+      ]
+    }
+  ]
+}
+
+The generated PNG is copied unchanged. No raster pixels were edited. Measured source crops and absolute clip polygons use a shared canvas with offsets and an eight-pixel margin. All four actions are calm loops with six unique temporal drawings. Top-level frames select matching static fallback artwork from the same atlas.
+Browser registered-frame QA: .cache/capri-motion/context-contact.png
+Metadata evidence: .cache/capri-motion/registration-context.json and validation-context.json

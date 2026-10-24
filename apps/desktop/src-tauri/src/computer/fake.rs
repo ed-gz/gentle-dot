@@ -22,6 +22,8 @@ pub struct FakeDesktop {
     pub elements: Mutex<Vec<AxElement>>,
     pub focus: Mutex<Option<Focus>>,
     pub opened: Mutex<Vec<String>>,
+    pub listed_apps: Mutex<Option<Vec<AppInfo>>>,
+    pub opened_windows: Mutex<Vec<String>>,
     pub activated: Mutex<Vec<i32>>,
     pub captures: AtomicUsize,
     /// A 2560 × 1600 pt display at the origin, captured at 1280 × 800 (scale 0.5).
@@ -41,6 +43,8 @@ impl Default for FakeDesktop {
             elements: Mutex::new(Vec::new()),
             focus: Mutex::new(None),
             opened: Mutex::new(Vec::new()),
+            listed_apps: Mutex::new(None),
+            opened_windows: Mutex::new(Vec::new()),
             activated: Mutex::new(Vec::new()),
             captures: AtomicUsize::new(0),
             geometry: ScreenshotGeometry::for_display(Point { x: 0.0, y: 0.0 }, 2560.0, 1280, 800),
@@ -70,10 +74,18 @@ impl Desktop for FakeDesktop {
     }
 
     fn list_apps(&self) -> Result<Vec<AppInfo>, String> {
+        if let Some(apps) = self.listed_apps.lock().unwrap().clone() {
+            return Ok(apps);
+        }
         Ok(vec![
-            AppInfo { name: "Safari".into(), bundle_id: Some("com.apple.Safari".into()), active: true },
-            AppInfo { name: "Mail".into(), bundle_id: Some("com.apple.mail".into()), active: false },
+            AppInfo { name: "Safari".into(), bundle_id: Some("com.apple.Safari".into()), active: true, windows: None },
+            AppInfo { name: "Mail".into(), bundle_id: Some("com.apple.mail".into()), active: false, windows: None },
         ])
+    }
+
+    fn open_window(&self, id: &str) -> Result<(), String> {
+        self.opened_windows.lock().unwrap().push(id.to_string());
+        Ok(())
     }
 
     fn open_app(&self, name: &str) -> Result<(), String> {

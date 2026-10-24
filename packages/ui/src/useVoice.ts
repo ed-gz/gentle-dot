@@ -2,6 +2,7 @@ import { MAX_VOICE_AUDIO, MAX_VOICE_TEXT } from "@gentle-dot/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { newRequestId, type Send } from "./components/types.ts";
 import { inDesktop } from "./desktop.ts";
+import { mobileBridge } from "./mobile.ts";
 import { guessLanguage, pickVoice, speakableText } from "./speech.ts";
 import { type DotState, isBusy } from "./store.ts";
 import { voiceLanguage } from "./voice-language.ts";
@@ -68,13 +69,14 @@ const REASONS = {
 	empty: "I didn't catch anything. Try again.",
 } as const;
 
-type Source = { kind: "daemon" | "native" } | { kind: "none"; reason?: string };
+type Source = { kind: "daemon" | "native" | "mobile" } | { kind: "none"; reason?: string };
 
 /**
  * Where speech becomes text: the daemon (an OpenAI key) when it can and the page may record,
  * else the desktop recognizer. The web offers only the daemon, over HTTPS or localhost.
  */
 function chooseSource(desktop: boolean, transcribe: boolean, native: NativeVoiceStatus | undefined): Source {
+	if (mobileBridge()) return { kind: "mobile" };
 	const secure = desktop || window.isSecureContext === true;
 	const recorder = typeof MediaRecorder !== "undefined" && navigator.mediaDevices?.getUserMedia !== undefined;
 	if (transcribe && secure && recorder) return { kind: "daemon" };
@@ -104,7 +106,12 @@ function stopTimers(entry: Recording): void {
 	entry.stopMeter?.();
 }
 
-export function useVoice(state: DotState, send: Send): VoiceControls {
+export function useVoice(state: DotState, send: Send, options?: { inputOnly: true; enabled: boolean }): VoiceControls {
+	const inputOnly = options?.inputOnly === true;
+	const enabled = options?.enabled ?? true;
+	const allowed = useRef(enabled);
+	allowed.current = enabled;
+	const generation = useRef(0);
 	const desktop = inDesktop();
 	const [native, setNative] = useState<NativeVoiceStatus | undefined>(undefined);
 	const [phase, setPhaseState] = useState<VoicePhase>("idle");
@@ -199,7 +206,8 @@ export function useVoice(state: DotState, send: Send): VoiceControls {
 				finish(REASONS.empty);
 				return;
 			}
-			if (sendOnStopNow.current) {
+			// The Android dialog returns a draft. Remote computer instructions always get a review.
+			if (!inputOnly && sendOnStopNow.current && !mobileBridge()) {
 				voiceTurn.current = new Set(latest.current.messages.map((m) => m.id));
 				send({ type: "send", text, requestId: newRequestId() });
 			} else {
@@ -208,7 +216,7 @@ export function useVoice(state: DotState, send: Send): VoiceControls {
 			}
 			finish();
 		},
-		[send, finish],
+		[send, finish, inputOnly],
 	);
 
 	const setSendOnStop = useCallback((next: boolean) => {
@@ -226,9 +234,10 @@ export function useVoice(state: DotState, send: Send): VoiceControls {
 	}, []);
 
 	const sent = useCallback(() => {
+		if (inputOnly) return;
 		voiceTurn.current = dictated.current ? new Set(latest.current.messages.map((m) => m.id)) : undefined;
 		dictated.current = false;
-	}, []);
+	}, [inputOnly]);
 
 	const begin = useCallback(
 		(entry: Recording) => {
@@ -245,8 +254,10 @@ export function useVoice(state: DotState, send: Send): VoiceControls {
 
 	const upload = useCallback(
 		async (blob: Blob, mime: string) => {
+			const attempt = generation.current;
 			setPhase("transcribing");
 			const data = await toBase64(blob);
+			if (attempt !== generation.current || !allowed.current) return;
 			if (data.length > MAX_VOICE_AUDIO) {
 				finish(REASONS.tooLong);
 				return;
@@ -267,15 +278,23 @@ export function useVoice(state: DotState, send: Send): VoiceControls {
 			return;
 		}
 		setPhase("transcribing");
-		stopNativeVoice().then(sendTranscript, (error: unknown) => finish(startRefusal(error)));
+		const attempt = generation.current;
+		stopNativeVoice().then(text => {
+			if (attempt === generation.current && allowed.current) sendTranscript(text);
+		}, (error: unknown) => { if (attempt === generation.current) finish(startRefusal(error)); });
 	}, [finish, sendTranscript, setPhase]);
 
 	const startDaemon = useCallback(async () => {
+		const attempt = generation.current;
 		let stream: MediaStream;
 		try {
 			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 		} catch {
-			finish(REASONS.denied);
+			if (attempt === generation.current) finish(REASONS.denied);
+			return;
+		}
+		if (attempt !== generation.current || !allowed.current) {
+			for (const track of stream.getTracks()) track.stop();
 			return;
 		}
 		const type = RECORDING_TYPES.find((t) => MediaRecorder.isTypeSupported?.(t));
@@ -298,30 +317,51 @@ export function useVoice(state: DotState, send: Send): VoiceControls {
 	}, [begin, finish, stop, upload]);
 
 	const startNative = useCallback(async () => {
+		const attempt = generation.current;
 		try {
 			// Apple's recognizer listens in one language: the one chosen in Settings, else the system's.
 			await startNativeVoice(voiceLanguage() ?? navigator.language);
 		} catch (error) {
-			finish(startRefusal(error));
+			if (attempt === generation.current) finish(startRefusal(error));
 			return;
 		}
+		if (attempt !== generation.current || !allowed.current) { void cancelNativeVoice().catch(() => {}); return; }
 		begin({ kind: "native", cancelled: false });
 	}, [begin, finish]);
 
+	const mobileAttempt = useRef(0);
+	const startMobile = useCallback(async () => {
+		const bridge = mobileBridge();
+		if (!bridge) return;
+		const attempt = ++mobileAttempt.current;
+		setNote(undefined);
+		setPhase("transcribing");
+		try {
+			const result = await bridge.transcribe({ language: voiceLanguage() ?? navigator.language });
+			if (attempt === mobileAttempt.current && allowed.current) sendTranscript(result.text);
+		} catch (error) {
+			if (attempt === mobileAttempt.current) finish(startRefusal(error));
+		}
+	}, [finish, sendTranscript, setPhase]);
+
 	const start = useCallback(() => {
-		if (phaseNow.current !== "idle" || starting.current) return;
-		stopSpeaking();
+		if (!allowed.current || phaseNow.current !== "idle" || starting.current) return;
+		if (!inputOnly) stopSpeaking();
 		if (source.kind === "none") return;
 		starting.current = true;
-		const run = source.kind === "daemon" ? startDaemon() : startNative();
+		const run =
+			source.kind === "mobile" ? startMobile() : source.kind === "daemon" ? startDaemon() : startNative();
 		void run.finally(() => {
 			starting.current = false;
 		});
-	}, [source.kind, startDaemon, startNative, stopSpeaking]);
+	}, [source.kind, startDaemon, startNative, startMobile, stopSpeaking, inputOnly]);
 
 	const cancel = useCallback(() => {
+		mobileAttempt.current += 1;
+		generation.current += 1;
+		setDraft(undefined);
 		const current = recording.current;
-		if (!current) return;
+		if (!current) { finish(); return; }
 		current.cancelled = true;
 		if (current.kind === "daemon") current.recorder?.stop();
 		else void cancelNativeVoice().catch(() => {});
@@ -432,6 +472,8 @@ export function useVoice(state: DotState, send: Send): VoiceControls {
 		return () => window.removeEventListener("keydown", onKey, true);
 	}, [phase, cancel]);
 
+	useEffect(() => { if (!enabled) cancel(); }, [enabled, cancel]);
+
 	// Leaving the chat drops a recording and silences the voice.
 	const cancelNow = useRef(cancel);
 	cancelNow.current = cancel;
@@ -440,9 +482,9 @@ export function useVoice(state: DotState, send: Send): VoiceControls {
 	useEffect(
 		() => () => {
 			cancelNow.current();
-			stopSpeakingNow.current();
+			if (!inputOnly) stopSpeakingNow.current();
 		},
-		[],
+		[inputOnly],
 	);
 
 	const mic: MicState | undefined =
@@ -467,8 +509,8 @@ export function useVoice(state: DotState, send: Send): VoiceControls {
 		stopSpeaking,
 		setMuted,
 		typed,
-		sendOnStop,
-		setSendOnStop,
+		sendOnStop: inputOnly || mobileBridge() ? false : sendOnStop,
+		setSendOnStop: inputOnly ? () => {} : setSendOnStop,
 		...(draft ? { draft } : {}),
 		draftTaken,
 		sent,

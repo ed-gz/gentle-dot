@@ -23,6 +23,7 @@ import type {
 	VoiceCapability,
 } from "@gentle-dot/protocol";
 import { MAX_CONNECTOR_DRAFTS } from "@gentle-dot/protocol";
+import type { NotificationEvent } from "./mobile.ts";
 
 export interface AuthFlowState {
 	providerId: string;
@@ -53,6 +54,8 @@ export interface ProfilesState {
 
 export interface ConnectorsState {
 	open: boolean;
+	/** A persistent access issue belongs in Connections, not repeatedly over the conversation. */
+	issue?: string;
 	/** Undefined until the first list arrives. */
 	list?: ConnectorInfo[];
 	/** A connector sign-in or setup; `providerId` is the connector id (or the draft's name). */
@@ -110,6 +113,10 @@ export interface Notice {
 	id: number;
 	level: "info" | "warning" | "error";
 	message: string;
+	notificationEvent?: NotificationEvent;
+	notificationId?: string;
+	session?: { paneId: string; sessionId?: string };
+	title?: string;
 }
 
 export interface DotState {
@@ -228,6 +235,7 @@ function reduceServer(state: DotState, message: ServerMessage): DotState {
 	switch (message.type) {
 		case "ready": {
 			const { pin: _pin, ...rest } = state;
+			const { issue: _issue, ...connectors } = state.connectors;
 			return {
 				...rest,
 				...(message.pin ? { pin: message.pin } : {}),
@@ -240,7 +248,7 @@ function reduceServer(state: DotState, message: ServerMessage): DotState {
 				features: message.features ?? initialState.features,
 				voice: message.voice ?? initialState.voice,
 				// The daemon sends the drafts still waiting right after ready.
-				connectors: { ...state.connectors, drafts: [] },
+				connectors: { ...connectors, drafts: [] },
 			};
 		}
 		case "pin_status":
@@ -269,13 +277,33 @@ function reduceServer(state: DotState, message: ServerMessage): DotState {
 				text: m.text + message.delta,
 				streaming: true,
 			}));
-		case "message_done":
-			return updateAssistant(state, message.messageId, (m) => {
+		case "message_done": {
+			const alreadyDone = state.messages.some(
+				(m) =>
+					m.id === message.messageId &&
+					!m.streaming &&
+					m.text === message.text &&
+					(message.error !== undefined ? m.note?.kind === "error" && m.note.text === message.error : !m.note),
+			);
+			const updated = updateAssistant(state, message.messageId, (m) => {
 				const done: ChatMessage = { ...m, text: message.text, streaming: false };
 				if (message.error !== undefined) done.note = { kind: "error", text: message.error };
 				else if (message.stopped) done.note = { kind: "stopped", text: "Stopped." };
 				return done;
 			});
+			if (alreadyDone || message.stopped || message.intermediate || (!message.text.trim() && !message.error))
+				return updated;
+			return addNotice(
+				updated,
+				message.error ? "error" : "info",
+				message.error ? "Revisa la respuesta de Dot para continuar." : "Tu respuesta está lista en el chat.",
+				{
+					notificationEvent: message.error ? "dotError" : "dotReply",
+					notificationId: `dot-${message.messageId}-${message.error ? "error" : "reply"}`,
+					title: message.error ? "Dot necesita atención" : "Gentle Dot",
+				},
+			);
+		}
 		case "activity":
 			return updateAssistant(state, message.messageId, (m) => {
 				const index = m.activities.findIndex((a) => a.id === message.activity.id);
@@ -285,11 +313,31 @@ function reduceServer(state: DotState, message: ServerMessage): DotState {
 						: m.activities.map((a, i) => (i === index ? message.activity : a));
 				return { ...m, activities };
 			});
-		case "ask":
+		case "ask": {
 			if (state.asks.some((a) => a.requestId === message.ask.requestId)) return state;
-			return { ...state, asks: [...state.asks, message.ask] };
+			const next = { ...state, asks: [...state.asks, message.ask] };
+			return addNotice(
+				next,
+				"warning",
+				message.ask.method === "app" ? "Puedes responder desde Sesiones." : "Abre Dot para responder.",
+				{
+					notificationEvent: "permission",
+					notificationId: `${message.ask.method === "app" ? "dot-approval" : "dot-ask"}:${message.ask.requestId}`,
+					title: "Dot necesita tu respuesta",
+				},
+			);
+		}
 		case "ask_resolved":
-			return { ...state, asks: state.asks.filter((a) => a.requestId !== message.requestId) };
+			return {
+				...state,
+				asks: state.asks.filter((a) => a.requestId !== message.requestId),
+				notices: state.notices.filter(
+					(notice) =>
+						notice.notificationId !== `dot-ask:${message.requestId}` &&
+						notice.notificationId !== `dot-approval:${message.requestId}`,
+				),
+			};
+
 		case "history": {
 			// A snapshot taken mid-turn cannot cover the live streaming turn: the
 			// session file only gains the assistant message once it ends, and history
@@ -403,7 +451,17 @@ function reduceServer(state: DotState, message: ServerMessage): DotState {
 				: updateFlow(state, message.flowId, finish);
 		}
 		case "toast":
-			return addNotice(state, message.level, message.message);
+			if (
+				message.code === "connectors_unchecked" ||
+				message.message.startsWith("Gentle Dot could not check your connectors")
+			)
+				return { ...state, connectors: { ...state.connectors, issue: message.message } };
+			return addNotice(state, message.level, message.message, {
+				...(message.notificationEvent ? { notificationEvent: message.notificationEvent } : {}),
+				...(message.notificationId ? { notificationId: message.notificationId } : {}),
+				...(message.session ? { session: message.session } : {}),
+				...(message.title ? { title: message.title } : {}),
+			});
 		case "error": {
 			if (MODEL_ERRORS.has(message.code))
 				return { ...state, models: { ...state.models, error: message.message } };
@@ -492,9 +550,22 @@ function updateAssistant(state: DotState, id: string, update: (m: ChatMessage) =
 	return { ...state, messages: state.messages.map((m, i) => (i === index ? update(m) : m)) };
 }
 
-function addNotice(state: DotState, level: Notice["level"], message: string): DotState {
+function addNotice(
+	state: DotState,
+	level: Notice["level"],
+	message: string,
+	detail: Partial<Pick<Notice, "notificationEvent" | "notificationId" | "title" | "session">> = {},
+): DotState {
 	if (!message) return state;
-	return { ...state, notices: [...state.notices.slice(-4), { id: ++nextNotice, level, message }] };
+	if (
+		state.notices.some((notice) =>
+			detail.notificationId
+				? notice.notificationId === detail.notificationId
+				: notice.level === level && notice.message === message,
+		)
+	)
+		return state;
+	return { ...state, notices: [...state.notices.slice(-4), { id: ++nextNotice, level, message, ...detail }] };
 }
 
 function stopStreaming(message: ChatMessage): ChatMessage {
