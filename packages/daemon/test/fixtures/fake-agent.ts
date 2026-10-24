@@ -102,6 +102,7 @@ if (process.env.FAKE_AGENT_ENV_FILE) {
 					"XDG_CACHE_HOME",
 					"XDG_STATE_HOME",
 					"GIT_CONFIG_GLOBAL",
+					"GH_CONFIG_DIR",
 					"PATH",
 					"PI_CODING_AGENT_DIR",
 					"GENTLE_SHELL_CONFIG",

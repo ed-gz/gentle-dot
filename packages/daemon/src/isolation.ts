@@ -6,6 +6,7 @@ import { delimiter, dirname, join } from "node:path";
 import { bundledGentleShell } from "./config.ts";
 import { directAccess, type EngineAccess } from "./engine-access.ts";
 import { resolveEngramBin, runtimeDir } from "./runtime.ts";
+import { vpsEnabled } from "./vps.ts";
 
 /**
  * The folder with the `pi` executable bundled with the daemon. The engine's
@@ -118,6 +119,9 @@ export function ensureMemoryProject(workspace: string, access: EngineAccess = di
  * the XDG folders under it, because parts of the engine write to fixed places
  * under the home folder. PATH is kept, with the bundled `pi` folder first, and so is the user's git identity,
  * through `GIT_CONFIG_GLOBAL` pointing at their real `~/.gitconfig`.
+ * On the desktop, GitHub CLI can reuse its existing configuration through
+ * `GH_CONFIG_DIR`; its credentials stay managed by `gh`, without copying them.
+ * Explicit configuration and an account in the engine's private home take precedence.
  *
  * Memory is the user's global Engram: Engram ties a server to its data folder
  * (by default under HOME), so `ENGRAM_DATA_DIR` points at the user's real one
@@ -181,6 +185,24 @@ export function isolatedAgentEnv(
 	if (runtime) env.ENGRAM_BIN = resolveEngramBin(base, runtime, { home: realHome });
 	const gitConfig = join(realHome, ".gitconfig");
 	if (!base.GIT_CONFIG_GLOBAL && existsSync(gitConfig)) env.GIT_CONFIG_GLOBAL = gitConfig;
+	// Share only the desktop user's own CLI configuration, never a server/other
+	// user's account. Keep HOME and XDG isolated for every other tool.
+	if (
+		!base.GH_CONFIG_DIR &&
+		access === directAccess &&
+		!vpsEnabled(base) &&
+		!existsSync(join(home, ".config", "gh", "hosts.yml"))
+	) {
+		const appData = process.platform === "win32" ? base.AppData || base.APPDATA : undefined;
+		const ghConfig = base.XDG_CONFIG_HOME
+			? join(base.XDG_CONFIG_HOME, "gh")
+			: appData
+				? join(appData, "GitHub CLI")
+				: join(realHome, ".config", "gh");
+		// Follow gh's original directory precedence; don't search other accounts
+		// or read hosts.yml, which can contain credentials on some installations.
+		if (existsSync(join(ghConfig, "hosts.yml"))) env.GH_CONFIG_DIR = ghConfig;
+	}
 	return env;
 }
 

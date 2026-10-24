@@ -10,6 +10,7 @@ import {
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type DotDaemon, startDaemon } from "../src/daemon.ts";
+import { directAccess, type EngineAccess } from "../src/engine-access.ts";
 import {
 	ensureMemoryProject,
 	isolatedAgentEnv,
@@ -19,6 +20,25 @@ import {
 import { FAKE_AGENT, tempDir } from "./helpers.ts";
 
 const daemons: DotDaemon[] = [];
+const GH_HOSTS_FIXTURE = "fixture-only-auth-marker; intentionally not parsed\n";
+
+function githubConfig(dir: string): string {
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(join(dir, "hosts.yml"), GH_HOSTS_FIXTURE);
+	return dir;
+}
+
+function withPlatform<T>(platform: NodeJS.Platform, run: () => T): T {
+	const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+	if (!descriptor) throw new Error("process.platform has no property descriptor");
+	Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+	try {
+		return run();
+	} finally {
+		Object.defineProperty(process, "platform", descriptor);
+	}
+}
+
 afterEach(async () => {
 	await Promise.all(daemons.splice(0).map((d) => d.close()));
 });
@@ -36,6 +56,132 @@ describe("isolatedAgentEnv PATH", () => {
 		const once = isolatedAgentEnv({ PATH: "/bin", HOME: tempDir() }, tempDir());
 		const twice = isolatedAgentEnv({ PATH: once.PATH, HOME: tempDir() }, tempDir());
 		expect(twice.PATH).toBe(once.PATH);
+	});
+});
+
+describe("isolatedAgentEnv GitHub CLI", () => {
+	it("reuses an existing desktop CLI configuration without copying credentials or restoring HOME", () => {
+		const realHome = tempDir();
+		const config = githubConfig(join(realHome, ".config", "gh"));
+		const dataDir = tempDir();
+		const base = { HOME: realHome };
+		const env = isolatedAgentEnv(base, dataDir);
+		expect(env.GH_CONFIG_DIR).toBe(config);
+		expect(env.HOME).toBe(join(dataDir, "home"));
+		expect(env.XDG_CONFIG_HOME).toBe(join(dataDir, "home", ".config"));
+		expect(env.GH_TOKEN).toBeUndefined();
+		expect(env.GITHUB_TOKEN).toBeUndefined();
+		expect(Object.values(env)).not.toContain(GH_HOSTS_FIXTURE);
+		expect(existsSync(join(dataDir, "home", ".config", "gh"))).toBe(false);
+		expect(readFileSync(join(config, "hosts.yml"), "utf8")).toBe(GH_HOSTS_FIXTURE);
+		expect(base).toEqual({ HOME: realHome });
+	});
+
+	it("honors an explicit GH_CONFIG_DIR even without hosts.yml and ahead of a private account", () => {
+		const realHome = tempDir();
+		githubConfig(join(realHome, ".config", "gh"));
+		const dataDir = tempDir();
+		githubConfig(join(dataDir, "home", ".config", "gh"));
+		const explicit = join(tempDir(), "chosen-gh");
+		const customAccess: EngineAccess = (fn) => fn();
+		for (const [vps, access] of [
+			["0", directAccess],
+			["1", directAccess],
+			["0", customAccess],
+		] as const) {
+			const env = isolatedAgentEnv(
+				{ HOME: realHome, GH_CONFIG_DIR: explicit, GENTLE_DOT_VPS: vps },
+				dataDir,
+				access,
+			);
+			expect(env.GH_CONFIG_DIR).toBe(explicit);
+		}
+		expect(existsSync(explicit)).toBe(false);
+	});
+
+	it.each(["linux", "win32"] as const)(
+		"uses the original XDG configuration before AppData and HOME on %s",
+		(platform) => {
+			const realHome = tempDir();
+			const xdg = join(realHome, "custom-xdg");
+			const appdata = join(realHome, "custom-appdata");
+			githubConfig(join(realHome, ".config", "gh"));
+			githubConfig(join(appdata, "GitHub CLI"));
+			githubConfig(join(xdg, "gh"));
+			const env = withPlatform(platform, () =>
+				isolatedAgentEnv({ HOME: realHome, AppData: appdata, XDG_CONFIG_HOME: xdg }, tempDir()),
+			);
+			expect(env.GH_CONFIG_DIR).toBe(join(xdg, "gh"));
+		},
+	);
+
+	it.each(["AppData", "APPDATA"])("uses %s/GitHub CLI before HOME on Windows", (key) => {
+		const realHome = tempDir();
+		const appdata = join(realHome, "custom-appdata");
+		const otherAppdata = join(realHome, "other-appdata");
+		githubConfig(join(realHome, ".config", "gh"));
+		githubConfig(join(otherAppdata, "GitHub CLI"));
+		githubConfig(join(appdata, "GitHub CLI"));
+		const env = withPlatform("win32", () =>
+			isolatedAgentEnv({ HOME: realHome, APPDATA: otherAppdata, [key]: appdata }, tempDir()),
+		);
+		expect(env.GH_CONFIG_DIR).toBe(join(appdata, "GitHub CLI"));
+	});
+
+	it("ignores both AppData spellings on Linux", () => {
+		const realHome = tempDir();
+		const config = githubConfig(join(realHome, ".config", "gh"));
+		const appdata = join(realHome, "custom-appdata");
+		githubConfig(join(appdata, "GitHub CLI"));
+		const env = withPlatform("linux", () =>
+			isolatedAgentEnv({ HOME: realHome, AppData: appdata, APPDATA: appdata }, tempDir()),
+		);
+		expect(env.GH_CONFIG_DIR).toBe(config);
+	});
+
+	it.each(["XDG_CONFIG_HOME", "AppData", "APPDATA"])(
+		"does not fall back to a different account when %s has no hosts.yml",
+		(key) => {
+			const realHome = tempDir();
+			githubConfig(join(realHome, ".config", "gh"));
+			const env = withPlatform(key === "XDG_CONFIG_HOME" ? "linux" : "win32", () =>
+				isolatedAgentEnv({ HOME: realHome, [key]: tempDir() }, tempDir()),
+			);
+			expect(env.GH_CONFIG_DIR).toBeUndefined();
+		},
+	);
+
+	it("keeps an account already configured in the engine's private home", () => {
+		const realHome = tempDir();
+		githubConfig(join(realHome, ".config", "gh"));
+		const dataDir = tempDir();
+		const privateConfig = githubConfig(join(dataDir, "home", ".config", "gh"));
+		const env = isolatedAgentEnv({ HOME: realHome }, dataDir);
+		expect(env.GH_CONFIG_DIR).toBeUndefined();
+		expect(join(env.XDG_CONFIG_HOME ?? "", "gh")).toBe(privateConfig);
+		expect(readFileSync(join(privateConfig, "hosts.yml"), "utf8")).toBe(GH_HOSTS_FIXTURE);
+	});
+
+	it("does not advertise a host account when the config folder exists without hosts.yml", () => {
+		const realHome = tempDir();
+		mkdirSync(join(realHome, ".config", "gh"), { recursive: true });
+		const env = isolatedAgentEnv({ HOME: realHome }, tempDir());
+		expect(env.GH_CONFIG_DIR).toBeUndefined();
+	});
+
+	it.each(["1", "on", " TRUE "])("never auto-shares a host account in VPS mode %s", (mode) => {
+		const realHome = tempDir();
+		githubConfig(join(realHome, ".config", "gh"));
+		expect(
+			isolatedAgentEnv({ HOME: realHome, GENTLE_DOT_VPS: mode }, tempDir()).GH_CONFIG_DIR,
+		).toBeUndefined();
+	});
+
+	it("never auto-shares a host account across an explicit engine access boundary", () => {
+		const realHome = tempDir();
+		githubConfig(join(realHome, ".config", "gh"));
+		const access: EngineAccess = (fn) => fn();
+		expect(isolatedAgentEnv({ HOME: realHome }, tempDir(), access).GH_CONFIG_DIR).toBeUndefined();
 	});
 });
 
@@ -233,6 +379,16 @@ describe("engine memory and folders", () => {
 		const { env } = await start({ env: { GENTLE_DOT_ENGRAM: "private" } });
 		expect(env.ENGRAM_PORT).toBe("7438");
 		expect(env.ENGRAM_DATA_DIR).toBeUndefined();
+	});
+
+	it("passes the selected GitHub CLI configuration to the actual engine process", async () => {
+		const xdg = tempDir();
+		const config = githubConfig(join(xdg, "gh"));
+		const { dataDir, env } = await start({ env: { XDG_CONFIG_HOME: xdg } });
+		expect(env.GH_CONFIG_DIR).toBe(config);
+		expect(env.HOME).toBe(join(dataDir, "home"));
+		expect(env.XDG_CONFIG_HOME).toBe(join(dataDir, "home", ".config"));
+		expect(existsSync(join(dataDir, "home", ".config", "gh"))).toBe(false);
 	});
 
 	it("tells the engine about a custom folder without working or writing in it", async () => {
