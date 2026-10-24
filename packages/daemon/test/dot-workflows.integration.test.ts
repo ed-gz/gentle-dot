@@ -307,10 +307,12 @@ it.each([false, true])(
 				() => {
 					expect(prompt).toHaveBeenCalledOnce();
 					expect(loseFirstAcknowledgment).toBe(false);
+					// The tool invocation happens before Pi consumes its result and settles the reply.
+					expect(stage).toBe(7);
+					expect(session?.isIdle).toBe(true);
 				},
 				{ timeout: 10_000 },
 			);
-			expect(stage).toBe(7);
 			expect(probe).not.toHaveBeenCalled();
 			finish(1, "result-b-final");
 			await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });

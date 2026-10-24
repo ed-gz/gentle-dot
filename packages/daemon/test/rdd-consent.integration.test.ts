@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { createConnection } from "node:net";
 import { once } from "node:events";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
@@ -12,6 +12,7 @@ import {
 import { expect, it, vi } from "vitest";
 import { localRequest } from "../src/orchestration/herdr.ts";
 import { SESSION_EXTENSION_PATH } from "../src/orchestration/index.ts";
+import { tempDir } from "./helpers.ts";
 
 const gentle = dirname(createRequire(import.meta.url).resolve("gentle-pi/package.json"));
 const providerPath = join(gentle, "extensions/gentle-ai.ts");
@@ -27,11 +28,10 @@ interface FixtureConsent {
 const { decodeReviewConsentV3 } = await import(join(gentle, "lib/review-integration-v2.ts")) as {
 	decodeReviewConsentV3(raw: Record<string, unknown>, agent: string): FixtureConsent;
 };
-const scratch = resolve(".cache/rdd-consent-bridge/tests");
-mkdirSync(scratch, { recursive: true });
 
 async function harness(unverifiedSource = false) {
-	const directory = mkdtempSync(join(scratch, "runner-"));
+	// Unix socket paths are bounded: nesting the fixture under the checkout can exceed 103 bytes.
+	const directory = tempDir();
 	expect(spawnSync("git", ["init", "--quiet", "--initial-branch=main", directory]).status).toBe(0);
 	const raw = JSON.parse(readFileSync(join(gentle, "tests/fixtures/devbinary/consent-v3.captured.json"), "utf8"));
 	raw.agent = "pi";
@@ -145,8 +145,26 @@ async function harness(unverifiedSource = false) {
 		} catch (error) { reject(error); }
 	});
 	const errors: unknown[] = [];
-	await session.bindExtensions({ mode: "tui", onError: error => errors.push(error), uiContext: { custom, notify() {}, setStatus() {} } as unknown as ExtensionUIContext });
-	const manifest = JSON.parse(readFileSync(join(registry, readdirSync(registry).find(file => file.endsWith(".json"))!), "utf8"));
+	const notifications: string[] = [];
+	await session.bindExtensions({
+		mode: "tui",
+		onError: (error) => errors.push(error),
+		uiContext: {
+			custom,
+			notify(message: string) {
+				notifications.push(message);
+			},
+			setStatus() {},
+		} as unknown as ExtensionUIContext,
+	});
+	const manifestFile = existsSync(registry)
+		? readdirSync(registry).find((file) => file.endsWith(".json"))
+		: undefined;
+	if (!manifestFile)
+		throw new Error(
+			`Fixture session adapter did not publish its manifest: ${notifications.join("; ") || "no notification"}`,
+		);
+	const manifest = JSON.parse(readFileSync(join(registry, manifestFile), "utf8"));
 	const call = (method: string, params = {}) => localRequest(manifest.socketPath, method, { expectedSessionId: manifest.sessionId, expectedInstanceId: manifest.instanceId, ...params });
 	let count = 0;
 	session.agent.streamFunction = () => {

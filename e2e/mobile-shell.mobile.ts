@@ -894,7 +894,9 @@ test("agent workflow unfolds on demand, preserves the draft and fits phone, land
 	const { traffic, errors } = await mountShell(page, { workflow: true });
 	await page.getByRole("button", { name: "Sesiones", exact: true }).click();
 	await page.getByRole("button", { name: /Revisión del proyecto/ }).click();
-	const workflow = page.locator(".agent-workflow");
+	const workflow = page.locator(".agent-workflow").filter({
+		has: page.getByRole("list", { name: "Subagentes activos", includeHidden: true }),
+	});
 	const summary = workflow.locator(":scope > summary");
 	await expect(summary).toContainText("1 activo");
 	await expect(workflow).not.toHaveAttribute("open", "");
@@ -996,7 +998,9 @@ test("active agent opens its own conversation and native Back returns to the age
 		text: "Continúa y avísame al terminar",
 	});
 	await expect(reply).toHaveValue("");
-	await expect(page.getByText("Instrucción enviada a Revisión del proyecto.", { exact: true })).toBeVisible();
+	const delivery = page.getByRole("region", { name: "Estado de tus envíos" });
+	await expect(delivery).toContainText("Continúa y avísame al terminar");
+	await expect(delivery).toContainText("Recibido por la conexión; esperando confirmación de la sesión.");
 	await page.setViewportSize({ width: 375, height: 812 });
 	await page.evaluate(() => window.__mobileShellNativeEvent("backButton"));
 	await expect(page.getByRole("button", { name: /Revisión del proyecto/ })).toBeVisible();
@@ -1155,8 +1159,16 @@ test("chat receives private images and files; Android save/share require an expl
 	).toEqual([]);
 	await pdf.getByRole("button", { name: "Guardar archivo" }).click();
 	await expect(pdf.getByRole("status")).toContainText("Archivo recibido");
-	await image.getByRole("button", { name: "Compartir", exact: true }).click();
-	await expect(image.getByRole("status")).toContainText("menú para compartir");
+	await image.getByRole("button", { name: "Ampliar Rosa Gentle.png" }).click();
+	const viewer = page.getByRole("dialog", { name: "Rosa Gentle.png", exact: true });
+	await expect(viewer).toBeVisible();
+	expect(
+		await page.evaluate(() =>
+			window.__mobileShellFixture.calls.filter((call) => call.method === "receiveFile"),
+		),
+	).toHaveLength(1);
+	await viewer.getByRole("button", { name: "Compartir imagen", exact: true }).click();
+	await expect(viewer.getByRole("status")).toContainText("menú para compartir");
 	const calls = await page.evaluate(() =>
 		window.__mobileShellFixture.calls
 			.filter((call) => call.method === "receiveFile")
@@ -1178,10 +1190,8 @@ test("chat receives private images and files; Android save/share require an expl
 			action: "share",
 		},
 	]);
-	await image.getByRole("button", { name: "Ampliar Rosa Gentle.png" }).click();
-	await expect(page.getByRole("dialog", { name: "Rosa Gentle.png" })).toBeVisible();
 	await page.evaluate(() => window.__mobileShellNativeEvent("backButton"));
-	await expect(page.getByRole("dialog", { name: "Rosa Gentle.png" })).toBeHidden();
+	await expect(viewer).toBeHidden();
 	await expect(page.getByRole("textbox", { name: "Mensaje", exact: true })).toBeVisible();
 	expect(traffic.http.some((request) => request.path === `/api/files/${IMAGE_ID}/content`)).toBe(true);
 	expect(traffic.http.some((request) => request.path === `/api/files/${FILE_ID}/content`)).toBe(false);
@@ -1258,16 +1268,19 @@ test("phone customizes independent alerts and persists them separately from Dot 
 	expect(errors).toEqual([]);
 });
 
-test("subscription usage stays in settings, refreshes on demand, and preserves the chat draft", async ({
+test("subscription usage shows chat badges, opens details in settings and preserves the chat draft", async ({
 	page,
 }, info) => {
 	await page.setViewportSize({ width: 375, height: 812 });
 	const { traffic, errors } = await mountShell(page);
 	const draft = page.getByRole("textbox", { name: "Mensaje", exact: true });
 	await draft.fill("Después continúa con la revisión.");
-	expect(traffic.http.some((request) => request.path === "/api/mobile/usage")).toBe(false);
+	await expect(page.getByRole("img", { name: "Codex, Semanal: 22% usado", exact: true })).toBeVisible();
+	const initialReads = traffic.http.filter((request) => request.path === "/api/mobile/usage").length;
+	expect(initialReads).toBeGreaterThan(0);
+	await expect(page.getByRole("main", { name: "Consumo", exact: true })).toHaveCount(0);
 	await page.getByRole("button", { name: "Ajustes" }).click();
-	expect(traffic.http.some((request) => request.path === "/api/mobile/usage")).toBe(false);
+	expect(traffic.http.filter((request) => request.path === "/api/mobile/usage")).toHaveLength(initialReads);
 	await page.getByRole("button", { name: "Consumo", exact: true }).click();
 	const panel = page.getByRole("main", { name: "Consumo", exact: true });
 	await expect(panel.getByRole("article", { name: "Consumo de Codex" })).toBeVisible();
@@ -1602,12 +1615,17 @@ test("phone approvals remain usable when Dot's model has failed", async ({ page 
 		await route.fulfill({ headers: { "Access-Control-Allow-Origin": "*" }, json: { ok: true } });
 	});
 	await page.getByRole("button", { name: /^Sesiones/ }).click();
-	await expect(page.getByRole("button", { name: "Aprobar permiso de Dot", exact: true })).toBeEnabled();
 	const permission = page.getByRole("region", { name: "Permisos pendientes" });
 	await expect(permission.getByRole("button", { name: "Permitir", exact: true })).toBeEnabled();
+	expect(approved).toBe(false);
+	expect(traffic.http.filter((item) => item.body?.action === "answer")).toHaveLength(0);
+	await page.getByRole("button", { name: "Dot", exact: true }).click();
+	await expect(page.getByRole("button", { name: "Aprobar permiso de Dot", exact: true })).toBeEnabled();
 	await page.screenshot({ path: info.outputPath("apk-independent-approvals.png") });
 	await page.getByRole("button", { name: "Aprobar permiso de Dot", exact: true }).click();
-	expect(approved).toBe(true);
+	await expect.poll(() => approved).toBe(true);
+	expect(traffic.http.filter((item) => item.body?.action === "answer")).toHaveLength(0);
+	await page.getByRole("button", { name: /^Sesiones/ }).click();
 	await permission.getByRole("button", { name: "Permitir", exact: true }).click();
 	await expect.poll(() => traffic.http.filter((item) => item.body?.action === "answer").length).toBe(1);
 	expect(traffic.ws.some((event) => event.type === "send")).toBe(false);
@@ -2044,6 +2062,9 @@ test("phone browser access and Dot rejection require explicit choices in their c
 	});
 	await page.getByRole("textbox", { name: "Mensaje", exact: true }).fill("Conserva este borrador");
 	await page.getByRole("button", { name: "Sesiones", exact: true }).click();
+	await expect(page.getByRole("button", { name: "Rechazar permiso de Dot" })).toHaveCount(0);
+	expect(answers).toEqual([]);
+	await page.getByRole("button", { name: "Dot", exact: true }).click();
 	await expect(page.getByRole("button", { name: "Rechazar permiso de Dot" })).toBeEnabled();
 	expect(answers).toEqual([]);
 	await page.getByRole("button", { name: "Rechazar permiso de Dot" }).click();
