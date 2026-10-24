@@ -167,6 +167,13 @@ export function CompanionSettings({ themeControls }: { themeControls: NativeComp
 					personaje sobre otras apps.
 				</p>
 			) : null}
+			{ready && state.motionPausedReason && (
+				<p className="mobile-setting-hint" role="status">
+					{state.motionPausedReason === "battery"
+						? "Movimiento pausado por el ahorro de batería de Android."
+						: "Movimiento pausado porque Android tiene las animaciones desactivadas."}
+				</p>
+			)}
 			{!state.permission &&
 				(permissionHelp ? (
 					<div className="mobile-companion-permission">

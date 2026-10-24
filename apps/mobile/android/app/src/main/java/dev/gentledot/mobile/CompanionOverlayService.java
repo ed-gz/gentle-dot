@@ -14,6 +14,7 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.content.res.Configuration;
+import android.database.ContentObserver;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
@@ -101,6 +102,7 @@ public final class CompanionOverlayService extends Service {
             });
         });
     }
+    private final ContentObserver motionObserver=new ContentObserver(handler){@Override public void onChange(boolean selfChange){updateVisibility();}};
     private final BroadcastReceiver stateReceiver=new BroadcastReceiver(){@Override public void onReceive(Context c,Intent i){updateVisibility();}};
     @Override public void onCreate(){
         super.onCreate();if(Build.VERSION.SDK_INT<26){stopSelf();return;}current=new WeakReference<>(this);windows=getSystemService(WindowManager.class);
@@ -116,20 +118,23 @@ public final class CompanionOverlayService extends Service {
                 info.addAction(new AccessibilityNodeInfo.AccessibilityAction(PIN,prefs(CompanionOverlayService.this).getBoolean("pinned",false)?"Soltar posición":"Fijar posición"));
                 info.addAction(new AccessibilityNodeInfo.AccessibilityAction(LEFT,"Mover a la izquierda"));info.addAction(new AccessibilityNodeInfo.AccessibilityAction(RIGHT,"Mover a la derecha"));info.addAction(new AccessibilityNodeInfo.AccessibilityAction(HIDE,"Ocultar acompañante"));}
             @Override public boolean performAccessibilityAction(View view,int action,android.os.Bundle args){
-                if(action==PIN){togglePin();return true;}if(action==LEFT||action==RIGHT){position.x=action==LEFT?dp(8):screen().x-position.width-dp(8);move();savePosition();return true;}
+                if(action==PIN){togglePin();return true;}if(action==LEFT||action==RIGHT){sprite.play("walk");position.x=action==LEFT?dp(8):screen().x-position.width-dp(8);move();savePosition();return true;}
                 if(action==HIDE){stopEnabled();return true;}return super.performAccessibilityAction(view,action,args);}
         });
         sprite.setOnTouchListener(new View.OnTouchListener(){float x,y;int sx,sy;boolean moved;final int slop=ViewConfiguration.get(CompanionOverlayService.this).getScaledTouchSlop();
             @SuppressLint("ClickableViewAccessibility") // Taps/long presses return false to View's native performClick handling; only actual drags are consumed.
             @Override public boolean onTouch(View view,MotionEvent event){
+                if(event.getActionMasked()==MotionEvent.ACTION_DOWN)sprite.play("greeting");
                 if(prefs(CompanionOverlayService.this).getBoolean("pinned",false))return false;
                 if(event.getActionMasked()==MotionEvent.ACTION_DOWN){x=event.getRawX();y=event.getRawY();sx=position.x;sy=position.y;moved=false;return false;}
-                if(event.getActionMasked()==MotionEvent.ACTION_MOVE){float dx=event.getRawX()-x,dy=event.getRawY()-y;if(Math.abs(dx)+Math.abs(dy)>slop)moved=true;
+                if(event.getActionMasked()==MotionEvent.ACTION_MOVE){float dx=event.getRawX()-x,dy=event.getRawY()-y;if(!moved&&Math.abs(dx)+Math.abs(dy)>slop){moved=true;sprite.play("walk");}
                     if(moved){view.cancelLongPress();hideSpeech();position.x=sx+(int)dx;position.y=sy+(int)dy;move();return true;}}
-                if(event.getActionMasked()==MotionEvent.ACTION_UP&&moved){view.setPressed(false);savePosition();return true;}return false;
+                if(event.getActionMasked()==MotionEvent.ACTION_UP&&moved){view.setPressed(false);savePosition();sprite.play("greeting");moved=false;return true;}
+                if(event.getActionMasked()==MotionEvent.ACTION_CANCEL&&moved){view.setPressed(false);sprite.play("idle");moved=false;return true;}return false;
             }});
         IntentFilter filter=new IntentFilter();filter.addAction(Intent.ACTION_SCREEN_OFF);filter.addAction(Intent.ACTION_SCREEN_ON);filter.addAction(Intent.ACTION_USER_PRESENT);filter.addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);
         ContextCompat.registerReceiver(this,stateReceiver,filter,ContextCompat.RECEIVER_NOT_EXPORTED);
+        getContentResolver().registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE),false,motionObserver);
     }
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent!=null&&STOP.equals(intent.getAction())){stopEnabled();return START_NOT_STICKY;}
@@ -145,7 +150,7 @@ public final class CompanionOverlayService extends Service {
         catch(RuntimeException error){stopSelf();}
         return START_NOT_STICKY;
     }
-    private void togglePin(){boolean value=!prefs(this).getBoolean("pinned",false);prefs(this).edit().putBoolean("pinned",value).apply();sprite.announceForAccessibility(value?"Posición fijada":"Puedes mover el acompañante");}
+    private void togglePin(){boolean value=!prefs(this).getBoolean("pinned",false);prefs(this).edit().putBoolean("pinned",value).apply();sprite.play(value?"perch":"greeting");sprite.announceForAccessibility(value?"Posición fijada":"Puedes mover el acompañante");}
     private void updateVisibility(){
         PowerManager power=getSystemService(PowerManager.class);KeyguardManager keyguard=getSystemService(KeyguardManager.class);
         boolean visible=sprite.renderState().ready && CompanionPolicy.visible(prefs(this).getBoolean("enabled",false),permitted(this),power.isInteractive(),keyguard.isKeyguardLocked(),MainActivity.isVisible());
@@ -185,6 +190,6 @@ public final class CompanionOverlayService extends Service {
     private static String safe(String value,int length){return value==null?"":value.substring(0,Math.min(length,value.length()));}
     private void stopEnabled(){prefs(this).edit().putBoolean("enabled",false).apply();stopSelf();}
     @Override public void onConfigurationChanged(Configuration config){super.onConfigurationChanged(config);hideSpeech();move();}
-    @Override public void onDestroy(){started=false;handler.removeCallbacksAndMessages(null);hideSpeech();if(attached)windows.removeView(sprite);if(sprite!=null){CompanionSpriteView.RenderState state=sprite.renderState();lastRenderState=new CompanionSpriteView.RenderState(null,false,state.error);sprite.release();unregisterReceiver(stateReceiver);}if(current.get()==this)current.clear();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}
+    @Override public void onDestroy(){started=false;handler.removeCallbacksAndMessages(null);hideSpeech();if(attached)windows.removeView(sprite);if(sprite!=null){CompanionSpriteView.RenderState state=sprite.renderState();lastRenderState=new CompanionSpriteView.RenderState(null,false,state.error);sprite.release();unregisterReceiver(stateReceiver);getContentResolver().unregisterContentObserver(motionObserver);}if(current.get()==this)current.clear();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}
     @Override public IBinder onBind(Intent intent){return null;}
 }

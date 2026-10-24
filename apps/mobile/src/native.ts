@@ -27,6 +27,7 @@ export interface NativeCompanionState {
 	appliedTheme?: "gentle-dot" | "capri";
 	renderReady?: boolean;
 	renderError?: string;
+	motionPausedReason?: "battery" | "system";
 	partialChat: boolean;
 }
 interface NativePlugin {

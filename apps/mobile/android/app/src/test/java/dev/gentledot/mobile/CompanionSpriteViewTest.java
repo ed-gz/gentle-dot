@@ -2,6 +2,8 @@ package dev.gentledot.mobile;
 
 import static org.junit.Assert.*;
 import android.content.Context;
+import android.app.Activity;
+import android.widget.FrameLayout;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -11,10 +13,14 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.Robolectric;
+import org.robolectric.android.controller.ActivityController;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
@@ -27,7 +33,18 @@ import org.robolectric.annotation.LooperMode;
 @LooperMode(LooperMode.Mode.PAUSED)
 public class CompanionSpriteViewTest {
     private Context context;
+    private ActivityController<Activity> host;
+    private FrameLayout container;
     @Before public void setup() { context=RuntimeEnvironment.getApplication(); }
+    @After public void cleanup() { if(host!=null)host.pause().stop().destroy(); }
+    private void attach(CompanionSpriteView view) {
+        if(host==null) {
+            host=Robolectric.buildActivity(Activity.class).setup().visible();
+            container=new FrameLayout(host.get());host.get().setContentView(container);
+        }
+        container.addView(view,new FrameLayout.LayoutParams(224,224));
+        assertTrue(view.isAttachedToWindow());
+    }
     private Bitmap draw(CompanionSpriteView view) {
         view.layout(0,0,224,224);
         Bitmap output=Bitmap.createBitmap(224,224,Bitmap.Config.ARGB_8888);
@@ -56,7 +73,7 @@ public class CompanionSpriteViewTest {
         view.release();
     }
     @Test public void packagedAnimationActuallyAdvancesAndGentleCanBeRestored() {
-        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");view.active(true);view.play("working");
+        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");attach(view);view.active(true);view.play("working");
         Bitmap first=draw(view);
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200));
         Bitmap next=draw(view);assertFalse("Two distinct atlas frames",first.sameAs(next));assertCapri(next);
@@ -103,4 +120,63 @@ public class CompanionSpriteViewTest {
         });
         assertTrue(view.theme("capri").ready);assertCapri(draw(view));view.release();
     }
+    @Test public void idleKeepsBlinkingAcrossCyclesWithoutReloadingAssets() {
+        AtomicInteger opens=new AtomicInteger();
+        CompanionSpriteView view=new CompanionSpriteView(context,path->{opens.incrementAndGet();return context.getAssets().open(path);});
+        view.theme("capri");attach(view);view.active(true);
+        int loaded=opens.get();Bitmap first=draw(view);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(3650));
+        assertTrue("Idle returns to its first pose",first.sameAs(draw(view)));
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1600));
+        assertFalse("Second cycle blinks without a thirty-second freeze",first.sameAs(draw(view)));
+        int totalChanges=0;
+        for(int window=0;window<10;window++) {
+            int changes=0;Bitmap previous=draw(view);
+            for(int sample=0;sample<20;sample++) {
+                Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(300));
+                Bitmap next=draw(view);if(!previous.sameAs(next))changes++;
+                previous.recycle();previous=next;
+            }
+            previous.recycle();totalChanges+=changes;
+            assertTrue("Idle visibly changes in every six-second window "+window,changes>=2);
+        }
+        assertTrue("Idle stays a sparse frame sequence",totalChanges<120);
+        assertEquals("Idle reuses decoded bitmap and frames",loaded,opens.get());view.release();
+    }
+    @Test public void detachStopsTicksAndReattachRestoresThemWithoutAnotherActiveToggle() {
+        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");attach(view);view.active(true);view.play("working");
+        container.removeView(view);Bitmap detached=draw(view);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(20));
+        assertTrue("No animation while detached",detached.sameAs(draw(view)));
+        attach(view);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200));
+        assertFalse("Reattachment restores an already-enabled clock",detached.sameAs(draw(view)));view.release();
+    }
+    @Test public void repeatedRefreshesDoNotDuplicateOrStarveTheFrameClock() {
+        CompanionSpriteView observed=new CompanionSpriteView(context),reference=new CompanionSpriteView(context);
+        observed.theme("capri");reference.theme("capri");attach(observed);attach(reference);observed.active(true);reference.active(true);
+        Bitmap first=draw(observed);
+        for(int interval=0;interval<54;interval++) {
+            for(int call=0;call<20;call++)observed.active(true);
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100));
+            assertTrue("Refresh does not speed up or delay frame "+interval,draw(observed).sameAs(draw(reference)));
+        }
+        assertFalse("Both clocks advanced after repeated refresh",first.sameAs(draw(observed)));observed.release();reference.release();
+    }
+    @Test public void activeRefreshRepairsAMissingTickWithoutASeparatePollingWatchdog() throws Exception {
+        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");attach(view);view.active(true);view.play("working");
+        java.lang.reflect.Field handler=CompanionSpriteView.class.getDeclaredField("handler");handler.setAccessible(true);
+        ((android.os.Handler)handler.get(view)).removeCallbacksAndMessages(null);
+        Bitmap first=draw(view);view.active(true);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200));
+        assertFalse("An active refresh repairs a cleared callback",first.sameAs(draw(view)));view.release();
+    }
+    @Test public void pauseHoldsThePoseAndResumeRestartsExactlyOneIdleCycle() {
+        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");attach(view);view.active(true);view.play("working");
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200));view.active(false);Bitmap paused=draw(view);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(1));assertTrue(paused.sameAs(draw(view)));
+        view.active(true);Bitmap resumed=draw(view);
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1600));assertFalse(resumed.sameAs(draw(view)));view.release();
+    }
+
 }

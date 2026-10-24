@@ -9,7 +9,10 @@ final class CompanionPolicy {
         return notificationsEnabled && normalInterruptionMode;
     }
     static boolean animate(boolean visible, boolean powerSave, boolean reducedMotion) {
-        return visible && !powerSave && !reducedMotion;
+        return visible && motionPausedReason(powerSave,reducedMotion)==null;
+    }
+    static String motionPausedReason(boolean powerSave, boolean reducedMotion) {
+        return powerSave ? "battery" : reducedMotion ? "system" : null;
     }
     static int bound(int value, int extent, int size, int inset) {
         return Math.max(inset, Math.min(value, Math.max(inset, extent - size - inset)));

@@ -4,6 +4,7 @@ import static org.junit.Assert.*;
 import android.content.Context;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.provider.Settings;
 import androidx.appcompat.app.AppCompatActivity;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PluginCall;
@@ -92,6 +93,19 @@ public class CompanionRendererContractTest {
         Shadows.shadowOf(Looper.getMainLooper()).idle();
         assertNull(activation.result);assertNotNull(activation.error);
         assertFalse(disable.result.getBoolean("active",true));assertFalse(disable.result.getBoolean("renderReady",true));
+    }
+    @Test public void intentionalPauseReportsReasonWithoutLosingRenderConfirmation() {
+        start();
+        Shadows.shadowOf(context.getSystemService(PowerManager.class)).setIsPowerSaveMode(true);
+        Settings.Global.putFloat(context.getContentResolver(),Settings.Global.ANIMATOR_DURATION_SCALE,0f);
+        Call battery=new Call(new JSObject());plugin.companionState(battery);
+        assertEquals("battery",battery.result.getString("motionPausedReason"));
+        assertTrue(battery.result.getBoolean("active",false));assertTrue(battery.result.getBoolean("renderReady",false));
+        assertFalse(battery.result.has("renderError"));
+        Shadows.shadowOf(context.getSystemService(PowerManager.class)).setIsPowerSaveMode(false);
+        Call system=new Call(new JSObject());plugin.companionState(system);assertEquals("system",system.result.getString("motionPausedReason"));
+        Settings.Global.putFloat(context.getContentResolver(),Settings.Global.ANIMATOR_DURATION_SCALE,1f);
+        Call resumed=new Call(new JSObject());plugin.companionState(resumed);assertFalse(resumed.result.has("motionPausedReason"));
     }
     @Test public void enabledRequiresExplicitForegroundPermissionEvenWhenThemeIsValid() {
         ShadowSettings.setCanDrawOverlays(false);

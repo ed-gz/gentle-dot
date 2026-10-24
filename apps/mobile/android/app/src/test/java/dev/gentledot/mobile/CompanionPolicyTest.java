@@ -18,6 +18,12 @@ public class CompanionPolicyTest {
         assertFalse(CompanionPolicy.animate(true,false,true));
         assertFalse(CompanionPolicy.animate(false,false,false));
     }
+    @Test public void intentionalPauseReportsTheSystemReasonWithBatteryFirst() {
+        assertNull(CompanionPolicy.motionPausedReason(false,false));
+        assertEquals("battery",CompanionPolicy.motionPausedReason(true,false));
+        assertEquals("battery",CompanionPolicy.motionPausedReason(true,true));
+        assertEquals("system",CompanionPolicy.motionPausedReason(false,true));
+    }
     @Test public void screenBoundsKeepTheWholeSpriteReachable() {
         assertEquals(8,CompanionPolicy.bound(-300,400,112,8));
         assertEquals(280,CompanionPolicy.bound(500,400,112,8));

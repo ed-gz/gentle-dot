@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.Bundle;
 import android.os.ResultReceiver;
 import android.speech.RecognizerIntent;
@@ -104,6 +105,10 @@ public class GentleMobilePlugin extends Plugin {
         value.put("renderReady", ready);
         if (ready && render.appliedTheme != null) value.put("appliedTheme", render.appliedTheme);
         if (render.error != null) value.put("renderError", render.error);
+        String paused = CompanionPolicy.motionPausedReason(
+            getContext().getSystemService(PowerManager.class).isPowerSaveMode(),
+            Settings.Global.getFloat(getContext().getContentResolver(), Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f);
+        if (paused != null) value.put("motionPausedReason", paused);
         value.put("pinned", CompanionOverlayService.prefs(getContext()).getBoolean("pinned", false));
         value.put("theme", CompanionOverlayService.prefs(getContext()).getString("theme", "gentle-dot"));
         value.put("partialChat", getActivity() instanceof CompanionChatActivity);

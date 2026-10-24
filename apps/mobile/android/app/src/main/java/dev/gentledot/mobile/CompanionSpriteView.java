@@ -11,6 +11,7 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.View;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -31,22 +32,23 @@ final class CompanionSpriteView extends View {
     interface Assets { InputStream open(String path) throws IOException; }
     private static final String LOAD_ERROR="No se pudo cargar Capri en este teléfono. Reintenta el personaje desde los ajustes.";
     private final Handler handler=new Handler(Looper.getMainLooper());
+    private final Object frameToken=new Object();
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
     private final RectF targetRect=new RectF();
     private final Assets assets;
     private Bitmap atlas;
     private Animation animation;
     private int frame;
-    private boolean capri, animate;
-    private String sheet="";
+    private boolean capri, animate, attachedToWindow;
+    private String sheet="", action="idle";
     private volatile RenderState state=RenderState.unavailable();
     private Consumer<RenderState> stateListener;
     private final Runnable advance=()->{
-        if(!animate || animation==null)return;
+        if(!canAnimate())return;
         if(++frame>=animation.frames.length){
-            frame=0;loadOrIdle("idle");invalidate();
-            if(state.ready)handler.postDelayed(this::resumeIdle,30_000);
-            return;
+            frame=0;
+            // Idle already contains a 3.6 s breath/blink cycle. Keep its decoded frames resident.
+            if(!"idle".equals(action))loadOrIdle("idle");
         }
         invalidate();schedule();
     };
@@ -63,21 +65,26 @@ final class CompanionSpriteView extends View {
     RenderState theme(String name) {
         release();capri="capri".equals(name);frame=0;
         if(capri)loadOrIdle("idle");else state(new RenderState("gentle-dot",true,null));
-        invalidate();if(animate&&state.ready&&capri)schedule();return state;
+        invalidate();schedule();return state;
     }
     void active(boolean value) {
-        if(animate==value)return;
-        animate=value;handler.removeCallbacksAndMessages(null);
-        if(value&&state.ready)play("idle");
+        boolean changed=animate!=value;animate=value;
+        if(!value){cancelFrames();return;}
+        if(changed&&state.ready)play("idle");else schedule();
     }
     void play(String value) {
-        handler.removeCallbacksAndMessages(null);frame=0;
+        cancelFrames();frame=0;
         // A failed activation stays failed until the user explicitly retries it.
         if(capri&&state.ready)loadOrIdle(value);
-        invalidate();if(animate&&capri&&state.ready)schedule();
+        invalidate();schedule();
     }
-    private void resumeIdle() { if(animate)play("idle"); }
-    private void schedule() { if(animation!=null)handler.postDelayed(advance,animation.frames[frame].duration); }
+    private boolean canAnimate() { return animate&&attachedToWindow&&capri&&state.ready&&animation!=null; }
+    private void cancelFrames() { handler.removeCallbacksAndMessages(frameToken); }
+    private void schedule() {
+        // Refresh/reattach is also a watchdog: repair a missing tick without resetting a live one.
+        if(canAnimate()&&!handler.hasMessages(0,frameToken))
+            handler.postAtTime(advance,frameToken,SystemClock.uptimeMillis()+animation.frames[frame].duration);
+    }
     private void loadOrIdle(String name) {
         try { load(name); }
         catch(Exception error) {
@@ -110,7 +117,7 @@ final class CompanionSpriteView extends View {
         }
         // Only replace a complete, validated animation. Optional action failures can return to Capri idle.
         if(atlas!=null&&atlas!=nextAtlas)atlas.recycle();
-        atlas=nextAtlas;sheet=next;animation=selected;frame=0;state(new RenderState("capri",true,null));
+        atlas=nextAtlas;sheet=next;animation=selected;action=name;frame=0;state(new RenderState("capri",true,null));
     }
     private static final class Animation {
         final int width,height;
@@ -165,6 +172,7 @@ final class CompanionSpriteView extends View {
         } catch(RuntimeException error) { fail(); }
         finally { canvas.restoreToCount(saved); }
     }
-    void release() { handler.removeCallbacksAndMessages(null);if(atlas!=null)atlas.recycle();atlas=null;animation=null;sheet="";state=RenderState.unavailable(); }
-    @Override protected void onDetachedFromWindow() { handler.removeCallbacksAndMessages(null);super.onDetachedFromWindow(); }
+    void release() { cancelFrames();if(atlas!=null)atlas.recycle();atlas=null;animation=null;sheet="";state=RenderState.unavailable(); }
+    @Override protected void onAttachedToWindow() { super.onAttachedToWindow();attachedToWindow=true;schedule(); }
+    @Override protected void onDetachedFromWindow() { attachedToWindow=false;cancelFrames();super.onDetachedFromWindow(); }
 }

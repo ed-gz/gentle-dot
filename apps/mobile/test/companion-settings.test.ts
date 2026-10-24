@@ -273,3 +273,23 @@ it("shows the confirmed character and reports synchronization failures beside th
 	expect(host.textContent).not.toContain("Capri está lista");
 	expect(host.querySelector('[role="alert"]')?.textContent).toContain("no confirmó");
 });
+
+it.each([
+	["battery", "Movimiento pausado por el ahorro de batería de Android."],
+	["system", "Movimiento pausado porque Android tiene las animaciones desactivadas."],
+])("explains a %s motion pause without treating it as failed activation", async (reason, message) => {
+	native.state.mockResolvedValue({
+		...initial,
+		permission: true,
+		enabled: true,
+		active: true,
+		theme: "capri",
+		renderReady: true,
+		motionPausedReason: reason,
+	});
+	await render({ theme: "capri" });
+	expect(host.textContent).toContain(message);
+	expect(host.querySelector('button[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+	expect(host.querySelector('[role="alert"]')).toBeNull();
+	expect(native.set).not.toHaveBeenCalled();
+});
