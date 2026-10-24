@@ -318,10 +318,17 @@ export function workspaceToolPermission(call: GuardCall): { provider: "dot-sessi
 	const inside = (raw: string): boolean => {
 		if (!raw || /[\0$~*?{}]/.test(raw) || /(?:^|[/\\])(?:\.env(?:\.[^/\\]*)?|\.ssh|\.aws|credentials?|auth\.json)(?:$|[/\\])/i.test(raw)) return false;
 		const target = resolvePath(raw, call.cwd);
+		const sensitive = (path: string) => /(?:^|[/\\])(?:\.env[^/\\]*|\.ssh|\.aws|(?:[^/\\]*[._-])?(?:auth|credentials?|tokens?|keys?)(?:[._-][^/\\]+)?|(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)|[^/\\]*\.(?:pem|key|p12|pfx))(?:$|[/\\])/i.test(path) || namesPrivateFile(path, policy.protectedPaths);
+		if (sensitive(target)) return false;
 		// Resolve the nearest existing ancestor for new files/directories. Never follow a
 		// dangling symlink by pretending it is a new path (lstat distinguishes the two).
 		const canonical = (path: string): string => {
-			try { return realpathSync(path); } catch {
+			if (sensitive(path)) throw new Error("sensitive path");
+			try {
+				const real = realpathSync(path);
+				if (sensitive(real)) throw new Error("sensitive path");
+				return real;
+			} catch {
 				// lstat, unlike stat, sees dangling symlinks.
 				if (lstatSync(path, { throwIfNoEntry: false })) throw new Error("unresolved path");
 				const parent = dirname(path);
@@ -331,7 +338,7 @@ export function workspaceToolPermission(call: GuardCall): { provider: "dot-sessi
 		};
 		try {
 			const real = canonical(target);
-			return real === root || real.startsWith(root + sep);
+			return !sensitive(real) && (real === root || real.startsWith(root + sep));
 		} catch { return false; }
 	};
 	if (call.toolName === "bash") {

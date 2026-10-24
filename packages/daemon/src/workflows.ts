@@ -235,7 +235,8 @@ export function workflowQuestionHash(question: unknown): string {
 export class WorkflowContinuations {
 	private readonly options: WorkflowOptions;
 	private enrollmentSync: Promise<void> = Promise.resolve();
-	private readonly enrollments = new Map<string, { socket: Socket; signature: string }>();
+	private readonly enrollments = new Map<string, { socket: Socket; signature: string; renewal: ReturnType<typeof setInterval> }>();
+	private readonly unconfirmedRevocations = new Set<string>();
 
 	/** Publish live grants over the existing private adapter socket, never model/tool input. */
 	private syncEnrollments(): Promise<void> {
@@ -246,15 +247,20 @@ export class WorkflowContinuations {
 					(runLimitReached(work) && !work.lease && !work.operations.some(op => op.state === "dispatching"))) continue;
 				for (const target of work.sessions) {
 					const observed = work.observed[pair(target)];
-					if (!observed?.activityInstanceId || observed.humanActivityAt === undefined) continue;
+					if (observed?.connected !== true || !observed.activityInstanceId || observed.humanActivityAt === undefined) continue;
 					desired.set(observed.activityInstanceId, { sessionId: target.sessionId, expiresAt: deadline(work), humanActivityAt: observed.humanActivityAt });
 				}
 			}
 			for (const [id, peer] of this.enrollments) {
 				if (!peer.socket.destroyed && JSON.stringify(desired.get(id)) === peer.signature) continue;
 				this.enrollments.delete(id);
+				clearInterval(peer.renewal);
+				this.unconfirmedRevocations.add(id);
 				if (!peer.socket.destroyed) await new Promise<void>(resolve => {
 					const timer = setTimeout(() => peer.socket.destroy(), 1000);
+					// Only a remote FIN acknowledges that the adapter processed revocation.
+					// A local destroy/close is not evidence that the peer relinquished authority.
+					peer.socket.once("end", () => this.unconfirmedRevocations.delete(id));
 					peer.socket.once("close", () => { clearTimeout(timer); resolve(); });
 					peer.socket.end();
 				});
@@ -284,7 +290,16 @@ export class WorkflowContinuations {
 						try {
 							const value = JSON.parse(response.split("\n")[0]!);
 							if (value.result?.accepted !== true || this.closed) { socket.destroy(); return; }
-							this.enrollments.set(id, { socket, signature: JSON.stringify(grant) });
+							const renewal = setInterval(() => {
+								// Recompute desired grants before renewing, never renew cached authority.
+								void this.syncEnrollments().then(() => {
+									if (this.enrollments.get(id)?.socket === socket && !socket.destroyed) socket.write("workflow.renew\n");
+								});
+							}, 1000);
+							renewal.unref();
+							socket.once("close", () => clearInterval(renewal));
+							this.unconfirmedRevocations.delete(id);
+							this.enrollments.set(id, { socket, signature: JSON.stringify(grant), renewal });
 							socket.removeAllListeners("data");
 							socket.unref();
 							finish();
@@ -706,8 +721,7 @@ export class WorkflowContinuations {
 			this.closed ||
 			this.storageError ||
 			!["completed", "attention", "disconnected"].includes(event.type) ||
-			!event.paneId ||
-			!event.sessionId ||
+			(event.type !== "disconnected" && (!event.paneId || !event.sessionId)) ||
 			!event.id ||
 			event.id.length > 256 ||
 			(event.requestId && event.requestId.length > 256) ||
@@ -723,6 +737,20 @@ export class WorkflowContinuations {
 		let changed = false;
 		for (const work of this.works.values()) {
 			if (!active(work)) continue;
+			if (event.type === "disconnected" && !event.paneId && !event.sessionId) {
+				for (const target of work.sessions) {
+					const key = pair(target);
+					work.observed[key] = { ...work.observed[key], state: "unknown", connected: false };
+				}
+				if (work.mode === "session") {
+					work.state = "paused";
+					delete work.lease;
+					this.approvalRevisions.set(work.id, (this.approvalRevisions.get(work.id) ?? 0) + 1);
+				}
+				this.enqueue(work, "Descubrimiento desconectado; autonomía revocada.");
+				changed = handled = true;
+				continue;
+			}
 			const session = work.sessions.find(
 				(item) => item.paneId === event.paneId && item.sessionId === event.sessionId,
 			);
@@ -750,6 +778,11 @@ export class WorkflowContinuations {
 				) {
 					changed = true;
 					continue;
+				}
+				if (event.type === "disconnected" && work.mode === "session") {
+					work.state = "paused";
+					delete work.lease;
+					this.approvalRevisions.set(work.id, (this.approvalRevisions.get(work.id) ?? 0) + 1);
 				}
 				work.observed[key] = {
 					...previous,
@@ -828,6 +861,11 @@ export class WorkflowContinuations {
 				if (!session?.connected) {
 					if (previous?.connected !== false) {
 						work.observed[key] = { ...previous, state: "unknown", connected: false };
+						if (work.mode === "session") {
+							work.state = "paused";
+							delete work.lease;
+							this.approvalRevisions.set(work.id, (this.approvalRevisions.get(work.id) ?? 0) + 1);
+						}
 						this.enqueue(work, `Sesión desconectada: ${target.paneId}`);
 						changed = true;
 					}
@@ -1047,8 +1085,12 @@ export class WorkflowContinuations {
 		actor: "human" | "agent",
 		authorize: () => boolean = () => true,
 	): Promise<unknown> {
-		try { return await this.dispatchWork(value, actor, authorize); }
+		let result: unknown;
+		try { result = await this.dispatchWork(value, actor, authorize); }
 		finally { await this.syncEnrollments(); }
+		return record(result) && this.unconfirmedRevocations.size
+			? { ...result, revocation: "unconfirmed" }
+			: result;
 	}
 	private async dispatchWork(value: unknown, actor: "human" | "agent", authorize: () => boolean): Promise<unknown> {
 		if (!record(value)) throw new WorkflowError("La solicitud de seguimiento no es válida.");
@@ -1241,7 +1283,7 @@ export class WorkflowContinuations {
 				for (const target of work.sessions) {
 					const session = snapshot.sessions.find(s => pair(s) === pair(target));
 					if (!session?.connected || session.capabilities?.activityFence !== 1) throw new WorkflowError("Sólo avisos: actualiza el adaptador con protección de actividad antes de reanudar.", 403);
-					work.observed[pair(target)] = {...work.observed[pair(target)], state:session.state, humanActivityAt:session.humanActivityAt ?? null, activityInstanceId:session.activityInstanceId};
+					work.observed[pair(target)] = {...work.observed[pair(target)], state:session.state, connected:true, humanActivityAt:session.humanActivityAt ?? null, activityInstanceId:session.activityInstanceId};
 				}
 				if (renew) work.expiresAt = stamp(this.now() + (work.renewalHours ?? 24) * 3600_000);
 				work.state = "waiting";

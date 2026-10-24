@@ -66,9 +66,9 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 	let confirmTool: ((tool: string, input: Record<string, unknown>) => Promise<boolean>) | undefined;
 	const trustedWorkspaceDialogs = new WeakMap<object, () => boolean>();
 	// Enrollment is a live coordinator connection, never a dialog/tool argument.
-	let enrollment: { socket: Socket; expiresAt: number; humanActivityAt: string | null } | undefined;
+	let enrollment: { socket: Socket; expiresAt: number; leaseUntil: number; humanActivityAt: string | null } | undefined;
 	const autonomouslyEnrolled = () => !!enrollment && !enrollment.socket.destroyed &&
-		enrollment.expiresAt > Date.now() && enrollment.humanActivityAt ===
+		enrollment.expiresAt > Date.now() && enrollment.leaseUntil > Date.now() && enrollment.humanActivityAt ===
 		(companionActivity.snapshot(ctx?.isIdle() ?? true, false).humanActivityAt ?? null);
 	let ownedUI: object | undefined;
 	const owner = {};
@@ -166,7 +166,8 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 			const permission = verifyPermission?.();
 			if (permission && verifyPermission) {
 				pending.workflowPermission = permission;
-				trustedWorkspaceDialogs.set(pending, () => autonomouslyEnrolled() && JSON.stringify(verifyPermission()) === JSON.stringify(permission));
+				const grant = enrollment;
+				trustedWorkspaceDialogs.set(pending, () => enrollment === grant && autonomouslyEnrolled() && JSON.stringify(verifyPermission()) === JSON.stringify(permission));
 			}
 			question = pending;
 			revision++;
@@ -608,13 +609,27 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 						params.humanActivityAt !== (companionActivity.snapshot(ctx.isIdle(), false).humanActivityAt ?? null))
 						throw new OrchestrationError("ENROLLMENT_CHANGED", "La autorización de autonomía ya no está vigente.");
 					if (enrollment) enrollment.socket.destroy();
-					const grant = { socket, expiresAt: params.expiresAt, humanActivityAt: params.humanActivityAt as string | null };
+					const grant = { socket, expiresAt: params.expiresAt, leaseUntil: Date.now() + 3000, humanActivityAt: params.humanActivityAt as string | null };
 					enrollment = grant;
 					const revoke = () => { if (enrollment === grant) enrollment = undefined; };
 					// FIN is acknowledged only after revocation. A completed pause therefore
 					// cannot leave a stale enrollment; a daemon crash also revokes it.
 					socket.once("end", revoke);
 					socket.once("close", revoke);
+					// Only this live enrollment can renew its short lease. An expired lease
+					// cannot be resurrected; the coordinator must positively enroll again.
+					let renewal = "";
+					socket.on("data", chunk => {
+						renewal += String(chunk);
+						if (renewal.length > 1024) { socket.destroy(); return; }
+						while (renewal.includes("\n")) {
+							const end = renewal.indexOf("\n");
+							const message = renewal.slice(0, end);
+							renewal = renewal.slice(end + 1);
+							if (message !== "workflow.renew" || enrollment !== grant || !autonomouslyEnrolled()) { revoke(); socket.destroy(); return; }
+							grant.leaseUntil = Date.now() + 3000;
+						}
+					});
 					socket.setTimeout(0);
 					socket.write(`${JSON.stringify({ id, result: { accepted: true } })}\n`);
 					return;

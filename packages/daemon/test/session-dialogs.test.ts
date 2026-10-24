@@ -1,5 +1,6 @@
-import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { Socket } from "node:net";
 import { join } from "node:path";
 import {
 	type ExtensionAPI,
@@ -168,6 +169,75 @@ it("revokes autonomous answers to an already pending tool confirmation on pause"
 	expect(await coordinator.tryApprove({ ...target, question: pending })).toBe(false);
 	await expect(h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null })).rejects.toMatchObject({ code: "HUMAN_REQUIRED" });
 	await h.call("answer", { questionId: pending.id, confirmed: false });
+	await waiting;
+});
+
+it.each([".env", ".env.local", ".aws/credentials", "auth.json", "access_token.json", "api-key.json", ".ssh/known_hosts", ".ssh/new/missing.txt"])("keeps sensitive alias %s human-only", async sensitive => {
+	const h = await session();
+	await enroll(h);
+	await mkdir(join(h.ctx.cwd, sensitive, ".."), { recursive: true });
+	if (!sensitive.includes("missing")) await writeFile(join(h.ctx.cwd, sensitive), "fixture");
+	const directory = sensitive.startsWith(".ssh/");
+	await symlink(join(h.ctx.cwd, directory ? ".ssh" : sensitive), join(h.ctx.cwd, "safe.txt"));
+	const waiting = h.handlers.get("tool_call")?.({ toolName: "write", toolCallId: "secret", input: { path: directory ? `safe.txt/${sensitive.slice(5)}` : "safe.txt", content: "fixture" } }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	expect(humanOnlyQuestion(pending)).toBe(true);
+	await h.call("answer", { questionId: pending.id, confirmed: false });
+	await waiting;
+});
+
+it.each([false, true])("revokes pending grants on discovery disconnect (all: %s)", async all => {
+	const h = await session();
+	const { coordinator, target } = await enroll(h);
+	const waiting = h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "pending", input: { command: "npm test" } }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	coordinator.onEvent({ id: "lost-binding", type: "disconnected", at: new Date().toISOString(), ...(all ? {} : target) } as Parameters<typeof coordinator.onEvent>[0]);
+	await new Promise(resolve => setTimeout(resolve, 50));
+	await expect(h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null })).rejects.toMatchObject({ code: "HUMAN_REQUIRED" });
+	await h.call("answer", { questionId: pending.id, confirmed: false });
+	await waiting;
+	await expect(h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "later", input: { command: "npm test" } }, h.ctx)).resolves.toBeUndefined();
+});
+
+it("reports stalled revocation as unconfirmed and expires the adapter lease", async () => {
+	const h = await session();
+	const { coordinator, work } = await enroll(h);
+	const original = Socket.prototype.end;
+	const stall = vi.spyOn(Socket.prototype, "end").mockImplementation(function(this: Socket, ...args: unknown[]) {
+		if (!args.length) return this;
+		return original.apply(this, args as Parameters<Socket["end"]>);
+	});
+	try {
+		await expect(coordinator.dispatch({ action: "pause", workflowId: work.id }, "human")).resolves.toMatchObject({ state: "paused", revocation: "unconfirmed" });
+	} finally { stall.mockRestore(); }
+	const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3100);
+	try {
+		await expect(h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "expired", input: { command: "npm test" } }, h.ctx)).resolves.toBeUndefined();
+	} finally { clock.mockRestore(); }
+});
+
+it("expires a stalled live enrollment locally and invalidates its pending grant", async () => {
+	const h = await session();
+	await enroll(h);
+	const waiting = h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "stalled", input: { command: "npm test" } }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3100);
+	try {
+		await expect(h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null })).rejects.toMatchObject({ code: "HUMAN_REQUIRED" });
+		await h.call("answer", { questionId: pending.id, confirmed: false });
+		await waiting;
+		await expect(h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "late", input: { command: "npm test" } }, h.ctx)).resolves.toBeUndefined();
+	} finally { clock.mockRestore(); }
+});
+
+it("renews a healthy enrollment beyond the short local lease", async () => {
+	const h = await session();
+	await enroll(h);
+	await new Promise(resolve => setTimeout(resolve, 3300));
+	const waiting = h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "renewed", input: { command: "npm test" } }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	expect(humanOnlyQuestion(pending)).toBe(false);
+	await h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null });
 	await waiting;
 });
 
