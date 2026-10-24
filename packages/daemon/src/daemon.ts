@@ -71,6 +71,7 @@ import { AgentSupervisor } from "./supervisor.ts";
 import { UploadStore } from "./uploads.ts";
 import { SubscriptionUsage } from "./usage.ts";
 import { VoiceService } from "./voice.ts";
+import { LocalVoice } from "./local-voice.ts";
 import { CONNECTOR_HOME, chownHandOver, prepareVpsLayout, type VpsOptions } from "./vps.ts";
 import { WATCH_EXTENSION_PATH, WatcherError, Watchers, WatchSourceError } from "./watchers.ts";
 import { PIN_FILE, PinGate } from "./web-pin.ts";
@@ -541,6 +542,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		log,
 	});
 	const voice = new VoiceService({
+		...(app ? { local: new LocalVoice(app) } : {}),
 		apiKey: () => auth.openAIApiKey(),
 		...(options.voiceFetch ? { fetch: options.voiceFetch } : {}),
 		log,
@@ -1160,7 +1162,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		handleHttp(req, res, options.uiDir, bridge);
 	});
 	const clientKeys = new WeakMap<WebSocket, string>();
-	const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+	const wss = new WebSocketServer({ noServer: true, maxPayload: 3 * 1024 * 1024 });
 	const hasApprovalClient = () =>
 		[...wss.clients].some(
 			(client) => client.readyState === client.OPEN && mobile.canApprove(clientKeys.get(client) ?? ""),

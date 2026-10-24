@@ -29,6 +29,7 @@ mod machine;
 mod macos;
 pub mod model;
 pub mod parakeet;
+mod remote;
 #[cfg(unix)]
 pub mod pipe;
 

@@ -1,6 +1,50 @@
 //! PCM helpers shared by every microphone and recognizer: the 16 kHz mono contract, the
 //! level meter, and a streaming resampler from the device rate.
 
+#[cfg(test)]
+mod remote_wav_tests {
+    #[test]
+    fn synthetic_wav_reaches_a_fake_recognizer_and_rejects_invalid_format() {
+        let mut wav = b"RIFF".to_vec();
+        wav.extend_from_slice(&38u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        for value in [1u16, 1] { wav.extend_from_slice(&value.to_le_bytes()); }
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&32000u32.to_le_bytes());
+        for value in [2u16,16] { wav.extend_from_slice(&value.to_le_bytes()); }
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&2u32.to_le_bytes());
+        wav.extend_from_slice(&16384i16.to_le_bytes());
+        let fake = |samples: &[f32]| -> Result<String,String> { assert_eq!(samples, &[0.5]); Ok("hola".into()) };
+        assert_eq!(super::transcribe_wav(&wav, fake).unwrap(), "hola");
+        for index in [0usize, 20, 22, 24, 28, 32, 34, 40] {
+            let mut invalid = wav.clone(); invalid[index] ^= 1;
+            assert!(super::parse_wav(&invalid).is_err(), "index {index}");
+        }
+        assert!(super::parse_wav(&wav[..43]).is_err());
+        assert!(super::parse_wav(&vec![0; 1_920_045]).is_err());
+    }
+}
+
+/// The phone sends canonical PCM WAV, not compressed or arbitrary RIFF containers.
+pub const MAX_WAV_BYTES: usize = 44 + 16000 * 2 * 60;
+pub fn parse_wav(wav: &[u8]) -> Result<Vec<f32>, String> {
+    let invalid = || "PC voice needs 16 kHz mono 16-bit PCM WAV under one minute.".to_string();
+    if wav.len() < 46 || wav.len() > MAX_WAV_BYTES { return Err(invalid()); }
+    let u16_at = |i| u16::from_le_bytes([wav[i],wav[i+1]]);
+    let u32_at = |i| u32::from_le_bytes(wav[i..i+4].try_into().unwrap());
+    if &wav[0..4] != b"RIFF" || &wav[8..16] != b"WAVEfmt " || &wav[36..40] != b"data"
+        || u32_at(4) as usize != wav.len()-8 || u32_at(16) != 16
+        || u16_at(20) != 1 || u16_at(22) != 1 || u32_at(24) != 16000
+        || u32_at(28) != 32000 || u16_at(32) != 2 || u16_at(34) != 16
+        || u32_at(40) as usize != wav.len()-44 || (wav.len()-44)%2 != 0 { return Err(invalid()); }
+    Ok(wav[44..].chunks_exact(2).map(|s| i16::from_le_bytes([s[0],s[1]]) as f32 / 32768.0).collect())
+}
+pub fn transcribe_wav(wav: &[u8], recognize: impl FnOnce(&[f32]) -> Result<String,String>) -> Result<String,String> {
+    recognize(&parse_wav(wav)?)
+}
+
 /// What every `Microphone` delivers and every `Recognizer` consumes: 16 kHz mono f32.
 pub const SAMPLE_RATE: u32 = 16_000;
 /// The meter's floor: quieter input shows as silence.

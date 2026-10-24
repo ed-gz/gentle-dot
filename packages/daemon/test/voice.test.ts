@@ -40,6 +40,17 @@ function service(reply: (call: Call) => Response | Promise<Response>, key: strin
 const header = (call: Call | undefined, name: string) => new Headers(call?.init.headers).get(name);
 
 describe("VoiceService capability", () => {
+ it("prefers the installed PC over OpenAI and never sends its failed WAV to the cloud", async () => {
+  let installed = true;
+  const local = {available:async () => installed, transcribe:async () => ({ok:false as const,reason:"PC busy"})};
+  const cloud = fakeFetch(() => Response.json({text:"cloud"}));
+  const voice = new VoiceService({apiKey:async () => KEY, local, fetch:cloud.fetch});
+  expect(await voice.refresh()).toEqual({transcribe:true,speak:true,local:true});
+  expect(await voice.transcribe("audio/wav",AUDIO)).toEqual({ok:false,reason:"PC busy"});
+  expect(cloud.calls).toHaveLength(0);
+  installed=false;
+  expect(await voice.refresh()).toEqual({transcribe:true,speak:true});
+ });
 	it("is off until an OpenAI API key is found, and on for both directions once it is", async () => {
 		const { voice } = service(() => new Response());
 		expect(voice.capability()).toEqual({ transcribe: false, speak: false });
@@ -225,6 +236,16 @@ async function startWith(apiKey: string | undefined, reply: (call: Call) => Resp
 }
 
 describe("voice through the daemon", () => {
+ it("accepts a full-minute WAV payload over WebSocket and rejects audio beyond the protocol bound", async () => {
+  const {send,find} = await startWith(KEY, () => Response.json({text:"full minute"}));
+  await find("ready");
+  const data = Buffer.alloc(1_920_044).toString("base64");
+  expect(data.length).toBe(MAX_VOICE_AUDIO);
+  send({type:"voice_transcribe",requestId:"full-minute",mime:"audio/wav",data});
+  expect(await find("voice_transcript")).toMatchObject({requestId:"full-minute",text:"full minute"});
+  const voice = new VoiceService({apiKey:async () => KEY});
+  expect((await voice.transcribe("audio/wav",data+"AAAA")).ok).toBe(false);
+ });
 	it("reports voice in the accounts list and transcribes a recording with the key kept in the daemon", async () => {
 		const { send, find, messages, logs, calls } = await startWith(KEY, () =>
 			Response.json({ text: "what's on my calendar" }),

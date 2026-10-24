@@ -66,9 +66,15 @@ impl VoiceInput {
 pub struct VoiceModel {
     manager: Arc<ModelManager>,
     local: Arc<Parakeet>,
+    remote: super::remote::Transfers,
 }
 
 impl VoiceModel {
+    pub fn remote_request(&self, method: &str, params: &serde_json::Value) -> Result<serde_json::Value,String> {
+        if method == "voice_status" { return Ok(serde_json::json!({"installed":self.local.installed()})); }
+        self.remote.request(method, params, |audio| self.local.transcribe_wav(audio))
+    }
+    pub fn remote_disconnected(&self) { self.remote.clear(); }
     pub fn status(&self) -> ModelStatus {
         self.manager.status()
     }
@@ -114,7 +120,7 @@ pub fn start(app: &AppHandle) -> (VoiceInput, VoiceModel) {
     let locate: Locate = Arc::new(move || installed.installed());
     let loader: Loader = Arc::new(parakeet::load);
     let local = Arc::new(Parakeet::new(locate, loader));
-    (platform_input(local.clone()), VoiceModel { manager, local })
+    (platform_input(local.clone()), VoiceModel { manager, local, remote: super::remote::Transfers::default() })
 }
 
 /// macOS: the native microphone, Parakeet when installed, else Apple Speech. Linux: a

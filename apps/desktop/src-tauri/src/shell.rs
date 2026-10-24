@@ -370,6 +370,9 @@ struct ChannelService {
 }
 
 impl app_channel::Handler for ChannelService {
+    fn voice_request(&self, method: &str, params: &serde_json::Value) -> Result<serde_json::Value,String> {
+        self.app.try_state::<voice::VoiceModel>().ok_or("PC voice is starting.")?.remote_request(method, params)
+    }
     fn privileged_operation(&self, request: crate::privileged::Request) -> crate::privileged::Reply {
         self.privileged.perform(request)
     }
@@ -391,6 +394,7 @@ impl app_channel::Handler for ChannelService {
     }
 
     fn closed(&self) {
+        if let Some(model) = self.app.try_state::<voice::VoiceModel>() { model.remote_disconnected(); }
         self.privileged.disconnected();
         computer::stop(&self.app, Reason::Panic);
     }

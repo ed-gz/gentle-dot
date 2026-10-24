@@ -166,6 +166,14 @@ impl Parakeet {
         self
     }
 
+    /// Remote dictation shares the native recognizer's load cache and idle unload.
+    pub fn transcribe_wav(&self, wav: &[u8]) -> Result<String, String> {
+        super::audio::transcribe_wav(wav, |samples| {
+            let dir = (self.locate)().ok_or("The local voice model is not installed.")?;
+            self.cache.get(&dir, self.idle)?.transcribe(samples)
+        })
+    }
+
     pub fn installed(&self) -> bool {
         (self.locate)().is_some()
     }
@@ -442,6 +450,19 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+
+    #[test]
+    fn remote_wav_uses_the_shared_fake_engine_and_idle_unload() {
+        let setup = Setup::new(None);
+        let local = setup.parakeet().with_idle(Duration::from_millis(30));
+        let wav = b"RIFF\x26\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80\x3e\x00\x00\x00\x7d\x00\x00\x02\x00\x10\x00data\x02\x00\x00\x00\x00\x40";
+        assert_eq!(local.transcribe_wav(wav).unwrap().trim(), "1 samples");
+        assert_eq!(local.transcribe_wav(wav).unwrap().trim(), "1 samples");
+        assert_eq!(setup.loads.load(Ordering::SeqCst), 1);
+        assert!(local.transcribe_wav(b"not a WAV").is_err());
+        assert_eq!(setup.threads.lock().unwrap().len(), 2, "invalid audio never reaches the engine");
+        wait_until("remote idle unload", || !local.loaded());
     }
 
     #[test]

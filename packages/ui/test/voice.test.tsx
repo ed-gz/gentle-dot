@@ -1,19 +1,23 @@
 import type { ClientMessage, ServerMessage, ServerPayload } from "@gentle-dot/protocol";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useReducer } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatSurface } from "../src/components/ChatSurface.tsx";
 import { type DotState, initialState, reduce } from "../src/store.ts";
+import { useVoice } from "../src/useVoice.ts";
 import { openDesktopOptions } from "./desktop-options.ts";
 
 /** Talking to the assistant (S30.2–S30.4) through the chat, with the desktop and browser mocked. */
 const h = vi.hoisted(() => ({
+	capture: vi.fn(),
 	tauri: false,
 	invoke: vi.fn(),
 	listeners: new Map<string, (event: { payload: unknown }) => void>(),
 	server: (_payload: ServerPayload) => {},
 }));
+
+vi.mock("../src/voice-capture.ts", () => ({ capturePcm: (...args: unknown[]) => h.capture(...args) }));
 
 vi.mock("@tauri-apps/api/core", () => ({
 	isTauri: () => h.tauri,
@@ -149,6 +153,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	delete window.__GENTLE_MOBILE__;
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
@@ -165,6 +170,68 @@ async function voiceTurn(transcript: string) {
 	server({ type: "voice_transcript", requestId: request.requestId, text: transcript });
 	return request;
 }
+
+describe("phone PC-first dictation", () => {
+ it("records WAV for PC then falls back to Google on error, leaving an editable draft", async () => {
+  const google = vi.fn(async () => ({text:"Google draft"}));
+  window.__GENTLE_MOBILE__ = {transcribe:google};
+  const blob = {arrayBuffer:async () => new Uint8Array([1,2,3]).buffer} as Blob;
+  h.capture.mockResolvedValue({stop:() => blob,cancel:vi.fn()});
+  const state = {...withVoice(true,false),voice:{transcribe:true,speak:false,local:true}};
+  const send = vi.fn();
+  const hook = renderHook(({state}) => useVoice(state,send,{inputOnly:true,enabled:true}), {initialProps:{state}});
+  await act(async () => hook.result.current.start());
+  expect(h.capture).toHaveBeenCalled(); expect(google).not.toHaveBeenCalled();
+  await act(async () => hook.result.current.stop());
+  const request = send.mock.calls[0]?.[0];
+  expect(request).toMatchObject({type:"voice_transcribe",mime:"audio/wav"});
+  hook.rerender({state:{...state,voiceReplies:[{type:"voice_unavailable",requestId:request.requestId,reason:"timeout",seq:1}]}});
+  await waitFor(() => expect(hook.result.current.draft?.text).toBe("Google draft"));
+  expect(send.mock.calls.some(([m]) => m.type === "send")).toBe(false);
+ });
+ it("keeps a PC result as a draft and ignores replies after cancellation", async () => {
+  const google = vi.fn(async () => ({text:"never"}));
+  window.__GENTLE_MOBILE__ = {transcribe:google};
+  h.capture.mockResolvedValue({stop:() => ({arrayBuffer:async () => new Uint8Array([1]).buffer}),cancel:vi.fn()});
+  const state = {...withVoice(true,false),voice:{transcribe:true,speak:false,local:true}};
+  const send = vi.fn();
+  const hook = renderHook(({state}) => useVoice(state,send,{inputOnly:true,enabled:true}),{initialProps:{state}});
+  await act(async () => hook.result.current.start());
+  await act(async () => hook.result.current.stop());
+  const request = send.mock.calls[0]![0];
+  hook.rerender({state:{...state,voiceReplies:[{type:"voice_transcript",requestId:request.requestId,text:"PC draft",seq:1}]}});
+  await waitFor(() => expect(hook.result.current.draft?.text).toBe("PC draft"));
+  expect(google).not.toHaveBeenCalled();
+  act(() => hook.result.current.cancel());
+  await act(async () => hook.result.current.start());
+  await act(async () => hook.result.current.stop());
+  const second = send.mock.calls[1]![0];
+  act(() => hook.result.current.cancel());
+  hook.rerender({state:{...state,voiceReplies:[{type:"voice_transcript",requestId:second.requestId,text:"late",seq:2}]}});
+  expect(hook.result.current.draft).toBeUndefined();
+  expect(send.mock.calls.some(([m]) => m.type === "send")).toBe(false);
+ });
+ it("opens Google when the PC reply deadline expires", async () => {
+  vi.useFakeTimers();
+  const google = vi.fn(async () => ({text:"backup"}));
+  window.__GENTLE_MOBILE__ = {transcribe:google};
+  h.capture.mockResolvedValue({stop:() => ({arrayBuffer:async () => new Uint8Array([1]).buffer}),cancel:vi.fn()});
+  const hook = renderHook(() => useVoice({...withVoice(true,false),voice:{transcribe:true,speak:false,local:true}} as DotState,vi.fn(),{inputOnly:true,enabled:true}));
+  await act(async () => hook.result.current.start());
+  await act(async () => hook.result.current.stop());
+  await act(async () => vi.advanceTimersByTimeAsync(85_000));
+  expect(google).toHaveBeenCalledOnce();
+  expect(hook.result.current.draft?.text).toBe("backup");
+ });
+ it("uses Google immediately without a local capability", async () => {
+  const google = vi.fn(async () => ({text:"phone"}));
+  window.__GENTLE_MOBILE__ = {transcribe:google};
+  const hook = renderHook(() => useVoice(withVoice(false),vi.fn(),{inputOnly:true,enabled:true}));
+  await act(async () => hook.result.current.start());
+  expect(google).toHaveBeenCalled();
+  expect(hook.result.current.draft?.text).toBe("phone");
+ });
+});
 
 describe("the mic in the browser", () => {
 	it("is hidden without an OpenAI key, and so is the mute toggle", () => {

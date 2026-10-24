@@ -122,6 +122,9 @@ pub trait Handler: Send + Sync {
     fn computer_stop(&self) -> Result<Value, String> {
         Err("Computer control is unavailable on this desktop.".into())
     }
+    fn voice_request(&self, _method: &str, _params: &Value) -> Result<Value,String> {
+        Err("PC voice is unavailable.".into())
+    }
     /// The channel to a freshly spawned daemon is open (for example, register the computer helper).
     fn opened(&self, _channel: &Arc<AppChannel>) {}
     /// Cancel authentication still waiting when its requesting daemon disconnects.
@@ -329,6 +332,12 @@ impl AppChannel {
     fn answer(&self, id: u64, method: &str, params: Value, handler: &dyn Handler, cancelled: Option<Token>, approval_id: Option<&str>) {
         if !self.is_open() { return; }
         let frame = match method {
+            "voice_status" | "voice_begin" | "voice_chunk" | "voice_finish" | "voice_cancel" => {
+                match handler.voice_request(method, &params) {
+                    Ok(result) => Frame::Response { id, result: Some(result), error: None },
+                    Err(error) => Frame::Response { id, result: None, error: Some(error) },
+                }
+            }
             "approve" => {
                 let cancelled = cancelled.unwrap_or_else(|| Arc::new(AtomicBool::new(true)));
                 let approved = !cancelled.load(Ordering::SeqCst) && serde_json::from_value::<ApprovalRequest>(params)

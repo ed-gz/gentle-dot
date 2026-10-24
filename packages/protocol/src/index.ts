@@ -98,15 +98,17 @@ export interface PinStatus {
 export interface VoiceCapability {
 	/** The daemon can turn a recording into text. */
 	transcribe: boolean;
+	/** Installed PC model, reachable over the desktop's private channel. */
+	local?: boolean;
 	/** The daemon can read a reply aloud. */
 	speak: boolean;
 }
 
 /**
- * Longest base64 recording in `voice_transcribe`: with the rest of the frame it stays under the
- * daemon's 1 MiB WebSocket limit (about 700 KB of audio, over a minute of compressed speech).
+ * Longest base64 recording: 60 seconds of 16 kHz mono 16-bit PCM plus a 44-byte WAV header.
+ * WebSocket payloads allow 3 MiB; the private desktop channel remains 1 MiB (chunked audio).
  */
-export const MAX_VOICE_AUDIO = 960_000;
+export const MAX_VOICE_AUDIO = 2_560_060;
 /** Longest text `voice_speak` reads aloud (OpenAI's speech input limit). */
 export const MAX_VOICE_TEXT = 4096;
 

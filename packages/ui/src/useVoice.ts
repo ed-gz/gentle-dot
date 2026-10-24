@@ -5,6 +5,7 @@ import { inDesktop } from "./desktop.ts";
 import { mobileBridge } from "./mobile.ts";
 import { guessLanguage, pickVoice, speakableText } from "./speech.ts";
 import { type DotState, isBusy } from "./store.ts";
+import { capturePcm, type PcmCapture } from "./voice-capture.ts";
 import { voiceLanguage } from "./voice-language.ts";
 import {
 	cancelNativeVoice,
@@ -70,14 +71,14 @@ const REASONS = {
 	empty: "I didn't catch anything. Try again.",
 } as const;
 
-type Source = { kind: "daemon" | "native" | "mobile" } | { kind: "none"; reason?: string };
+type Source = { kind: "daemon" | "native" | "mobile" | "pc" } | { kind: "none"; reason?: string };
 
 /**
- * Android uses its own recognizer. Desktop prefers the available local recognizer, with
- * daemon transcription as a fallback. The web offers the daemon over HTTPS or localhost.
+ * Android prefers PC WAV dictation, with its native recognizer as backup. Desktop prefers
+ * its native recognizer. The web offers daemon transcription over HTTPS or localhost.
  */
-function chooseSource(desktop: boolean, transcribe: boolean, native: NativeVoiceStatus | undefined): Source {
-	if (mobileBridge()) return { kind: "mobile" };
+function chooseSource(desktop: boolean, transcribe: boolean, native: NativeVoiceStatus | undefined, local = false): Source {
+	if (mobileBridge()) return { kind: local ? "pc" : "mobile" };
 	// Wait for local capability discovery before offering a remote recording path.
 	if (desktop && !native) return { kind: "none", reason: REASONS.checking };
 	if (desktop && native?.available) return { kind: "native" };
@@ -95,7 +96,8 @@ function chooseSource(desktop: boolean, transcribe: boolean, native: NativeVoice
 }
 
 interface Recording {
-	kind: "daemon" | "native";
+	kind: "daemon" | "native" | "pc";
+	pcm?: PcmCapture;
 	cancelled: boolean;
 	recorder?: MediaRecorder;
 	ticker?: ReturnType<typeof setInterval>;
@@ -143,7 +145,9 @@ export function useVoice(
 	const mutedNow = useRef(muted);
 	mutedNow.current = muted;
 
-	const source = chooseSource(desktop, state.voice.transcribe, native);
+	const source = chooseSource(desktop, state.voice.transcribe, native, "local" in state.voice && state.voice.local === true);
+	const transcriptTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const mobileFallback = useRef<() => Promise<void>>(async () => {});
 
 	const setPhase = useCallback((next: VoicePhase) => {
 		phaseNow.current = next;
@@ -155,6 +159,7 @@ export function useVoice(
 			if (recording.current) stopTimers(recording.current);
 			recording.current = undefined;
 			pendingTranscript.current = undefined;
+			clearTimeout(transcriptTimer.current);
 			setPhase("idle");
 			setElapsed(0);
 			setLevel(0);
@@ -272,7 +277,18 @@ export function useVoice(
 			}
 			const requestId = newRequestId();
 			pendingTranscript.current = requestId;
-			send({ type: "voice_transcribe", requestId, mime: mime.replace(/\s+/g, ""), data });
+			if (send({ type: "voice_transcribe", requestId, mime: mime.replace(/\s+/g, ""), data }) === false) {
+				pendingTranscript.current = undefined;
+				if (mobileBridge()) await mobileFallback.current();
+				else finish("Voice is disconnected.");
+				return;
+			}
+			transcriptTimer.current = setTimeout(() => {
+				if (pendingTranscript.current !== requestId || attempt !== generation.current) return;
+				pendingTranscript.current = undefined;
+				if (mobileBridge()) void mobileFallback.current();
+				else finish("Voice did not answer in time.");
+			}, 85_000);
 		},
 		[send, finish, setPhase],
 	);
@@ -281,6 +297,19 @@ export function useVoice(
 		const current = recording.current;
 		if (!current || phaseNow.current !== "recording") return;
 		stopTimers(current);
+		if (current.kind === "pc") {
+			setPhase("transcribing");
+			const attempt = generation.current;
+			const fallback = () => {
+				if (attempt === generation.current && allowed.current) return mobileFallback.current();
+			};
+			try {
+				void upload(current.pcm!.stop(), "audio/wav").catch(fallback);
+			} catch {
+				void fallback();
+			}
+			return;
+		}
 		if (current.kind === "daemon") {
 			current.recorder?.stop();
 			return;
@@ -295,7 +324,7 @@ export function useVoice(
 				if (attempt === generation.current) finish(startRefusal(error));
 			},
 		);
-	}, [finish, sendTranscript, setPhase]);
+	}, [finish, sendTranscript, setPhase, upload]);
 
 	const startDaemon = useCallback(async () => {
 		const attempt = generation.current;
@@ -360,17 +389,36 @@ export function useVoice(
 		}
 	}, [finish, sendTranscript, setPhase]);
 
+	mobileFallback.current = startMobile;
+
+	const startPc = useCallback(async () => {
+		const attempt = generation.current;
+		try {
+			const pcm = await capturePcm(setLevel);
+			if (attempt !== generation.current || !allowed.current) {
+				pcm.cancel();
+				return;
+			}
+			const entry: Recording = { kind: "pc", cancelled: false, pcm };
+			begin(entry);
+			setPartial("PC");
+			entry.limit = setTimeout(stop, MAX_RECORDING_MS);
+		} catch {
+			if (attempt === generation.current && allowed.current) await startMobile();
+		}
+	}, [begin, stop, startMobile]);
+
 	const start = useCallback(() => {
 		if (!allowed.current || phaseNow.current !== "idle" || starting.current) return;
 		if (!inputOnly) stopSpeaking();
 		if (source.kind === "none") return;
 		starting.current = true;
 		const run =
-			source.kind === "mobile" ? startMobile() : source.kind === "daemon" ? startDaemon() : startNative();
+			source.kind === "pc" ? startPc() : source.kind === "mobile" ? startMobile() : source.kind === "daemon" ? startDaemon() : startNative();
 		void run.finally(() => {
 			starting.current = false;
 		});
-	}, [source.kind, startDaemon, startNative, startMobile, stopSpeaking, inputOnly]);
+	}, [source.kind, startPc, startDaemon, startNative, startMobile, stopSpeaking, inputOnly]);
 
 	const cancel = useCallback(() => {
 		mobileAttempt.current += 1;
@@ -382,7 +430,8 @@ export function useVoice(
 			return;
 		}
 		current.cancelled = true;
-		if (current.kind === "daemon") current.recorder?.stop();
+		if (current.kind === "pc") current.pcm?.cancel();
+		else if (current.kind === "daemon") current.recorder?.stop();
 		else void cancelNativeVoice().catch(() => {});
 		finish();
 	}, [finish]);
@@ -450,8 +499,12 @@ export function useVoice(
 		for (const reply of state.voiceReplies) {
 			if (reply.requestId === pendingTranscript.current) {
 				pendingTranscript.current = undefined;
+				clearTimeout(transcriptTimer.current);
 				if (reply.type === "voice_transcript") sendTranscript(reply.text);
-				else if (reply.type === "voice_unavailable") finish(reply.reason);
+				else if (reply.type === "voice_unavailable") {
+					if (mobileBridge()) void mobileFallback.current();
+					else finish(reply.reason);
+				}
 			}
 			const speech = pendingSpeech.current;
 			if (speech && reply.requestId === speech.requestId) {

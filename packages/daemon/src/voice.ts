@@ -12,6 +12,7 @@ export type VoiceResult<T> = ({ ok: true } & T) | { ok: false; reason: string };
 export interface VoiceServiceOptions {
 	/** The connected OpenAI API key, read on each request; never a ChatGPT sign-in token. */
 	apiKey: () => Promise<string | undefined>;
+	local?: { available(): Promise<boolean>; transcribe(mime: string, data: string): Promise<VoiceResult<{text:string}>> };
 	fetch?: typeof fetch;
 	log?: (line: string) => void;
 	timeoutMs?: number;
@@ -65,12 +66,17 @@ export class VoiceService {
 	/** Checks whether a key is connected now. */
 	async refresh(): Promise<VoiceCapability> {
 		const on = (await this.key()) !== undefined;
-		this.current = { transcribe: on, speak: on };
+		const local = await this.options.local?.available() ?? false;
+		this.current = { transcribe: on || local, speak: on, ...(local ? {local:true} : {}) };
 		return this.current;
 	}
 
 	async transcribe(mime: string, data: string): Promise<VoiceResult<{ text: string }>> {
 		if (data.length > MAX_VOICE_AUDIO) return { ok: false, reason: REASONS.tooLong };
+		const local = this.options.local;
+		// Phone WAV must not leak to a cloud backend when PC capability goes stale.
+		if (mime === "audio/wav" && local)
+			return local.transcribe(mime, data);
 		const type = mime.split(";")[0]?.trim().toLowerCase() ?? "";
 		const form = new FormData();
 		form.append("model", TRANSCRIBE_MODEL);
