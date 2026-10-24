@@ -10,6 +10,7 @@ pub mod desktop_context;
 pub mod disclaimed;
 pub mod geometry;
 mod frontend;
+mod navigation;
 pub mod health;
 pub mod platform;
 pub mod position;

@@ -15,6 +15,7 @@ import {
 import { createPortal } from "react-dom";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { openUrl as openExternal } from "../desktop.ts";
 import { MAX_IMAGE_PREVIEW_BYTES, type SharedFileClient, type SharedFileInfo } from "../shared-files.ts";
 import { formatSize } from "../uploads.ts";
 import { ImageViewer } from "./ImageViewer.tsx";
@@ -70,7 +71,13 @@ function uniqueAttachments(client: SharedFileClient | undefined) {
 }
 
 /** Private file links are authenticated cards; ordinary Markdown remains ordinary content. */
-export function SharedMarkdown({ children }: { children: string }) {
+export function SharedMarkdown({
+	children,
+	openUrl = openExternal,
+}: {
+	children: string;
+	openUrl?: (url: string) => void;
+}) {
 	const client = useContext(SharedFileContext);
 	const attachments = useMemo(() => uniqueAttachments(client), [client]);
 	const components = useMemo<Components>(
@@ -97,6 +104,7 @@ export function SharedMarkdown({ children }: { children: string }) {
 			},
 			a: ({ href, children, node }) => {
 				const id = href && client?.idFromHref(href);
+				const external = typeof href === "string" && /^https?:\/\//i.test(href);
 				const description = node?.properties["data-shared-description"];
 				return id && client ? (
 					<SharedFileCard
@@ -106,7 +114,21 @@ export function SharedMarkdown({ children }: { children: string }) {
 						description={typeof description === "string" ? description : undefined}
 					/>
 				) : (
-					<a href={href}>{children}</a>
+					<a
+						href={href}
+						target={external ? "_blank" : undefined}
+						rel={external ? "noopener noreferrer" : undefined}
+						onClick={
+							external
+								? (event) => {
+										event.preventDefault();
+										openUrl(href);
+									}
+								: undefined
+						}
+					>
+						{children}
+					</a>
 				);
 			},
 			img: ({ src, alt }) => {
@@ -118,7 +140,7 @@ export function SharedMarkdown({ children }: { children: string }) {
 				);
 			},
 		}),
-		[client],
+		[client, openUrl],
 	);
 	return (
 		<Markdown remarkPlugins={[remarkGfm, attachments]} components={components}>

@@ -841,6 +841,7 @@ fn bundled_frontend_cold_start_and_daemon_reconnect_keep_the_real_document() {
         )
         .title(&rule.title)
         .on_page_load(crate::frontend::page_loaded)
+        .on_navigation(crate::navigation::handler(app.handle().clone()))
         .inner_size(w, h)
         .min_inner_size(w, h)
         .max_inner_size(w, h)

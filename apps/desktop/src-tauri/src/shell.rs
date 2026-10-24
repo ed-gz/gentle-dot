@@ -768,6 +768,7 @@ fn build_windows(
     rose_hidden: bool,
 ) -> tauri::Result<()> {
     let dot = WebviewWindowBuilder::new(app, DOT, WebviewUrl::App("index.html?surface=dot".into()))
+        .on_navigation(crate::navigation::handler(app.clone()))
         .on_page_load(crate::frontend::page_loaded)
         .title(DOT_TITLE)
         .inner_size(DOT_SIZE.0, DOT_SIZE.1)
@@ -787,6 +788,7 @@ fn build_windows(
     let dot = dot.resizable(true).min_inner_size(DOT_SIZE.0, DOT_SIZE.1).max_inner_size(DOT_SIZE.0, DOT_SIZE.1);
     let dot = dot.build()?;
     WebviewWindowBuilder::new(app, desktop_companion::LAUNCHER, WebviewUrl::App("index.html?surface=companion-launcher".into()))
+        .on_navigation(crate::navigation::handler(app.clone()))
         .on_page_load(crate::frontend::page_loaded)
         .title(desktop_companion::LAUNCHER_TITLE)
         .inner_size(56., 56.).min_inner_size(56., 56.).max_inner_size(56., 56.)
@@ -794,6 +796,7 @@ fn build_windows(
         .skip_taskbar(true).visible_on_all_workspaces(true).shadow(false).visible(false)
         .build()?;
     WebviewWindowBuilder::new(app, desktop_companion::BUBBLE, WebviewUrl::App("index.html?surface=companion-bubble".into()))
+        .on_navigation(crate::navigation::handler(app.clone()))
         .on_page_load(crate::frontend::page_loaded)
         .title(desktop_companion::BUBBLE_TITLE)
         .inner_size(desktop_companion::BUBBLE_WIDTH as f64, desktop_companion::BUBBLE_HEIGHT as f64)
@@ -804,6 +807,7 @@ fn build_windows(
         .build()?;
     // Linux has no window effects; the panel URL tells the UI to paint an opaque background.
     let panel = WebviewWindowBuilder::new(app, PANEL, WebviewUrl::App(platform::panel_url(Os::CURRENT).into()))
+        .on_navigation(crate::navigation::handler(app.clone()))
         .on_page_load(crate::frontend::page_loaded)
         .title(PANEL_TITLE)
         .inner_size(PANEL_SIZE.0, PANEL_SIZE.1)
