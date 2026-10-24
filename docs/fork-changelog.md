@@ -25,6 +25,16 @@ La actualización documental que contiene este registro reorganiza el onboarding
 
 La [matriz de integración](upstream-2026-10-23.md) incorpora correcciones de Node empaquetado, codemode, lecturas de Notion, WebKit/Wayland, enlaces del chat y preferencia de voz nativa. Registra la procedencia de cada PR abierta, las adaptaciones necesarias para Linux/Android/Capri y las propuestas aplazadas. También distingue los fallos previos del baseline, la reparación de las fixtures y los resultados finales de pruebas, incluido Android 0.21.2; el lint completo continúa pendiente.
 
+## Versión 0.22.0: Capri con intención y móvil reorganizado
+
+Capri ya no se mueve ni cambia de pose al azar. Un único motor de prioridades (pregunta pendiente, resultado o error, escritura, agente trabajando, respuesta, reposo) decide la pose y el destino en escritorio y en la app. Se eliminaron el salto cada 20 segundos, la rotación de escenas cada 12 segundos y el salto entre bordes en móvil. Al escribir en Kitty o Herdr, Capri se coloca junto a la ventana enfocada usando su geometría de Hyprland; el cliente parcheado de Herdr pasa a ser una mejora de precisión opcional.
+
+En escritorio desaparece el recuadro fantasma: el acceso oculto recibe la misma regla sin desenfoque, sombra ni redondeo que el personaje.
+
+En Android, Capri reacciona al estado real de las sesiones (trabajando, te necesita, terminado, error), vuelve tras bloquear o perder el proceso y un fallo transitorio ya no la desactiva. El monitor de avisos se activa por defecto en teléfonos vinculados, se restaura al abrir la app, al reiniciar y al actualizar, y solo queda apagado si se desactiva explícitamente. Ajustes se agrupa en Capri, Avisos, Personalización, Cuenta y equipo y Avanzado; crear una sesión ofrece carpetas recientes y los datos técnicos quedan plegados.
+
+El APK **0.22.0 / código 39** se compila y distribuye de forma privada.
+
 ## Parche Android 0.21.4: movimiento y conversación móvil
 
 Capri deja de esperar 30 segundos después de cada animación. Su reposo recorre seis fotogramas cada 3,6 segundos con un solo temporizador, reutiliza el atlas cargado y recupera el reloj al volver a mostrarse. Tocar, arrastrar y fijar disparan reacciones breves. Bloquear la pantalla, activar ahorro o desactivar las animaciones de Android sigue pausando el movimiento; Ajustes distingue esas pausas de un fallo de carga.
