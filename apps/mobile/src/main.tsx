@@ -6,7 +6,7 @@ import { PhoneSettings } from "../../../packages/ui/src/components/SettingsGroup
 import { RoseGlyph } from "../../../packages/ui/src/components/icons.tsx";
 import { CompanionSettings } from "./CompanionSettings.tsx";
 import { NotificationSettings } from "./NotificationSettings.tsx";
-import { GentleMobile, nativeAndroid, setupNative } from "./native.ts";
+import { ensureMonitor, GentleMobile, MONITOR_OPT_OUT, nativeAndroid, setupNative } from "./native.ts";
 import {
 	type Connection,
 	disconnectDevice,
@@ -208,13 +208,30 @@ function MobileApp() {
 			setBusy(false);
 		}
 	};
+	useEffect(() => {
+		if (!connection) return;
+		const ensure = () =>
+			void ensureMonitor(connection)
+				.then(async (started) => {
+					if (started) setMonitoring((await GentleMobile.monitorState()).active);
+				})
+				.catch(fail);
+		ensure();
+		window.addEventListener("gentledot-resume", ensure);
+		return () => window.removeEventListener("gentledot-resume", ensure);
+	}, [connection, fail]);
 	const toggleMonitor = async () => {
 		if (!connection) return;
 		setBusy(true);
 		setError("");
 		try {
-			if (monitoring) await GentleMobile.stopMonitor();
-			else await GentleMobile.startMonitor({ url: connection.url, token: connection.token });
+			if (monitoring) {
+				localStorage.setItem(MONITOR_OPT_OUT, "1");
+				await GentleMobile.stopMonitor();
+			} else {
+				localStorage.removeItem(MONITOR_OPT_OUT);
+				await GentleMobile.startMonitor({ url: connection.url, token: connection.token });
+			}
 			setMonitoring((await GentleMobile.monitorState()).active);
 		} catch (cause) {
 			fail(cause);

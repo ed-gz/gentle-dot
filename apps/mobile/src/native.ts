@@ -90,6 +90,15 @@ interface NativePlugin {
 }
 export const GentleMobile = registerPlugin<NativePlugin>("GentleMobile");
 export const nativeAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
+/** Background notices are on by default for a paired phone; only an explicit switch-off keeps them off. */
+export const MONITOR_OPT_OUT = "gentledot-monitor-opt-out";
+export async function ensureMonitor(connection: { url: string; token: string }): Promise<boolean> {
+	if (!nativeAndroid || localStorage.getItem(MONITOR_OPT_OUT) === "1") return false;
+	const state = await GentleMobile.monitorState();
+	if (state.status !== "not_paired" && state.status !== "disconnected") return false;
+	await GentleMobile.startMonitor({ url: connection.url, token: connection.token });
+	return true;
+}
 const preferenceListeners = new Set<(preferences: NotificationPreferences) => void>();
 export async function readNotificationPreferences(): Promise<NotificationPreferences> {
 	if (!nativeAndroid) return normalizeNotificationPreferences(undefined);
