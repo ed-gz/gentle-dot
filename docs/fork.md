@@ -2,6 +2,8 @@
 
 Este repositorio conserva **Gentle Dot como aplicación base** y **Capri como personalización opcional**. El origen es [`Gentleman-Programming/gentle-dot`](https://github.com/Gentleman-Programming/gentle-dot); el fork es [`ed-gz/gentle-dot`](https://github.com/ed-gz/gentle-dot). Para instalarlo, empieza en el [README](../README.md). Para revisar qué cambió respecto de upstream, usa el [registro del fork](fork-changelog.md).
 
+La [revisión upstream del 23 de octubre de 2026](upstream-2026-10-23.md) registra las correcciones seleccionadas, sus adaptaciones para este fork y las propuestas aplazadas, incluida la evidencia oficial del runtime Node 24.22.1.
+
 ## Elegir Gentle Dot o Capri
 
 Una instalación nueva usa la apariencia y personalidad de Gentle Dot. Los usuarios que ya habían elegido Capri conservan su preferencia durante la migración.

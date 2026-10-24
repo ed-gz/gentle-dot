@@ -21,6 +21,10 @@ El primer commit reúne un desarrollo previo extenso. Las secciones siguientes a
 
 La actualización documental que contiene este registro reorganiza el onboarding, corrige descripciones anteriores y enlaza las reglas de seguridad e higiene. No cambia por sí misma el comportamiento del producto.
 
+## Revisión upstream del 23 de octubre de 2026
+
+La [matriz de integración](upstream-2026-10-23.md) incorpora correcciones de Node empaquetado, codemode, lecturas de Notion, WebKit/Wayland, enlaces del chat y preferencia de voz nativa. Registra la procedencia de cada PR abierta, las adaptaciones necesarias para Linux/Android/Capri y las propuestas aplazadas. También distingue los fallos previos del baseline, la reparación de las fixtures y los resultados finales de pruebas, incluido Android 0.21.2; el lint completo continúa pendiente.
+
 ## Parche Android 0.21.1
 
 Al regresar de los ajustes sin permiso para mostrarse sobre otras apps, la interfaz explica cómo revisarlo y ofrece **Abrir información de la app** y **Volver al permiso**. La guía incluye la ruta oficial de Android para ajustes restringidos cuando está disponible y la persona confía en su APK. No se atribuye toda denegación a esa restricción: la aplicación sólo conoce el estado del permiso y no puede levantar un bloqueo del sistema.
