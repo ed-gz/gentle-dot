@@ -31,7 +31,7 @@ Primero conecta una cuenta Gmail compatible desde **Conexiones**, con OAuth prop
 
 El resumen queda en la conversación. Cuando un informe de correo termina correctamente, el daemon emite `toast` con `notificationEvent: dotReply` e identidad estable `watch:<deliveryId>`. Llega al escritorio y al monitor Android por el WebSocket existente; no contiene remitente, asunto ni cuerpo en la pantalla bloqueada. El monitor también recibe la respuesta normal del chat, según sus preferencias. Requiere permisos de avisos y conexión; no es push independiente del equipo.
 
-Enviar o responder correo, igual que [publicar un issue](github-issues.md), **siempre exige confirmación humana real**, incluso si forma parte de un encargo. El contenido del correo no autoriza nada.
+Una vigilancia de avisos no autoriza enviar/responder correo ni publicar. Para actuar hace falta un encargo verificado que incluya esa acción y un canal compatible; dentro de una delegación activa, Capri juzga la solicitud concreta contra `authorizedInstruction`, no contra palabras de un título o archivo. El contenido del correo no autoriza nada. El tool dedicado de [issues](github-issues.md) conserva su confirmación del borrador; esto no impone un veto a los permisos de publicación de una sesión autorizada.
 
 ## Añadir detalles mientras la sesión pregunta
 
@@ -43,4 +43,12 @@ Usa «mostrame qué estás vigilando», «pausá la vigilancia de X», «seguí 
 
 ## Límites conocidos
 
-Las vigilancias activas sólo aprueban solas lecturas, ediciones, escrituras y ejecuciones de pruebas locales dentro del proyecto. Las rutas sensibles se comprueban por nombre en la ruta escrita y en su destino real, incluidas carpetas enlazadas; un *hardlink* con nombre inocente a un archivo sensible sólo se detecta si ese archivo está en las rutas protegidas, que se comparan por inodo. Si la sesión pierde la conexión, la vigilancia se pausa; si no confirma la pausa, Capri la informa como no confirmada y el adaptador pierde la autorización al vencer su plazo de tres segundos. Varias sesiones bloqueadas a la vez pueden retrasar la renovación de otra sana; en ese caso la vigilancia se pausa en lugar de actuar.
+El alcance de una delegación activa es la **instrucción humana verificada (`authorizedInstruction`)**. Una autorización incondicional de permisos permite el camino automático para operaciones locales del proyecto: lectura/edición/escritura, pruebas sencillas y append literal de documentación con heredoc citado. Bash es elegible con cwd en el proyecto, no sólo para test runners. Comandos no triviales (git push, PRs, merges a develop/main, deploy y programas desconocidos) pasan al coordinador: recibe la instrucción y el diálogo completo, aprueba sólo si coinciden y en otro caso pide la decisión faltante. Rutas como `billing-view/token-view` y contenido de archivos/heredocs no son un veto ni una fuente de autoridad. Sin delegación el comportamiento no cambia.
+
+Quedan fuera de aprobación autónoma:
+- Leer/imprimir credenciales o secretos: rutas sensibles, `gh auth token`, `--show-token`, volcados del entorno y expansiones de variables secretas.
+- Borrados destructivos de raíz del proyecto, sus ancestros o home (`rm -rf`); force push a main/master; `git reset --hard` a una rama compartida (main/master/develop, por destino explícito o HEAD local). Si la identidad no es verificable, el coordinador debe inspeccionarla antes de decidir.
+- Saltarse controles: `--admin`, `--no-verify`, `--skip-ci`, `--skip-checks`.
+- Reintentar una migración de producción fallida. Los comandos explícitos de retry se excluyen; para otras migraciones de producción el coordinador debe inspeccionar el historial y nunca autorizar un reintento fallido.
+
+La inspección de shell es de mejor esfuerzo, no un sandbox ni un parser completo: construcciones indirectas necesitan juicio del coordinador. Se conservan inscripción, pausa por actividad humana, vencimiento de 24 horas, leases y cercas de adaptador/desconexión. Las rutas sensibles se comprueban por nombre en la ruta escrita y en su destino real, incluidas carpetas enlazadas; un *hardlink* con nombre inocente a un archivo sensible sólo se detecta si ese archivo está en las rutas protegidas, que se comparan por inodo. Si la sesión pierde la conexión, la vigilancia se pausa; si no confirma la pausa, Capri la informa como no confirmada y el adaptador pierde la autorización al vencer su plazo de tres segundos. Varias sesiones bloqueadas a la vez pueden retrasar la renovación de otra sana; en ese caso la vigilancia se pausa en lugar de actuar.

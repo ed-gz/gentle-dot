@@ -8,8 +8,8 @@ it.each([undefined, {}, {provider:"extension",category:"workspace-tool",scope:"p
 it.each(["read","edit","write","bash"])("allows the explicit workspace tool permission contract: %s", tool => {
  expect(humanOnlyQuestion({kind:"confirm",title:"Allow local operation?",workflowPermission:{...workspace,tool}})).toBe(false);
 });
-it.each(["SMTP delivery", "send email", "publish artifact", "git push", "connector access", "payment", "credential access"])("preview restrictions narrow even a recognized category: %s", message => {
- expect(humanOnlyQuestion({kind:"confirm",title:"Allow local operation?",message,workflowPermission:workspace})).toBe(true);
+it.each(["SMTP delivery", "send email", "publish artifact", "git push", "connector access", "payment", "credential access"])("S20 preview words do not override adapter eligibility: %s", message => {
+ expect(humanOnlyQuestion({kind:"confirm",title:"Allow local operation?",message,workflowPermission:workspace})).toBe(false);
 });
 it("allows the bound native review category, never a generic review-looking prompt", () => {
  const dialog={kind:"select",title:"Review consent",options:[{id:"granted",label:"Review once"}]};

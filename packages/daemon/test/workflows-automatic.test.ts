@@ -103,6 +103,24 @@ it.each([
  expect(await h.attempt()).toBe(false); expect(h.approve).not.toHaveBeenCalled();
 });
 
+it("S20 auto-approves the real release log append, not incidental billing/token filenames", async () => {
+	const h = fixture();
+	await h.start({ objective: "Release portal_b2b: tests, flujos, PRs, develop, main y deploy" });
+	h.question.title = "Allow bash in this project?";
+	h.question.message = JSON.stringify({ command: "cat >> odd/tasks/release-store-local-polish.md <<'EOF'\nL7 billing-view/token-view release checks\nEOF" });
+	expect(await h.attempt()).toBe(true);
+	expect(h.approve).toHaveBeenCalledTimes(1);
+});
+
+it.each(["git push origin develop", "gh pr create --title release --body ready"])("S20 leaves external command %s to instruction-based model review", async command => {
+	const h = fixture();
+	await h.start();
+	h.question.workflowPermission = { provider: "dot-session/v1", category: "workspace-tool", scope: "project-workspace", tool: "bash", decision: "instruction" };
+	h.question.message = JSON.stringify({ command });
+	expect(await h.attempt()).toBe(false);
+	expect(h.approve).not.toHaveBeenCalled();
+});
+
 it("answers directly on discovery with no model lease, heavy transcript read, wake or repeated response", async () => {
 	const h = fixture();
 	const work = await h.start();
@@ -158,11 +176,11 @@ it.each([
 	{ answerable: false },
 	{ expiresAt: "invalid" },
 	{ expiresAt: "2026-10-12T00:00:00Z" },
-	{ title: "Do you prefer option A?" },
-	{ title: "Allow all connectors?" },
-	{ message: "Send your password" },
-	{ title: "Allow permanent access?" },
-	{ message: "Autorizar todas las sesiones" },
+	{ title: "Do you prefer option A?", workflowPermission: undefined },
+	{ title: "Allow all connectors?", workflowPermission: undefined },
+	{ message: "Send your password", workflowPermission: undefined },
+	{ title: "Allow permanent access?", workflowPermission: undefined },
+	{ message: "Autorizar todas las sesiones", workflowPermission: undefined },
 ])("keeps unsupported, expired, personal or wider-scope dialogs available: %j", async (change) => {
 	const h = fixture();
 	await h.start();

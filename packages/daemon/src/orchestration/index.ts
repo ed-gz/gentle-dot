@@ -902,7 +902,7 @@ export class Orchestrator {
 					"QUESTION_CHANGED",
 					"La solicitud cambió; vuelve a inspeccionar la sesión.",
 				);
-			if (humanOnlyQuestion(question)) throw new OrchestrationError("HUMAN_REQUIRED", "Esta publicación o envío requiere respuesta humana directa.", 403);
+			if (humanOnlyQuestion(question)) throw new OrchestrationError("HUMAN_REQUIRED", "Esta solicitud no tiene permiso verificable para delegación o contiene un bloqueo estructural.", 403);
 			if (!record(page.capabilities) || page.capabilities.activityFence !== 1) throw new OrchestrationError("ACTIVITY_FENCE_REQUIRED", "Actualiza el adaptador antes de delegar acciones.", 403);
 			const answer = questionAnswer(question, input.answer);
 			this.assertAuthorized(authorize);

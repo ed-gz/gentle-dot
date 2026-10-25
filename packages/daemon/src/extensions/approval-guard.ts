@@ -34,7 +34,7 @@
  * extensions folder (`child-guard.ts`), but get no `propose_connector`.
  * This file has no dependencies besides Node, so the engine loads it as is.
  */
-import { lstatSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { pruneScreenshots } from "./screenshot-context.ts";
@@ -149,6 +149,14 @@ export interface GuardCall {
 	readOnlyHint?: unknown;
 	/** The working folder relative paths resolve against. */
 	cwd: string;
+	/** Set only by the live adapter, never from tool input. */
+	delegated?: boolean;
+}
+
+const workspaceDelegations = new WeakMap<object, () => boolean>();
+/** UI identity binds the guard to the adapter's existing enrollment/lease fence. */
+export function bindWorkspaceDelegation(ui: object, active: () => boolean): void {
+	workspaceDelegations.set(ui, active);
 }
 
 const USE_CONNECTORS_SCREEN =
@@ -263,10 +271,10 @@ export function decide(call: GuardCall, policy: ConnectorPolicy): GuardDecision 
 		const githubCommand = command.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (original, name) => bindings.get(name) ?? original).replace(/["'`\\]/g, "");
 		if (/\bgh\b[^;\n|&]*\bauth\s+(?:token\b|status\b[^;\n]*--show-token\b)/i.test(githubCommand))
 			return {action:"block", reason:"Nunca leas tokens de GitHub. Usa github_issue status, que sólo consulta el código de salida."};
-		if (/\bgh\b[^;\n|&]*\b(?:issue|pr)\s+create\b/i.test(githubCommand) ||
+		if (!call.delegated && (/\bgh\b[^;\n|&]*\b(?:issue|pr)\s+create\b/i.test(githubCommand) ||
 			(/\bgh\b[^;\n|&]*\bapi\b/i.test(githubCommand) &&
 			 /\brepos\/[\w.{}-]+\/[\w.{}-]+\/(?:issues|pulls)(?:\b|\/)/i.test(githubCommand) &&
-			 /(?:\b(?:POST|PATCH|PUT|DELETE)\b|(?:^|\s)(?:-f|-F|--(?:raw-)?field|--input)(?:\s|=))/i.test(githubCommand)))
+			 /(?:\b(?:POST|PATCH|PUT|DELETE)\b|(?:^|\s)(?:-f|-F|--(?:raw-)?field|--input)(?:\s|=))/i.test(githubCommand))))
 			return {action:"block", reason:"Usa github_issue create: publicar un issue requiere confirmación real en PC o teléfono."};
 		if (CONNECTOR_COMMAND.test(command)) return { action: "block", reason: USE_CONNECTORS_SCREEN };
 		return namesPrivateFile(command, policy.protectedPaths)
@@ -302,11 +310,11 @@ export function decide(call: GuardCall, policy: ConnectorPolicy): GuardDecision 
 	};
 }
 
-/** A verified local operation, not a promise about arbitrary shell program effects. */
-export function workspaceToolPermission(call: GuardCall): { provider: "dot-session/v1"; category: "workspace-tool"; tool: string; scope: "project-workspace" } | undefined {
+/** Adapter eligibility plus local-vs-instruction routing, not a shell sandbox. */
+export function workspaceToolPermission(call: GuardCall): { provider: "dot-session/v1"; category: "workspace-tool"; tool: string; scope: "project-workspace"; decision: "local" | "instruction" } | undefined {
 	if (!["read", "edit", "write", "bash"].includes(call.toolName)) return;
 	const policy = parsePolicy(process.env[POLICY_ENV]) ?? { protectedPaths: [] };
-	if (decide(call, policy).action !== "pass") return;
+	if (call.toolName !== "bash" && decide({ ...call, delegated: true }, policy).action !== "pass") return;
 	// Unknown/model-authored authority fields must never become permission metadata.
 	const fields: Record<string, string[]> = {
 		read: ["path", "offset", "limit"], edit: ["path", "oldText", "newText"],
@@ -318,7 +326,7 @@ export function workspaceToolPermission(call: GuardCall): { provider: "dot-sessi
 	const inside = (raw: string): boolean => {
 		if (!raw || /[\0$~*?{}]/.test(raw) || /(?:^|[/\\])(?:\.env(?:\.[^/\\]*)?|\.ssh|\.aws|credentials?|auth\.json)(?:$|[/\\])/i.test(raw)) return false;
 		const target = resolvePath(raw, call.cwd);
-		const sensitive = (path: string) => /(?:^|[/\\])(?:\.env[^/\\]*|\.ssh|\.aws|(?:[^/\\]*[._-])?(?:auth|credentials?|tokens?|keys?)(?:[._-][^/\\]+)?|(?:id_rsa|id_ed25519|id_ecdsa|id_dsa)|[^/\\]*\.(?:pem|key|p12|pfx))(?:$|[/\\])/i.test(path) || namesPrivateFile(path, policy.protectedPaths);
+		const sensitive = (path: string) => sensitiveWorkspacePath(path) || namesPrivateFile(path, policy.protectedPaths);
 		if (sensitive(target)) return false;
 		// Resolve the nearest existing ancestor for new files/directories. Never follow a
 		// dangling symlink by pretending it is a new path (lstat distinguishes the two).
@@ -341,31 +349,108 @@ export function workspaceToolPermission(call: GuardCall): { provider: "dot-sessi
 			return !sensitive(real) && (real === root || real.startsWith(root + sep));
 		} catch { return false; }
 	};
+	let decision: "local" | "instruction" = "local";
 	if (call.toolName === "bash") {
 		const command = call.input.command;
-		if (typeof command !== "string" || namesPrivateFile(command, policy.protectedPaths)) return;
-		// No general shell parsing: only a single local test runner invocation, without
-		// expansion, redirection, chaining, environment overrides or network commands.
-		if (!/^[A-Za-z0-9_./:@=\s-]+$/.test(command) || /[\r\n]/.test(command)) return;
-		const words = command.trim().split(/\s+/);
-		let count = 0;
-		if (["npm", "pnpm", "yarn", "bun"].includes(words[0] ?? "")) {
-			count = words[1] === "test" ? 2 : words[1] === "run" && words[2] === "test" ? 3 : 0;
-		} else if (["node_modules/.bin/vitest", "./node_modules/.bin/vitest"].includes(words[0] ?? "") && words[1] === "run") count = 2;
-		else if (["pytest", "./node_modules/.bin/jest", "node_modules/.bin/jest"].includes(words[0] ?? "")) count = 1;
-		else if (["go", "cargo"].includes(words[0] ?? "") && words[1] === "test") count = 2;
-		else if (words[0] === "node" && words[1] === "--test") count = 2;
-		if (!count) return;
-		if (words[0]!.includes("/") && !inside(words[0]!)) return;
-		for (const arg of words.slice(count)) {
-			if (["--", "--runInBand", "--coverage", "--watch=false", "--no-watch", "--verbose", "-v"].includes(arg)) continue;
-			// Unknown options (including --prefix/--config/--eval) cannot redirect execution.
-			if (arg.startsWith("-") || arg.includes(":") || arg.includes("=") || !inside(arg)) return;
-		}
+		if (typeof command !== "string" || !command.trim()) return;
+		const shell = workspaceShell(command, root, inside, policy.protectedPaths);
+		if (shell === "blocked") return;
+		decision = shell;
 	} else {
 		if (typeof call.input.path !== "string" || !inside(call.input.path)) return;
 	}
-	return { provider: "dot-session/v1", category: "workspace-tool", tool: call.toolName, scope: "project-workspace" };
+	return { provider: "dot-session/v1", category: "workspace-tool", tool: call.toolName, scope: "project-workspace", decision };
+}
+
+// Names of actual secret stores, not incidental words such as src/token.ts.
+function sensitiveWorkspacePath(path: string): boolean {
+	return /(?:^|[/\\])(?:\.env(?:\.[^/\\]*)?|\.ssh|\.aws|credentials?(?:\.json)?|auth\.json|tokens?\.json|access[_-]token\.json|api[_-]key\.json|id_(?:rsa|ed25519|ecdsa|dsa)|[^/\\]*\.(?:pem|key|p12|pfx))(?:$|[/\\])/i.test(path);
+}
+
+function workspaceBranch(root: string): string | undefined {
+	try {
+		let git = join(root, ".git");
+		if (statSync(git).isFile()) {
+			const pointer = readFileSync(git, "utf8").match(/^gitdir: (.+)\s*$/);
+			if (!pointer) return;
+			git = resolve(root, pointer[1]!);
+		}
+		return readFileSync(join(git, "HEAD"), "utf8").trim().replace(/^ref: refs\/heads\//, "");
+	} catch { return; }
+}
+
+/** Best-effort shell inspection, not a sandbox. Unknown programs go to instruction review. */
+function workspaceShell(command: string, root: string, inside: (path: string) => boolean, protectedPaths: string[]): "local" | "instruction" | "blocked" {
+	// A quoted heredoc is literal file content, not shell code. Never classify its body.
+	const code = command.replace(/<<(-?)\s*(['"])([\w-]+)\2([^\n]*)\n[\s\S]*?\n\3(?:\n|$)/g,
+		(_match, _dash, _quote, _delimiter, tail: string) => `<< LITERAL${tail}\n`);
+	const tokens = code.match(/'(?:[^']*)'|"(?:\\.|[^"\\])*"|&&|\|\||[;\n|<>]+|[^\s;|<>]+/g) ?? [];
+	const words = tokens.map(word => word.replace(/^(['"])([\s\S]*)\1$/, "$2"));
+	const segments: string[][] = [[]];
+	for (const word of words) {
+		if (/^(?:&&|\|\||[;\n|]+)$/.test(word)) segments.push([]);
+		else segments.at(-1)!.push(word);
+	}
+	let local = segments.filter(segment => segment.length).length === 1 && !/[$`]/.test(code);
+	for (const argv of segments) {
+		if (!argv.length) continue;
+		const executable = basename(argv[0]!);
+		const args = argv.slice(1);
+		if (executable === "mcp" && ["add", "login", "logout", "remove"].includes(args[0] ?? "")) return "blocked";
+		const option = (name: string) => args.some(arg => arg === name || arg.startsWith(name + "="));
+		// Content-valued arguments are not CLI switches. In particular, an issue body
+		// or `echo '--admin'` must not become a check-bypass operation.
+		const contentOptions = ["--body", "--title", "--message", "-m", "--data", "-d", "--header", "-H"];
+		const switches = args.filter((_arg, index) => !contentOptions.includes(args[index - 1] ?? ""));
+		const bypass = !["echo", "printf", "cat", "head", "tail"].includes(executable) &&
+			switches.some(arg => ["--admin", "--no-verify", "--skip-ci", "--skip-checks"].includes(arg.split("=")[0]!));
+		const expansions = code.replace(/'[^']*'/g, "");
+		const skipCommitCI = executable === "git" && args.includes("commit") && args.some((arg, index) =>
+			["-m", "--message"].includes(args[index - 1] ?? "") && /\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/i.test(arg));
+		if (bypass || skipCommitCI ||
+			/\$(?:\{)?(?:[A-Z_]*(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|CREDENTIAL)[A-Z_]*)(?:\}|\b)/.test(expansions) ||
+			["printenv", "env", "set"].includes(executable) && (args.length === 0 || args.every(arg => arg.startsWith("-")) || args.some(arg => /(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|CREDENTIAL)/.test(arg))) ||
+			["export", "declare"].includes(executable) && args.includes("-p") ||
+			executable === "gh" && args[0] === "auth" && (args[1] === "token" || option("--show-token"))) return "blocked";
+		const sharedTarget = args.some(arg => /(?:^|[:/])(?:main|master|develop)$/.test(arg));
+		const branch = workspaceBranch(root);
+		if (executable === "git" && args.includes("push") &&
+			(option("--force") || option("--force-with-lease") || args.includes("-f") || args.some(arg => arg.startsWith("+"))) &&
+			(args.some(arg => /(?:^|[:/])(?:main|master)$/.test(arg)) || branch === "main" || branch === "master")) return "blocked";
+		if (executable === "git" && args.includes("reset") && option("--hard") &&
+			(sharedTarget || branch === "main" || branch === "master" || branch === "develop")) return "blocked";
+		if (executable === "rm" && args.some(arg => /^-[^-]*r/.test(arg) || arg === "--recursive")) {
+			for (const arg of args.filter(arg => !arg.startsWith("-"))) {
+				const target = resolvePath(arg, root);
+				if (/^(?:~|\$(?:HOME|PWD)|\$\{(?:HOME|PWD)\})(?:\/\*?|\/)?$/.test(arg) || target === root || target === root + sep + "*" || target === "/" || root.startsWith(target + sep)) return "blocked";
+			}
+		}
+		for (let index = 0; index < args.length; index++) {
+			if (/^>{1,2}$/.test(args[index]!) && namesPrivateFile(args[index + 1] ?? "", protectedPaths)) return "blocked";
+		}
+		const reads = ["cat", "head", "tail", "less", "more", "grep", "rg", "sed", "awk", "base64", "cp"].includes(executable);
+		if ((reads || argv.includes("<")) && args.some(arg => {
+			if (sensitiveWorkspacePath(arg) || namesPrivateFile(arg, protectedPaths)) return true;
+			try {
+				const target = realpathSync(resolvePath(arg, root));
+				return sensitiveWorkspacePath(target) || isProtected(target, protectedPaths);
+			} catch { return false; }
+		})) return "blocked";
+		if (args.some(arg => /^(?:--retry|--rerun)$/.test(arg)) && args.some(arg => /^(?:migrate|migration|migrations)$/.test(arg)) && args.some(arg => /^(?:production|prod|--production)$/.test(arg))) return "blocked";
+		// Only straightforward local reads, literal appends, and tests bypass inference.
+		const test = ["npm", "pnpm", "yarn", "bun", "go", "cargo"].includes(executable) && (args[0] === "test" || args[0] === "run" && args[1] === "test") ||
+			["vitest", "jest", "pytest"].includes(executable) || executable === "node" && args[0] === "--test";
+		const append = executable === "cat" && args[0] === ">>" && inside(args[1] ?? "") && args[2] === "<<" && args[3] === "LITERAL" && args.length === 4;
+		const read = ["cat", "head", "tail"].includes(executable) && args.length > 0 && args.every(arg => !arg.startsWith("-") && inside(arg));
+		const count = ["vitest", "jest", "pytest"].includes(executable) ? (args[0] === "run" ? 1 : 0) : args[0] === "run" ? 2 : 1;
+		const safeFlags = ["--", "--runInBand", "--coverage", "--watch=false", "--no-watch", "--verbose", "-v"];
+		const simpleTest = test && !/[<>]/.test(code) && args.slice(count).every(arg => safeFlags.includes(arg) ||
+			!arg.startsWith("-") && !/[:=]/.test(arg) && inside(arg));
+		const knownExecutable = !argv[0]!.includes("/") ||
+			["node_modules/.bin/vitest", "./node_modules/.bin/vitest", "node_modules/.bin/jest", "./node_modules/.bin/jest"].includes(argv[0]!) && inside(argv[0]!);
+		local &&= knownExecutable && (append || read || simpleTest);
+	}
+	return local ? "local" : "instruction";
 }
 
 /**
@@ -547,12 +632,18 @@ export default function approvalGuard(pi: ExtensionAPI, options: { subagent?: bo
 		const annotations = event.toolName.startsWith("mcp__")
 			? pi.getAllTools().find((tool) => tool.name === event.toolName)?.annotations
 			: undefined;
+		// The adapter will present its unforgeable workspace dialog next. Do not
+		// replace an authorized publication with the legacy unconditional refusal.
+		if (workspaceDelegations.get(ctx.ui)?.() === true && workspaceToolPermission({
+			toolName: event.toolName, input: event.input as Record<string, unknown>, cwd: ctx.cwd,
+		})) return undefined;
 		const decision = decide(
 			{
 				toolName: event.toolName,
 				input: event.input as Record<string, unknown>,
 				readOnlyHint: annotations?.readOnlyHint,
 				cwd: ctx.cwd,
+				delegated: workspaceDelegations.get(ctx.ui)?.() === true,
 			},
 			policy,
 		);

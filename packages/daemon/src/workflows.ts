@@ -606,20 +606,15 @@ export class WorkflowContinuations {
 		const revision = this.approvalRevisions.get(work.id);
 		const question = input.question;
 		if (humanOnlyQuestion(question)) return false;
-		// Do not turn a yes/no personal question, credentials, connector grants or
-		// changes to other sessions into operational permission. Unknown dialogs use review.
-		const title = typeof question.title === "string" ? question.title : "";
-		const prompt = `${title}\n${typeof question.message === "string" ? question.message : ""}`;
+		// Non-local operations require the coordinator to compare the full dialog
+		// with authorizedInstruction; blanket confirmations never skip that judgment.
+		if (record(question.workflowPermission) && question.workflowPermission.decision === "instruction") return false;
 		if (
 			question.kind !== "confirm" ||
 			question.answerable !== true ||
 			typeof question.id !== "string" ||
 			!question.id ||
 			question.id.length > 256 ||
-			!/^[¿\s]*(?:allow|approve|permitir|autorizar|aprobar)\b/i.test(title) ||
-			/\b(?:password|passwd|contrase(?:ñ|n)a|credentials?|credenciales|permanent|permanente|connectors?|conectores?|all sessions|todas las sesiones|security settings|configuraci[oó]n de seguridad)\b/i.test(
-				prompt,
-			) ||
 			(typeof question.expiresAt === "string" &&
 				question.expiresAt &&
 				(!Number.isFinite(Date.parse(question.expiresAt)) || Date.parse(question.expiresAt) <= this.now()))

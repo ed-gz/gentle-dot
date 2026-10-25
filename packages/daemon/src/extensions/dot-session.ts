@@ -30,7 +30,7 @@ import { connectReviewConsent, isNativeReviewSource, type LiveReviewConsent, rev
 import { copySession } from "../orchestration/session-copy.ts";
 import { createSessionMetadata } from "../orchestration/session-info.ts";
 import { projectSessionMessages } from "../orchestration/transcript.ts";
-import { workspaceToolPermission } from "./approval-guard.ts";
+import { bindWorkspaceDelegation, workspaceToolPermission } from "./approval-guard.ts";
 
 interface DialogDetails extends Record<string, unknown> {
 	kind: "confirm" | "select" | "input" | "editor" | "questionnaire";
@@ -673,6 +673,8 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 		if (context.mode !== "tui" || !env.GENTLE_DOT_SESSION_DIR || Reflect.get(context.ui, UI_OWNER)) return;
 		metadata = createSessionMetadata(pi, context, env);
 		ownedUI = context.ui;
+		const uiIdentity = context.ui;
+		bindWorkspaceDelegation(uiIdentity, () => ownedUI === uiIdentity && autonomouslyEnrolled());
 		Object.defineProperty(ownedUI, UI_OWNER, { value: owner, configurable: true });
 		try {
 			const identity = await processIdentity(process.pid);

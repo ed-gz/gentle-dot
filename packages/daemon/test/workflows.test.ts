@@ -794,6 +794,28 @@ it("isolates an ambiguous in-flight answer when stopped, while another objective
 	);
 });
 
+it.each([
+	["git push origin develop", true], ["git push origin develop", false],
+	["gh pr create --title release --body ready", true], ["gh pr create --title release --body ready", false],
+])("S20 hands %s and its instruction to coordinator review (authorized=%s)", async (command, authorized) => {
+	const h = fixture();
+	const target = h.sessions[0]!;
+	const authorization = authorized ? "Autoriza PRs y push a develop para el release" : "Sólo pruebas locales; no PRs ni push a develop";
+	const dialog = { ...question, title: "Allow bash in this project?", message: JSON.stringify({ command }), workflowPermission: { provider: "dot-session/v1", category: "workspace-tool", scope: "project-workspace", tool: "bash", decision: "instruction" } };
+	h.approvals.push({ id: dialog.id, paneId: target.paneId, sessionId: target.sessionId });
+	h.inspect.mockResolvedValue({ sessionId: target.sessionId, status: "blocked", question: dialog });
+	await h.start({ mode: "session", sessions: [target], authorization });
+	expect(h.approve).not.toHaveBeenCalled(); // No fast-path external approvals.
+	const wake = await claim(h);
+	expect(wake.authorizedInstruction).toBe(authorization);
+	const inspected = await h.coordinator.dispatch(input(wake, "inspect"), "agent");
+	expect(inspected).toMatchObject({ question: { message: JSON.stringify({ command }), workflowPermission: { decision: "instruction" } } });
+	// Stand-in coordinator decision: positive only for the matching instruction.
+	// Natural-language interpretation belongs to the model, not a second regex policy.
+	await h.coordinator.dispatch(permission(wake, { answer: { confirmed: authorized }, reason: authorized ? "PRs y develop están autorizados" : "La instrucción excluye PRs y develop" }), "agent");
+	expect(h.approve.mock.calls[0]?.[0]).toMatchObject({ authorizedInstruction: authorization, answer: { confirmed: authorized } });
+});
+
 it("binds an approval to the exact inspected request, objective and verified human instruction", async () => {
 	const h = fixture();
 	await h.start();

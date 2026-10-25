@@ -313,11 +313,10 @@ it("fences real workspace approvals when the person resumes work and isolates si
 
 it.each([
 	{ toolName: "read", input: { path: "../outside" } },
-	{ toolName: "bash", input: { command: "git push origin main" } },
-	{ toolName: "bash", input: { command: "mail -s update person@example.invalid" } },
-	{ toolName: "bash", input: { command: "curl -X POST https://example.invalid" } },
-	{ toolName: "bash", input: { command: "npm test ../outside" } },
-	{ toolName: "bash", input: { command: "npm test; git push" } },
+	{ toolName: "bash", input: { command: "cat .env.local" } },
+	{ toolName: "bash", input: { command: "gh pr merge --admin" } },
+	{ toolName: "bash", input: { command: "git push --force origin main" } },
+	{ toolName: "bash", input: { command: "rm -rf ." } },
 	{ toolName: "bash", input: { command: "npm test", workflowPermission: { provider: "dot-session/v1", category: "workspace-tool", tool: "bash", scope: "project-workspace" } } },
 ])("keeps unsafe or forged real tool confirmations human-only: %j", async event => {
 	const h = await session();
@@ -329,6 +328,17 @@ it.each([
 	await expect(h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null })).rejects.toMatchObject({ code: "HUMAN_REQUIRED" });
 	await h.call("answer", { questionId: pending.id, confirmed: false });
 	await expect(tool).resolves.toMatchObject({ block: true });
+});
+
+it.each(["git push origin develop", "gh pr create --title release --body ready", "npm test; git push"])("S20 carries %s through the real adapter for coordinator judgment", async command => {
+	const h = await session();
+	await enroll(h);
+	const tool = h.handlers.get("tool_call")?.({ toolName: "bash", toolCallId: "release", input: { command } }, h.ctx);
+	const pending = (await h.call("snapshot")).question as Record<string, unknown>;
+	expect(humanOnlyQuestion(pending)).toBe(false);
+	expect(pending.workflowPermission).toMatchObject({ decision: "instruction" });
+	await h.call("answer", { questionId: pending.id, confirmed: true, expectedHumanActivityAt: null });
+	await expect(tool).resolves.toBeUndefined();
 });
 
 it("does not accept permission metadata in generic dialog text or options", async () => {
