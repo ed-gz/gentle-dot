@@ -71,6 +71,22 @@ const REASONS = {
 	empty: "I didn't catch anything. Try again.",
 } as const;
 
+const MOBILE_REASONS: Record<string, string> = {
+	[REASONS.checking]: "Comprobando el dictado de la PC…",
+	[REASONS.insecure]: "El dictado necesita una conexión segura.",
+	[REASONS.noRecorder]: "Este navegador no puede grabar audio.",
+	[REASONS.denied]: "Permití el micrófono para dictar con la PC",
+	[REASONS.tooLong]: "La grabación es muy larga. Usá menos de un minuto.",
+	[REASONS.empty]: "No escuché nada. Probá de nuevo.",
+};
+
+function captureRefusal(error: unknown): string {
+	const name = typeof error === "object" && error !== null && "name" in error ? error.name : undefined;
+	return name === "NotAllowedError" || name === "SecurityError"
+		? "Permití el micrófono para dictar con la PC"
+		: "No se pudo grabar el audio. Probá de nuevo.";
+}
+
 type Source = { kind: "daemon" | "native" | "mobile" | "pc" } | { kind: "none"; reason?: string };
 
 /**
@@ -164,7 +180,7 @@ export function useVoice(
 			setElapsed(0);
 			setLevel(0);
 			setPartial("");
-			setNote(reason);
+			setNote(reason && mobileBridge() ? (MOBILE_REASONS[reason] ?? reason) : reason);
 		},
 		[setPhase],
 	);
@@ -300,13 +316,13 @@ export function useVoice(
 		if (current.kind === "pc") {
 			setPhase("transcribing");
 			const attempt = generation.current;
-			const fallback = () => {
-				if (attempt === generation.current && allowed.current) return mobileFallback.current();
+			const failed = (error: unknown) => {
+				if (attempt === generation.current && allowed.current) finish(captureRefusal(error));
 			};
 			try {
-				void upload(current.pcm!.stop(), "audio/wav").catch(fallback);
-			} catch {
-				void fallback();
+				void upload(current.pcm!.stop(), "audio/wav").catch(failed);
+			} catch (error) {
+				failed(error);
 			}
 			return;
 		}
@@ -385,6 +401,7 @@ export function useVoice(
 			const result = await bridge.transcribe({ language: voiceLanguage() ?? navigator.language });
 			if (attempt === mobileAttempt.current && allowed.current) sendTranscript(result.text);
 		} catch (error) {
+			// Android already explains why dictation could not start, in Spanish.
 			if (attempt === mobileAttempt.current) finish(startRefusal(error));
 		}
 	}, [finish, sendTranscript, setPhase]);
@@ -403,10 +420,12 @@ export function useVoice(
 			begin(entry);
 			setPartial("PC");
 			entry.limit = setTimeout(stop, MAX_RECORDING_MS);
-		} catch {
-			if (attempt === generation.current && allowed.current) await startMobile();
+		} catch (error) {
+			// A rejected microphone permission is not a PC outage. Opening Google's
+			// dialog here hides the capture failure and sends the user down another path.
+			if (attempt === generation.current && allowed.current) finish(captureRefusal(error));
 		}
-	}, [begin, stop, startMobile]);
+	}, [begin, stop, finish]);
 
 	const start = useCallback(() => {
 		if (!allowed.current || phaseNow.current !== "idle" || starting.current) return;

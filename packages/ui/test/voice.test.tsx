@@ -172,6 +172,64 @@ async function voiceTurn(transcript: string) {
 }
 
 describe("phone PC-first dictation", () => {
+ it.each(["NotAllowedError", "SecurityError", "NotFoundError", "NotReadableError"])("does not open Google for a local capture failure (%s)", async (name) => {
+  const google = vi.fn(async () => ({text:"phone"}));
+  window.__GENTLE_MOBILE__ = {transcribe:google};
+  h.capture.mockRejectedValue(new DOMException("Capture failed", name));
+  const state = {...withVoice(true,false),voice:{transcribe:true,speak:false,local:true}};
+  const hook = renderHook(() => useVoice(state,vi.fn(),{inputOnly:true,enabled:true}));
+  await act(async () => hook.result.current.start());
+  expect(google).not.toHaveBeenCalled();
+  expect(hook.result.current.phase).toBe("idle");
+  expect(hook.result.current.note).toBe(name === "NotAllowedError" || name === "SecurityError"
+   ? "Permití el micrófono para dictar con la PC"
+   : "No se pudo grabar el audio. Probá de nuevo.");
+ });
+ it("localizes an empty Android recognizer result without implying a daemon request", async () => {
+  window.__GENTLE_MOBILE__ = {transcribe:vi.fn(async () => ({text:""}))};
+  const send = vi.fn();
+  const hook = renderHook(() => useVoice(withVoice(false),send,{inputOnly:true,enabled:true}));
+  await act(async () => hook.result.current.start());
+  expect(send).not.toHaveBeenCalled();
+  expect(hook.result.current.note).toBe("No escuché nada. Probá de nuevo.");
+ });
+ it("retries PC capture after permission is allowed instead of sticking to Google", async () => {
+  const google = vi.fn(async () => ({text:"phone"}));
+  window.__GENTLE_MOBILE__ = {transcribe:google};
+  const cancel = vi.fn();
+  h.capture.mockRejectedValueOnce(new DOMException("Denied", "NotAllowedError"))
+   .mockResolvedValue({stop:vi.fn(),cancel});
+  const state = {...withVoice(true,false),voice:{transcribe:true,speak:false,local:true}};
+  const hook = renderHook(() => useVoice(state,vi.fn(),{inputOnly:true,enabled:true}));
+  await act(async () => hook.result.current.start());
+  expect(hook.result.current.phase).toBe("idle");
+  await act(async () => hook.result.current.start());
+  expect(hook.result.current.phase).toBe("recording");
+  expect(hook.result.current.note).toBeUndefined();
+  expect(google).not.toHaveBeenCalled();
+  act(() => hook.result.current.cancel());
+  expect(cancel).toHaveBeenCalledOnce();
+ });
+ it("does not open Google when a local recording cannot produce a WAV", async () => {
+  const google = vi.fn(async () => ({text:"phone"}));
+  window.__GENTLE_MOBILE__ = {transcribe:google};
+  h.capture.mockResolvedValue({stop:() => {throw new Error("No samples");},cancel:vi.fn()});
+  const state = {...withVoice(true,false),voice:{transcribe:true,speak:false,local:true}};
+  const send = vi.fn();
+  const hook = renderHook(() => useVoice(state,send,{inputOnly:true,enabled:true}));
+  await act(async () => hook.result.current.start());
+  await act(async () => hook.result.current.stop());
+  expect(google).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+  expect(hook.result.current.note).toBe("No se pudo grabar el audio. Probá de nuevo.");
+ });
+ it("shows the Android plugin reason when dictation cannot start", async () => {
+  // The Android plugin explains the refusal in Spanish; that reason is what the person needs.
+  window.__GENTLE_MOBILE__ = {transcribe:vi.fn(async () => {throw new Error("No hay un servicio de dictado en este teléfono. Activa el reconocimiento de voz de Android o escribe el mensaje.");})};
+  const hook = renderHook(() => useVoice(withVoice(false),vi.fn(),{inputOnly:true,enabled:true}));
+  await act(async () => hook.result.current.start());
+  expect(hook.result.current.note).toBe("No hay un servicio de dictado en este teléfono. Activa el reconocimiento de voz de Android o escribe el mensaje.");
+ });
  it("switches from phone fallback to PC when the live capability arrives", async () => {
   const google = vi.fn(async () => ({text:"phone"}));
   window.__GENTLE_MOBILE__ = {transcribe:google};

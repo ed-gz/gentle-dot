@@ -5,6 +5,7 @@ import com.getcapacitor.BridgeActivity;
 public class MainActivity extends BridgeActivity {
     private static int visibleActivities, fullAppActivities;
     private boolean resumed;
+    private VoiceWebChromeClient voiceChromeClient;
     static boolean isVisible() { return visibleActivities > 0; }
     static boolean isFullAppVisible() { return fullAppActivities > 0; }
     static boolean isCompanionChatVisible() { return visibleActivities > fullAppActivities; }
@@ -29,5 +30,14 @@ public class MainActivity extends BridgeActivity {
     @Override public void onCreate(Bundle state) {
         registerPlugin(GentleMobilePlugin.class);
         super.onCreate(state);
+        // Both the main app and CompanionChatActivity inherit this WebView boundary.
+        if (getBridge() != null) {
+            voiceChromeClient = new VoiceWebChromeClient(getBridge());
+            getBridge().getWebView().setWebChromeClient(voiceChromeClient);
+        }
+    }
+    @Override public void onDestroy() {
+        if (voiceChromeClient != null) voiceChromeClient.close();
+        super.onDestroy();
     }
 }
