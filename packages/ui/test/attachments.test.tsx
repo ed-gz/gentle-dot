@@ -55,6 +55,17 @@ describe("attaching files in the composer", () => {
 		expect(chips()).toHaveLength(1);
 	});
 
+	it("shows a thumbnail for an attached image and a plain chip for other files", async () => {
+		const created = vi.fn(() => "blob:photo");
+		Object.assign(URL, { createObjectURL: created, revokeObjectURL: vi.fn() });
+		render(<ComposerWith upload={instantUploader()} send={vi.fn()} />);
+		await userEvent.upload(attachInput(), [file("notes.txt", 2048), file("photo.png", 10, "image/png")]);
+		const [notes, photo] = chips();
+		expect(within(photo as HTMLElement).getByRole("img", { name: "photo.png" }).getAttribute("src")).toBe("blob:photo");
+		expect(within(notes as HTMLElement).queryByRole("img")).toBeNull();
+		expect(created).toHaveBeenCalledTimes(1);
+	});
+
 	it("uploads on send with one message folder, then sends the text with the attachments", async () => {
 		const upload = instantUploader();
 		upload.mockImplementationOnce(async (f, options) => {

@@ -1,11 +1,11 @@
 import type { AttachmentRef } from "@gentle-dot/protocol";
 import { publishCompanionActivity } from "../companion-activity.ts";
 import { type ClipboardEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
-import { formatSize } from "../uploads.ts";
-import type { AttachmentControls, PendingFile } from "../useAttachments.ts";
+import type { AttachmentControls } from "../useAttachments.ts";
 import type { VoiceControls } from "../useVoice.ts";
 import { MicIcon, PaperclipIcon, SendIcon, StopIcon } from "./icons.tsx";
 import { newRequestId, type Send } from "./types.ts";
+import { AttachmentChip } from "./AttachmentChip.tsx";
 
 interface ComposerProps {
 	busy: boolean;
@@ -168,10 +168,10 @@ export function Composer({
 			{attachments && files.length > 0 ? (
 				<ul className="attachment-chips" aria-label="Files to send">
 					{files.map((file) => (
-						<FileChip
+						<AttachmentChip
 							key={file.id}
 							file={file}
-							removeLabel={labels?.remove}
+							removeLabel={labels?.remove ?? copy("Remove", "Quitar")}
 							locked={uploading}
 							remove={() => attachments.remove(file.id)}
 						/>
@@ -313,37 +313,6 @@ export function Composer({
 				)}
 			</form>
 		</>
-	);
-}
-
-/** One attached file: name, size, upload progress, and why it cannot be sent. */
-function FileChip({ file, locked, remove, removeLabel = "Remove" }: { file: PendingFile; locked: boolean; remove: () => void; removeLabel?: string }) {
-	const name = file.file.name;
-	const problem = file.refused ?? file.error;
-	return (
-		<li className={`attachment-chip${problem ? " attachment-chip-error" : ""}`}>
-			<span className="chip-name" title={name}>
-				{name}
-			</span>
-			<span className="chip-size">{formatSize(file.file.size)}</span>
-			{file.progress !== undefined ? (
-				<progress className="chip-progress" aria-label={`Uploading ${name}`} max={1} value={file.progress} />
-			) : null}
-			{problem ? (
-				<span className="chip-error" role="alert">
-					{problem}
-				</span>
-			) : null}
-			<button
-				type="button"
-				className="chip-remove"
-				aria-label={`${removeLabel} ${name}`}
-				disabled={locked}
-				onClick={remove}
-			>
-				×
-			</button>
-		</li>
 	);
 }
 
