@@ -50,6 +50,45 @@ public class CompanionChatActivityTest {
         assertEquals(CompanionChatActivity.class.getName(),Shadows.shadowOf(service).getNextStartedActivity().getComponent().getClassName());
     }
 
+    @Test public void keyboardConfigurationChangesDoNotRecreateTheWebView() throws Exception {
+        android.content.Context context=org.robolectric.RuntimeEnvironment.getApplication();
+        android.content.pm.ActivityInfo info=context.getPackageManager().getActivityInfo(
+            new android.content.ComponentName(context,CompanionChatActivity.class),0);
+        int changes=android.content.pm.ActivityInfo.CONFIG_KEYBOARD
+            | android.content.pm.ActivityInfo.CONFIG_KEYBOARD_HIDDEN
+            | android.content.pm.ActivityInfo.CONFIG_SCREEN_SIZE
+            | android.content.pm.ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE;
+        assertEquals("Keyboard/layout changes must retain the WebView and its IME selection",changes,info.configChanges & changes);
+    }
+
+    @Test public void windowOwnsImeOnceEvenWithCapacitorDecorHandling() {
+        try (ActivityController<CompanionChatActivity> chat=Robolectric.buildActivity(CompanionChatActivity.class).setup()) {
+            CompanionChatActivity activity=chat.get();
+            View decor=activity.getWindow().getDecorView();
+            View content=activity.findViewById(android.R.id.content);
+            WindowInsetsCompat keyboard=new WindowInsetsCompat.Builder()
+                .setInsets(WindowInsetsCompat.Type.systemBars(),Insets.of(0,24,0,48))
+                .setInsets(WindowInsetsCompat.Type.ime(),Insets.of(0,0,0,600))
+                .setVisible(WindowInsetsCompat.Type.ime(),true).build();
+            // Bridge load is shadowed, so supply Capacitor's real outer-window padding
+            // as the initial state. The sheet must replace it, not add a second owner.
+            decor.setPadding(0,24,0,600);
+            for (int i=0;i<3;i++) ViewCompat.dispatchApplyWindowInsets(decor,keyboard);
+            assertEquals("Only content owns the keyboard inset",0,decor.getPaddingBottom());
+            assertEquals(600,content.getPaddingBottom());
+            assertEquals("Platform resizing must not subtract the IME again",
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,
+                activity.getWindow().getAttributes().softInputMode & WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST);
+            int height=1000;
+            decor.measure(View.MeasureSpec.makeMeasureSpec(1000,View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));
+            decor.layout(0,0,1000,height);
+            android.view.View child=((android.view.ViewGroup)content).getChildAt(0);
+            assertTrue("Keyboard must leave visible chat content",child.getHeight()>0);
+            assertTrue("Composer stays above the IME",child.getBottom()<=content.getHeight()-600);
+        }
+    }
+
     @Test public void imeInsetsReserveComposerSpaceAndRestoreSheetWhenHidden() {
         try (ActivityController<CompanionChatActivity> chat=Robolectric.buildActivity(CompanionChatActivity.class).setup()) {
             CompanionChatActivity activity=chat.get();
@@ -58,7 +97,7 @@ public class CompanionChatActivityTest {
             WindowInsetsCompat keyboard=new WindowInsetsCompat.Builder()
                 .setInsets(WindowInsetsCompat.Type.systemBars(),Insets.of(0,24,0,48))
                 .setInsets(WindowInsetsCompat.Type.ime(),Insets.of(0,0,0,360)).build();
-            ViewCompat.dispatchApplyWindowInsets(content,keyboard);
+            ViewCompat.dispatchApplyWindowInsets(activity.getWindow().getDecorView(),keyboard);
             assertEquals("Reserve the IME, not IME plus nav bar",360,content.getPaddingBottom());
             assertTrue(content.getPaddingBottom()>baseline);
             int hostHeight=activity.getResources().getDisplayMetrics().heightPixels;
@@ -72,11 +111,11 @@ public class CompanionChatActivityTest {
             assertFalse("Floating windows do not reliably receive IME resize/insets",activity.getWindow().isFloating());
             int sheetTop=content.getPaddingTop();
             assertEquals(Math.round(activity.getResources().getDisplayMetrics().heightPixels*.12f),sheetTop);
-            ViewCompat.dispatchApplyWindowInsets(content,new WindowInsetsCompat.Builder()
+            ViewCompat.dispatchApplyWindowInsets(activity.getWindow().getDecorView(),new WindowInsetsCompat.Builder()
                 .setInsets(WindowInsetsCompat.Type.systemBars(),Insets.of(0,24,0,48)).build());
             assertEquals(48,content.getPaddingBottom());
             assertEquals(sheetTop,content.getPaddingTop());
-            ViewCompat.dispatchApplyWindowInsets(content,keyboard);
+            ViewCompat.dispatchApplyWindowInsets(activity.getWindow().getDecorView(),keyboard);
             assertEquals("Repeated delivery is not cumulative",360,content.getPaddingBottom());
         }
     }

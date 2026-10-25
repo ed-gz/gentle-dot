@@ -21,18 +21,27 @@ public final class CompanionChatActivity extends MainActivity {
         WindowCompat.setDecorFitsSystemWindows(getWindow(),false);
         getWindow().setGravity(Gravity.BOTTOM);
         getWindow().setLayout(WindowManager.LayoutParams.MATCH_PARENT,WindowManager.LayoutParams.MATCH_PARENT);
-        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        // This window owns IME geometry; neither the platform nor Capacitor should
+        // subtract the keyboard a second time from the already-inset content.
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         View content=findViewById(android.R.id.content);
-        ViewCompat.setOnApplyWindowInsetsListener(content,(view,insets)->{
+        View decor=getWindow().getDecorView();
+        // Replace Capacitor SystemBars' decor listener, not a descendant listener:
+        // consuming insets at content is too late to undo the decor's IME padding.
+        ViewCompat.setOnApplyWindowInsetsListener(decor,(view,insets)->{
             Insets bars=insets.getInsets(WindowInsetsCompat.Type.systemBars());
             int ime=insets.getInsets(WindowInsetsCompat.Type.ime()).bottom;
-            view.setPadding(bars.left,Math.max(Math.round(getResources().getDisplayMetrics().heightPixels*.12f),bars.top),
+            view.setPadding(0,0,0,0);
+            content.setPadding(bars.left,Math.max(Math.round(getResources().getDisplayMetrics().heightPixels*.12f),bars.top),
                 bars.right,Math.max(bars.bottom,ime));
-            // Native layout owns these insets; do not let the WebView apply them twice.
-            return WindowInsetsCompat.CONSUMED;
+            // Forward explicit zero insets rather than CONSUMED so Chromium can
+            // recalculate safe areas without applying the keyboard again.
+            return new WindowInsetsCompat.Builder(insets)
+                .setInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout()
+                    | WindowInsetsCompat.Type.ime(),Insets.NONE).build();
         });
         content.setPadding(0,Math.round(getResources().getDisplayMetrics().heightPixels*.12f),0,0);
-        ViewCompat.requestApplyInsets(content);
+        ViewCompat.requestApplyInsets(decor);
         setFinishOnTouchOutside(false);
     }
 }

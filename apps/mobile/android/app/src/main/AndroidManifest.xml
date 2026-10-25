@@ -48,7 +48,7 @@
             </intent-filter>
         </activity>
 
-        <activity android:name=".CompanionChatActivity" android:taskAffinity="${applicationId}.companion" android:excludeFromRecents="true" android:exported="false" android:theme="@style/AppTheme.CompanionChat" android:launchMode="singleTask" android:resizeableActivity="true" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".CompanionChatActivity" android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density" android:taskAffinity="${applicationId}.companion" android:excludeFromRecents="true" android:exported="false" android:theme="@style/AppTheme.CompanionChat" android:launchMode="singleTask" android:resizeableActivity="true" android:windowSoftInputMode="adjustNothing" />
         <service android:name=".CompanionOverlayService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled animated companion overlay and quick access to conversations; hidden while locked, paused in battery saver, user can stop at any time." />
         </service>
