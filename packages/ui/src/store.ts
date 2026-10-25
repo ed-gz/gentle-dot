@@ -379,6 +379,8 @@ function reduceServer(state: DotState, message: ServerMessage): DotState {
 				auth: { ...state.auth, providers: message.providers, open: message.open ? true : state.auth.open },
 				voice: message.voice ?? state.voice,
 			};
+		case "voice_capability":
+			return { ...state, voice: message.voice };
 		case "voice_transcript":
 		case "voice_speech":
 		case "voice_unavailable":

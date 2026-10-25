@@ -40,6 +40,29 @@ function service(reply: (call: Call) => Response | Promise<Response>, key: strin
 const header = (call: Call | undefined, name: string) => new Headers(call?.init.headers).get(name);
 
 describe("VoiceService capability", () => {
+	it("does not let an older desktop status overwrite a newer refresh", async () => {
+		const replies: ((installed: boolean) => void)[] = [];
+		const voice = new VoiceService({
+			apiKey: async () => undefined,
+			local: {
+				available: () => new Promise<boolean>((resolve) => replies.push(resolve)),
+				transcribe: async () => ({ ok: false, reason: "unused" }),
+			},
+		});
+		const older = voice.refresh();
+		await Promise.resolve();
+		await Promise.resolve();
+		const newer = voice.refresh();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(replies).toHaveLength(1);
+		replies[0]!(true);
+		await older;
+		await waitFor(() => replies.length === 2);
+		replies[1]!(false);
+		await newer;
+		expect(voice.capability()).toEqual({ transcribe: false, speak: false });
+	});
  it("prefers the installed PC over OpenAI and never sends its failed WAV to the cloud", async () => {
   let installed = true;
   const local = {available:async () => installed, transcribe:async () => ({ok:false as const,reason:"PC busy"})};

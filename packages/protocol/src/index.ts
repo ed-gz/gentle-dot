@@ -498,6 +498,7 @@ export type ServerPayload =
 	| { type: "connector_draft_resolved"; draftId: string; approved: boolean }
 	| { type: "connector_imports"; found: ImportCandidate[] }
 	| { type: "connector_imported"; names: string[] }
+	| { type: "voice_capability"; voice: VoiceCapability }
 	| { type: "voice_transcript"; requestId: string; text: string }
 	/** Speech for a `voice_speak` request, in base64. */
 	| { type: "voice_speech"; requestId: string; mime: string; data: string }

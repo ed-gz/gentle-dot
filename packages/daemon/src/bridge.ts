@@ -369,6 +369,8 @@ export class DotBridge {
 			...(this.options.voice ? { voice: this.options.voice.capability() } : {}),
 			...(this.options.pin && !this.options.app?.connected ? { pin: this.options.pin.status() } : {}),
 		});
+		// Keep ready synchronous/backward compatible, then publish freshly checked PC availability.
+		void this.refreshVoiceCapability();
 		if (this.queued()) this.deliver(client, { type: "queue", ...this.queue });
 		for (const { ask } of this.asks.values()) this.deliver(client, { type: "ask", ask });
 		for (const draft of this.options.connectors?.drafts() ?? [])
@@ -381,6 +383,20 @@ export class DotBridge {
 			this.options.auth?.cancelOwnedBy(client);
 			this.options.connectors?.cancelOwnedBy(client);
 		};
+	}
+
+	/** Recheck the desktop model independently of the accounts screen. */
+	async refreshVoiceCapability(): Promise<void> {
+		const voice = this.options.voice;
+		if (!voice) return;
+		const before = voice.capability();
+		try {
+			const fresh = await voice.refresh();
+			if (before.transcribe !== fresh.transcribe || before.speak !== fresh.speak || before.local !== fresh.local)
+				this.broadcast({ type: "voice_capability", voice: fresh });
+		} catch {
+			this.log("could not refresh voice capability");
+		}
 	}
 
 	/** A window's message. Connector changes come only from the desktop app (S25.2). */

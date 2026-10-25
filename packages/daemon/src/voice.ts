@@ -52,6 +52,7 @@ const EXTENSIONS: Record<string, string> = {
  */
 export class VoiceService {
 	private current: VoiceCapability = { transcribe: false, speak: false };
+	private refreshing: Promise<VoiceCapability> = Promise.resolve(this.current);
 	private readonly options: VoiceServiceOptions;
 
 	constructor(options: VoiceServiceOptions) {
@@ -63,12 +64,16 @@ export class VoiceService {
 		return this.current;
 	}
 
-	/** Checks whether a key is connected now. */
-	async refresh(): Promise<VoiceCapability> {
-		const on = (await this.key()) !== undefined;
-		const local = await this.options.local?.available() ?? false;
-		this.current = { transcribe: on || local, speak: on, ...(local ? {local:true} : {}) };
-		return this.current;
+	/** Serialize checks so late desktop replies cannot overwrite a newer capability. */
+	refresh(): Promise<VoiceCapability> {
+		const check = async () => {
+			const on = (await this.key()) !== undefined;
+			const local = await this.options.local?.available() ?? false;
+			this.current = { transcribe: on || local, speak: on, ...(local ? { local: true } : {}) };
+			return this.current;
+		};
+		this.refreshing = this.refreshing.then(check, check);
+		return this.refreshing;
 	}
 
 	async transcribe(mime: string, data: string): Promise<VoiceResult<{ text: string }>> {

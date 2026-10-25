@@ -172,6 +172,21 @@ async function voiceTurn(transcript: string) {
 }
 
 describe("phone PC-first dictation", () => {
+ it("switches from phone fallback to PC when the live capability arrives", async () => {
+  const google = vi.fn(async () => ({text:"phone"}));
+  window.__GENTLE_MOBILE__ = {transcribe:google};
+  h.capture.mockClear();
+  h.capture.mockResolvedValue({stop:vi.fn(),cancel:vi.fn()});
+  const hook = renderHook(() => {
+   const [state, dispatch] = useReducer(reduce, withVoice(false));
+   return {voice:useVoice(state,vi.fn(),{inputOnly:true,enabled:true}),dispatch};
+  });
+  act(() => hook.result.current.dispatch({type:"server",message:{type:"voice_capability",voice:{transcribe:true,speak:false,local:true},seq:1}}));
+  await act(async () => hook.result.current.voice.start());
+  expect(h.capture).toHaveBeenCalledOnce();
+  expect(google).not.toHaveBeenCalled();
+  act(() => hook.result.current.voice.cancel());
+ });
  it("records WAV for PC then falls back to Google on error, leaving an editable draft", async () => {
   const google = vi.fn(async () => ({text:"Google draft"}));
   window.__GENTLE_MOBILE__ = {transcribe:google};

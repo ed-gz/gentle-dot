@@ -586,6 +586,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 	const github = new GitHubIssues({approve: (request, signal) => bridge.askInApp(request, signal)});
 
 	if (app) {
+		// This inherited private channel is already connected; there is no reconnect handshake.
+		void bridge.refreshVoiceCapability();
 		// Nothing the app asks changes connectors before connectors.json was checked (S25.6).
 		app.handler = async (method, params) => {
 			await integrity;
@@ -595,6 +597,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		// The computer helper belongs to the app that registered it (S24.7).
 		app.onClose(() => {
 			log("the desktop app's channel closed");
+			void bridge.refreshVoiceCapability();
 			computerCaptures.clear();
 			for (const pending of computerApprovals.values()) pending.abort();
 			mobileApprovals.cancelAll();

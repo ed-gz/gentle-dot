@@ -11,6 +11,13 @@ function apply(state: DotState, ...payloads: ServerPayload[]): DotState {
 }
 
 describe("reduce", () => {
+	it("applies live voice capability without changing accounts", () => {
+		const local = apply(initialState, { type: "voice_capability", voice: { transcribe: true, speak: false, local: true } });
+		expect(local.voice).toEqual({ transcribe: true, speak: false, local: true });
+		expect(local.auth).toBe(initialState.auth);
+		const offline = apply(local, { type: "voice_capability", voice: { transcribe: false, speak: false } });
+		expect(offline.voice).toEqual({ transcribe: false, speak: false });
+	});
 	it("records ready, connection, and agent state", () => {
 		let s = reduce(initialState, { type: "connection", status: "open" });
 		s = apply(s, { type: "ready", agentState: "idle", conversationId: "a.jsonl", model: "Fake" });
