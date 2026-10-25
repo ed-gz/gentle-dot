@@ -167,7 +167,7 @@
 }
 .agent-approval {
 	margin-top: 12px;
-	border-color: var(--accent-line);
+	border-color: var(--border-subtle);
 }
 .agent-approval pre {
 	white-space: pre-wrap;
@@ -220,7 +220,7 @@
 	background: var(--surface-2);
 }
 .agent-subagent-reply > summary:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 2px;
 }
 .agent-message p {
@@ -520,7 +520,7 @@
 	box-shadow: none;
 }
 .chat-mobile .composer:focus-within {
-	border-color: var(--accent);
+	border-color: var(--border-subtle);
 	box-shadow: none;
 }
 .chat-mobile .composer textarea {
@@ -709,7 +709,7 @@
 	font-size: 16px;
 }
 .mobile-tools-sheet :is(button, select, input):focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 2px;
 }
 .mobile-tools-sheet button:active:not(:disabled),
@@ -1016,7 +1016,7 @@
 	min-width: 0;
 }
 .mobile-device-settings > summary:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: -2px;
 	border-radius: 12px;
 }

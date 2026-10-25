@@ -4,7 +4,8 @@
 	--bg-glass: rgba(26, 18, 24, 0.82);
 	--surface: #20161e;
 	--surface-2: #241822;
-	--line: #342230;
+	--line: color-mix(in srgb, var(--text) 12%, transparent);
+	--border-subtle: color-mix(in srgb, var(--text) 12%, transparent);
 	--text: #f6eff3;
 	--muted: #a78e9b;
 	--accent: #f095c8;
@@ -138,13 +139,12 @@ textarea {
 input:focus,
 select:focus,
 textarea:focus {
-	outline: none;
-	border-color: var(--accent-line);
-	box-shadow: 0 0 0 3px var(--accent-soft);
+	border-color: var(--border-subtle);
+	box-shadow: none;
 }
 
 :focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 2px;
 }
 
@@ -843,7 +843,7 @@ html[data-effects="none"] .chat-panel {
 	max-width: 85%;
 	padding: 9px 13px;
 	border-radius: var(--radius-lg) var(--radius-lg) 4px var(--radius-lg);
-	border: 1px solid var(--accent-line);
+	border: 1px solid var(--border-subtle);
 	background: rgba(240, 149, 200, 0.16);
 	color: var(--text);
 }
@@ -907,8 +907,8 @@ html[data-effects="none"] .chat-panel {
 }
 
 .ask-card {
-	border-color: rgba(224, 194, 122, 0.45);
-	box-shadow: 0 10px 30px rgba(224, 194, 122, 0.08);
+	border-color: var(--border-subtle);
+	box-shadow: none;
 }
 
 .ask-card .eyebrow {
@@ -1070,8 +1070,13 @@ html[data-effects="none"] .chat-panel {
 }
 
 .composer:focus-within {
-	border-color: var(--accent-line);
-	box-shadow: 0 0 0 3px var(--accent-soft);
+	border-color: var(--border-subtle);
+	box-shadow: none;
+}
+
+.composer:has(:focus-visible) {
+	outline: 1px solid var(--text);
+	outline-offset: 2px;
 }
 
 .composer textarea {
@@ -1211,9 +1216,9 @@ html[data-effects="none"] .chat-panel {
 	margin: 0 0 14px;
 	padding: 14px;
 	border-radius: var(--radius-md);
-	border: 1px solid var(--accent-line);
+	border: 1px solid var(--border-subtle);
 	background: var(--surface);
-	box-shadow: 0 10px 30px rgba(240, 149, 200, 0.08);
+	box-shadow: none;
 }
 
 .onboarding p {
@@ -1599,7 +1604,7 @@ html[data-surface="glow"] body {
 
 .message-attachments .attachment-chip {
 	padding-right: 10px;
-	border-color: var(--accent-line);
+	border-color: var(--border-subtle);
 }
 
 .attachment-chip-error {
@@ -1643,7 +1648,7 @@ html[data-surface="glow"] body {
 }
 
 .chat-dropping {
-	outline: 2px dashed var(--accent-line);
+	outline: 1px dashed var(--text);
 	outline-offset: -6px;
 }
 
@@ -1707,10 +1712,11 @@ html[data-surface="glow"] body {
 	color: var(--text);
 }
 
-.model-search:focus {
-	outline: none;
-	border-color: var(--accent-line);
-	box-shadow: 0 0 0 3px var(--accent-soft);
+.model-search:focus-visible {
+	outline: 1px solid var(--text);
+	outline-offset: 2px;
+	border-color: var(--border-subtle);
+	box-shadow: none;
 }
 
 .model-list {

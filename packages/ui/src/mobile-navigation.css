@@ -14,7 +14,7 @@
 	padding: 8px;
 }
 .chat-mobile .mobile-settings-group > summary:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: -2px;
 }
 .chat-mobile .mobile-settings-group > summary:active {
@@ -135,7 +135,7 @@
 	background: var(--surface-2);
 }
 .mobile-top-nav > button:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: -2px;
 }
 .nav-attention {
@@ -173,7 +173,7 @@
 	background: var(--surface-2);
 }
 .mobile-chat-utilities .mobile-usage-shortcut:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: -2px;
 }
 .chat-mobile .mobile-settings-screen {
@@ -289,7 +289,7 @@
 	display: none;
 }
 .agent-session-menu > summary:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 }
 .agent-session-menu-content {
 	position: absolute;

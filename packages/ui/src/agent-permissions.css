@@ -59,8 +59,8 @@
 	line-height: 1.5;
 	resize: vertical;
 }
-.agent-permission-form label:focus-within {
-	outline: 2px solid var(--accent);
+.agent-permission-form label:has(:focus-visible) {
+	outline: 1px solid var(--text);
 	outline-offset: 2px;
 }
 .agent-permission-preview {
@@ -76,7 +76,7 @@
 	border-radius: 12px;
 }
 .agent-permission-detail:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 2px;
 }
 .agent-approval .agent-permission-detail pre {

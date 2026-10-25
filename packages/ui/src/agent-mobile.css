@@ -265,7 +265,7 @@
 	background: var(--surface-2);
 }
 .agent-workflow summary:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: -2px;
 }
 .agent-work-summary {
@@ -356,7 +356,7 @@
 /* The plan remains compact and independently expandable above the conversation. */
 .agent-plan {
 	margin-top: 12px;
-	border-left: 2px solid var(--accent);
+	border-left: 1px solid var(--border-subtle);
 	padding: 4px 12px 0;
 	font-size: var(--chat-font-size, 15px);
 	overflow-wrap: anywhere;
@@ -418,7 +418,7 @@
 	line-height: 24px;
 }
 .agent-plan summary:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 2px;
 }
 .agent-plan .agent-work-list {

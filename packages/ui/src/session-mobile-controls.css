@@ -112,7 +112,7 @@
 .session-mobile-controls-trigger:focus-visible,
 .session-delivery-trigger:focus-visible,
 .session-delivery-options > button:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: -2px;
 }
 .session-mobile-controls-trigger:active,

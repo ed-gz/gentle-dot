@@ -62,7 +62,7 @@
 }
 .message-body blockquote,
 .agent-message-content blockquote {
-	border-left: 3px solid var(--accent-line);
+	border-left: 1px solid var(--border-subtle);
 	margin: 14px 0;
 	padding: 2px 0 2px 14px;
 	color: var(--muted);

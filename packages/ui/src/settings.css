@@ -25,8 +25,8 @@
 }
 
 .shortcut-row:has(.shortcut-recording) {
-	border-color: var(--accent-line);
-	box-shadow: 0 0 0 3px var(--accent-soft);
+	border-color: var(--border-subtle);
+	box-shadow: none;
 }
 
 .settings-ok {

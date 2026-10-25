@@ -18,7 +18,7 @@
 	touch-action: manipulation;
 }
 .session-context-trigger:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: -2px;
 }
 .orchestration .session-context-trigger:active {
@@ -181,7 +181,7 @@
 	color: var(--muted);
 }
 .agent-session-dialog :is(button, summary):focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: -2px;
 }
 .session-dialog-scroll {

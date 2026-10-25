@@ -111,7 +111,7 @@ button.desktop-companion-bubble-message:hover:not(:disabled) {
 	box-shadow: none;
 }
 .desktop-companion-bubble button:focus-visible {
-	outline: 2px solid #dfb8fa;
+	outline: 1px solid var(--text);
 	outline-offset: -3px;
 }
 .desktop-companion-surface {
@@ -206,7 +206,7 @@ button.desktop-companion-bubble-message:hover:not(:disabled) {
 	border-color: #bcf86a;
 }
 .desktop-companion-launcher:focus-visible {
-	outline: 2px solid #bcf86a;
+	outline: 1px solid var(--text);
 	outline-offset: -3px;
 }
 @media (prefers-reduced-motion: reduce) {

@@ -74,7 +74,7 @@
 }
 .companion-space-selection {
 	position: absolute;
-	border: 2px solid var(--accent);
+	border: 1px solid var(--border-subtle);
 	border-radius: 12px;
 	background: var(--accent-soft);
 	box-sizing: border-box;
@@ -158,7 +158,7 @@
 .companion-space-editor button:focus-visible,
 .capri-preferences button:focus-visible,
 .capri-preferences input:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 3px;
 }
 .companion-space-editor[data-disabled="true"] {

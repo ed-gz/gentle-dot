@@ -22,7 +22,7 @@
 .terminal-mood-presets [data-mood="sunset"] { --terminal-swatch: #ffbd7c; }
 .terminal-mood-settings > button { min-height: 48px; }
 .terminal-mood-error { color: var(--red); }
-.terminal-mood button:focus-visible, .terminal-mood input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.terminal-mood button:focus-visible, .terminal-mood input:focus-visible { outline: 1px solid var(--text); outline-offset: 2px; }
 .terminal-mood button:active:not(:disabled) { background: var(--surface-2); }
 @media (max-width: 359px) { .terminal-mood-presets { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .terminal-mood button { transition: none; } }

@@ -4,7 +4,8 @@
 	--bg-glass: #0b1114;
 	--surface: #121d22;
 	--surface-2: #1b2a30;
-	--line: #30434b;
+	--line: color-mix(in srgb, var(--text) 12%, transparent);
+	--border-subtle: color-mix(in srgb, var(--text) 12%, transparent);
 	--text: #f0f6ef;
 	--muted: #b0c4c2;
 	--accent: #bcf86a;
@@ -37,7 +38,7 @@
 	--bg-glass: #07140e;
 	--surface: #0c2116;
 	--surface-2: #173122;
-	--line: #355842;
+	--line: color-mix(in srgb, var(--text) 12%, transparent);
 	--text: #effff2;
 	--muted: #b5d6bf;
 	--accent: #80ffab;
@@ -50,7 +51,7 @@
 	--bg-glass: #151025;
 	--surface: #211a35;
 	--surface-2: #302542;
-	--line: #57466d;
+	--line: color-mix(in srgb, var(--text) 12%, transparent);
 	--text: #f8f1ff;
 	--muted: #c9b9dc;
 	--accent: #d0adff;
@@ -63,7 +64,7 @@
 	--bg-glass: #211710;
 	--surface: #2b211b;
 	--surface-2: #3b2b20;
-	--line: #695344;
+	--line: color-mix(in srgb, var(--text) 12%, transparent);
 	--text: #fff3e7;
 	--muted: #d9c4b3;
 	--accent: #ffc078;
@@ -85,7 +86,7 @@
 }
 :is(.chat, .capri-overlay)[data-companion="capri"] :is(.chat-header, .mobile-top-nav) {
 	background: var(--companion-header);
-	border-bottom: 1px solid #40504c;
+	border-bottom: 1px solid var(--line);
 }
 :is(.chat, .capri-overlay)[data-companion="capri"] .mobile-top-nav button[aria-pressed="true"] {
 	background: #bcf86a12;
@@ -93,7 +94,7 @@
 	box-shadow: none;
 }
 :is(.chat, .capri-overlay)[data-companion="capri"] :is(.composer, .agent-composer) {
-	border-color: #47604f;
+	border-color: var(--border-subtle);
 }
 :is(.chat, .capri-overlay)[data-companion="capri"] button.primary:hover:not(:disabled) {
 	background: color-mix(in srgb, var(--accent) 85%, white);
@@ -298,7 +299,7 @@
 	cursor: grabbing;
 }
 .capri-overlay .capri-drag-handle:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 3px;
 }
 .capri-overlay:not([data-minimized="true"]) .capri-drag-handle:focus-visible {
@@ -315,13 +316,13 @@
 }
 .capri-overlay[data-minimized="true"] .capri-drag-handle {
 	background: var(--surface);
-	border: 1px solid var(--accent-line);
+	border: 1px solid var(--border-subtle);
 	border-radius: 50%;
 	box-shadow: 0 4px 16px #0005;
 	padding: 5px;
 }
 .capri-overlay[data-minimized="true"][data-attention="true"] .capri-drag-handle {
-	border-color: #ff9bca;
+	border-color: var(--border-subtle);
 }
 .capri-speech {
 	position: absolute;
@@ -432,7 +433,7 @@
 	border-color: var(--accent);
 }
 .capri-bubble-menu button:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 2px;
 }
 .capri-move-controls {
@@ -467,7 +468,7 @@
 	margin: 0;
 	min-width: 0;
 	background: #10191e;
-	border: 1px solid #30434b;
+	border: 1px solid var(--border-subtle);
 	border-radius: 10px;
 	padding: 5px;
 }
@@ -500,7 +501,7 @@
 	align-items: center;
 	gap: 12px;
 	margin: 12px 0;
-	border: 1px solid var(--accent);
+	border: 1px solid var(--border-subtle);
 	border-radius: 12px;
 	padding: 12px;
 }
@@ -629,7 +630,7 @@
 	transform: translateX(16px);
 }
 .capri-preference-row input:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 4px;
 }
 .capri-preferences-mode {

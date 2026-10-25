@@ -22,7 +22,7 @@
 	margin: 12px 0;
 }
 .session-delivery {
-	border-left: 2px solid var(--accent);
+	border-left: 1px solid var(--border-subtle);
 	padding: 6px 12px;
 	overflow-wrap: anywhere;
 }
@@ -33,11 +33,9 @@
 .session-delivery small {
 	color: var(--muted);
 }
-.session-delivery-unconfirmed {
-	border-color: var(--yellow);
-}
+.session-delivery-unconfirmed,
 .session-delivery-delivered {
-	border-color: var(--green);
+	border-color: var(--border-subtle);
 }
 .agent-command-list {
 	max-height: min(28dvh, 240px);

@@ -40,7 +40,7 @@
 }
 .watchers-panel :is(button, summary):focus-visible,
 .watchers-settings > summary:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 3px;
 }
 .watcher-card {
@@ -257,7 +257,7 @@
 }
 .watcher-field :is(select, textarea):focus-visible,
 .watcher-create input:focus-visible {
-	outline: 2px solid var(--accent);
+	outline: 1px solid var(--text);
 	outline-offset: 3px;
 }
 .watchers-panel button.watchers-primary {
