@@ -47,6 +47,10 @@ export function Composer({
 	labels,
 }: ComposerProps) {
 	const copy = (english: string, spanish: string) => (mobile ? spanish : english);
+	// Agent input-only composers also use `mobile` for Spanish copy on desktop.
+	// The shell/pointer, not that copy preference, determines their keyboard policy.
+	const newlineOnEnter = (mobile && !inputOnly) || Boolean(window.__GENTLE_MOBILE__)
+		|| window.matchMedia?.("(pointer: coarse)").matches === true;
 	const [localText, setLocalText] = useState("");
 	const text = controlledText ?? localText;
 	const textNow = useRef(text);
@@ -140,7 +144,7 @@ export function Composer({
 	}
 
 	function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-		if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+		if (event.key === "Enter" && !newlineOnEnter && !event.shiftKey && !event.nativeEvent.isComposing) {
 			event.preventDefault();
 			void submit();
 		}
@@ -244,6 +248,7 @@ export function Composer({
 								? copy("Add to what I'm doing…", "Añade una indicación…")
 								: copy("Ask me anything…", "Escribe un mensaje…")
 						}
+						enterKeyHint={newlineOnEnter ? "enter" : "send"}
 						rows={1}
 						value={text}
 						disabled={disabled || pending}
