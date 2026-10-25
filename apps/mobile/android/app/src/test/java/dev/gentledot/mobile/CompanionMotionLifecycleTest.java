@@ -28,7 +28,7 @@ import org.robolectric.annotation.LooperMode;
 import org.robolectric.shadows.ShadowSettings;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=35)
+@Config(sdk=35, shadows=CompanionChatActivityTest.ShadowBridgeActivity.class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @LooperMode(LooperMode.Mode.PAUSED)
 public class CompanionMotionLifecycleTest {
@@ -73,6 +73,28 @@ public class CompanionMotionLifecycleTest {
         Shadows.shadowOf(power).setIsInteractive(true);event(Intent.ACTION_SCREEN_ON);assertFalse(CompanionOverlayService.presenting());
         Shadows.shadowOf(context.getSystemService(KeyguardManager.class)).setKeyguardLocked(false);event(Intent.ACTION_USER_PRESENT);
         assertTrue(CompanionOverlayService.presenting());Bitmap awake=draw();advance(1700);assertFalse(awake.sameAs(draw()));
+    }
+    @Test public void chatKeepsActualOverlayAndTapIsANoOpButFullAppHidesIt() {
+        try (org.robolectric.android.controller.ActivityController<CompanionChatActivity> chat=
+                Robolectric.buildActivity(CompanionChatActivity.class).setup()) {
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertTrue("Service keeps the sprite attached over partial chat",sprite.isAttachedToWindow());
+            sprite.performClick();
+            assertNull(Shadows.shadowOf(controller.get()).getNextStartedActivity());
+            Shadows.shadowOf(context.getSystemService(KeyguardManager.class)).setKeyguardLocked(true);
+            event(Intent.ACTION_SCREEN_ON);
+            assertFalse("Chat does not bypass keyguard",sprite.isAttachedToWindow());
+            Shadows.shadowOf(context.getSystemService(KeyguardManager.class)).setKeyguardLocked(false);
+            event(Intent.ACTION_USER_PRESENT);
+            assertTrue(sprite.isAttachedToWindow());
+        }
+        try (org.robolectric.android.controller.ActivityController<MainActivity> app=
+                Robolectric.buildActivity(MainActivity.class).setup()) {
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertFalse("Full app composer remains unobstructed",sprite.isAttachedToWindow());
+        }
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertTrue("Leaving the full app restores Capri",sprite.isAttachedToWindow());
     }
     @Test public void stickyNullIntentRestoresEnabledOverlay() {
         assertEquals(android.app.Service.START_STICKY,controller.get().onStartCommand(null,0,2));

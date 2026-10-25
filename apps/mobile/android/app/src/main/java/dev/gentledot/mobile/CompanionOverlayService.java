@@ -182,7 +182,7 @@ public final class CompanionOverlayService extends Service {
     private void togglePin(){boolean value=!prefs(this).getBoolean("pinned",false);prefs(this).edit().putBoolean("pinned",value).apply();sprite.play(value?"perch":"greeting");sprite.announceForAccessibility(value?"Posición fijada":"Puedes mover el acompañante");}
     private void updateVisibility(){
         PowerManager power=getSystemService(PowerManager.class);KeyguardManager keyguard=getSystemService(KeyguardManager.class);
-        boolean visible=sprite.renderState().ready && CompanionPolicy.visible(prefs(this).getBoolean("enabled",false),permitted(this),power.isInteractive(),keyguard.isKeyguardLocked(),MainActivity.isVisible());
+        boolean visible=sprite.renderState().ready && CompanionPolicy.visible(prefs(this).getBoolean("enabled",false),permitted(this),power.isInteractive(),keyguard.isKeyguardLocked(),MainActivity.isFullAppVisible());
         if(visible&&!attached){try{clamp();windows.addView(sprite,position);attached=true;}catch(RuntimeException denied){scheduleRecovery();return;}}
         if(!visible){hideSpeech();if(attached){try{windows.removeView(sprite);}catch(RuntimeException ignored){}attached=false;}}
         boolean motion=CompanionPolicy.animate(visible,power.isPowerSaveMode(),Settings.Global.getFloat(getContentResolver(),Settings.Global.ANIMATOR_DURATION_SCALE,1f)==0f);
@@ -205,6 +205,8 @@ public final class CompanionOverlayService extends Service {
         try{windows.addView(speech,speechPosition);speechAttached=true;handler.postDelayed(hideSpeechTask,6000);return true;}catch(RuntimeException ignored){speech=null;return false;}
     }
     private void openChat(){
+        // Keep the current draft, focus and keyboard; a second tap is deliberately a no-op.
+        if(MainActivity.isCompanionChatVisible())return;
         Intent intent=new Intent(this,CompanionChatActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP|Intent.FLAG_ACTIVITY_CLEAR_TOP);
         intent.putExtra("companion.openChat",true).putExtra("companion.eventId",latestEvent).putExtra("companion.title",latestTitle).putExtra("companion.body",latestBody).putExtra("companion.paneId",latestPane).putExtra("companion.sessionId",latestSession).putExtra("companion.conversationId",latestConversation);
         try{startActivity(intent);hideSpeech();}catch(RuntimeException ignored){}

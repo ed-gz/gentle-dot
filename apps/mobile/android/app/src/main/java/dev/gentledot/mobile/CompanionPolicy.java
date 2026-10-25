@@ -2,8 +2,9 @@ package dev.gentledot.mobile;
 
 /** Small deterministic policy shared by renderer/service tests. No background polling. */
 final class CompanionPolicy {
-    static boolean visible(boolean enabled, boolean permission, boolean interactive, boolean locked, boolean appVisible) {
-        return enabled && permission && interactive && !locked && !appVisible;
+    // The partial chat is not the full app: keep Capri there, but never cover the full-app composer.
+    static boolean visible(boolean enabled, boolean permission, boolean interactive, boolean locked, boolean fullAppVisible) {
+        return enabled && permission && interactive && !locked && !fullAppVisible;
     }
     static boolean offerNotice(boolean notificationsEnabled, boolean normalInterruptionMode) {
         return notificationsEnabled && normalInterruptionMode;
