@@ -1,0 +1,75 @@
+.attachment-chips.attachment-preview-row,
+.attachment-chips:has(.attachment-draft) {
+ display: flex;
+ flex-wrap: nowrap;
+ align-items: flex-start;
+ gap: 8px;
+ overflow-x: auto;
+ padding-block: 4px;
+}
+.attachment-chips .attachment-draft {
+ position: relative;
+ flex: 0 0 auto;
+ max-width: min(280px, 80vw);
+ border: 0;
+ background: var(--surface-2);
+ border-radius: 12px;
+}
+.attachment-draft .attachment-file-icon { display: inline-flex; flex: none; }
+.attachment-file-icon svg { width: 16px; height: 16px; }
+.attachment-draft .chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-chips .attachment-image {
+ display: block;
+ width: 64px;
+ padding: 0;
+ background: transparent;
+}
+.attachment-thumbnail {
+ display: block;
+ width: 64px;
+ height: 64px;
+ padding: 0;
+ border: 0;
+ border-radius: 12px;
+ overflow: hidden;
+ background: var(--surface-2);
+ cursor: pointer;
+}
+.attachment-thumbnail img {
+ display: block;
+ width: 64px;
+ height: 64px;
+ margin: 0;
+ object-fit: cover;
+ border-radius: inherit;
+}
+.attachment-draft .chip-remove { min-width: 44px; min-height: 44px; flex: none; }
+.attachment-image .chip-remove {
+ position: absolute;
+ top: -4px;
+ right: -4px;
+ display: grid;
+ place-items: center;
+ width: 44px;
+ height: 44px;
+ margin: 0;
+ padding: 0;
+ border: 0;
+ color: var(--text);
+ background: transparent;
+ isolation: isolate;
+ cursor: pointer;
+}
+.attachment-image .chip-remove::before {
+ content: "";
+ position: absolute;
+ inset: 10px;
+ z-index: -1;
+ border-radius: 50%;
+ background: var(--bg);
+}
+.attachment-draft button:focus-visible { outline: 1px solid var(--text); outline-offset: -2px; }
+.attachment-draft button:active:not(:disabled) { opacity: 0.75; }
+.attachment-draft button:disabled { opacity: 0.45; cursor: default; }
+.attachment-image .chip-progress { display: block; width: 64px; margin-top: 4px; }
+.attachment-image .chip-error { display: block; width: 64px; overflow-wrap: anywhere; white-space: normal; }
