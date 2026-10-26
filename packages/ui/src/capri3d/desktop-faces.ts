@@ -10,6 +10,8 @@ export function desktopFace(event: string): string | undefined {
 export function transitionFace(before: DesktopForm, after: DesktopForm) {
  return before !== after ? "glitch-transition" : undefined;
 }
+/** A face is drawn only when it replaces the body or during the metamorphosis, never as a second head. */
+export function headVisible(form: DesktopForm, transition: boolean, framed: boolean): boolean { return framed && (form === "face" || transition); }
 export function faceFrame(clip: FaceClip | undefined, elapsedMs: number, once: boolean): FaceFrame | undefined {
  if (!clip?.frames.length) return;
  const total = clip.frames.reduce((sum, frame) => sum + Math.max(34, frame.durationMs), 0);

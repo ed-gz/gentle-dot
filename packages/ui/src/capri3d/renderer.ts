@@ -7,7 +7,7 @@ import { injectLegs } from "./rig.ts";
 import { createPosePlayer, clips, samplePose, type ProceduralClip } from "./procedural.ts";
 import { FrameScheduler } from "./scheduler.ts";
 import { attachFace, type FaceLayer } from "./face.ts";
-import { faceFrame, loadDesktopFaces, transitionFace, type DesktopForm } from "./desktop-faces.ts";
+import { faceFrame, headVisible, loadDesktopFaces, transitionFace, type DesktopForm } from "./desktop-faces.ts";
 import { PERCH_SEAT_Y, perchCameraY } from "./perch.ts";
 
 /** WebGL stays behind this interface so the surface can be tested without a GPU. */
@@ -189,9 +189,9 @@ export const createRenderer: RendererFactory = async options => {
   const animation = transition ? "glitch-transition" : choice.face?.animation;
   const clip = animation ? atlas.manifest.animations[animation] : undefined;
   const f = faceFrame(clip, elapsed * 1000, transition);
-  head.visible = Boolean(f);
+  head.visible = headVisible(form, transition, Boolean(f));
   if (current) current.scene.visible = form !== "face" || !f;
-  if (!f || !clip) return;
+  if (!f || !clip || !head.visible) return;
   faceTexture.repeat.set(f.width / atlas.manifest.width, f.height / atlas.manifest.height);
   faceTexture.offset.set(f.x / atlas.manifest.width, 1 - (f.y + f.height) / atlas.manifest.height);
   const size = (camera.top - camera.bottom) * (form === "face" || transition ? 112 : 76) / 340;

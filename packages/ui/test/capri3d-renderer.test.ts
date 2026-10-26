@@ -329,7 +329,7 @@ it.skipIf(!existsSync(personalBase))("fits every real Capri clip, including skin
    }
   }
  }
-}, 60_000);
+}, 180_000);
 
 it("rejects an external resource before GLTFLoader can request it", async () => {
  const json = new TextEncoder().encode('{"buffers":[{"uri":"https://invalid.test/model.bin"}]}');

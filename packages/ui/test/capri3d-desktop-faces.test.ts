@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { desktopFace, faceFrame, loadDesktopFaces, transitionFace } from "../src/capri3d/desktop-faces.ts";
+import { desktopFace, faceFrame, headVisible, loadDesktopFaces, transitionFace } from "../src/capri3d/desktop-faces.ts";
 import { companionSessionCue, type CompanionSessionSnapshot } from "../src/companion-sessions.ts";
 
 describe("purposeful desktop faces", () => {
@@ -32,6 +32,12 @@ describe("purposeful desktop faces", () => {
   for (const [event, animation] of Object.entries({ typing: "typing-watch", working: "working", question: "pointing", done: "happy", error: "crying", idle: "sleepy", return: "wake", output: "look", denied: "angry", notification: "surprised" }))
    expect(desktopFace(event)).toBe(animation);
   expect(desktopFace("unknown")).toBeUndefined();
+ });
+ it("never draws a second face over the visible 3D body", () => {
+  expect(headVisible("3d", false, true)).toBe(false);
+  expect(headVisible("face", false, true)).toBe(true);
+  expect(headVisible("3d", true, true)).toBe(true);
+  expect(headVisible("face", false, false)).toBe(false);
  });
  it("uses metamorphosis on either form change only", () => {
   expect(transitionFace("3d", "face")).toBe("glitch-transition");
