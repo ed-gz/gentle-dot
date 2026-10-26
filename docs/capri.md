@@ -84,6 +84,35 @@ La ventana 3D mide aproximadamente **240 × 340 píxeles lógicos**; 2D conserva
 
 El render se limita a 30 fps mientras reproduce un gesto. El reposo y las poses fijas no mantienen un bucle; al ocultarse o con movimiento reducido se detiene la animación. La máscara se actualiza al cambiar la pose, al volver a mostrarse y como máximo cada 500 ms durante una animación. WebGL en WebKitGTK/Wayland, el encuadre de cada modelo y el coste de GPU requieren verificación en el equipo real; las pruebas sin GPU cubren el contrato del renderer, las decisiones, la recuperación 2D y la región de entrada.
 
+### Atlas 3D para un Android personal
+
+El móvil puede usar **sprites prerenderizados de esos mismos GLB**, sin cargar Three.js ni mantener WebGL en el teléfono. El overlay nativo y el personaje dentro del WebView comparten los PNG y manifiestos. Si no existen, no se decodifican o el manifiesto es inválido, conservan los sprites 2D incluidos. La selección no cambia permisos, sesiones ni señales de comportamiento.
+
+1. Instala los modelos locales con el procedimiento anterior. Necesitas las dependencias ya preparadas del proyecto (Three.js en `packages/ui/node_modules` y Chromium de Playwright).
+2. Desde la raíz genera los atlas:
+
+   ```sh
+   node --test scripts/capri3d/atlas.test.mjs
+   node scripts/capri3d/render-atlases.mjs
+   ```
+
+3. Comprueba la salida en **`.cache/capri3d-atlases/capri-3d-core-v1.{json,png}`**. La carpeta ya está excluida por `.gitignore`. No publiques ni agregues a Git los modelos, atlas, capturas o APK personales que los contengan.
+4. Sigue tu compilación Android habitual. `syncCompanionAssets` detecta la carpeta opcional y copia sólo `capri-3d-*-v1.json/png` a los assets generados `companion/` (overlay) y `public/companion/` (WebView). No copia GLB ni modifica `src/main/assets`. En un checkout sin esa carpeta la compilación conserva únicamente los atlas 2D. Para volver a una compilación distribuible, usa un checkout sin estos derivados personales.
+
+El render offline usa Chromium headless con `--use-angle=swiftshader --enable-unsafe-swiftshader`, fondo transparente, texturas nearest y lienzos de **192 × 272**, aproximadamente **12 fps**. Recorta alfa y empaqueta con un límite de 4096 por lado y 120 cuadros por animación; las poses fijas necesitan un solo cuadro. Encuadra el gesto completo con una cámara estable. Sólo genera los siete estados de la tabla anterior: no incluye clips de caminar, teletransporte, baile ni desplazamientos aleatorios. El viaje con propósito conserva el reposo 3D.
+
+| Acción del overlay Android | Animación del atlas / origen |
+|---|---|
+| `idle`, `walk` y descansos sin equivalente | `idle` / `Flotar_en_reposo` |
+| `working`, `curious`, `duo-watch` | `thinking` / `Pensar` |
+| `eyes`, `face` (escritura) | `typing` / pose inclinada |
+| `attentive`, `greeting`, señalar | `greeting` / primeros 3 s de Saludar |
+| `duo-high-five` (terminado) | `laughing` / `Reir` |
+| `crying`, `angry` (error) | `error` / pose recostada con ojos cerrados |
+| `follow-message` (envío confirmado) | `talking` / `Hablar` |
+
+El WebView resuelve directamente los mismos estados de `mapping.ts`: trabajo/lectura → Pensar, respuesta/envío → Hablar, escritura → inclinada, atención → Saludar, terminado → Reir, error → recostada, reposo → Flotar. Descarga sólo el manifiesto y PNG del mismo origen (`/companion/`); valida límites y dimensiones antes de sustituir 2D. Al faltar archivos o WebGL, **no requiere conexión al PC**. Se eligieron atlas en vez del renderer de escritorio para evitar exponer GLB por red, diferencias de WebGL en Android y gasto de GPU continuo. El reloj del sprite se pausa con la app oculta o animaciones desactivadas; no vuelve a renderizar el chat en cada cuadro.
+
 ## Actualización de sesiones y avisos
 
 La actualización de Dot no recarga las extensiones de un Gentle Shell que ya esté abierto. Los recibos nativos de entrega y adaptadores nuevos están disponibles en sesiones nuevas. Para actualizar una sesión existente, escribe `/reload` en su terminal cuando haya terminado su trabajo y no tenga preguntas, mensajes pendientes, subagentes ni monitores que necesites conservar: recarga todas sus extensiones y puede cancelar trabajos auxiliares. La conversación se conserva. La interfaz evita presentar una aceptación del servidor como recepción confirmada por la IA.
