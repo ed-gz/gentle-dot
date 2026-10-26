@@ -53,7 +53,7 @@ public class GentleMobilePlugin extends Plugin {
         GentleMobilePlugin plugin = current.get();
         if (plugin == null || !MainActivity.isVisible() || !plugin.hasListeners("foregroundNotification")) return false;
         JSObject event = new JSObject();
-        event.put("id", id); event.put("title", title); event.put("body", body); event.put("event", kind);
+        event.put("id", id); event.put("title", NotificationDelivery.persona(plugin.getContext())); event.put("body", body); event.put("event", kind);
         if (paneId != null && !paneId.isEmpty()) {
             JSObject session = new JSObject(); session.put("paneId", paneId);
             if (sessionId != null && !sessionId.isEmpty()) session.put("sessionId", sessionId);

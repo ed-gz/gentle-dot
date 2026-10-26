@@ -6,6 +6,8 @@ export function sessionNotice(
 	event: OrchestrationEvent,
 ): Extract<ServerPayload, { type: "toast" }> | undefined {
 	if (event.type === "policy" || event.intentional) return;
+	const dialog = event.type === "attention" && Boolean(event.requestId);
+	const question = dialog && event.dialogKind === "question";
 	const notificationEvent =
 		event.type === "completed"
 			? event.resultChanged !== false && event.assistantMessageId
@@ -13,7 +15,7 @@ export function sessionNotice(
 				: "agentAvailable"
 			: event.type === "disconnected"
 				? "agentError"
-				: event.requestId
+				: dialog && !question
 					? "permission"
 					: "agentAttention";
 	const copy = (
@@ -25,15 +27,18 @@ export function sessionNotice(
 			permission: ["Autorización pendiente", "Puedes responder desde Sesiones."],
 		} as const
 	)[notificationEvent];
+	const label = event.sessionId || event.paneId || "La sesión";
+	const summary = (event.dialogTitle || event.message || "Revisa la solicitud en Sesiones.").slice(0, 160);
 	return {
 		type: "toast",
 		level: event.type === "completed" ? "info" : "warning",
 		notificationEvent,
-		notificationId: event.id,
+		// Stable across repeated attention events; consumers already maintain bounded seen-id ledgers.
+		notificationId: dialog ? `dialog:${JSON.stringify([event.paneId, event.sessionId, event.requestId])}` : event.id,
 		...(event.paneId
 			? { session: { paneId: event.paneId, ...(event.sessionId ? { sessionId: event.sessionId } : {}) } }
 			: {}),
-		title: copy[0],
-		message: copy[1],
+		title: dialog ? (question ? "Pregunta" : "Permiso") : copy[0],
+		message: dialog ? `${label}${question ? " te pregunta: " : " pide permiso: "}${summary}` : copy[1],
 	};
 }

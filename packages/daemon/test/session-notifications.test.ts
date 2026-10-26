@@ -32,6 +32,19 @@ it("keeps actionable permissions distinct and drops automatic policy bookkeeping
 	expect(sessionNotice({ ...event, type: "disconnected", intentional: true })).toBeUndefined();
 });
 
+it("classifies dialog metadata without completion and uses a stable dialog identity", () => {
+	const dialog = { ...event, type: "attention" as const, requestId: "ask-1", sessionId: "Review", dialogTitle: "Which branch?", dialogKind: "question" as const };
+	const notice = sessionNotice(dialog);
+	expect(notice).toMatchObject({ notificationEvent: "agentAttention", title: "Pregunta", message: "Review te pregunta: Which branch?" });
+	expect(sessionNotice({ ...dialog, id: "retry" })?.notificationId).toBe(notice?.notificationId);
+	expect(sessionNotice({ ...dialog, requestId: "ask-2" })?.notificationId).not.toBe(notice?.notificationId);
+	expect(sessionNotice({ ...dialog, dialogKind: "permission", dialogTitle: "git push" })).toMatchObject({ notificationEvent: "permission", title: "Permiso", message: "Review pide permiso: git push" });
+	expect(sessionNotice({ ...dialog, dialogKind: undefined })?.notificationEvent).toBe("permission");
+	expect(sessionNotice({ ...dialog, paneId: "other" })?.notificationId).not.toBe(notice?.notificationId);
+	expect(sessionNotice({ ...dialog, dialogTitle: "x".repeat(200) })?.message).toBe(`Review te pregunta: ${"x".repeat(160)}`);
+	expect(sessionNotice({ ...dialog, type: "completed" })?.notificationEvent).toBe("agentCompleted");
+});
+
 it("preserves exact session identity so the phone can open it or keep a viewed reply silent", () => {
 	expect(sessionNotice({ ...event, paneId: "w2F:p1", sessionId: "session-a" })).toMatchObject({
 		session: { paneId: "w2F:p1", sessionId: "session-a" },

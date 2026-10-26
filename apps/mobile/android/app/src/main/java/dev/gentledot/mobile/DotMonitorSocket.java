@@ -176,9 +176,10 @@ final class DotMonitorSocket implements AutoCloseable {
             if (ask == null || ask.optString("requestId").isEmpty() || !NotificationPreferences.socketQuestion(ask.optString("method"))) return;
             questions.add(ask.optString("requestId")); activity(agentState);
             id = "dot-ask:" + ask.optString("requestId");
-            event = "permission";
-            title = "Gentle Dot necesita tu respuesta";
-            body = ask.optString("title", "Abre la conversación para continuar.");
+            event = NotificationDelivery.dialogEvent(ask);
+            title = NotificationDelivery.dialogTitle(ask);
+            body = NotificationDelivery.persona(context) + (NotificationDelivery.question(ask) ? " te pregunta: " : " pide permiso: ")
+                + ask.optString("title", "Abre la conversación para continuar.");
         } else if ("message_done".equals(type)) {
             if (message.optBoolean("stopped") || message.optBoolean("intermediate") || message.optString("messageId").isEmpty()) return;
             // Empty tool-only turns are not a user-visible answer.

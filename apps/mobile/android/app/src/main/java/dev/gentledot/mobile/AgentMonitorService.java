@@ -43,6 +43,7 @@ public class AgentMonitorService extends Service {
     private static final String ALERT_CHANNEL = "gentledot-agents";
     private static final String DOT_CHANNEL = "gentledot-dot";
     private static final String PERMISSION_CHANNEL = "gentledot-permissions";
+    private static final String QUESTION_CHANNEL = "gentledot-questions";
     private static final int STATUS_ID = 1;
     private static final String STOP = "dev.gentledot.mobile.STOP_MONITOR";
     private volatile MonitorSession session;
@@ -141,7 +142,7 @@ public class AgentMonitorService extends Service {
     private static void channels(Context context) {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager manager = context.getSystemService(NotificationManager.class);
-        manager.createNotificationChannel(new NotificationChannel(STATUS_CHANNEL, "Conexión con el equipo", NotificationManager.IMPORTANCE_LOW));
+        manager.createNotificationChannel(new NotificationChannel(STATUS_CHANNEL, NotificationDelivery.persona(context) + " · Conexión con el equipo", NotificationManager.IMPORTANCE_LOW));
     }
 
     private static PendingIntent openApp(Context context) {
@@ -161,7 +162,7 @@ public class AgentMonitorService extends Service {
         Intent stop = new Intent(this, AgentMonitorService.class).setAction(STOP);
         PendingIntent action = PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, STATUS_CHANNEL)
-            .setSmallIcon(R.drawable.ic_notification).setContentTitle("Gentle Dot")
+            .setSmallIcon(R.drawable.ic_notification).setContentTitle(NotificationDelivery.persona(this))
             .setContentText(body).setContentIntent(openApp(this)).setOngoing(true).setOnlyAlertOnce(true)
             .addAction(0, "Detener avisos", action).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).build();
     }
@@ -184,20 +185,21 @@ public class AgentMonitorService extends Service {
     }
     private static void deliver(Context context, String event, String id, String title, String body,
             String paneId, String sessionId, String conversationId, boolean monitorEvent) {
+        final String brandedTitle = NotificationDelivery.persona(context);
         CompanionOverlayService.react(event);
         NotificationPreferences preferences = preferences(context);
         NotificationDelivery.Route route = NotificationDelivery.route(preferences, event, MainActivity.isVisible(), monitorEvent);
         if (route == NotificationDelivery.Route.NONE) return;
         if (route == NotificationDelivery.Route.FOREGROUND
-                && GentleMobilePlugin.foregroundNotification(event, id, title, body, paneId, sessionId)) return;
+                && GentleMobilePlugin.foregroundNotification(event, id, brandedTitle, body, paneId, sessionId)) return;
         boolean normalInterruptionMode = false;
         try { normalInterruptionMode = context.getSystemService(NotificationManager.class).getCurrentInterruptionFilter() == NotificationManager.INTERRUPTION_FILTER_ALL; }
         catch (RuntimeException ignored) { /* Unknown interruption policy stays with the system notification route. */ }
         if (!CompanionPolicy.offerNotice(NotificationManagerCompat.from(context).areNotificationsEnabled(), normalInterruptionMode)) {
-            systemNotice(context, event, id, title, body, paneId, sessionId, conversationId, false); return;
+            systemNotice(context, event, id, brandedTitle, body, paneId, sessionId, conversationId, false); return;
         }
-        CompanionOverlayService.offer(event, id, title, body, paneId, sessionId, conversationId,
-            drawn -> systemNotice(context, event, id, title, body, paneId, sessionId, conversationId, drawn));
+        CompanionOverlayService.offer(event, id, brandedTitle, body, paneId, sessionId, conversationId,
+            drawn -> systemNotice(context, event, id, brandedTitle, body, paneId, sessionId, conversationId, drawn));
     }
 
     private static void systemNotice(Context context, String event, String id, String title, String body,
@@ -209,21 +211,21 @@ public class AgentMonitorService extends Service {
         // Keep the normal heads-up fallback unless the overlay actually drew this notice.
         channels(context);
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return;
-        title = title.substring(0, Math.min(title.length(), 120));
+        title = NotificationDelivery.persona(context);
         body = body.substring(0, Math.min(body.length(), 1000));
-        String source = "permission".equals(event) ? PERMISSION_CHANNEL : event.startsWith("dot") ? DOT_CHANNEL : ALERT_CHANNEL;
+        String source = "permission".equals(event) ? PERMISSION_CHANNEL : "agentAttention".equals(event) ? QUESTION_CHANNEL : event.startsWith("dot") ? DOT_CHANNEL : ALERT_CHANNEL;
         String channel = source + "-v2-" + preferences.channelSuffix() + (companionVisible ? "-companion" : "");
         if (Build.VERSION.SDK_INT >= 26) {
-            String name = "permission".equals(event) ? "Solicitudes de permiso" : event.startsWith("dot") ? "Alertas de Dot" : "Alertas de sesiones";
+            String name = NotificationDelivery.persona(context) + " · " + ("permission".equals(event) ? "Permisos" : "agentAttention".equals(event) ? "Preguntas y atención" : event.startsWith("dot") ? "Respuestas" : "Sesiones");
             NotificationChannel settings = new NotificationChannel(channel, name, companionVisible ? NotificationManager.IMPORTANCE_LOW : NotificationManager.IMPORTANCE_HIGH);
-            settings.setDescription("Personaliza los avisos desde Ajustes → Alertas en Gentle Dot.");
+            settings.setDescription("Personaliza los avisos desde Ajustes → Alertas en " + NotificationDelivery.persona(context) + ".");
             settings.enableVibration(preferences.get("vibration"));
             settings.setSound(preferences.get("sound") ? RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION) : null,
                 new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).build());
             context.getSystemService(NotificationManager.class).createNotificationChannel(settings);
         }
         Notification publicVersion = new NotificationCompat.Builder(context, channel)
-            .setSmallIcon(R.drawable.ic_notification).setContentTitle("Gentle Dot").setContentText("Tienes una nueva alerta.").build();
+            .setSmallIcon(R.drawable.ic_notification).setContentTitle(NotificationDelivery.persona(context)).setContentText("Tienes una nueva alerta.").build();
         Bundle extras = new Bundle(); extras.putString("gentledot.event", event);
         Notification notification = new NotificationCompat.Builder(context, channel)
             .addExtras(extras).setSmallIcon(R.drawable.ic_notification).setContentTitle(title)
@@ -318,7 +320,7 @@ public class AgentMonitorService extends Service {
             String event = notice.optString("notificationEvent");
             String id = notice.optString("notificationId");
             if (id.isEmpty()) return;
-            if (!"permission".equals(event)) {
+            if (!"permission".equals(event) && !id.startsWith("dialog:")) {
                 // The socket must not wait behind a slow HTTP request to deliver a reply.
                 if (notices.live(id)) {
                     JSONObject identity = notice.optJSONObject("session");
@@ -474,8 +476,9 @@ public class AgentMonitorService extends Service {
                 JSONObject item = pending.optJSONObject(i); if (item == null) continue;
                 String id = item.optString("id"); if (id.isEmpty()) continue;
                 currentApprovals.add(id);
-                if (!approvals.contains(id)) alert("permission", "approval:" + id, "Un agente necesita tu permiso",
-                    item.optString("title", "Abre Gentle Dot para revisar la solicitud."), item);
+                if (!approvals.contains(id) && notices.live("approval:" + id))
+                    alert(NotificationDelivery.dialogEvent(item), "approval:" + id,
+                        NotificationDelivery.dialogTitle(item), NotificationDelivery.dialogBody(item), item);
             }
             for (String previous : approvals) if (ownsMonitor() && !currentApprovals.contains(previous)) NotificationManagerCompat.from(AgentMonitorService.this).cancel("gentledot:approval:" + previous, 2);
             approvals = currentApprovals;

@@ -12,6 +12,7 @@ import type {
 	ReceiveFileResult,
 } from "../../../packages/ui/src/mobile.ts";
 import { isNotificationEvent } from "../../../packages/ui/src/mobile.ts";
+import { foregroundNotification } from "../../../packages/ui/src/notifications.ts";
 import { readMobileDraft, saveMobileDraft } from "./drafts.ts";
 import { type NotificationMode, normalizeNotificationPreferences } from "./notifications.ts";
 
@@ -176,7 +177,7 @@ export function setupNative(): void {
 					}
 				: {}),
 		};
-		window.dispatchEvent(new CustomEvent("gentledot-notification", { detail }));
+		window.dispatchEvent(new CustomEvent("gentledot-notification", { detail: foregroundNotification(detail) }));
 	}).catch(() => {});
 	window.__GENTLE_MOBILE__ = {
 		readDraft: readMobileDraft,
@@ -193,7 +194,7 @@ export function setupNative(): void {
 		cancelReceiveFile: () => GentleMobile.cancelReceiveFile(),
 		notify: async (options) => {
 			// The background monitor owns deduplication when enabled.
-			if (!(await GentleMobile.monitorState()).active) await GentleMobile.notify(options);
+			if (!(await GentleMobile.monitorState()).active) await GentleMobile.notify(foregroundNotification(options));
 		},
 	};
 }
