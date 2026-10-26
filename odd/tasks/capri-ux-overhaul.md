@@ -168,3 +168,5 @@ L66 T38/S35 independent verification follow-up: points 1–4 passed per verifier
 L67 User: "Detalle, con los de 'sesion tiene una pregunta' y el boton de responder, en este caso necesito que deshabilites la funcion de justamente responder desde capri, por que es inecesario en la PC, ya yo con tener esto me doy cuenta y busco la sesion" → question notice keeps the bubble, drops the Responder button on desktop.
 
 L68 User: "Aoplicame este diseño nuevo para movil y si activo el modo capri, tambien tanto las notificaciones normales como el icono de la app se actualiza a capri" / "Dale a modernidad, velocidad y seguridad" (4 mockups en S36)
+
+L70 T41 shipped in source: Capri theme selects notification icon + lime accent and a reversible launcher alias (DefaultLauncher/CapriLauncher, DONT_KILL_APP, enable-first, idempotent); content, channels and permissions unchanged; icons generated from the committed user atlas frame. Validation: native 125 tests green (22 suites), JS hook 19/19, RED observed first. Needs-device: launcher cache behavior, upgrade migration, silhouette/accent rendering, switch-back while running. Not yet installed or visually verified.

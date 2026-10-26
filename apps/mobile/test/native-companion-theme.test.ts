@@ -3,10 +3,10 @@ import { act, createElement, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const native = vi.hoisted(() => ({ state: vi.fn(), set: vi.fn() }));
+const native = vi.hoisted(() => ({ state: vi.fn(), set: vi.fn(), icon: vi.fn() }));
 vi.mock("../src/native.ts", () => ({
 	nativeAndroid: true,
-	GentleMobile: { companionState: native.state, setCompanion: native.set },
+	GentleMobile: { companionState: native.state, setCompanion: native.set, setAppIcon: native.icon },
 }));
 
 import { COMPANION_KEY, useCompanion } from "../../../packages/ui/src/useCompanion.ts";
@@ -50,6 +50,7 @@ beforeEach(() => {
 		theme: "gentle-dot",
 		partialChat: false,
 	};
+	native.icon.mockResolvedValue(undefined);
 	native.state.mockImplementation(async () => ({ ...state }));
 	native.set.mockImplementation(async (options) => {
 		state = { ...state, ...options, active: options.enabled ?? state.active };
@@ -83,6 +84,41 @@ it("restores the native appearance without enabling the overlay or opting into a
 	await act(() => window.dispatchEvent(new Event("gentledot-resume")));
 	expect(controls.theme).toBe("capri");
 	expect(native.set).not.toHaveBeenCalled();
+});
+
+it("reconciles launcher identity when appearance changes in either direction without enabling the overlay", async () => {
+	await render();
+	expect(native.icon).toHaveBeenLastCalledWith({ theme: "gentle-dot" });
+	await act(() => select("capri"));
+	expect(native.icon).toHaveBeenLastCalledWith({ theme: "capri" });
+	await act(() => select("gentle"));
+	expect(native.icon.mock.calls.map(([options]) => options.theme)).toEqual(["gentle-dot", "capri", "gentle-dot"]);
+	expect(state.active).toBe(false);
+	expect(state.enabled).toBe(false);
+});
+
+it("reconciles launcher identity on resume even when the native theme already matches", async () => {
+	state.theme = "capri";
+	await render();
+	expect(native.icon).toHaveBeenLastCalledWith({ theme: "capri" });
+	native.icon.mockClear();
+	await act(() => window.dispatchEvent(new Event("gentledot-pause")));
+	expect(native.icon).not.toHaveBeenCalled();
+	await act(() => window.dispatchEvent(new Event("gentledot-resume")));
+	expect(native.icon).toHaveBeenCalledExactlyOnceWith({ theme: "capri" });
+	expect(native.set).not.toHaveBeenCalled();
+});
+
+it("surfaces launcher reconciliation failures and retries without enabling the overlay", async () => {
+	await render();
+	native.icon.mockRejectedValueOnce(new Error("Android no pudo actualizar el icono."));
+	await act(() => select("capri"));
+	expect(controls.error).toContain("no pudo actualizar el icono");
+	expect(controls.pending).toBe(false);
+	await act(() => controls.retry());
+	expect(native.icon).toHaveBeenLastCalledWith({ theme: "capri" });
+	expect(controls.error).toBe("");
+	expect(state.active).toBe(false);
 });
 
 it("preserves an explicit persona while hydrating missing appearance", async () => {

@@ -161,8 +161,8 @@ public class AgentMonitorService extends Service {
     private Notification status(String body) {
         Intent stop = new Intent(this, AgentMonitorService.class).setAction(STOP);
         PendingIntent action = PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        return new NotificationCompat.Builder(this, STATUS_CHANNEL)
-            .setSmallIcon(R.drawable.ic_notification).setContentTitle(NotificationDelivery.persona(this))
+        return NotificationAppearance.builder(this, STATUS_CHANNEL)
+            .setContentTitle(NotificationDelivery.persona(this))
             .setContentText(body).setContentIntent(openApp(this)).setOngoing(true).setOnlyAlertOnce(true)
             .addAction(0, "Detener avisos", action).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).build();
     }
@@ -224,11 +224,11 @@ public class AgentMonitorService extends Service {
                 new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_NOTIFICATION).build());
             context.getSystemService(NotificationManager.class).createNotificationChannel(settings);
         }
-        Notification publicVersion = new NotificationCompat.Builder(context, channel)
-            .setSmallIcon(R.drawable.ic_notification).setContentTitle(NotificationDelivery.persona(context)).setContentText("Tienes una nueva alerta.").build();
+        Notification publicVersion = NotificationAppearance.builder(context, channel)
+            .setContentTitle(NotificationDelivery.persona(context)).setContentText("Tienes una nueva alerta.").build();
         Bundle extras = new Bundle(); extras.putString("gentledot.event", event);
-        Notification notification = new NotificationCompat.Builder(context, channel)
-            .addExtras(extras).setSmallIcon(R.drawable.ic_notification).setContentTitle(title)
+        Notification notification = NotificationAppearance.builder(context, channel)
+            .addExtras(extras).setContentTitle(title)
             .setContentText(body).setStyle(new NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH).setOnlyAlertOnce(true)
             .setDefaults((preferences.get("sound") ? Notification.DEFAULT_SOUND : 0) | (preferences.get("vibration") ? Notification.DEFAULT_VIBRATE : 0))

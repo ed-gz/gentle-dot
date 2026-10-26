@@ -119,6 +119,9 @@ export function useNativeCompanionTheme(contentReady = true) {
 				// A later selection wins, including when it arrived during a native call.
 				if (selected && selected !== target) continue;
 				verify(state, target);
+				// Also reconcile persisted Android aliases on first load/resume, even with the overlay off.
+				await GentleMobile.setAppIcon({ theme: target });
+				if (selected && selected !== target) continue;
 				return;
 			}
 		};

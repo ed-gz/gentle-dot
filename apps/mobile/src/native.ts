@@ -32,6 +32,7 @@ export interface NativeCompanionState {
 	partialChat: boolean;
 }
 interface NativePlugin {
+	setAppIcon(options: { theme: "gentle-dot" | "capri" }): Promise<void>;
 	companionState(): Promise<NativeCompanionState>;
 	setCompanion(options: {
 		enabled?: boolean;

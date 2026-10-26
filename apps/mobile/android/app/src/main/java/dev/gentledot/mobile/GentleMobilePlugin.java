@@ -143,6 +143,18 @@ public class GentleMobilePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setAppIcon(PluginCall call) {
+        String theme = call.getString("theme");
+        if (!"gentle-dot".equals(theme) && !"capri".equals(theme)) { call.reject("Tema no válido."); return; }
+        try {
+            LauncherIcon.apply(getContext(), theme);
+            call.resolve();
+        } catch (RuntimeException error) {
+            call.reject("Android no pudo actualizar el icono. Inténtalo de nuevo.");
+        }
+    }
+
+    @PluginMethod
     public void setCompanion(PluginCall call) {
         Activity activity = getActivity();
         if (activity == null) { call.reject("Abre Gentle Dot e inténtalo de nuevo."); return; }
@@ -154,6 +166,7 @@ public class GentleMobilePlugin extends Plugin {
             if (Boolean.TRUE.equals(enabled) && (!CompanionOverlayService.permitted(getContext()) || !MainActivity.isVisible())) {
                 call.reject("Permite Mostrar sobre otras apps y activa el acompañante desde la app abierta."); return;
             }
+            String previousTheme = CompanionOverlayService.prefs(getContext()).getString("theme", "gentle-dot");
             android.content.SharedPreferences.Editor edit = CompanionOverlayService.prefs(getContext()).edit();
             if (enabled != null) edit.putBoolean("enabled", enabled);
             if (theme != null) edit.putString("theme", theme);
@@ -161,6 +174,7 @@ public class GentleMobilePlugin extends Plugin {
             if (!edit.commit()) { call.reject("No se pudo guardar el acompañante."); return; }
             String requestedTheme = CompanionOverlayService.prefs(getContext()).getString("theme", "gentle-dot");
             try {
+                if (!requestedTheme.equals(previousTheme)) NotificationAppearance.refreshOngoing(getContext());
                 if (Boolean.FALSE.equals(enabled)) {
                     getContext().stopService(new Intent(getContext(), CompanionOverlayService.class));
                     call.resolve(companionStateValue());return;

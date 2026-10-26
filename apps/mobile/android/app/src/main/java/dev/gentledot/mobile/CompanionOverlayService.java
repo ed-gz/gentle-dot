@@ -172,7 +172,7 @@ public final class CompanionOverlayService extends Service {
         manager.createNotificationChannel(new NotificationChannel("companion-presence","Acompañante sobre otras apps",NotificationManager.IMPORTANCE_LOW));
         PendingIntent stop=PendingIntent.getService(this,NOTICE,new Intent(this,CompanionOverlayService.class).setAction(STOP),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
         PendingIntent open=PendingIntent.getActivity(this,NOTICE,new Intent(this,CompanionChatActivity.class),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        Notification notice=new NotificationCompat.Builder(this,"companion-presence").setSmallIcon(R.drawable.ic_notification).setContentTitle("Tu acompañante está disponible")
+        Notification notice=NotificationAppearance.builder(this,"companion-presence").setContentTitle("Tu acompañante está disponible")
             .setContentText("Toca para conversar. Se pausa al bloquear la pantalla.").setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
             .addAction(0,"Ocultar",stop).setVisibility(NotificationCompat.VISIBILITY_SECRET).build();
         try {if(Build.VERSION.SDK_INT>=34)startForeground(NOTICE,notice,ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);else startForeground(NOTICE,notice);started=true;sprite.sustain(CompanionPolicy.aggregate(activities.values()));updateVisibility();if(!sprite.renderState().ready)scheduleRecovery();}
