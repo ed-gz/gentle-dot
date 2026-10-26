@@ -68,13 +68,7 @@ fn probe(view: webkit2gtk::WebView, label: String, expect_capri: bool, remaining
         return;
     }
     let next = view.clone();
-    let required = if expect_capri {
-        "!!document.querySelector('.desktop-companion-surface svg image')"
-    } else if label == "companion-launcher" {
-        "!!document.querySelector('.desktop-companion-launcher svg image')"
-    } else {
-        "true"
-    };
+    let required = required_marker(&label, expect_capri);
     let script = format!("{required} && ({PROBE})");
     view.evaluate_javascript(&script,None,None,None::<&webkit2gtk::gio::Cancellable>,move |result| {
         if result.is_ok_and(|value|value.to_boolean()) {
@@ -87,9 +81,31 @@ fn probe(view: webkit2gtk::WebView, label: String, expect_capri: bool, remaining
     });
 }
 
+/// What must exist before a window counts as mounted. Capri renders either the 2D sprite
+/// or the 3D canvas, so either one certifies the companion surface.
+#[cfg(target_os = "linux")]
+fn required_marker(label: &str, expect_capri: bool) -> &'static str {
+    if expect_capri {
+        "(!!document.querySelector('.desktop-companion-surface svg image') || !!document.querySelector('.capri3d-canvas'))"
+    } else if label == "companion-launcher" {
+        "!!document.querySelector('.desktop-companion-launcher svg image')"
+    } else {
+        "true"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn capri_readiness_accepts_the_2d_sprite_or_the_3d_canvas() {
+        let marker = required_marker("dot", true);
+        assert!(marker.contains(".desktop-companion-surface svg image"));
+        assert!(marker.contains(".capri3d-canvas"));
+        assert_eq!(required_marker("companion-launcher", false), "!!document.querySelector('.desktop-companion-launcher svg image')");
+        assert_eq!(required_marker("panel", false), "true");
+    }
     #[test]
     fn a_development_server_or_error_document_cannot_be_certified_as_embedded() {
         assert!(own_document(
