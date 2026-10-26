@@ -130,6 +130,42 @@ it("moves through a transparent teleport midpoint and clears the effect on the n
  expect(canvas.style.opacity).toBe("");
  renderer.dispose();
 });
+it.each(["roja_sentada.glb", "roja_recostada_cerrados.glb"] as const)("animates the authored rest pose %s, not just its render count, without rAF", async name => {
+ const base = model(), resting = model();
+ resting.scene.position.set(2, 3, 4);
+ gpu.parse.mockResolvedValueOnce(base).mockResolvedValueOnce(resting);
+ const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => { throw Error("No compositor frame callback"); });
+ const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => bytes(), mask: vi.fn(), failure: vi.fn() });
+ try {
+  renderer.visibility(true, false);
+  await renderer.choose({ model: name, clip: null });
+  const initial = resting.scene.position.clone();
+  vi.advanceTimersByTime(510);
+  expect(resting.scene.position.y).not.toBe(initial.y);
+  expect(resting.scene.position.y).toBeGreaterThan(3);
+  expect(resting.scene.position.y).toBeLessThanOrEqual(3.025);
+  expect(resting.scene.rotation.z).not.toBe(0);
+  expect(resting.scene.position.x).toBe(2);
+  expect(resting.scene.position.z).toBe(4);
+  const first = resting.scene.position.clone();
+  vi.advanceTimersByTime(510);
+  expect(resting.scene.position.y).not.toBe(first.y);
+  renderer.visibility(false, false);
+  const hidden = resting.scene.position.clone();
+  vi.advanceTimersByTime(1000);
+  expect(resting.scene.position.equals(hidden)).toBe(true);
+  renderer.visibility(true, true);
+  vi.advanceTimersByTime(1000);
+  expect(resting.scene.position.equals(hidden)).toBe(true);
+  await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo" });
+  expect(resting.scene.position.equals(initial)).toBe(true);
+  await renderer.choose({ model: name, clip: null });
+  expect(resting.scene.position.equals(initial)).toBe(true);
+  expect(resting.scene.rotation.z).toBe(0);
+  expect(raf).not.toHaveBeenCalled();
+ } finally { renderer.dispose(); raf.mockRestore(); }
+ expect(vi.getTimerCount()).toBe(0);
+});
 it("rejects an external resource before GLTFLoader can request it", async () => {
  const json = new TextEncoder().encode('{"buffers":[{"uri":"https://invalid.test/model.bin"}]}');
  const buffer = new ArrayBuffer(20 + json.length); const view = new DataView(buffer);

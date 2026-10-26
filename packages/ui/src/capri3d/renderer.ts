@@ -112,7 +112,15 @@ export const createRenderer: RendererFactory = async options => {
     procedural = following; following = undefined; phase = 0; player?.play(procedural);
    }
    player?.update(delta);
-  } else mixer?.update(delta);
+  } else {
+   mixer?.update(delta);
+   // Authored resting GLBs have no playing clip. A live timer alone just
+   // repaints identical pixels; breathe/sway without replacing their pose.
+   if (current && !action) {
+    current.scene.position.y = home.y + 0.025 * Math.sin(elapsed * Math.PI / 2);
+    current.scene.rotation.z = 0.012 * Math.sin(elapsed * Math.PI / 3);
+   }
+  }
   if (currentName === "roja.glb") face?.update(elapsed, procedural === "hablar" || choice?.clip === "Hablar", procedural === "dormir" ? true : undefined);
   if (current && choice?.motion) {
    const t = elapsed * 1000 / (choice.duration ?? 1);
