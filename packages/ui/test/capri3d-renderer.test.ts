@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as THREE from "three";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { injectLegs } from "../src/capri3d/rig.ts";
 const gpu = vi.hoisted(() => ({ render: vi.fn(), dispose: vi.fn(), reads: vi.fn(), parse: vi.fn() }));
 vi.mock("three", async importOriginal => {
  const actual = await importOriginal<typeof import("three")>();
@@ -16,7 +20,9 @@ vi.mock("../src/capri3d/desktop-faces.ts", async original => ({
  ...await original<typeof import("../src/capri3d/desktop-faces.ts")>(), loadDesktopFaces: vi.fn(async () => undefined),
 }));
 import { loadDesktopFaces } from "../src/capri3d/desktop-faces.ts";
-import { createRenderer } from "../src/capri3d/renderer.ts";
+import { createRenderer, createFramingSampler, fitPoseCamera, FRAME_MARGIN } from "../src/capri3d/renderer.ts";
+import { clips, createPosePlayer, type ProceduralClip } from "../src/capri3d/procedural.ts";
+import { perchCameraY } from "../src/capri3d/perch.ts";
 function bytes() {
  const json = new TextEncoder().encode('{"asset":{"version":"2.0"}}  ');
  const buffer = new ArrayBuffer(20 + json.length);
@@ -217,6 +223,114 @@ it("shares one render owner for heads, metamorphosis in both directions, and 3D 
   vi.advanceTimersByTime(2000); expect(gpu.render).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
  } finally { renderer.dispose(); load.mockRestore(); }
 });
+function articulatedModel() {
+ const scene = new THREE.Group();
+ const bone = (name: string, parent: THREE.Object3D, x: number, y: number, width: number, height: number) => {
+  const node = new THREE.Bone(); node.name = name; node.position.set(x, y, 0); parent.add(node);
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, 0.25)); mesh.position.y = height / 2; node.add(mesh);
+  return node;
+ };
+ const root = bone("Raiz", scene, 0, 1, 0.55, 0.9);
+ const head = bone("Cabeza", root, 0, 0.9, 0.7, 0.6);
+ // A long asymmetric hair spike, above the skull's ordinary bind-pose bounds.
+ const spike = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.7, 3)); spike.position.set(0.25, 0.8, 0); head.add(spike);
+ for (const [side, x] of [["izquierdo", -0.4], ["derecho", 0.4]] as const) {
+  const arm = bone(`Brazo_${side}`, root, x, 0.75, 0.18, 0.6);
+  const forearm = bone(`Antebrazo_${side}`, arm, 0, 0.6, 0.16, 0.45);
+  bone(side === "izquierdo" ? "Mano_izquierda" : "Mano_derecha", forearm, 0, 0.45, 0.18, 0.15);
+  const thigh = bone(`Muslo_${side}`, root, x / 2, 0, 0.22, -0.5);
+  bone(`Pierna_${side}`, thigh, 0, -0.5, 0.2, -0.5);
+ }
+ return scene;
+}
+
+it.each(Object.keys(clips) as ProceduralClip[])("projects every sampled %s pose inside the canvas with margin (no WebGL)", name => {
+ for (const perched of [false, true]) {
+  const scene = articulatedModel();
+  const sample = createFramingSampler(scene);
+  const initial = scene.getObjectByName("Raiz")!.position.clone();
+  const bounds = sample([name]);
+  expect(scene.getObjectByName("Raiz")!.position.equals(initial)).toBe(true);
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
+  fitPoseCamera(camera, bounds, perched);
+  const player = createPosePlayer(scene); player.play(name);
+  for (let i = 0; i <= Math.ceil(clips[name].duration * 120); i++) {
+   player.update(i === 0 ? 0 : 1 / 120);
+   scene.updateMatrixWorld(true);
+   if (perched) {
+    const hip = scene.getObjectByName("Muslo_izquierdo")!.getWorldPosition(new THREE.Vector3()).add(scene.getObjectByName("Muslo_derecho")!.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
+    camera.position.x = hip.x; camera.position.y = perchCameraY(hip.y, camera.top);
+    camera.lookAt(hip.x, camera.position.y, hip.z);
+   }
+   camera.updateMatrixWorld(true);
+   const box = new THREE.Box3().setFromObject(scene, true);
+   for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) {
+    const p = new THREE.Vector3(x, y, z).project(camera);
+    expect((p.x + 1) * 120).toBeGreaterThanOrEqual(FRAME_MARGIN);
+    expect((p.x + 1) * 120).toBeLessThanOrEqual(240 - FRAME_MARGIN);
+    expect((1 - p.y) * 170).toBeGreaterThanOrEqual(FRAME_MARGIN);
+    expect((1 - p.y) * 170).toBeLessThanOrEqual(340 - FRAME_MARGIN);
+    expect(p.z).toBeGreaterThan(-1); expect(p.z).toBeLessThan(1);
+   }
+  }
+ }
+});
+
+it("measures authored animation tracks rather than just their starting pose", () => {
+ const scene = articulatedModel();
+ const clip = new THREE.AnimationClip("raised", 1, [new THREE.NumberKeyframeTrack("Raiz.position[y]", [0, 0.5, 1], [1, 5, 1])]);
+ const sample = createFramingSampler(scene);
+ const rest = sample([]).world;
+ const animated = sample([], clip).world;
+ expect(animated.max.y - rest.max.y).toBeCloseTo(4);
+ expect(scene.getObjectByName("Raiz")!.position.y).toBe(1);
+});
+
+// Personal assets are deliberately not distributed. When installed, exercise the real
+// skinned vertices (including hair) as well as the portable articulated fixture above.
+const personalBase = join(homedir(), ".local/share/dev.gentleman.gentle-dot/capri-3d/roja.glb");
+it.skipIf(!existsSync(personalBase))("fits every real Capri clip, including skinning and the native seated anchor", async () => {
+ const original = readFileSync(personalBase);
+ const jsonLength = original.readUInt32LE(12);
+ const json = JSON.parse(original.subarray(20, 20 + jsonLength).toString());
+ // Strip only textures/material references in memory: math tests need no image decoder/GPU.
+ delete json.images; delete json.textures; delete json.materials;
+ for (const mesh of json.meshes) for (const primitive of mesh.primitives) delete primitive.material;
+ const text = JSON.stringify(json); const padded = text + " ".repeat((4 - Buffer.byteLength(text) % 4) % 4);
+ const body = Buffer.from(padded), binary = original.subarray(20 + jsonLength);
+ const bytes = new ArrayBuffer(20 + body.length + binary.length); const view = new DataView(bytes);
+ view.setUint32(0, 0x46546c67, true); view.setUint32(4, 2, true); view.setUint32(8, bytes.byteLength, true);
+ view.setUint32(12, body.length, true); view.setUint32(16, 0x4e4f534a, true);
+ new Uint8Array(bytes, 20).set(body); new Uint8Array(bytes, 20 + body.length).set(binary);
+ const { GLTFLoader } = await vi.importActual<typeof import("three/addons/loaders/GLTFLoader.js")>("three/addons/loaders/GLTFLoader.js");
+ const { scene } = await new GLTFLoader().parseAsync(bytes, "");
+ expect(injectLegs(scene)).toBe(true);
+ const sample = createFramingSampler(scene), player = createPosePlayer(scene);
+ const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
+ for (const name of Object.keys(clips) as ProceduralClip[]) {
+  const perched = name === "sentada" || name === "sentarse";
+  fitPoseCamera(camera, sample([name]), perched);
+  player.play(name);
+  for (let i = 0; i <= Math.ceil(clips[name].duration * 60); i++) {
+   player.update(i === 0 ? 0 : 1 / 60); scene.updateMatrixWorld(true);
+   scene.traverse(object => { if (object instanceof THREE.SkinnedMesh) object.skeleton.update(); });
+   if (perched) {
+    const hip = scene.getObjectByName("Muslo_izquierdo")!.getWorldPosition(new THREE.Vector3()).add(scene.getObjectByName("Muslo_derecho")!.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
+    camera.position.x = hip.x; camera.position.y = perchCameraY(hip.y, camera.top); camera.lookAt(hip.x, camera.position.y, hip.z);
+   }
+   camera.updateMatrixWorld(true);
+   const box = new THREE.Box3().setFromObject(scene, true);
+   for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) {
+    const p = new THREE.Vector3(x, y, box.max.z).project(camera);
+    expect((p.x + 1) * 120, `${name} x at ${i}`).toBeGreaterThanOrEqual(FRAME_MARGIN);
+    expect((p.x + 1) * 120, `${name} x at ${i}`).toBeLessThanOrEqual(240 - FRAME_MARGIN);
+    expect((1 - p.y) * 170, `${name} y at ${i}`).toBeGreaterThanOrEqual(FRAME_MARGIN);
+    expect((1 - p.y) * 170, `${name} y at ${i}`).toBeLessThanOrEqual(340 - FRAME_MARGIN);
+   }
+  }
+ }
+}, 60_000);
+
 it("rejects an external resource before GLTFLoader can request it", async () => {
  const json = new TextEncoder().encode('{"buffers":[{"uri":"https://invalid.test/model.bin"}]}');
  const buffer = new ArrayBuffer(20 + json.length); const view = new DataView(buffer);

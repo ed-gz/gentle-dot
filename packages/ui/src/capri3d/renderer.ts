@@ -4,7 +4,7 @@ import type { AssetName, AssetReader } from "./assets.ts";
 import type { ClipChoice } from "./mapping.ts";
 import { encodeAlphaMask } from "./mask.ts";
 import { injectLegs } from "./rig.ts";
-import { createPosePlayer, clips, type ProceduralClip } from "./procedural.ts";
+import { createPosePlayer, clips, samplePose, type ProceduralClip } from "./procedural.ts";
 import { FrameScheduler } from "./scheduler.ts";
 import { attachFace, type FaceLayer } from "./face.ts";
 import { faceFrame, loadDesktopFaces, transitionFace, type DesktopForm } from "./desktop-faces.ts";
@@ -51,6 +51,116 @@ function embeddedOnly(bytes: ArrayBuffer) {
  };
  for (const entry of [...(json.buffers ?? []), ...(json.images ?? [])])
   if (entry.uri && !entry.uri.startsWith("data:")) throw new Error("External GLB resource rejected");
+}
+
+/** Pixel clearance also absorbs motion between the 30Hz framing samples. */
+export const FRAME_MARGIN = 12;
+export interface PoseBounds { world: THREE.Box3; seated: THREE.Box3 }
+
+/** Capture bind transforms before any player mutates them; measuring never changes playback. */
+export function createFramingSampler(scene: THREE.Object3D) {
+ const bind = new Map<THREE.Object3D, { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 }>();
+ scene.traverse(object => bind.set(object, { position: object.position.clone(), quaternion: object.quaternion.clone(), scale: object.scale.clone() }));
+ const cache = new Map<ProceduralClip, PoseBounds>();
+ const measure = (): PoseBounds => {
+  scene.updateMatrixWorld(true);
+  scene.traverse(object => { if (object instanceof THREE.SkinnedMesh) object.skeleton.update(); });
+  // precise=true evaluates skinned vertices, not stale bind-pose geometry bounds.
+  const world = new THREE.Box3().setFromObject(scene, true);
+  const left = scene.getObjectByName("Muslo_izquierdo"), right = scene.getObjectByName("Muslo_derecho");
+  const hip = left && right ? left.getWorldPosition(new THREE.Vector3()).add(right.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5) : new THREE.Vector3();
+  return { world, seated: world.clone().translate(hip.negate()) };
+ };
+ return (names: ProceduralClip[], authored?: THREE.AnimationClip, start = 0, end = authored?.duration ?? 0): PoseBounds => {
+  const saved = new Map<THREE.Object3D, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>();
+  scene.traverse(object => saved.set(object, { position: object.position.clone(), rotation: object.rotation.clone(), scale: object.scale.clone() }));
+  const result = measure(); // Includes the outgoing pose during the 300ms blend.
+  try {
+   for (const name of names) {
+    let bounds = cache.get(name);
+    if (!bounds) {
+     bounds = { world: new THREE.Box3(), seated: new THREE.Box3() };
+     const steps = Math.ceil(clips[name].duration * 30);
+     for (let i = 0; i <= steps; i++) {
+      for (const [object, transform] of bind) { object.position.copy(transform.position); object.quaternion.copy(transform.quaternion); object.scale.copy(transform.scale); }
+      for (const [key, value] of Object.entries(samplePose(name, clips[name].duration * i / steps))) {
+       const [node, property = "rotation"] = key.split(".");
+       const object = scene.getObjectByName(node!);
+       if (!object) continue;
+       if (property === "rotation") object.rotation.set(...value.map(v => THREE.MathUtils.degToRad(v)) as [number, number, number]);
+       else if (property === "position") object.position.add(new THREE.Vector3(...value));
+       else object.scale.multiply(new THREE.Vector3(...value));
+      }
+      const sample = measure();
+      bounds.world.union(sample.world); bounds.seated.union(sample.seated);
+     }
+     cache.set(name, bounds);
+    }
+    result.world.union(bounds.world); result.seated.union(bounds.seated);
+    // Slerping between two rotations can extend beyond either endpoint's AABB
+    // (notably colgada -> colgando). Measure the actual 300ms player blend too.
+    for (let i = 0; i <= 18; i++) {
+     const t = i / 60, u = t / 0.3, weight = u * u * (3 - 2 * u);
+     for (const [object, transform] of bind) { object.position.copy(transform.position); object.quaternion.copy(transform.quaternion); object.scale.copy(transform.scale); }
+     for (const [key, value] of Object.entries(samplePose(name, t))) {
+      const [node, property = "rotation"] = key.split("."); const object = scene.getObjectByName(node!);
+      if (!object) continue;
+      const from = saved.get(object)!;
+      if (property === "rotation") {
+       const target = new THREE.Quaternion().setFromEuler(new THREE.Euler(...value.map(v => THREE.MathUtils.degToRad(v)) as [number, number, number]));
+       object.quaternion.setFromEuler(from.rotation).slerp(target, weight);
+      } else if (property === "position") {
+       const target = bind.get(object)!.position.clone().add(new THREE.Vector3(...value));
+       object.position.copy(from.position).lerp(target, weight);
+      } else {
+       const target = bind.get(object)!.scale.clone().multiply(new THREE.Vector3(...value));
+       object.scale.copy(from.scale).lerp(target, weight);
+      }
+     }
+     const sample = measure(); result.world.union(sample.world); result.seated.union(sample.seated);
+    }
+   }
+   if (authored) {
+    for (const [object, transform] of bind) { object.position.copy(transform.position); object.quaternion.copy(transform.quaternion); object.scale.copy(transform.scale); }
+    const mixer = new THREE.AnimationMixer(scene);
+    const action = mixer.clipAction(authored);
+    action.setLoop(THREE.LoopOnce, 1); action.clampWhenFinished = true; action.play();
+    try {
+     const steps = Math.max(1, Math.ceil((end - start) * 60));
+     for (let i = 0; i <= steps; i++) {
+      mixer.setTime(start + (end - start) * i / steps);
+      const sample = measure(); result.world.union(sample.world); result.seated.union(sample.seated);
+     }
+    } finally { mixer.stopAllAction(); mixer.uncacheRoot(scene); }
+   }
+   return result;
+  } finally {
+   for (const [object, transform] of saved) { object.position.copy(transform.position); object.rotation.copy(transform.rotation); object.scale.copy(transform.scale); }
+   scene.updateMatrixWorld(true);
+   scene.traverse(object => { if (object instanceof THREE.SkinnedMesh) object.skeleton.update(); });
+  }
+ };
+}
+
+/** Fit both axes; perched bounds are hip-relative because the camera follows that anchor. */
+export function fitPoseCamera(camera: THREE.OrthographicCamera, bounds: PoseBounds, perched: boolean) {
+ const box = perched ? bounds.seated : bounds.world;
+ const center = box.getCenter(new THREE.Vector3());
+ const width = 240 - 2 * FRAME_MARGIN, height = 340 - 2 * FRAME_MARGIN;
+ const halfHeight = perched
+  ? Math.max(Math.abs(box.min.x), Math.abs(box.max.x)) * 340 / width
+  : (box.max.x - box.min.x) * 170 / width;
+ const vertical = perched
+  ? Math.max(box.max.y * 170 / (PERCH_SEAT_Y - FRAME_MARGIN), -box.min.y * 170 / (340 - PERCH_SEAT_Y - FRAME_MARGIN))
+  : (box.max.y - box.min.y) * 170 / height;
+ // Extra 8% protects interpolated rotations and sub-sample extrema, without per-frame zoom.
+ const half = Math.max(halfHeight, vertical, 0.1) * 1.08;
+ camera.left = -half * 240 / 340; camera.right = -camera.left;
+ camera.top = half; camera.bottom = -half;
+ camera.position.set(center.x, center.y, bounds.world.max.z + Math.max(half, box.max.z - box.min.z) * 4);
+ camera.lookAt(center.x, center.y, bounds.world.min.z);
+ camera.updateProjectionMatrix();
+ camera.updateMatrixWorld(true);
 }
 
 export const createRenderer: RendererFactory = async options => {
@@ -108,7 +218,7 @@ export const createRenderer: RendererFactory = async options => {
  let procedural: ProceduralClip | undefined;
  let phase = 0;
  let following: ProceduralClip | undefined;
- const framing = new WeakMap<THREE.Object3D, THREE.Box3>();
+ const framing = new WeakMap<THREE.Object3D, ReturnType<typeof createFramingSampler>>();
  const batteryApi = navigator as Navigator & { getBattery?: () => Promise<EventTarget & { charging: boolean }> };
  let batteryState: (EventTarget & { charging: boolean }) | undefined;
  const batteryChanged = () => { battery = batteryState?.charging === false; resume(); };
@@ -228,6 +338,7 @@ export const createRenderer: RendererFactory = async options => {
  try {
   const base = await parse(options.base);
   injectLegs(base.scene);
+  framing.set(base.scene, createFramingSampler(base.scene));
   players.set(base.scene, createPosePlayer(base.scene));
   cache.set("roja.glb", base);
   face = attachFace(base.scene);
@@ -251,6 +362,7 @@ export const createRenderer: RendererFactory = async options => {
      catch { name = "roja.glb"; gltf = cache.get(name); next = { model: name, clip: "Pensar" }; }
      if (!gltf) throw new Error("Missing base model");
      if (disposed) { if (name !== "roja.glb") release(gltf); return; }
+     framing.set(gltf.scene, createFramingSampler(gltf.scene));
      cache.set(name, gltf);
     }
     // Two models total: base fallback plus the visible alternate.
@@ -288,8 +400,9 @@ export const createRenderer: RendererFactory = async options => {
     else if (previousProcedural === "sentada" && procedural === "quieta") { procedural = "pararse"; following = "quieta"; }
     else if (procedural === "sorpresa") following = "triste";
     if (procedural && !following && !("loop" in clips[procedural])) following = "quieta";
-    if (procedural && player) { player.play(procedural); if (reduced) player.update(0.3); }
     const clip = !procedural ? next.clip ? gltf.animations.find(clip => clip.name === next.clip) : next.once ? gltf.animations[0] : undefined : undefined;
+    const bounds = framing.get(gltf.scene)!([...(procedural ? [procedural] : []), ...(following ? [following] : [])], clip, next.start, next.end);
+    if (procedural && player) { player.play(procedural); if (reduced) player.update(0.3); }
     // Alternate models are authored poses; don't animate an arbitrary clip.
     action = clip ? mixer.clipAction(clip) : undefined;
     if (action) {
@@ -299,19 +412,8 @@ export const createRenderer: RendererFactory = async options => {
      if (next.start) mixer.setTime(next.start);
     }
     gltf.scene.updateMatrixWorld(true);
-    // Stable bind-pose framing: changing a clip must not zoom/pan around its previous pose.
-    const box = framing.get(gltf.scene) ?? new THREE.Box3().setFromObject(gltf.scene);
-    framing.set(gltf.scene, box);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-
-    const extraRoom = procedural === "voltereta" ? 1.65 : procedural === "salto" ? 1.25 : 1;
-    const halfHeight = Math.max(size.y * 0.62, size.x * 0.62 * 340 / 240, 0.1) * extraRoom;
-    camera.left = -halfHeight * 240 / 340; camera.right = -camera.left;
-    camera.top = halfHeight; camera.bottom = -halfHeight;
-    camera.position.set(center.x, center.y, center.z + Math.max(size.z, halfHeight) * 4);
-    camera.lookAt(center);
-    camera.updateProjectionMatrix();
+    // A stable frame for the entire gesture and its following rest pose, never its first frame.
+    fitPoseCamera(camera, bounds, Boolean(next.perch));
     if (switched && !reduced) {
      options.canvas.classList.remove("capri3d-glitch");
      // Restart a short CSS-only glitch; it never moves the native window.
