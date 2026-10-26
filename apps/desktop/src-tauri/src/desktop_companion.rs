@@ -397,6 +397,12 @@ fn destination(
     let (x, y) = chosen.1.clamp_rect(x, y, current.width, current.height);
     Some((chosen.0.clone(), chosen.1, x, y))
 }
+// Stay in an allowed screen corner instead of covering the active conversation.
+fn safe_corner(prefs: &Preferences, monitors: &[Monitor], dot: &Client) -> Option<(i32, i32)> {
+    if prefs.pinned || !prefs.motion { return None; }
+    let (_, area, _, _) = destination(prefs, monitors, dot, false)?;
+    Some(area.clamp_rect(i32::MAX, i32::MAX, dot.width, dot.height))
+}
 fn pin_position(monitors: &[Monitor], monitor: &str, x: i32, y: i32) -> Option<PinPosition> {
     let m = monitors.iter().find(|m| m.name == monitor)?;
     Some(PinPosition {
@@ -1406,22 +1412,18 @@ impl Controller {
                 self.paint(true)?;
             }
         }
-        // Supplied verified editor geometry always wins. Failure to fit is not permission
-        // to move somewhere else. Only target-less typing cues use window metadata.
-        let fallback = request.target.is_none()
-            && matches!(request.kind, Kind::Typing | Kind::InputReady);
-        // Pinned companions never even query another target. Ongoing cues refresh this
-        // projection, so focus, resize and pane layout changes are revalidated each time.
-        let editor = if fallback && !self.state().pinned { focused_herdr_editor(request.pane_id.as_deref(), request.editor_geometry.as_ref()) } else { None };
-        let terminal_fallback = fallback && editor.is_none();
-        let placement = if editor.is_some() { Some(Placement::Perch) } else { request.placement };
-        let target = request.target.clone().or(editor)
-            .or_else(|| (terminal_fallback && !self.state().pinned).then(focused_terminal_target).flatten());
-        if let Some(target) = target.as_ref() {
-            let placed = self.contextual_move(target, placement, terminal_fallback)?;
-            if placed {
-                if let Some(cue) = self.inner.lock().unwrap().context.cue.as_mut() {
-                    cue.placement = if terminal_fallback { Some(Placement::Aside) } else { placement };
+        // Reactions stay at the screen edge; editor activity must not pull Capri over text.
+        let state = self.state();
+        if state.enabled && state.visible && !state.pinned && !state.paused && state.motion {
+            let dot = resolve(crate::platform::DOT_TITLE)?;
+            let corner = {
+                let i = self.inner.lock().unwrap();
+                safe_corner(&i.prefs, &i.monitors, &dot)
+            };
+            if let Some(to) = corner {
+                if (dot.x, dot.y) != to {
+                    // Teleport while hidden rather than crossing the chat on the way home.
+                    self.begin_path(&dot, to, true, false);
                 }
             }
         }
@@ -3324,6 +3326,19 @@ mod tests {
         let (name, _, x, y) = destination(&restored, &resized, &current, true).unwrap();
         assert_eq!((name.as_str(), x, y), ("DP-1", 1024, 300));
         assert!(destination(&restored, &resized[..1], &current, true).is_none());
+    }
+    #[test]
+    fn safe_corner_uses_allowed_monitor_and_respects_manual_placement() {
+        let monitors = two_monitors();
+        let dot = Client { monitor: 1, x: -1500, y: 400, width: 144, height: 204,
+            ..own_client(&serde_json::json!([fixture(8, "own", "0xabc")]), 8, "own").unwrap() };
+        let mut prefs = Preferences { motion: true, areas: vec![zone("eDP-1", true), zone("DP-1", false)], ..Preferences::default() };
+        let (_, area, _, _) = destination(&prefs, &monitors, &dot, false).unwrap();
+        assert_eq!(safe_corner(&prefs, &monitors, &dot), Some(area.clamp_rect(i32::MAX, i32::MAX, 144, 204)));
+        prefs.pinned = true;
+        assert_eq!(safe_corner(&prefs, &monitors, &dot), None);
+        prefs.pinned = false; prefs.motion = false;
+        assert_eq!(safe_corner(&prefs, &monitors, &dot), None);
     }
     #[test]
     fn idle_never_schedules_a_move() {
