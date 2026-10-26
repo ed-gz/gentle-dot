@@ -4,6 +4,7 @@ import "../session-mobile-controls.css";
 
 export function SessionWorkShelf({
 	mobile,
+	capriMobile = false,
 	open,
 	onToggle,
 	work,
@@ -11,6 +12,7 @@ export function SessionWorkShelf({
 	children,
 }: {
 	mobile: boolean;
+	capriMobile?: boolean;
 	open: boolean;
 	onToggle: () => void;
 	work?: AgentWork;
@@ -36,6 +38,9 @@ export function SessionWorkShelf({
 				</span>
 				<Chevron open={open} />
 			</button>
+			{capriMobile && !stale && work?.version === 1 && work.plan && work.plan.total > 0 ? (
+				<div className="capri-plan-progress"><progress aria-label="Progreso del plan" value={work.plan.completed} max={work.plan.total} /><span>{work.plan.completed}/{work.plan.total}</span></div>
+			) : null}
 			<div id={`${id}-content`} className="session-mobile-controls-content" hidden={!open}>
 				{children}
 			</div>

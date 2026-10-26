@@ -7,6 +7,7 @@ import { ModelPicker } from "./ModelPicker.tsx";
 import { RequestPresentationSetting } from "./RequestPresentation.tsx";
 import type { Send } from "./types.ts";
 import { UsageBadgeSettings } from "./UsageBadgeSettings.tsx";
+import { AccountsIcon, ConversationsIcon, SettingsIcon, SpeakerIcon, ProfilesIcon } from "./icons.tsx";
 
 interface PhoneSettingsSlots {
 	capri: ReactNode;
@@ -19,10 +20,18 @@ export function PhoneSettings({ capri, avisos, equipo }: PhoneSettingsSlots) {
 	return <>{capri}{avisos}{equipo}</>;
 }
 
-function Group({ title, children }: { title: string; children: ReactNode }) {
+const GROUP_PRESENTATION = {
+	Capri: { description: "Comportamiento y conversación", Icon: ConversationsIcon },
+	Avisos: { description: "Notificaciones y eventos", Icon: SpeakerIcon },
+	Personalización: { description: "Apariencia y gestos", Icon: ProfilesIcon },
+	"Cuenta y equipo": { description: "Vinculación y dispositivos", Icon: AccountsIcon },
+	Avanzado: { description: "Conexión y diagnóstico", Icon: SettingsIcon },
+};
+function Group({ title, children, capri }: { title: keyof typeof GROUP_PRESENTATION; children: ReactNode; capri: boolean }) {
+	const { description, Icon } = GROUP_PRESENTATION[title];
 	return (
-		<details className="mobile-settings-group">
-			<summary>{title}</summary>
+		<details className={`mobile-settings-group${capri ? " capri-settings-group" : ""}`}>
+			<summary>{capri ? <span className="capri-settings-icon" aria-hidden="true"><Icon /></span> : null}{title}{capri ? <><small>{description}</small><svg className="capri-settings-chevron" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg></> : null}</summary>
 			<div className="mobile-tool-list">{children}</div>
 		</details>
 	);
@@ -61,15 +70,15 @@ export function SettingsGroups({
 		? mobileControls.props : undefined;
 	return (
 		<>
-			<Group title="Capri">
+			<Group title="Capri" capri={controls.settings.mode === "capri"}>
 				<CompanionSettings controls={controls} />
 				{phone?.capri}
 			</Group>
-			<Group title="Avisos">
+			<Group title="Avisos" capri={controls.settings.mode === "capri"}>
 				{phone ? phone.avisos : mobileControls}
 				<RequestPresentationSetting />
 			</Group>
-			<Group title="Personalización">
+			<Group title="Personalización" capri={controls.settings.mode === "capri"}>
 				<section className="mobile-menu-model" aria-label="Modelo de IA">
 					<h3>Modelo</h3>
 					<ModelPicker models={state.models} send={send} dispatch={dispatch} disabled={!ready}
@@ -82,7 +91,7 @@ export function SettingsGroups({
 					</button>
 				) : null}
 			</Group>
-			<Group title="Cuenta y equipo">
+			<Group title="Cuenta y equipo" capri={controls.settings.mode === "capri"}>
 				<button type="button" onClick={openAccounts}>Cuentas de IA</button>
 				<button type="button" onClick={openProfiles}>Perfiles</button>
 				<button type="button" onClick={openConnectors}>
@@ -90,7 +99,7 @@ export function SettingsGroups({
 				</button>
 				{phone?.equipo}
 			</Group>
-			<Group title="Avanzado">
+			<Group title="Avanzado" capri={controls.settings.mode === "capri"}>
 				{usage ? (
 					<>
 						<button type="button" onClick={openUsage}>Consumo</button>

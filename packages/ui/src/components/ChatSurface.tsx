@@ -558,7 +558,7 @@ function ChatSurfaceView({
 					</button>
 					<button type="button" className="mobile-dot-tab" aria-pressed={chatVisible} onClick={closeOptions}>
 						<>{capri ? <CapriSprite pose="face" className="capri-header-sprite" /> : <RoseGlyph />}</>
-						<span>{capriPersona ? "Capri" : "Dot"}</span>
+						<span>{capri || capriPersona ? "Capri" : "Dot"}</span>
 					</button>
 					{orchestration ? (
 						<button
@@ -593,6 +593,12 @@ function ChatSurfaceView({
 						</button>
 					)}
 				</nav>
+			) : null}
+			{mobile && capri && chatVisible ? (
+				<div className="capri-connection-strip" role="status" data-connected={state.connection === "open"}>
+					<span aria-hidden="true" />
+					{state.connection === "open" ? "Equipo conectado" : statusText(state, true) ?? "Equipo sin conexión"}
+				</div>
 			) : null}
 			{!mobile ? (
 				<header className="chat-header" data-tauri-drag-region={variant === "panel" ? "" : undefined}>
@@ -861,6 +867,7 @@ function ChatSurfaceView({
 						<AgentVoiceContext value={{ state, send }}>
 							<OrchestrationPanel
 								mobile={mobile}
+								capriMobile={mobile && capri}
 								controls={agents}
 								client={orchestration}
 								active={agentsShown}
@@ -998,6 +1005,7 @@ function ChatSurfaceView({
 			) : null}
 
 			<FloatingNotices
+				capriMobile={mobile && capri}
 				notices={state.notices}
 				dismiss={dismiss}
 				mobile={mobile}
@@ -1051,6 +1059,7 @@ function ChatSurfaceView({
 				) : null}
 				{mobileDraft?.note ? <p className="voice-status" role="status">{mobileDraft.note}</p> : null}
 				<Composer
+					capriMobile={mobile && capri}
 					{...(mobileDraft ? { text: mobileDraft.text, onText: mobileDraft.onText,
 						temporaryAttachmentsNote: "Archivos temporales: vuelve a adjuntarlos si Android cierra la app." } : {})}
 					busy={isBusy(state.agentState)}

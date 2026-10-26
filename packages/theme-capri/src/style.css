@@ -652,3 +652,274 @@
 	margin: 0;
 	border: 0;
 }
+
+/* S36: phone presentation only. Gentle Dot and desktop retain their own layout.
+   No receipt/time is invented when the transport does not supply one. */
+.chat-mobile[data-companion="capri"] {
+	--capri-mobile-canvas: #0b1114;
+	--capri-mobile-surface: #121d22;
+	--capri-mobile-raised: #1b2a30;
+	--capri-mobile-user: #192b24;
+	--capri-mobile-lime: #bcf86a;
+	--capri-mobile-send: #ff3558;
+	--capri-mobile-code: #b6a5ff;
+	--capri-mobile-line: #34474e;
+	--capri-mobile-muted: #b0c4c2;
+	background: var(--capri-mobile-canvas);
+	color: var(--text);
+}
+.chat-mobile[data-companion="capri"] .mobile-top-nav {
+	gap: 4px;
+	padding: 6px 10px;
+	background: var(--capri-mobile-surface);
+	border-bottom: 1px solid var(--capri-mobile-line);
+}
+.chat-mobile[data-companion="capri"] .mobile-top-nav > button {
+	min-height: 52px;
+	border: 0;
+	border-radius: 18px;
+	color: var(--capri-mobile-muted);
+	background: transparent;
+	gap: 8px;
+	font-weight: 600;
+	transition: opacity 120ms ease;
+}
+.chat-mobile[data-companion="capri"] .mobile-top-nav > button[aria-pressed="true"] {
+	background: color-mix(in srgb, var(--capri-mobile-lime) 9%, var(--capri-mobile-surface));
+	color: var(--capri-mobile-lime);
+}
+.chat-mobile[data-companion="capri"] .capri-header-sprite {
+	width: 30px;
+	height: 30px;
+	flex-shrink: 0;
+}
+.chat-mobile[data-companion="capri"] .capri-connection-strip {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 18px;
+	color: var(--capri-mobile-muted);
+	border-bottom: 1px solid var(--capri-mobile-line);
+	font-size: 14px;
+}
+.chat-mobile[data-companion="capri"] .capri-connection-strip > span {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	background: var(--yellow);
+	flex-shrink: 0;
+}
+.chat-mobile[data-companion="capri"] .capri-connection-strip[data-connected="true"] > span {
+	background: var(--capri-mobile-lime);
+}
+.chat-mobile[data-companion="capri"] :is(.message, .agent-message) {
+	max-width: 90%;
+	width: fit-content;
+	padding: 14px 16px;
+	border: 1px solid var(--capri-mobile-line);
+	border-radius: 18px;
+	font-size: var(--chat-font-size, 16px);
+	line-height: 1.55;
+	box-shadow: none;
+	background: var(--capri-mobile-surface);
+}
+.chat-mobile[data-companion="capri"] :is(.message-user, .agent-message-user) {
+	margin-left: auto;
+	background: var(--capri-mobile-user);
+	border-bottom-right-radius: 8px;
+	color: var(--text);
+}
+.chat-mobile[data-companion="capri"] :is(.message-assistant, .agent-message-assistant) {
+	margin-right: auto;
+	border-bottom-left-radius: 8px;
+	background: var(--capri-mobile-raised);
+}
+.chat-mobile[data-companion="capri"][data-chat-theme] .message .message-body {
+	padding: 0;
+	max-width: none;
+	border: 0;
+	background: transparent;
+	text-align: left;
+}
+.chat-mobile[data-companion="capri"] :is(.message-body, .agent-message-content) :not(pre) > code {
+	padding: 2px 6px;
+	border-radius: 6px;
+	border: 1px solid var(--capri-mobile-line);
+	background: var(--capri-mobile-surface);
+	color: var(--capri-mobile-code);
+	overflow-wrap: anywhere;
+}
+.chat-mobile[data-companion="capri"] .chat-composer {
+	padding: 8px 12px max(10px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+	background: var(--capri-mobile-canvas);
+	border: 0;
+}
+.chat-mobile[data-companion="capri"] .composer {
+	gap: 8px;
+	padding: 6px;
+	border-radius: 20px;
+	border: 1px solid var(--capri-mobile-line);
+	background: var(--capri-mobile-surface);
+}
+.chat-mobile[data-companion="capri"] .composer textarea {
+	min-width: 0;
+	padding: 12px 0;
+	border: 0;
+	background: transparent;
+	color: var(--text);
+	font-size: 16px;
+}
+.chat-mobile[data-companion="capri"] :is(.composer-attach, .composer-mic, .composer-send) {
+	min-width: 48px;
+	min-height: 48px;
+	width: 48px;
+	height: 48px;
+	flex-shrink: 0;
+	border: 0;
+	color: var(--capri-mobile-muted);
+	background: transparent;
+}
+.chat-mobile[data-companion="capri"] .composer-send {
+	border-radius: 50%;
+	background: var(--capri-mobile-send);
+	color: #fff;
+}
+.chat-mobile[data-companion="capri"] .composer-stop {
+	background: var(--capri-mobile-raised);
+	color: var(--capri-mobile-lime);
+}
+.chat-mobile[data-companion="capri"] .composer-send:disabled { opacity: .5; }
+.chat-mobile[data-companion="capri"] :is(button, summary):active { opacity: .75; }
+.chat-mobile[data-companion="capri"] :is(button, summary, textarea, input):focus-visible {
+	outline: 1px solid var(--text);
+	outline-offset: 3px;
+}
+.chat-mobile[data-companion="capri"] .orchestration { padding: 16px 12px; }
+.chat-mobile[data-companion="capri"] :is(.orchestration-heading h2, .mobile-settings-heading h2) {
+	font-size: clamp(26px, 7vw, 32px);
+	letter-spacing: -.025em;
+	margin: 8px 0 16px;
+}
+.chat-mobile[data-companion="capri"] .capri-session-group {
+	margin: 16px 0;
+	border: 0;
+}
+.chat-mobile[data-companion="capri"] .capri-session-group > summary {
+	min-height: 48px;
+	display: flex;
+	align-items: center;
+	padding: 8px 12px;
+	gap: 10px;
+	border-radius: 12px;
+	background: var(--capri-mobile-surface);
+	border: 1px solid var(--capri-mobile-line);
+	font-size: 17px;
+	font-weight: 650;
+	list-style: none;
+	cursor: pointer;
+}
+.chat-mobile[data-companion="capri"] .capri-session-group > summary::before {
+	content: "";
+	width: 9px;
+	height: 9px;
+	border: 2px solid var(--capri-mobile-lime);
+	border-radius: 50%;
+}
+.chat-mobile[data-companion="capri"] .capri-session-group:first-child > summary::before { background: var(--capri-mobile-lime); }
+.chat-mobile[data-companion="capri"] .capri-session-group > summary::after {
+	content: "";
+	width: 8px;
+	height: 8px;
+	border-right: 2px solid var(--capri-mobile-muted);
+	border-bottom: 2px solid var(--capri-mobile-muted);
+	transform: rotate(45deg);
+	margin-left: auto;
+}
+.chat-mobile[data-companion="capri"] .capri-session-group[open] > summary::after { transform: rotate(225deg); }
+.chat-mobile[data-companion="capri"] summary::-webkit-details-marker { display: none; }
+.chat-mobile[data-companion="capri"] .agent-sessions { gap: 0; }
+.chat-mobile[data-companion="capri"] .agent-session-row {
+	padding: 16px 0;
+	border-bottom: 1px solid var(--capri-mobile-line);
+	align-items: start;
+}
+.chat-mobile[data-companion="capri"] .agent-session {
+	display: grid;
+	grid-template-columns: 40px minmax(0, 1fr);
+	gap: 4px 12px;
+	border: 0;
+	border-radius: 0;
+	padding: 0;
+	background: transparent;
+	text-align: left;
+}
+.chat-mobile[data-companion="capri"] .capri-session-type {
+	grid-row: 1 / 4;
+	display: grid;
+	place-items: center;
+	width: 40px;
+	height: 44px;
+	border: 1px solid var(--capri-mobile-line);
+	border-radius: 12px;
+	background: var(--capri-mobile-surface);
+	color: var(--capri-mobile-lime);
+}
+.chat-mobile[data-companion="capri"] :is(.agent-session-top, .capri-session-project, .agent-preview) { grid-column: 2; min-width: 0; }
+.chat-mobile[data-companion="capri"] .agent-session-top { flex-wrap: wrap; gap: 4px 10px; }
+.chat-mobile[data-companion="capri"] .agent-session-top strong { font-size: 16px; overflow-wrap: anywhere; }
+.chat-mobile[data-companion="capri"] :is(.capri-session-project, .agent-preview) { color: var(--capri-mobile-muted); font-size: 14px; }
+.chat-mobile[data-companion="capri"] .agent-session-state { color: var(--capri-mobile-lime); font-size: 12px; }
+.chat-mobile[data-companion="capri"] .capri-settings-group { border: 0; border-bottom: 1px solid var(--capri-mobile-line); border-radius: 0; background: transparent; }
+.chat-mobile[data-companion="capri"] .capri-settings-group > summary {
+	display: grid;
+	grid-template-columns: 36px minmax(0, 1fr) 24px;
+	gap: 4px 12px;
+	align-items: center;
+	padding: 22px 8px;
+	min-height: 88px;
+	list-style: none;
+	font-size: 18px;
+}
+.chat-mobile[data-companion="capri"] .capri-settings-group > summary::after { display: none; }
+.chat-mobile[data-companion="capri"] .capri-settings-icon { grid-column: 1; grid-row: 1 / 3; color: var(--capri-mobile-muted); }
+.chat-mobile[data-companion="capri"] .capri-settings-icon svg { width: 28px; height: 28px; }
+.chat-mobile[data-companion="capri"] .capri-settings-group > summary small { grid-column: 2; font-size: 14px; font-weight: 400; color: var(--capri-mobile-muted); }
+.chat-mobile[data-companion="capri"] .capri-settings-chevron { grid-column: 3; grid-row: 1 / 3; color: var(--capri-mobile-muted); }
+.chat-mobile[data-companion="capri"] .capri-settings-group[open] .capri-settings-chevron { transform: rotate(90deg); }
+.chat-mobile[data-companion="capri"] :is(.session-mobile-controls, .agent-detail-navigation) { border-bottom: 1px solid var(--capri-mobile-line); background: transparent; }
+.chat-mobile[data-companion="capri"] .capri-plan-progress { display: flex; gap: 12px; align-items: center; padding: 0 14px 14px; color: var(--capri-mobile-muted); }
+.chat-mobile[data-companion="capri"] progress { accent-color: var(--capri-mobile-lime); height: 8px; border: 0; border-radius: 8px; overflow: hidden; }
+.chat-mobile[data-companion="capri"] .capri-plan-progress progress { flex: 1; width: 0; }
+.chat-mobile[data-companion="capri"] progress::-webkit-progress-bar { background: var(--capri-mobile-raised); }
+.chat-mobile[data-companion="capri"] progress::-webkit-progress-value { background: var(--capri-mobile-lime); border-radius: 8px; }
+.chat-mobile[data-companion="capri"] progress::-moz-progress-bar { background: var(--capri-mobile-lime); }
+.chat-mobile[data-companion="capri"] :is(.capri-current-step, .agent-workflow, .agent-plan, .session-turn-work) {
+	border: 1px solid var(--capri-mobile-line);
+	border-radius: 14px;
+	background: var(--capri-mobile-surface);
+	overflow: hidden;
+}
+.chat-mobile[data-companion="capri"] .capri-current-step { padding: 16px; }
+.chat-mobile[data-companion="capri"] .capri-current-step > small { display: block; color: var(--capri-mobile-muted); letter-spacing: .08em; font-size: 12px; }
+.chat-mobile[data-companion="capri"] .capri-current-step > strong { display: block; font-size: 20px; margin-top: 6px; }
+.chat-mobile[data-companion="capri"] .capri-current-step ul { list-style: none; padding: 0; margin: 12px 0 0; }
+.chat-mobile[data-companion="capri"] .capri-current-step li { display: flex; gap: 10px; padding: 6px 0; }
+.chat-mobile[data-companion="capri"] .capri-current-step li > span { color: var(--capri-mobile-lime); }
+.chat-mobile[data-companion="capri"] :is(.agent-work-list, .session-turn-work) { margin-top: 8px; }
+.chat-mobile[data-companion="capri"] :is(.agent-command-list > li, .session-turn-action) { margin-left: 16px; padding-left: 16px; border-left: 1px solid var(--capri-mobile-line); position: relative; }
+.chat-mobile[data-companion="capri"] .agent-command-list > li::before { content: ""; position: absolute; left: -5px; top: 18px; width: 8px; height: 8px; border-radius: 50%; background: var(--capri-mobile-muted); }
+.chat-mobile[data-companion="capri"] .agent-command-list > li:has(.agent-work-state-completed)::before { background: var(--capri-mobile-lime); }
+.chat-mobile[data-companion="capri"] .session-delivery-trigger { min-height: 48px; padding: 12px 16px; border-block: 1px solid var(--capri-mobile-line); background: transparent; }
+.chat-mobile[data-companion="capri"] .floating-notice { background: var(--capri-mobile-surface); border: 1px solid var(--capri-mobile-line); border-radius: 14px; box-shadow: none; }
+.chat-mobile[data-companion="capri"] .floating-notice-open { display: flex; align-items: center; gap: 12px; min-height: 48px; }
+.chat-mobile[data-companion="capri"] .capri-notice-action { flex-shrink: 0; border: 1px solid var(--capri-mobile-line); border-radius: 10px; padding: 10px; color: var(--text); font-size: 13px; }
+.chat-mobile[data-companion="capri"] .agent-work-item-heading time { color: var(--capri-mobile-muted); font-size: 12px; margin-left: auto; white-space: nowrap; }
+.chat-mobile[data-companion="capri"] .capri-command-output summary { min-height: 48px; display: flex; align-items: center; padding: 8px 0; color: var(--text); }
+.chat-mobile[data-companion="capri"] .capri-command-output pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; color: var(--capri-mobile-muted); }
+@media (max-width: 380px) {
+	.chat-mobile[data-companion="capri"] .mobile-top-nav > button { gap: 5px; font-size: 13px; }
+	.chat-mobile[data-companion="capri"] .capri-notice-action { flex-shrink: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.chat-mobile[data-companion="capri"] *, .chat-mobile[data-companion="capri"] *::before, .chat-mobile[data-companion="capri"] *::after { animation: none !important; transition: none !important; }
+}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AgentConversation, AgentSession, OrchestrationClient } from "../orchestration.ts";
 import type { OrchestrationControls } from "../useOrchestration.ts";
 import { reconcileDeliveries, restoreDeliveries, persistDeliveries, type OutgoingMessage } from "../session-delivery.ts";
@@ -40,6 +40,7 @@ export function OrchestrationPanel({
 	client,
 	active = true,
 	mobile = false,
+	capriMobile = false,
 	requestsVisible = true,
 	onVisibleSession,
 	requestedSession,
@@ -48,6 +49,7 @@ export function OrchestrationPanel({
 	client: OrchestrationClient;
 	active?: boolean;
 	mobile?: boolean;
+	capriMobile?: boolean;
 	requestsVisible?: boolean;
 	onVisibleSession?(identity: { paneId: string; sessionId?: string } | undefined): void;
 	requestedSession?: { paneId: string; sessionId?: string; key: number };
@@ -312,7 +314,7 @@ export function OrchestrationPanel({
 
 	const selectedView = session ? (
 		<section className="agent-detail" aria-label={`Sesión ${session.label}`}>
-			<SessionWorkShelf mobile={mobile} open={mobileDisclosure === "work"}
+			<SessionWorkShelf mobile={mobile} capriMobile={mobile && capriMobile} open={mobileDisclosure === "work"}
 				onToggle={() => setMobileDisclosure(current => current === "work" ? undefined : "work")}
 				work={conversation?.work} stale={Boolean(conversationError) || !connected || !session.connected}>
 				<TerminalMoodControl client={client.terminalMood} paneId={session.paneId} sessionId={session.sessionId}
@@ -325,6 +327,7 @@ export function OrchestrationPanel({
 					active={active}
 				/>
 				<AgentWorkflow
+					capriMobile={mobile && capriMobile}
 					key={`${session.paneId}:${session.sessionId ?? ""}`}
 					work={conversation?.work}
 					stale={Boolean(conversationError) || !connected || !session.connected}
@@ -632,8 +635,8 @@ export function OrchestrationPanel({
 						No hay sesiones activas. Puedes pedir a Dot que inicie una desde el chat.
 					</p>
 				) : null}
-				<div className="agent-sessions">
-					{activeSessions.map((entry) => (
+				<SessionGroups sessions={activeSessions} enabled={mobile && capriMobile}>
+					{(entry) => (
 						<div className="agent-session-row" key={`${entry.paneId}:${entry.sessionId}`}>
 						<button
 							type="button"
@@ -642,10 +645,12 @@ export function OrchestrationPanel({
 							aria-pressed={selected === entry.paneId}
 							onClick={() => setSelected(selected === entry.paneId ? undefined : entry.paneId)}
 						>
+							{mobile && capriMobile ? <span className="capri-session-type" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m5 6 6 6-6 6m8 0h6" /></svg></span> : null}
 							<span className="agent-session-top">
 								<strong>{entry.label || "Sesión sin nombre"}</strong>
 								<span className="agent-session-state">{entry.connected && entry.state === "working" ? <span className="session-working-dot" aria-hidden="true" /> : null}<SessionStatus session={entry} /><span aria-hidden="true">{entry.connected ? STATES[entry.state] : "Sin conexión"}</span></span>
 							</span>
+							{mobile && capriMobile && entry.cwd ? <span className="capri-session-project">{entry.provider ? PROVIDERS[entry.provider] : "TI"} · {entry.cwd.split("/").filter(Boolean).at(-1)}</span> : null}
 							<span className="agent-preview">
 								{entry.lastMessage ||
 									((entry.capabilities?.prompt ?? entry.managed) ? "Abre la conversación" : "Sólo lectura")}
@@ -653,11 +658,28 @@ export function OrchestrationPanel({
 						</button>
 						<SessionMenu session={entry} controls={controls} connected={connected} active={active} onClosed={() => setSelected(undefined)} />
 						</div>
-					))}
-				</div>
+					)}
+				</SessionGroups>
 			</section>
 		</section>
 	);
+}
+
+/** Grouping is a projection of the existing sorted list, never another session store. */
+function SessionGroups({ sessions, enabled, children }: {
+	sessions: AgentSession[];
+	enabled: boolean;
+	children: (session: AgentSession) => ReactNode;
+}) {
+	if (!enabled) return <div className="agent-sessions">{sessions.map(children)}</div>;
+	const ongoing = (session: AgentSession) => session.state === "working" || session.state === "blocked";
+	return <div className="capri-session-groups">{[
+		{ title: "En curso", entries: sessions.filter(ongoing) },
+		{ title: "Disponibles", entries: sessions.filter(session => !ongoing(session)) },
+	].map(group => <details className="capri-session-group" key={group.title} open>
+		<summary>{group.title} · {group.entries.length}</summary>
+		<div className="agent-sessions">{group.entries.map(children)}</div>
+	</details>)}</div>;
 }
 
 function mergeMessages(earlier: AgentConversation["messages"], later: AgentConversation["messages"]) {

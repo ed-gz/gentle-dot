@@ -65,6 +65,7 @@ export function FloatingNotices({
 	notices,
 	dismiss,
 	mobile,
+	capriMobile = false,
 	chatVisible = false,
 	visibleSession,
 	onOpenSession,
@@ -72,6 +73,7 @@ export function FloatingNotices({
 	notices: Notice[];
 	dismiss(id: number): void;
 	mobile: boolean;
+	capriMobile?: boolean;
 	chatVisible?: boolean;
 	visibleSession?: NoticeSession | undefined;
 	onOpenSession?: (session: NoticeSession) => void;
@@ -191,6 +193,7 @@ export function FloatingNotices({
 		<div className={`floating-notices${mobile ? " floating-notices-mobile" : ""}`}>
 			<NoticePopup
 				mobile={mobile}
+				capriMobile={mobile && capriMobile}
 				key={notice.key}
 				title={notice.event ? (COMPACT_TITLES[notice.event] ?? notice.title) : notice.title}
 				message={notice.event && GENERIC_COPY.has(notice.message) ? "" : notice.message}
@@ -215,6 +218,7 @@ function NoticePopup({
 	message,
 	close,
 	mobile,
+	capriMobile,
 	event,
 	level,
 	open,
@@ -223,6 +227,7 @@ function NoticePopup({
 	message: string;
 	close(): void;
 	mobile: boolean;
+	capriMobile: boolean;
 	event?: NotificationEvent | undefined;
 	level: Notice["level"];
 	open?: (() => void) | undefined;
@@ -313,6 +318,7 @@ function NoticePopup({
 					aria-label={`${title ?? "Aviso"} · Abrir sesión`}
 				>
 					{copy}
+					{capriMobile ? <span className="capri-notice-action">Ver sesión <span aria-hidden="true">→</span></span> : null}
 				</button>
 			) : (
 				copy

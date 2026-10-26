@@ -21,6 +21,8 @@ interface ComposerProps {
 	attachments?: AttachmentControls;
 	/** Compact phone copy; desktop keeps its existing labels and behavior. */
 	mobile?: boolean;
+	/** Presentation only; never changes delivery or keyboard policy. */
+	capriMobile?: boolean;
 	temporaryAttachmentsNote?: string;
 	/** Optional acknowledged, controlled input; the default Dot transport is unchanged. */
 	text?: string;
@@ -39,6 +41,7 @@ export function Composer({
 	voice,
 	attachments,
 	mobile = false,
+	capriMobile = false,
 	temporaryAttachmentsNote,
 	text: controlledText,
 	onText,
@@ -246,7 +249,7 @@ export function Composer({
 						placeholder={
 							busy
 								? copy("Add to what I'm doing…", "Añade una indicación…")
-								: copy("Ask me anything…", "Escribe un mensaje…")
+								: capriMobile ? "Escribe a Capri…" : copy("Ask me anything…", "Escribe un mensaje…")
 						}
 						enterKeyHint={newlineOnEnter ? "enter" : "send"}
 						rows={1}

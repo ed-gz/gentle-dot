@@ -9,7 +9,9 @@ export function AgentWorkflow({
 	work,
 	stale = false,
 	onInspect,
+	capriMobile = false,
 }: {
+	capriMobile?: boolean;
 	work?: AgentWork;
 	stale?: boolean;
 	onInspect?: () => void;
@@ -20,6 +22,8 @@ export function AgentWorkflow({
 		: (current?.agents.filter((agent) => agent.source === "live" && ACTIVE.has(agent.status)) ?? []);
 	const plan = current?.plan;
 	const commands = current?.commands ?? [];
+	const step = !stale && plan?.source === "live" ? plan.tasks.find(task => task.status === "in_progress") : undefined;
+	const stepIndex = step && plan ? plan.tasks.indexOf(step) + 1 : 0;
 	const running = stale ? 0 : commands.filter(command => command.status === "running" && command.source === "live").length;
 	const currentCommand = stale ? undefined : commands.findLast(command => command.status === "running" && command.source === "live");
 	const shelf = useRef<HTMLDivElement>(null);
@@ -36,13 +40,19 @@ export function AgentWorkflow({
 	}, [agents.length]);
 	return (
 		<div ref={shelf} className="agent-work-shelf">
+			{capriMobile && step && plan ? <section className="capri-current-step" aria-label="Paso actual">
+				<small>PASO {stepIndex} DE {plan.total}</small>
+				<strong>{step.title}</strong>
+				{step.note ? <p>{step.note}</p> : null}
+				<ul>{plan.tasks.filter(task => task.status === "done").map(task => <li key={task.id}><span aria-hidden="true">✓</span>{task.title}</li>)}</ul>
+			</section> : null}
 			{plan ? <AgentPlan plan={plan} stale={stale} onInspect={onInspect} /> : null}
 			{commands.length ? (
 				<details className="agent-workflow agent-command-workflow" onToggle={event => {
 					if (event.target === event.currentTarget && event.currentTarget.open) onInspect?.();
 				}}>
 					<summary>
-						<span className="agent-work-summary">Comandos y herramientas</span>
+						<span className="agent-work-summary">{capriMobile ? `${commands.length} acciones registradas` : "Comandos y herramientas"}</span>
 						<span className="agent-work-active">{stale ? "Sin actualizar" : running ? `${running} en ejecución` : `${commands.length} recientes`}</span>
 						{currentCommand ? <code className="agent-command-current">{currentCommand.label}</code> : null}
 					</summary>
@@ -51,10 +61,12 @@ export function AgentWorkflow({
 							<li key={command.id}>
 								<div className="agent-work-item-heading">
 									<code>{command.label}</code>
+									{capriMobile && command.finishedAt && Number.isFinite(Date.parse(command.finishedAt)) ? <time dateTime={command.finishedAt}>{new Date(command.finishedAt).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })}</time> : null}
 									<span className={`agent-work-state agent-work-state-${command.status}`}>
 										{stale && command.status === "running" ? "Sin estado actual" : command.status === "running" && command.source === "live" ? "Ejecutando" : command.status === "completed" ? "Completado" : command.status === "failed" ? "Falló" : "Sin confirmar"}
 									</span>
 								</div>
+								{capriMobile && command.output ? <details className="capri-command-output"><summary>Ver salida completa</summary><pre>{command.output}</pre>{command.outputTruncated ? <small>Salida parcial</small> : null}</details> : null}
 							</li>
 							))}
 					</ul>
