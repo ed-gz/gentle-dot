@@ -63,12 +63,8 @@ public class CompanionSpriteViewTest {
         }
         assertTrue("Capri's magenta silhouette, never the Gentle dot",pink>200);
     }
-    private java.io.InputStream twoD(String path) throws IOException {
-        if(path.contains("capri-3d-"))throw new IOException("2D regression fixture");
-        return context.getAssets().open(path);
-    }
     @Test public void packagedManifestAndPngRenderEveryNativeActionWithAlpha() {
-        CompanionSpriteView view=new CompanionSpriteView(context,this::twoD);
+        CompanionSpriteView view=new CompanionSpriteView(context);
         assertTrue(view.theme("capri").ready);
         assertEquals("capri",view.renderState().appliedTheme);
         for(String action:new String[]{"idle","walk","greeting","working","file-away","perch","step-aside","crying","follow-message","curious","attentive","eyes","duo-high-five"}) {
@@ -82,7 +78,7 @@ public class CompanionSpriteViewTest {
         view.release();
     }
     @Test public void packagedAnimationActuallyAdvancesAndGentleCanBeRestored() {
-        CompanionSpriteView view=new CompanionSpriteView(context,this::twoD);view.theme("capri");attach(view);view.active(true);view.play("working");
+        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");attach(view);view.active(true);view.play("working");
         Bitmap first=draw(view);
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200));
         Bitmap next=draw(view);assertFalse("Two distinct atlas frames",first.sameAs(next));assertCapri(next);
@@ -90,7 +86,7 @@ public class CompanionSpriteViewTest {
         Bitmap gentle=draw(view);assertEquals(Color.rgb(184,154,228),gentle.getPixel(112,112));view.release();
     }
     @Test public void sustainedWorkIsVisiblyDifferentFromIdleAndKeepsAnimating() {
-        CompanionSpriteView view=new CompanionSpriteView(context,this::twoD);view.theme("capri");attach(view);view.active(true);
+        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");attach(view);view.active(true);
         Bitmap idle=draw(view);view.sustain("working");Bitmap working=draw(view);
         int changed=0;for(int y=0;y<224;y++)for(int x=0;x<224;x++)if(idle.getPixel(x,y)!=working.getPixel(x,y))changed++;
         assertTrue("Working is not a subtly altered idle pose",changed>5000);
@@ -100,7 +96,7 @@ public class CompanionSpriteViewTest {
     }
     @Test public void missingOptionalActionReturnsToCapriIdle() {
         CompanionSpriteView view=new CompanionSpriteView(context,path->{
-            if(path.contains("actions"))throw new IOException("missing optional atlas");return twoD(path);
+            if(path.contains("actions"))throw new IOException("missing optional atlas");return context.getAssets().open(path);
         });
         view.theme("capri");Bitmap idle=draw(view);view.play("file-away");
         assertTrue(view.renderState().ready);assertEquals("capri",view.renderState().appliedTheme);assertNull(view.renderState().error);
@@ -115,15 +111,15 @@ public class CompanionSpriteViewTest {
     @Test public void undecodableAtlasFailsButExplicitRetryRecovers() {
         AtomicBoolean missing=new AtomicBoolean(true);
         CompanionSpriteView view=new CompanionSpriteView(context,path->{
-            if(missing.get()&&path.endsWith(".png"))return new ByteArrayInputStream(new byte[]{1,2,3});return twoD(path);
+            if(missing.get()&&path.endsWith(".png"))return new ByteArrayInputStream(new byte[]{1,2,3});return context.getAssets().open(path);
         });
         assertFalse(view.theme("capri").ready);assertNotNull(view.renderState().error);assertEquals(0,colored(draw(view)));
         missing.set(false);assertTrue(view.theme("capri").ready);assertNull(view.renderState().error);assertCapri(draw(view));view.release();
     }
     @Test public void malformedLaterFrameIsRejectedBeforeCapriCanBeConfirmed() {
         CompanionSpriteView view=new CompanionSpriteView(context,path->{
-            if(!path.endsWith(".json"))return twoD(path);
-            try(java.io.InputStream input=twoD(path)) {
+            if(!path.endsWith(".json"))return context.getAssets().open(path);
+            try(java.io.InputStream input=context.getAssets().open(path)) {
                 org.json.JSONObject manifest=new org.json.JSONObject(new String(input.readAllBytes(),StandardCharsets.UTF_8));
                 manifest.getJSONObject("animations").getJSONObject("idle").getJSONArray("frames").getJSONObject(2).put("x",1536);
                 return new ByteArrayInputStream(manifest.toString().getBytes(StandardCharsets.UTF_8));
@@ -132,7 +128,7 @@ public class CompanionSpriteViewTest {
         assertFalse(view.theme("capri").ready);assertNotNull(view.renderState().error);assertEquals(0,colored(draw(view)));view.release();
     }
     @Test public void manifestReadDoesNotDependOnAvailable() {
-        CompanionSpriteView view=new CompanionSpriteView(context,path->new java.io.FilterInputStream(twoD(path)) {
+        CompanionSpriteView view=new CompanionSpriteView(context,path->new java.io.FilterInputStream(context.getAssets().open(path)) {
             @Override public int available() { return 0; }
             @Override public int read(byte[] bytes,int offset,int length) throws IOException { return super.read(bytes,offset,Math.min(length,13)); }
         });
@@ -140,7 +136,7 @@ public class CompanionSpriteViewTest {
     }
     @Test public void idleKeepsBlinkingAcrossCyclesWithoutReloadingAssets() {
         AtomicInteger opens=new AtomicInteger();
-        CompanionSpriteView view=new CompanionSpriteView(context,path->{opens.incrementAndGet();return twoD(path);});
+        CompanionSpriteView view=new CompanionSpriteView(context,path->{opens.incrementAndGet();return context.getAssets().open(path);});
         view.theme("capri");attach(view);view.active(true);
         int loaded=opens.get();Bitmap first=draw(view);
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(3650));
@@ -162,7 +158,7 @@ public class CompanionSpriteViewTest {
         assertEquals("Idle reuses decoded bitmap and frames",loaded,opens.get());view.release();
     }
     @Test public void detachStopsTicksAndReattachRestoresThemWithoutAnotherActiveToggle() {
-        CompanionSpriteView view=new CompanionSpriteView(context,this::twoD);view.theme("capri");attach(view);view.active(true);view.play("working");
+        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");attach(view);view.active(true);view.play("working");
         container.removeView(view);Bitmap detached=draw(view);
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(20));
         assertTrue("No animation while detached",detached.sameAs(draw(view)));
@@ -171,7 +167,7 @@ public class CompanionSpriteViewTest {
         assertFalse("Reattachment restores an already-enabled clock",detached.sameAs(draw(view)));view.release();
     }
     @Test public void repeatedRefreshesDoNotDuplicateOrStarveTheFrameClock() {
-        CompanionSpriteView observed=new CompanionSpriteView(context,this::twoD),reference=new CompanionSpriteView(context,this::twoD);
+        CompanionSpriteView observed=new CompanionSpriteView(context),reference=new CompanionSpriteView(context);
         observed.theme("capri");reference.theme("capri");attach(observed);attach(reference);observed.active(true);reference.active(true);
         Bitmap first=draw(observed);
         for(int interval=0;interval<54;interval++) {
@@ -182,7 +178,7 @@ public class CompanionSpriteViewTest {
         assertFalse("Both clocks advanced after repeated refresh",first.sameAs(draw(observed)));observed.release();reference.release();
     }
     @Test public void activeRefreshRepairsAMissingTickWithoutASeparatePollingWatchdog() throws Exception {
-        CompanionSpriteView view=new CompanionSpriteView(context,this::twoD);view.theme("capri");attach(view);view.active(true);view.play("working");
+        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");attach(view);view.active(true);view.play("working");
         java.lang.reflect.Field handler=CompanionSpriteView.class.getDeclaredField("handler");handler.setAccessible(true);
         ((android.os.Handler)handler.get(view)).removeCallbacksAndMessages(null);
         Bitmap first=draw(view);view.active(true);
@@ -190,7 +186,7 @@ public class CompanionSpriteViewTest {
         assertFalse("An active refresh repairs a cleared callback",first.sameAs(draw(view)));view.release();
     }
     @Test public void pauseHoldsThePoseAndResumeRestartsExactlyOneIdleCycle() {
-        CompanionSpriteView view=new CompanionSpriteView(context,this::twoD);view.theme("capri");attach(view);view.active(true);view.play("working");
+        CompanionSpriteView view=new CompanionSpriteView(context);view.theme("capri");attach(view);view.active(true);view.play("working");
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200));view.active(false);Bitmap paused=draw(view);
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(1));assertTrue(paused.sameAs(draw(view)));
         view.active(true);Bitmap resumed=draw(view);

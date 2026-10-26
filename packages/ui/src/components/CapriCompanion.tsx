@@ -11,7 +11,6 @@ import { capriBehavior, CAPRI_OUTCOME_MS, type CapriActionKind } from "@gentle-d
 import { sceneCaption } from "../capri-scenes.ts";
 import { CapriAnimatedSprite } from "./CapriAnimatedSprite.tsx";
 import { CompanionSpaceEditor } from "./CompanionSpaceEditor.tsx";
-import { MobileAtlas } from "../capri3d/MobileAtlas.tsx";
 
 export { CAPRI_POSES, type CapriPose } from "../capri-art.ts";
 
@@ -527,15 +526,11 @@ export function CapriCompanion({
 						settings.minimized ? controls.change({ minimized: false }) : setMenu((value) => !value)
 					}
 				>
-					<MobileAtlas
-						behavior={behavior}
+					<CapriSprite
+						pose={settings.minimized || floating.compact ? "eyes" : pose}
+						animated
 						playing={alive && !floating.dragging}
-						fallback={<CapriSprite
-							pose={settings.minimized || floating.compact ? "eyes" : pose}
-							animated
-							playing={alive && !floating.dragging}
-							walking={floating.travelling && !compact && !face && !duo && !attention}
-						/>}
+						walking={floating.travelling && !compact && !face && !duo && !attention}
 					/>
 				</button>
 				<span id={descriptionId} className="capri-sr-only">
