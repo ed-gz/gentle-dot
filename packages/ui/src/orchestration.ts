@@ -244,6 +244,8 @@ export interface AgentConversation {
 	status: "idle" | "working" | "waiting";
 	messages: {
 		id: string;
+		clientMessageId?: string;
+		deliveryId?: string;
 		role: "user" | "assistant" | "tool" | "system";
 		timestamp?: string;
 		isError?: boolean;

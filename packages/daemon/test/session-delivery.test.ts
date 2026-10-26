@@ -40,6 +40,7 @@ it("carries stable delivery IDs through the native socket, steers once, and conf
 	const directory = await mkdtemp(join(tmpdir(), "dot-delivery-"));
 	const handlers = new Map<string, (event: unknown, context: ExtensionContext) => void | Promise<void>>();
 	const sendUserMessage = vi.fn();
+	const branch: unknown[] = [];
 	const pi = {
 		on: (name: string, callback: (event: unknown, context: ExtensionContext) => void) =>
 			handlers.set(name, callback),
@@ -57,7 +58,7 @@ it("carries stable delivery IDs through the native socket, steers once, and conf
 			editor: vi.fn(),
 			custom: vi.fn(),
 		},
-		sessionManager: { getSessionId: () => "session1", getSessionFile: () => undefined, getBranch: () => [] },
+		sessionManager: { getSessionId: () => "session1", getSessionFile: () => undefined, getBranch: () => branch },
 	} as unknown as ExtensionContext;
 	const adapter = createDotSession(pi, { GENTLE_DOT_SESSION_DIR: directory });
 	try {
@@ -93,12 +94,21 @@ it("carries stable delivery IDs through the native socket, steers once, and conf
 			code: "INVALID_DELIVERY",
 		});
 		expect(sendUserMessage).toHaveBeenCalledTimes(1);
+		// A client can reconnect after message_start was missed. Snapshot must recover
+		// consumption from the real branch, not leave a receipt permanently unconfirmed.
+		await request("prompt", {text:"Dos bugs\n\n<attachments>\n{\"name\":\"one.png\"}\n</attachments>", clientMessageId:"delivery-history"});
+		branch.push({type:"message", id:"history-user", timestamp:new Date().toISOString(), message:{role:"user", content:[{type:"text", text:"Dos bugs\n\n<attachments>\n{\"name\":\"one.png\"}\n</attachments>"}]}});
+		expect((await request("snapshot")).deliveries).toEqual(expect.arrayContaining([expect.objectContaining({id:"delivery-history",status:"delivered"})]));
+		await request("prompt", {text:"Dos bugs\n\n<attachments>\n{\"name\":\"one.png\"}\n</attachments>", clientMessageId:"delivery-repeat"});
+		for (let poll = 0; poll < 2; poll++) {
+			expect((await request("snapshot")).deliveries).toEqual(expect.arrayContaining([expect.objectContaining({id:"delivery-repeat",status:"queued"})]));
+		}
 		// Autonomy must yield even when the next daemon poll has not observed this keystroke yet.
 		await handlers.get("input")?.({source:"interactive",text:"personal"},context);
 		const personal = await request("snapshot");
 		expect(personal.companionActivity).toHaveProperty("humanActivityAt");
 		await expect(request("prompt",{text:"watch continuation",expectedHumanActivityAt:null})).rejects.toMatchObject({code:"HUMAN_ACTIVE"});
-		expect(sendUserMessage).toHaveBeenCalledTimes(1);
+		expect(sendUserMessage).toHaveBeenCalledTimes(3);
 		await handlers.get("input")?.({source:"extension",text:"watch continuation"},context);
 		expect((await request("snapshot")).companionActivity).toMatchObject({humanActivityAt:(personal.companionActivity as {humanActivityAt:string}).humanActivityAt});
 	} finally {

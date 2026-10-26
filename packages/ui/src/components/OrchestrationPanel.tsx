@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { AgentConversation, AgentDelivery, AgentSession, OrchestrationClient } from "../orchestration.ts";
+import type { AgentConversation, AgentSession, OrchestrationClient } from "../orchestration.ts";
 import type { OrchestrationControls } from "../useOrchestration.ts";
+import { reconcileDeliveries, restoreDeliveries, persistDeliveries, type OutgoingMessage } from "../session-delivery.ts";
 import { useSessionPolling } from "../useSessionPolling.ts";
 import { publishCompanionActivity, useCompanionResponse } from "../companion-activity.ts";
 import "../session-delivery.css";
@@ -25,21 +26,13 @@ const STATES: Record<AgentSession["state"], string> = {
 	unknown: "Sin estado",
 };
 const PROVIDERS = { herdr: "Herdr", orca: "Orca", terminal: "Terminal" };
-interface OutgoingMessage {
-	id: string;
-	identity: string;
-	text: string;
-	payload: string;
-	createdAt: number;
-	status: "sending" | "unconfirmed" | AgentDelivery["status"];
-	baseline: Set<string>;
-}
 const DELIVERY_STATUS = {
 	sending: "Enviando al equipo…",
 	unconfirmed: "Sin confirmación. Revisa el historial antes de reintentar.",
 	accepted: "Recibido por la conexión; esperando confirmación de la sesión.",
 	queued: "En cola; la sesión todavía no ha recibido el mensaje.",
 	delivered: "Recibido por la sesión",
+	dismissed: "Descartado",
 };
 
 export function OrchestrationPanel({
@@ -67,7 +60,7 @@ export function OrchestrationPanel({
 	const [provider, setProvider] = useState<AgentSession["provider"]>();
 	const [instruction, setInstruction] = useState("");
 	const [receipt, setReceipt] = useState<string>();
-	const [outbox, setOutbox] = useState<OutgoingMessage[]>([]);
+	const [outbox, setOutbox] = useState<OutgoingMessage[]>(restoreDeliveries);
 	const outboxRef = useRef(outbox);
 	outboxRef.current = outbox;
 	const [deliverAs, setDeliverAs] = useState<"steer" | "followUp">("steer");
@@ -249,28 +242,34 @@ export function OrchestrationPanel({
 				}
 				return value;
 			});
-			setOutbox(current => {
-				const updated = current.map<OutgoingMessage>(item => {
-				if (item.identity !== identity || item.status === "delivered") return item;
-				const delivery = next.deliveries?.find(delivery => delivery.id === item.id);
-				if (delivery) return { ...item, status: delivery.status };
-				// Legacy adapters have no receipts. A new exact user entry is the only delivery evidence.
-				if (!session?.capabilities?.deliveryReceipts && next.messages.some(message => message.role === "user" && !item.baseline.has(message.id) && message.content.map(block => block.text).join("\n") === item.text))
-					return { ...item, status: "delivered" };
-				if (!session?.capabilities?.deliveryReceipts && item.status === "accepted" && next.status === "idle" && Date.now() - item.createdAt > 30_000)
-					return { ...item, status: "unconfirmed" };
-				return item;
-				});
-				for (const delivery of next.deliveries ?? []) {
-					if (identity && delivery.status !== "delivered" && !updated.some(item => item.id === delivery.id && item.identity === identity))
-						updated.push({ id: delivery.id, identity, text: delivery.preview ?? "Mensaje pendiente de esta sesión", payload: "", status: delivery.status, createdAt: Date.parse(delivery.acceptedAt), baseline: new Set() });
-				}
-				return updated;
-			});
 			setConversationError(undefined);
 		},
 		(problem) => setConversationError(problem instanceof Error ? problem.message : "No se pudo cargar esta conversación."));
-	useEffect(() => { setOutbox([]); }, [client]);
+	useEffect(() => {
+		if (conversation && conversation.sessionId === session?.sessionId)
+			setOutbox(current => reconcileDeliveries(current, conversation, identity));
+	}, [conversation, identity, session?.sessionId]);
+	useEffect(() => { persistDeliveries(outbox); }, [outbox]);
+	const retryDelivery = async (item: OutgoingMessage) => {
+		if (!session?.sessionId || !connected || !session.connected || !active || busy) return;
+		if (!item.payload) {
+			// A receipt from another client only contains a potentially truncated preview.
+			// Never resend it silently or pretend its attachments can be reconstructed.
+			setInstruction(item.text);
+			setReceipt("Revisa el mensaje completo y vuelve a adjuntar los archivos antes de enviarlo.");
+			panel.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+			return;
+		}
+		let payload: unknown;
+		try { payload = JSON.parse(item.payload); } catch { setReceipt("No se pudo recuperar el envío. Revisa el mensaje antes de enviarlo."); return; }
+		if (!Array.isArray(payload) || typeof payload[0] !== "string") return;
+		const [text, attachments, mode] = payload;
+		setOutbox(current => current.map(entry => entry.id === item.id ? {...entry, status:"sending"} : entry));
+		const sent = await act({action:"prompt", paneId:session.paneId, sessionId:session.sessionId, text,
+			...(attachments ? {attachments} : {}), clientMessageId:item.id, ...(mode ? {deliverAs:mode} : {})});
+		setOutbox(current => current.map(entry => entry.id === item.id && entry.status === "sending" ? {...entry, status:sent ? "accepted" : "unconfirmed"} : entry));
+		refreshConversation();
+	};
 	const lastCompanionDelivery = useRef("");
 	useEffect(() => {
 		if (!active || !identity) return;
@@ -383,23 +382,13 @@ export function OrchestrationPanel({
 								{loadingEarlier ? "Cargando…" : "Ver mensajes anteriores"}
 							</button>
 						) : null}
-						{conversationMessages.length === 0 ? (
-							<p className="muted">Todavía no hay mensajes.</p>
-						) : (
-							<SessionTurns messages={conversation.messages} />
-						)}
+						{conversationMessages.length === 0 && !outbox.some(item => item.identity === identity && !["delivered", "dismissed"].includes(item.status)) ? <p className="muted">Todavía no hay mensajes.</p> : null}
+						<SessionTurns messages={conversation.messages} pending={outbox.filter(item => item.identity === identity)}
+							onRetry={item => void retryDelivery(item)} onDiscard={item => setOutbox(current => current.map(entry => entry === item ? {...entry, status:"dismissed"} : entry))}
+							retryDisabled={!active || !connected || !session.connected || busy} waiting={conversation.status === "waiting"} />
 					</section>
 				) : null}
-				{outbox.some(item => item.identity === identity) ? (
-					<section className="session-outbox" aria-label="Estado de tus envíos" aria-live="polite">
-						{outbox.filter(item => item.identity === identity).filter((item, index, items) => item.status !== "delivered" || index === items.length - 1).map(item => (
-							<article key={item.id} className={`session-delivery session-delivery-${item.status}`}>
-								{item.status !== "delivered" ? <p>{item.text || "Archivos adjuntos"}</p> : null}
-								<small>{item.status === "queued" && conversation?.status === "waiting" ? "En cola: se enviará cuando respondas la pregunta" : DELIVERY_STATUS[item.status]}</small>
-							</article>
-						))}
-					</section>
-				) : null}
+
 			</div>
 			{canJump ? (
 				<button
@@ -449,7 +438,7 @@ export function OrchestrationPanel({
 						const previous = outboxRef.current.findLast(item => item.identity === identity && item.payload === payload && item.status === "unconfirmed");
 						const messageId = previous?.id ?? crypto.randomUUID();
 						followConversation.current = true;
-						setOutbox(current => [...current.filter(item => item.id !== messageId), { id: messageId, identity: identity!, text, payload, createdAt: Date.now(), status: "sending", baseline: previous?.baseline ?? new Set(conversation?.messages.map(message => message.id)) }]);
+						setOutbox(current => [...current.filter(item => item.id !== messageId), { id: messageId, identity: identity!, text, payload, createdAt: Date.now(), status: "sending", attachmentNames: attachments?.map(file => file.name), baseline: previous?.baseline ?? new Set(conversation?.messages.map(message => message.id)) }]);
 						const sent = await act({ action: "prompt", paneId: session.paneId, sessionId: session.sessionId!, text,
 							...(attachments ? { attachments } : {}),
 							...(session.capabilities?.deliveryReceipts ? { clientMessageId: messageId } : {}), ...(mode ? { deliverAs: mode } : {}) });
@@ -678,19 +667,41 @@ function mergeMessages(earlier: AgentConversation["messages"], later: AgentConve
 }
 
 /** User entries are the only turn boundaries; delegated replies never create new turns. */
-export function SessionTurns({ messages }: { messages: AgentConversation["messages"] }) {
+export function SessionTurns({ messages, pending = [], onRetry, onDiscard, retryDisabled = false, waiting = false }: {
+	messages: AgentConversation["messages"]; pending?: OutgoingMessage[];
+	onRetry?(item: OutgoingMessage): void; onDiscard?(item: OutgoingMessage): void; retryDisabled?: boolean; waiting?: boolean;
+}) {
+	const timeline = [...messages];
+	const pendingById = new Map<string, OutgoingMessage>();
+	for (const item of [...pending].filter(item => !["delivered", "dismissed"].includes(item.status)).sort((a,b) => a.createdAt-b.createdAt)) {
+		const id = `pending:${item.id}`;
+		pendingById.set(id, item);
+		const entry = {id, role:"user" as const, timestamp:new Date(item.createdAt).toISOString(), content:[]};
+		const next = timeline.findIndex(message => Date.parse(message.timestamp ?? "") > item.createdAt);
+		if (next < 0) timeline.push(entry); else timeline.splice(next, 0, entry);
+	}
 	const turns: AgentConversation["messages"][] = [];
-	for (const message of messages) {
+	for (const message of timeline) {
 		if (message.role === "system") continue;
 		if (!turns.length || (message.role === "user" && !message.provenance)) turns.push([]);
 		turns.at(-1)!.push(message);
 	}
 	return <>{turns.map((turn, index) => {
 		const lastTool = turn.findLastIndex(message => message.role === "tool");
-		const work = turn.filter((message, i) => message.role === "tool" || (message.role === "assistant" && !message.provenance && (i < lastTool || message.stopReason === "toolUse")));
+		const work = lastTool < 0 ? [] : turn.filter((message, i) => message.role === "tool" || (message.role === "assistant" && !message.provenance && (i < lastTool || message.stopReason === "toolUse")));
 		const actions = work.filter(message => message.role === "tool").length;
+		const pendingItem = pendingById.get(turn[0]!.id);
+		const superseded = pendingItem?.status === "unconfirmed" && messages.some(message => message.role === "user" && !message.provenance && Date.parse(message.timestamp ?? "") > pendingItem.createdAt);
 		return <section className="session-turn" aria-label={`Turno ${index + 1}`} key={turn[0]!.id}>
-			{turn.filter(message => message.role === "user").map(message => <TurnMessage key={message.id} message={message} />)}
+			{pendingItem ? <article className={`session-delivery session-delivery-${pendingItem.status}`} aria-label="Envío sin confirmar">
+				{superseded ? <details className="session-delivery-superseded"><summary>Sin confirmar · {pendingItem.text.slice(0, 80) || "Archivos adjuntos"}</summary><p>{pendingItem.text || "Archivos adjuntos"}</p></details> : <p>{pendingItem.text || "Archivos adjuntos"}</p>}
+				{!superseded ? <small>{pendingItem.status === "queued" && waiting ? "En cola: se enviará cuando respondas la pregunta" : DELIVERY_STATUS[pendingItem.status]}</small> : null}
+				<div className="session-delivery-actions">
+					<button type="button" disabled={retryDisabled || pendingItem.status !== "unconfirmed"} onClick={() => onRetry?.(pendingItem)}>Reintentar</button>
+					<button type="button" disabled={pendingItem.status === "sending"} onClick={() => onDiscard?.(pendingItem)}>Descartar</button>
+				</div>
+			</article> : null}
+			{turn.filter(message => message.role === "user" && !pendingById.has(message.id)).map(message => <TurnMessage key={message.id} message={message} />)}
 			{work.length ? <details className="session-turn-work"><summary>Trabajó: {actions} {actions === 1 ? "acción" : "acciones"}</summary>
 				{work.map(message => <div key={message.id} className="session-turn-action">
 					{message.role === "tool" ? <span role="img" aria-label={message.isError ? "Error" : "Ejecutada"}>{message.isError ? "!" : "✓"}</span> : null}

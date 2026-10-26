@@ -33,6 +33,16 @@
 .session-delivery small {
 	color: var(--muted);
 }
+.session-delivery-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 8px;
+}
+.session-delivery-actions button {
+	min-height: 44px;
+	padding: 8px 12px;
+}
 .session-delivery-unconfirmed,
 .session-delivery-delivered {
 	border-color: var(--border-subtle);

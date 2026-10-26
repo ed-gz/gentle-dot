@@ -3,6 +3,15 @@ import { expect, it } from "vitest";
 import { SessionTurns } from "../src/components/OrchestrationPanel.tsx";
 import type { AgentConversation } from "../src/orchestration.ts";
 
+it("hides empty work disclosures without hiding the assistant text", () => {
+ const {container} = render(<SessionTurns messages={[
+  {id:"u-empty",role:"user",content:[{type:"text",text:"ya"}]},
+  {id:"a-empty",role:"assistant",stopReason:"toolUse",content:[{type:"text",text:"Preparando"}]},
+ ]}/>);
+ expect(container.querySelector(".session-turn-work")).toBeNull();
+ expect(screen.getByText("Preparando")).toBeVisible();
+});
+
 it("separates realistic prompts, collapsed execution and final replies without losing live work", () => {
  const messages = [
  {id:"u1",role:"user",content:[{type:"text",text:"Comprueba el build"}]},

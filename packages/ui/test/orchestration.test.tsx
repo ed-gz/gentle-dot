@@ -1,12 +1,29 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Send } from "../src/components/types.ts";
 import { OrchestrationPanel } from "../src/components/OrchestrationPanel.tsx";
 import type { AgentConversation, OrchestrationClient, OrchestrationSnapshot } from "../src/orchestration.ts";
 import { useOrchestration, type OrchestrationControls } from "../src/useOrchestration.ts";
 import { AgentVoiceContext } from "../src/useAgentVoice.ts";
 import { initialState } from "../src/store.ts";
+
+beforeEach(() => localStorage.removeItem("gentle-dot:session-outbox:v1"));
+
+it("confirms a persisted attachment send on a fresh client from transcript evidence, not a stale receipt", async () => {
+ const at = Date.now()-60_000;
+ localStorage.setItem("gentle-dot:session-outbox:v1", JSON.stringify([{id:"restored-send",identity:"p1:s1",text:"Dos bugs a resolver",payload:JSON.stringify(["Dos bugs a resolver",null,"steer"]),createdAt:at,status:"unconfirmed",baseline:[],attachmentNames:["uno.png","dos.png"]}]));
+ const {view} = setup({...snapshot,approvals:[]}, {sessionId:"s1",status:"idle",question:null,
+  deliveries:[{id:"restored-send",status:"unconfirmed",preview:"Dos bugs a resolver",deliverAs:"steer",acceptedAt:new Date(at).toISOString()}],
+  messages:[
+   {id:"u-images",role:"user",timestamp:new Date(at+1000).toISOString(),content:[{type:"text",text:'Dos bugs a resolver\n\n<attachments>\n{"name":"uno.png"}\n{"name":"dos.png"}\n</attachments>'}]},
+   {id:"a-images",role:"assistant",timestamp:new Date(at+2000).toISOString(),content:[{type:"text",text:"Ya están corregidos"}]},
+   {id:"u-later",role:"user",timestamp:new Date().toISOString(),content:[{type:"text",text:"ya"}]},
+  ]});
+ fireEvent.click(screen.getByRole("button",{name:/Release/}));
+ await screen.findByText("ya");
+ await waitFor(() => expect(view.container.querySelector(".session-delivery")).toBeNull());
+});
 
 const snapshot: OrchestrationSnapshot = {
 	available: true,
