@@ -141,10 +141,12 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
     <button type="button" className="capri3d-close" aria-label="Cerrar entrada" onClick={()=>{voice.cancel();close();}}>×</button>
    </div>
    <div className="capri3d-quick-row">
-   <button type="button" className="capri3d-history" aria-label="Historial" title="Historial" onClick={more}>
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M3 4v5h5M3.5 9a9 9 0 1 1-.1 6M12 7v5l3 3"/></svg>
-   </button>
-   <span className="capri3d-input-divider" aria-hidden="true"/>
+   {!draft.trim() && <>
+    <button type="button" className="capri3d-history" aria-label="Historial" title="Historial" onClick={more}>
+     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M3 4v5h5M3.5 9a9 9 0 1 1-.1 6M12 7v5l3 3"/></svg>
+    </button>
+    <span className="capri3d-input-divider" aria-hidden="true"/>
+   </>}
    <label className="capri3d-input"><span className="sr-only">Mensaje para Dot</span><input ref={input} value={draft} onChange={event=>{voice.typed();setDraft(event.target.value);}} onKeyDown={event=>{if(event.key==="Enter" && !event.nativeEvent.isComposing){event.preventDefault();event.currentTarget.form?.requestSubmit();}}} placeholder="Escríbele a Capri…" /></label>
    <button type="button" data-recording={voice.phase==="recording"} aria-label={voice.phase==="recording"?"Terminar dictado":voice.phase==="transcribing"?"Transcribiendo audio":"Hablar"} disabled={!voice.mic?.available || voice.phase==="transcribing"} title={voice.mic && !voice.mic.available?voice.mic.reason:undefined} onClick={()=>voice.phase==="recording"?voice.stop():voice.start()}>
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>

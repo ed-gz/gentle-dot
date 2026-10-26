@@ -32,14 +32,16 @@ it("opens history separately without sending or changing the quick draft",()=>{
  const send=vi.fn(),more=vi.fn();
  render(<CapriConversation state={{...initialState,connection:"open"}} send={send} open close={vi.fn()} more={more} onLayout={vi.fn()}/>);
  const input=screen.getByRole("textbox");
- fireEvent.change(input,{target:{value:"subí un issue a GitHub"}});
- expect(more).not.toHaveBeenCalled();
  const history=screen.getByRole("button",{name:"Historial"});
  expect(history).toHaveAttribute("type","button");
  expect(history.querySelector("svg")).not.toBeNull();
- expect(history.closest(".capri3d-quick-row")).not.toBeNull();
- fireEvent.click(history);
- expect(more).toHaveBeenCalledOnce();expect(send).not.toHaveBeenCalled();expect(input).toHaveValue("subí un issue a GitHub");
+ fireEvent.change(input,{target:{value:"subí un issue a GitHub"}});
+ expect(screen.queryByRole("button",{name:"Historial"})).toBeNull();
+ fireEvent.change(input,{target:{value:""}});
+ const restored=screen.getByRole("button",{name:"Historial"});
+ expect(restored.closest(".capri3d-quick-row")).not.toBeNull();
+ fireEvent.click(restored);
+ expect(more).toHaveBeenCalledOnce();expect(send).not.toHaveBeenCalled();expect(input).toHaveValue("");
 });
 it("sends the exact quick contract on Enter, clears and restores focus without opening history",()=>{
  const send=vi.fn().mockReturnValue(true),more=vi.fn();
@@ -269,4 +271,15 @@ it("pendingApproval keeps only a live, exact, answerable confirm",()=>{
  expect(pendingApproval([{...a,expiresAt:new Date(now-1000).toISOString()}],cue)).toBeUndefined();
  expect(pendingApproval([{...a,paneId:"other"}],cue)).toBeUndefined();
  expect(pendingApproval([{...a,sessionId:"other"}],cue)).toBeUndefined();
+});
+
+it("collapses the Historial block while typing and restores it when empty",()=>{
+ const more=vi.fn();
+ render(<CapriConversation state={{...initialState,connection:"open"}} send={vi.fn()} open close={vi.fn()} more={more} onLayout={vi.fn()}/>);
+ const input=screen.getByPlaceholderText(/a Capri/);
+ expect(screen.getByRole("button",{name:"Historial"})).toBeInTheDocument();
+ fireEvent.change(input,{target:{value:"subí un issue"}});
+ expect(screen.queryByRole("button",{name:"Historial"})).toBeNull();
+ fireEvent.change(input,{target:{value:""}});
+ expect(screen.getByRole("button",{name:"Historial"})).toBeInTheDocument();
 });
