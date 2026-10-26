@@ -267,7 +267,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 				orchestrator.dispatch({ action: "prompt", paneId, sessionId, text }, "agent", authorize),
 			approve: (request, authorize) => orchestrator.answerForWorkflow(request, authorize),
 			askContinuation: (work, answer) => {
-				const args: Parameters<DotBridge["askWatchContinuation"]> = [work.sessions.map(session => session.label ?? session.paneId).join(", "), answer];
+				const args: Parameters<DotBridge["askWatchContinuation"]> = [work.sessions.map(session => session.label ?? session.paneId).join(", "), answer, { pauseReason: work.pauseReason, lastMessage: work.lastMessage }];
 				if (presentWatchQuestion) presentWatchQuestion(...args);
 				else pendingWatchQuestions.push(args);
 			},
@@ -581,7 +581,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		.checkIntegrity()
 		.catch((error: Error) => log(`could not check connectors.json: ${error.message}`));
 	notifySession = (notice) => bridge.notifySession(notice);
-	presentWatchQuestion = (label, answer) => bridge.askWatchContinuation(label, answer);
+	presentWatchQuestion = (label, answer, pause) => bridge.askWatchContinuation(label, answer, pause);
 	for (const args of pendingWatchQuestions.splice(0)) presentWatchQuestion(...args);
 	const github = new GitHubIssues({approve: (request, signal) => bridge.askInApp(request, signal)});
 

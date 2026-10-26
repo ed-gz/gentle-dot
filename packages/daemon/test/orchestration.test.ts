@@ -853,7 +853,7 @@ it.each(["prompt", "approve"])("revokes workflow authority if the adapter restar
  const directory=await mkdtemp(join(tmpdir(),"dot-reconnect-"));
  cleanups.push(()=>rm(directory,{recursive:true,force:true}));
  const h=harness(); Object.assign(h.manifest,{instanceId:"before"});
- h.setCapabilities({questions:true,prompt:true,activityFence:1});
+ h.setCapabilities({questions:true,prompt:true,activityFence:1,enrollmentProtocol:1});
  const question=vi.fn();
  const workflows=new WorkflowContinuations({
   dataDir:directory,snapshot:()=>h.orchestrator.snapshot(),
@@ -896,7 +896,7 @@ describe("deterministic delegated discovery", () => {
 				workflows?.onEvent(event);
 			},
 		});
-		h.setCapabilities({ questions: true, activityFence:1 });
+		h.setCapabilities({ questions: true, activityFence:1, enrollmentProtocol:1 });
 		Object.assign(h.manifest, {instanceId:"adapter-a"});
 		workflows = new WorkflowContinuations({
 			dataDir: directory,

@@ -37,7 +37,7 @@ it.each([false, true])(
 			activityInstanceId: `adapter-${id}`,
 			state: "working",
 			assistantMessageId: `old-${id}`,
-			capabilities: { inspect: true, prompt: true, activityFence:1 },
+			capabilities: { inspect: true, prompt: true, activityFence:1, enrollmentProtocol:1 },
 		}));
 		const inspect = vi.fn(async (paneId: string, sessionId: string) => {
 			const target = workers.find((worker) => worker.paneId === paneId && worker.sessionId === sessionId);

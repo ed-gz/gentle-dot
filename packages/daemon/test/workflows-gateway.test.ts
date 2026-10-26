@@ -105,7 +105,7 @@ function pendingSession() {
 				connected: true,
 				activityInstanceId: "fixture-adapter",
 				managed: true,
-				capabilities: { inspect: true, prompt: true, approvals: true, abort: true, activityFence:1 },
+				capabilities: { inspect: true, prompt: true, approvals: true, abort: true, activityFence:1, enrollmentProtocol:1 },
 			},
 		],
 		approvals: [{ ...pair, ...question, action: "select", createdAt: new Date().toISOString() }],

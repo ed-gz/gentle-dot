@@ -51,6 +51,7 @@ export interface Session {
 		inspect: boolean;
 		prompt: boolean;
 		activityFence?: number;
+		enrollmentProtocol?: number;
 		deliveryReceipts?: boolean;
 		deliveryModes?: ("steer" | "followUp")[];
 		abort: boolean;
@@ -601,6 +602,7 @@ export class Orchestrator {
 							session.capabilities = {
 								inspect: true,
 								...(caps.activityFence === 1 ? {activityFence:1} : {}),
+								...(caps.enrollmentProtocol === 1 ? {enrollmentProtocol:1} : {}),
 								prompt: caps.prompt === true,
 								...(caps.deliveryReceipts === true ? { deliveryReceipts: true } : {}),
 								...(Array.isArray(caps.deliveryModes) ? { deliveryModes: caps.deliveryModes.filter((mode): mode is "steer" | "followUp" => mode === "steer" || mode === "followUp") } : {}),
@@ -720,7 +722,7 @@ export class Orchestrator {
 											answered =
 												!this.mutatingPanes.has(session.paneId) &&
 												(await this.options.onApproval({
-                                                    activity:{version:caps.activityFence === 1 ? 1 : 0, at:session.humanActivityAt ?? null, instanceId:session.activityInstanceId},
+                                                    activity:{version:caps.activityFence === 1 ? 1 : 0, enrollmentProtocol: caps.enrollmentProtocol === 1 ? 1 : 0, at:session.humanActivityAt ?? null, instanceId:session.activityInstanceId},
 													paneId: session.paneId,
 													sessionId: session.sessionId,
 													question,

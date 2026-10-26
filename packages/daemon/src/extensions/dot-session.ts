@@ -434,6 +434,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				capabilities: {
 					companionActivity: true,
 					activityFence: 1,
+					enrollmentProtocol: 1,
 					prompt: true,
 					deliveryReceipts: true,
 					deliveryModes: ["steer", "followUp"],

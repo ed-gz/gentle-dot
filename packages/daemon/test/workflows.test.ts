@@ -26,7 +26,7 @@ function fixture() {
 		state: "idle",
 		connected: true,
 		activityInstanceId: `adapter-${id}`,
-		capabilities: { inspect: true, prompt: true, approvals: true, activityFence:1 },
+		capabilities: { inspect: true, prompt: true, approvals: true, activityFence:1, enrollmentProtocol: 1 as number | undefined },
 		assistantMessageId: `old-${id}`,
 	}));
 	const inspect = vi.fn(
@@ -104,6 +104,51 @@ function fixture() {
 		},
 	};
 }
+it.each([undefined, 0, 2])("warns once for incompatible protocol %s, never answers or auto-resumes, and permits human resume after reload", async protocol => {
+ const h = fixture();
+ const notify = vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+ h.options.askContinuation = notify;
+ h.sessions[0]!.capabilities.enrollmentProtocol = protocol;
+ const target = h.sessions[0]!;
+ const work = await h.start({mode:"session", sessions:[{paneId:target.paneId, sessionId:target.sessionId}]});
+ expect(work).toMatchObject({state:"paused", pauseReason:"adapter-outdated",
+  lastMessage:"La sesión a usa una versión anterior del conector. Escribí /reload en esa sesión y decime «seguí vigilando»."});
+ await h.coordinator.prepare();
+ await h.coordinator.poll(false);
+ expect(h.approve).not.toHaveBeenCalled();
+ expect(h.prompt).not.toHaveBeenCalled();
+ expect(notify).toHaveBeenCalledTimes(1);
+ await expect(h.coordinator.dispatch({action:"resume", workflowId:work.id}, "human")).rejects.toThrow(/reload/);
+ h.restart();
+ target.capabilities.enrollmentProtocol = 1;
+ target.activityInstanceId = "reloaded-adapter";
+ await h.coordinator.prepare();
+ await h.coordinator.poll(false);
+ expect(h.coordinator.status().workflows[0]).toMatchObject({state:"paused", pauseReason:"adapter-outdated"});
+ expect(notify).toHaveBeenCalledTimes(1);
+ await h.coordinator.dispatch({action:"resume", workflowId:work.id}, "human");
+ expect(h.coordinator.status().workflows[0]).toMatchObject({state:"waiting"});
+ h.coordinator.close();
+});
+it("pauses an existing delegation before answering when its adapter protocol becomes outdated", async () => {
+ const h = fixture();
+ const notify = vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+ h.options.askContinuation = notify;
+ const target = h.sessions[0]!;
+ await h.start({mode:"session", authorization:"Aprueba todos los permisos de esta sesión", sessions:[{paneId:target.paneId, sessionId:target.sessionId}]});
+ target.capabilities.enrollmentProtocol = undefined;
+ expect(await h.coordinator.tryApprove({paneId:target.paneId, sessionId:target.sessionId,
+  activity:{version:1, at:null, instanceId:target.activityInstanceId},
+  question:{id:"outdated-permission",kind:"confirm",answerable:true,
+   workflowPermission:{provider:"dot-session/v1",category:"workspace-tool",scope:"project-workspace",tool:"bash"}}
+ })).toBe(false);
+ await h.coordinator.prepare();
+ await h.coordinator.poll(false);
+ expect(h.coordinator.status().workflows[0]).toMatchObject({state:"paused", pauseReason:"adapter-outdated"});
+ expect(h.approve).not.toHaveBeenCalled();
+ expect(notify).toHaveBeenCalledTimes(1);
+ h.coordinator.close();
+});
 for (const reload of [false, true]) for (const source of ["discovery", "session", "snapshot"] as const) {
  it(`resumes a disconnect-only delegation with matching activity (${source}, reload=${reload})`, async () => {
   const h = fixture();

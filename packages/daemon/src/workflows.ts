@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CompletionEvent, CompletionSession } from "./completion-reports.ts";
 import { humanOnlyQuestion } from "./orchestration/questions.ts";
-import { defaultHerdrSocket } from "./orchestration/herdr.ts";
+import { defaultHerdrSocket, localRequest } from "./orchestration/herdr.ts";
 import { readManifests } from "./orchestration/registry.ts";
 import { writePrivateFile } from "./private-file.ts";
 import { runtimeDir } from "./runtime.ts";
@@ -29,7 +29,7 @@ export type WorkflowState =
 	| "cancelled"
 	| "expired"
 	| "failed";
-type WorkflowPauseReason = "disconnected" | "human" | "expired" | "user" | "review" | "uncertain" | "limit";
+type WorkflowPauseReason = "disconnected" | "human" | "expired" | "user" | "review" | "uncertain" | "limit" | "adapter-outdated";
 export interface WorkflowStatus {
 	pauseReason?: WorkflowPauseReason;
 	id: string;
@@ -88,7 +88,7 @@ export function verifyWorkflowActivity(authorize: () => boolean, target: Workflo
 
 export interface WorkflowPendingApproval {
 	/** Adapter metadata supplied directly by discovery, not dialog text. */
-	activity?: { version: number; at: string | null; instanceId?: string };
+	activity?: { version: number; at: string | null; instanceId?: string; enrollmentProtocol?: number };
 	paneId: string;
 	sessionId: string;
 	/** The original adapter dialog, not the UI projection of it. */
@@ -111,7 +111,7 @@ export interface WorkflowOptions {
 				assistantMessageId?: string;
 				humanActivityAt?: string;
 				activityInstanceId?: string;
-				capabilities?: { inspect: boolean; prompt?: boolean; approvals?: boolean; activityFence?: number };
+				capabilities?: { inspect: boolean; prompt?: boolean; approvals?: boolean; activityFence?: number; enrollmentProtocol?: number };
 			}
 		>;
 		approvals?: Array<{ id: string; paneId: string; sessionId: string }>;
@@ -289,6 +289,13 @@ export class WorkflowContinuations {
 		this.revocations.set(id, pending);
 		void pending.then(() => { if (this.revocations.get(id) === pending) this.revocations.delete(id); });
 	}
+	private revokeInstanceEnrollments(id: string): void {
+		const peer = this.enrollments.get(id);
+		if (peer) this.revokeEnrollment(id, peer.socket);
+		for (const [socket, pending] of this.enrolling) {
+			if (pending.id === id) this.revokeEnrollment(id, socket);
+		}
+	}
 	private revokeObsoleteEnrollments(): void {
 		const desired = this.desiredEnrollments();
 		for (const [id, peer] of this.enrollments) {
@@ -309,15 +316,41 @@ export class WorkflowContinuations {
 			const directories = this.options.registryDirs ?? [join(this.options.dataDir, "pi-sessions"),
 				process.env.HERDR_MOBILE_PI_DIR || join(process.env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "herdr-mobile", "pi-connect")];
 			const manifests = await readManifests(directories, defaultHerdrSocket());
+			const verifiedInstances = new Set<string>();
 			for (const manifest of manifests) {
 				const id = manifest.instanceId;
 				const grant = id ? desired.get(id) : undefined;
-				if (!id || !grant || manifest.sessionId !== grant.sessionId || this.enrollments.has(id) || this.closed) continue;
+				if (!id || !grant || manifest.sessionId !== grant.sessionId || this.closed) continue;
 				await this.revocations.get(id);
 				const signature = JSON.stringify(grant);
 				const current = () => !this.closed && !this.storageError &&
 					JSON.stringify(this.desiredEnrollments().get(id)) === signature;
 				if (!current()) continue;
+				// Persisted observations and discovery summaries cannot establish protocol authority.
+				// Recheck the adapter-owned snapshot on every sync, including before renewal.
+				let page: Record<string, unknown>;
+				try {
+					page = await localRequest(manifest.socketPath, "snapshot", {
+						limit: 1, expectedSessionId: grant.sessionId, expectedInstanceId: id,
+					}, 1000, current);
+				} catch {
+					this.revokeInstanceEnrollments(id);
+					continue;
+				}
+				if (!current() || page.sessionId !== grant.sessionId || page.instanceId !== id) {
+					this.revokeInstanceEnrollments(id);
+					continue;
+				}
+				if (!record(page.capabilities) || page.capabilities.enrollmentProtocol !== 1) {
+					this.revokeInstanceEnrollments(id);
+					const work = this.works.get(grant.workflowId);
+					const target = work?.sessions.find(target => target.sessionId === grant.sessionId &&
+						work.observed[pair(target)]?.activityInstanceId === id);
+					if (work && target) this.pauseOutdated(work, target);
+					continue;
+				}
+				verifiedInstances.add(id);
+				if (this.enrollments.has(id)) continue;
 				await new Promise<void>(resolve => {
 					const socket = connect(manifest.socketPath);
 					this.enrolling.set(socket, { id, signature });
@@ -356,6 +389,10 @@ export class WorkflowContinuations {
 						} catch { socket.destroy(); }
 					});
 				});
+			}
+			// Missing registry evidence must not leave an existing renewal channel authorized.
+			for (const id of this.enrollments.keys()) {
+				if (!verifiedInstances.has(id)) this.revokeInstanceEnrollments(id);
 			}
 		}).catch(() => {
 			// A missing/stale adapter grants nothing. Never leave a cached grant on failure.
@@ -551,11 +588,22 @@ export class WorkflowContinuations {
 			...(this.storageError ? { error: this.storageError } : {}),
 		};
 	}
-	private async verifyActivity(work: StoredWorkflow, authorize: () => boolean = () => true, activity?: {version:number;at:string|null;instanceId?:string}): Promise<boolean> {
-		const snapshot = activity ? {sessions:work.sessions.map(target => ({...target, label:target.label ?? "", state:"unknown", connected:true, humanActivityAt:activity.at ?? undefined, activityInstanceId:activity.instanceId, capabilities:{inspect:true,activityFence:activity.version}}))} : await this.options.snapshot();
+	private adapterWarning(target: WorkflowSession): string {
+		return `La sesión ${target.label || target.paneId} usa una versión anterior del conector. Escribí /reload en esa sesión y decime «seguí vigilando».`;
+	}
+	private pauseOutdated(work: StoredWorkflow, target: WorkflowSession): void {
+		this.yieldToHuman(work, this.adapterWarning(target), "adapter-outdated");
+	}
+	private async verifyActivity(work: StoredWorkflow, authorize: () => boolean = () => true, activity?: {version:number;at:string|null;instanceId?:string;enrollmentProtocol?:number}): Promise<boolean> {
+		// Discovery supplies trusted capabilities with activity, avoiding recursive discovery.
+		const snapshot = activity ? {sessions:work.sessions.map(target => ({...target, label:target.label ?? "", state:"unknown", connected:true, humanActivityAt:activity.at ?? undefined, activityInstanceId:activity.instanceId, capabilities:{inspect:true,activityFence:activity.version,enrollmentProtocol:activity.enrollmentProtocol}}))} : await this.options.snapshot();
 		this.ensure(authorize);
 		for (const target of work.sessions) {
 			const session = snapshot.sessions.find(s => pair(s) === pair(target));
+			if (session?.connected && session.capabilities?.enrollmentProtocol !== 1) {
+				this.pauseOutdated(work, target);
+				return false;
+			}
 			if (!session?.connected || !this.matchesActivity(work, target, {
 				version: session.capabilities?.activityFence ?? 0,
 				at: session.humanActivityAt ?? null,
@@ -936,6 +984,10 @@ export class WorkflowContinuations {
 					}
 					continue;
 				}
+				if (session.capabilities?.enrollmentProtocol !== 1) {
+					this.pauseOutdated(work, target);
+					break;
+				}
 				if (reconnectable(work)) {
 					if (deadline(work) <= this.now()) {
 						this.yieldToHuman(work, "Venció el plazo autorizado; espera tu decisión para continuar.", "expired");
@@ -974,6 +1026,10 @@ export class WorkflowContinuations {
 						instanceId: session.activityInstanceId,
 					})) {
 						this.yieldToHuman(work, "La actividad o el adaptador de la sesión cambió o no pudo comprobarse.");
+						continue;
+					}
+					if (session.capabilities?.enrollmentProtocol !== 1) {
+						this.pauseOutdated(work, target);
 						continue;
 					}
 					approvals = fresh?.approvals;
@@ -1409,6 +1465,7 @@ export class WorkflowContinuations {
 					throw new WorkflowError("La delegación cambió durante la revisión de actividad.", 409);
 				for (const target of work.sessions) {
 					const session = snapshot.sessions.find(s => pair(s) === pair(target));
+					if (session?.connected && session.capabilities?.enrollmentProtocol !== 1) throw new WorkflowError(this.adapterWarning(target), 403);
 					if (!session?.connected || session.capabilities?.activityFence !== 1) throw new WorkflowError("Sólo avisos: actualiza el adaptador con protección de actividad antes de reanudar.", 403);
 					work.observed[pair(target)] = {...work.observed[pair(target)], state:session.state, connected:true, humanActivityAt:session.humanActivityAt ?? null, activityInstanceId:session.activityInstanceId};
 				}
@@ -1762,7 +1819,10 @@ export class WorkflowContinuations {
 			nextAttemptAt: this.now(),
 		};
 		this.works.set(work.id, work);
-		if (snapshot.sessions.some(session => sessions.some(target => pair(target) === pair(session)) && session.capabilities?.activityFence !== 1)) {
+		const outdated = selected.find(target => snapshot.sessions.find(session => pair(session) === pair(target))?.capabilities?.enrollmentProtocol !== 1);
+		if (outdated) {
+			this.pauseOutdated(work, outdated);
+		} else if (snapshot.sessions.some(session => sessions.some(target => pair(target) === pair(session)) && session.capabilities?.activityFence !== 1)) {
 			work.state = "paused";
 			work.pauseReason = "review";
 			work.lastMessage = "Sólo avisos: el adaptador no tiene protección de actividad versionada. Actualízalo antes de activar autonomía.";

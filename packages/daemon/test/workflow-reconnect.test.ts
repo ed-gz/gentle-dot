@@ -6,6 +6,7 @@ import { type ExtensionAPI, type ExtensionContext, type ExtensionUIDialogOptions
 import { afterEach, expect, it, vi } from "vitest";
 import { createDotSession } from "../src/extensions/dot-session.ts";
 import { localRequest } from "../src/orchestration/herdr.ts";
+import * as herdr from "../src/orchestration/herdr.ts";
 import * as registry from "../src/orchestration/registry.ts";
 import { WorkflowContinuations, type WorkflowOptions } from "../src/workflows.ts";
 
@@ -49,7 +50,7 @@ async function fixture(startImmediately = true) {
    const page = await call("snapshot");
    return { sessions: [{ ...target, label: "Local", state: page.question ? "blocked" : "working", connected: true,
     activityInstanceId: manifest.instanceId, humanActivityAt: (page.companionActivity as { humanActivityAt?: string }).humanActivityAt,
-    capabilities: { inspect: true, approvals: true, activityFence: 1 } }],
+    capabilities: { inspect: true, approvals: true, activityFence: 1, enrollmentProtocol: 1 } }],
     approvals: page.question ? [{ ...target, id: String((page.question as { id: string }).id) }] : [] };
   }, inspect: () => call("snapshot"), prompt: vi.fn(),
  };
@@ -60,6 +61,66 @@ async function fixture(startImmediately = true) {
  const tool = (id: string) => handlers.get("tool_call")?.({ toolName: "bash", toolCallId: id, input: { command: "npm test" } }, ctx);
  return { coordinator, call, tool, start, manifest, options };
 }
+it.each([undefined, 0, 1])("verifies adapter-owned protocol %s before enrolling a persisted active delegation on startup", async protocol => {
+ const h = await fixture();
+ h.coordinator.close();
+ const request = herdr.localRequest;
+ vi.spyOn(herdr, "localRequest").mockImplementation(async (...args) => {
+  const page = await request(...args);
+  if (args[1] !== "snapshot") return page;
+  return {...page, capabilities:{...(page.capabilities as object), enrollmentProtocol:protocol}};
+ });
+ const writes = vi.spyOn(Socket.prototype, "write");
+ const notify = vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+ const restarted = new WorkflowContinuations({...h.options, askContinuation:notify});
+ cleanups.push(() => restarted.close());
+ await restarted.poll(false); // Drain startup enrollment without invoking discovery recovery.
+ const enrollments = writes.mock.calls.filter(args => String(args[0]).includes('"method":"workflow.enroll"'));
+ expect(enrollments).toHaveLength(protocol === 1 ? 1 : 0);
+ if (protocol === 1) {
+  expect(restarted.status().workflows[0]?.state).toBe("waiting");
+  expect(notify).not.toHaveBeenCalled();
+ } else {
+  expect(restarted.status().workflows[0]).toMatchObject({state:"paused", pauseReason:"adapter-outdated"});
+  expect(notify).toHaveBeenCalledTimes(1);
+  await restarted.poll(false);
+  expect(notify).toHaveBeenCalledTimes(1);
+ }
+});
+it.each(["instance", "session", "unavailable"])("does not enroll persisted authority with unverified snapshot evidence (%s)", async failure => {
+ const h = await fixture();
+ h.coordinator.close();
+ const request = herdr.localRequest;
+ vi.spyOn(herdr, "localRequest").mockImplementation(async (...args) => {
+  if (args[1] === "snapshot" && failure === "unavailable") throw new Error("offline");
+  const page = await request(...args);
+  if (args[1] !== "snapshot") return page;
+  return {...page, ...(failure === "instance" ? {instanceId:"other-instance"} : {sessionId:"other-session"})};
+ });
+ const writes = vi.spyOn(Socket.prototype, "write");
+ const restarted = new WorkflowContinuations(h.options);
+ cleanups.push(() => restarted.close());
+ await restarted.poll(false);
+ expect(writes.mock.calls.filter(args => String(args[0]).includes('"method":"workflow.enroll"'))).toHaveLength(0);
+});
+it("checks live protocol evidence before renewal and revokes an outdated enrolled adapter once", async () => {
+ const h = await fixture();
+ const writes = vi.spyOn(Socket.prototype, "write");
+ await vi.waitFor(() => expect(writes.mock.calls.some(args => String(args[0]) === "workflow.renew\n")).toBe(true), {timeout:2500});
+ const request = herdr.localRequest;
+ vi.spyOn(herdr, "localRequest").mockImplementation(async (...args) => {
+  const page = await request(...args);
+  return args[1] === "snapshot" ? {...page, capabilities:{enrollmentProtocol:0}} : page;
+ });
+ const notify = vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+ h.options.askContinuation = notify;
+ writes.mockClear();
+ await h.coordinator.poll(false);
+ expect(h.coordinator.status().workflows[0]).toMatchObject({state:"paused",pauseReason:"adapter-outdated"});
+ await new Promise(resolve => setTimeout(resolve, 1100));
+ expect(writes.mock.calls.filter(args => String(args[0]) === "workflow.renew\n")).toHaveLength(0);
+ expect(notify).toHaveBeenCalledTimes(1);
+});
 it("revokes and persists snapshot disconnect A before awaiting reconnect inspection B", async () => {
  const h = await fixture();
  const snapshot = h.options.snapshot;
@@ -70,7 +131,7 @@ it("revokes and persists snapshot disconnect A before awaiting reconnect inspect
   return { ...page, sessions: [
    ...page.sessions.map(session => ({ ...session, connected: !disconnectedA })),
    { ...targetB, label: "B", state: "working", connected: true, activityInstanceId: "adapter-b",
-    capabilities: { inspect: true, approvals: true, activityFence: 1 } },
+    capabilities: { inspect: true, approvals: true, activityFence: 1, enrollmentProtocol: 1 } },
   ] };
  };
  await h.coordinator.dispatch({ action: "start", mode: "session", objective: "Run tests in B",

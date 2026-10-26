@@ -149,13 +149,14 @@ it.each(["git push", "Permiso de seguridad"])("resolves human confirmation %s ov
 async function enroll(h: Awaited<ReturnType<typeof session>>, now?: () => number) {
 	const target = { paneId: "pane-a", sessionId: "s1" };
 	const initial = await h.call("snapshot");
+	expect(initial.capabilities).toMatchObject({activityFence:1, enrollmentProtocol:1});
 	const coordinator = new WorkflowContinuations({
 		dataDir: h.ctx.cwd, now,
 		snapshot: async () => {
 			const page = await h.call("snapshot");
 			return { sessions: [{ ...target, label: "Local", state: "working", connected: true,
 				humanActivityAt: (page.companionActivity as { humanActivityAt?: string }).humanActivityAt,
-				activityInstanceId: String(initial.instanceId), capabilities: { inspect: true, prompt: true, approvals: true, activityFence: 1 } }], approvals: [] };
+				activityInstanceId: String(initial.instanceId), capabilities: { inspect: true, prompt: true, approvals: true, activityFence: 1, enrollmentProtocol: 1 } }], approvals: [] };
 		},
 		inspect: async () => h.call("snapshot"),
 		approve: async (request, authorize) => {

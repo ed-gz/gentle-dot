@@ -36,7 +36,7 @@ function fixture() {
 		state: "working",
 		connected: true,
 		activityInstanceId: "adapter-a",
-		capabilities: { inspect: true, prompt: true, approvals: true, activityFence:1 },
+		capabilities: { inspect: true, prompt: true, approvals: true, activityFence:1, enrollmentProtocol:1 },
 	};
 	const approvals: Array<{ id: string; paneId: string; sessionId: string }> = [];
 	const inspect = vi.fn(async () => ({ sessionId: target.sessionId, status: "waiting", question }));

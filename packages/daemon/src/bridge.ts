@@ -51,6 +51,7 @@ import type { AgentRecord, AgentSupervisor, SupervisorEvent } from "./supervisor
 import { composePrompt, type StoredFile, splitAttachments, type UploadStore } from "./uploads.ts";
 import type { VoiceService } from "./voice.ts";
 import type { PinGate } from "./web-pin.ts";
+import type { WorkflowStatus } from "./workflows.ts";
 import { isBlockedInput, presentText, shouldShowToast } from "./white-label.ts";
 
 export interface BridgeClient {
@@ -217,9 +218,16 @@ export class DotBridge {
 	}
 
 	/** A daemon-owned choice, displayed by the same desktop/phone ask channel as engine requests. */
-	askWatchContinuation(label: string, answer: (choice: "continue" | "stop") => Promise<void>): void {
+	askWatchContinuation(
+		label: string,
+		answer: (choice: "continue" | "stop") => Promise<void>,
+		pause?: Pick<WorkflowStatus, "pauseReason" | "lastMessage">,
+	): void {
 		const requestId = `watch-${randomUUID()}`;
-		const ask: Ask = {requestId, method:"select", title:presentText(`¿Sigo vigilando la sesión ${label} o la dejo?`), options:["Continuar", "Dejar de vigilar"]};
+		const title = pause?.pauseReason === "adapter-outdated" && pause.lastMessage
+			? pause.lastMessage
+			: `¿Sigo vigilando la sesión ${label} o la dejo?`;
+		const ask: Ask = {requestId, method:"select", title:presentText(title), options:["Continuar", "Dejar de vigilar"]};
 		this.continuationAnswers.set(requestId, answer);
 		const timer = setTimeout(() => this.resolveAsk(requestId), APPROVAL_WAIT_MS);
 		timer.unref();

@@ -25,15 +25,25 @@ Por defecto el plazo es **24 horas**, configurable con `expiresInHours` entre 0.
 
 La actividad local usa metadatos semánticos del adaptador, no el texto del borrador. En terminal la pregunta aparece en la próxima actualización del adaptador; además, cada envío autónomo lleva una marca de actividad esperada y el adaptador lo rechaza si la persona escribió entretanto, sin esperar ese sondeo. PC/teléfono pausa antes de enviar el prompt. Sesiones ya abiertas necesitan cargar el adaptador actualizado de forma segura para informar entrada local/escritura; sin esa capacidad sólo se detectan envíos hechos desde Dot. La versión `activityFence: 1` del adaptador es obligatoria para inscribir o reanudar autonomía. Si falta, el encargo queda pausado y sólo puede usarse la vigilancia de avisos; actualizar una sesión existente requiere cargar el adaptador de forma segura. Cada workflow guarda el último marcador personal y la instancia del adaptador de cada sesión exacta; un adaptador reiniciado tampoco prueba ausencia de interacción; después de reiniciar lo compara con el adaptador antes de conceder una continuación. Si hubo actividad durante la desconexión, pausa y pregunta en lugar de adoptar silenciosamente el marcador nuevo. Responder personalmente una pregunta de la sesión también cuenta como actividad; responder bajo un workflow no. Un comando ya entregado no puede deshacerse al pausar.
 
+## Si el conector de la sesión es antiguo
+
+La autonomía necesita también `enrollmentProtocol: 1`, anunciado por el adaptador junto con `activityFence: 1`. Si falta o es incompatible, el encargo queda pausado con motivo `adapter-outdated`, sin intentar respuestas ni clasificarlas como envíos inciertos. Capri avisa una sola vez, también al crear la delegación:
+
+> La sesión <label> usa una versión anterior del conector. Escribí /reload en esa sesión y decime «seguí vigilando».
+
+Después de `/reload`, pedí explícitamente que continúe. La nueva instancia no reanuda esta pausa automáticamente: recargar es una acción humana, no una reconexión inocua. Los avisos sin autonomía siguen disponibles.
+
 ## Reconexiones sin actividad humana
 
-Una desconexión revoca inmediatamente la inscripción y el lease de la delegación. Si **el único motivo de pausa guardado es `disconnected`**, Capri vuelve a inscribirla automáticamente al observar conectada la misma sesión (`paneId` + `sessionId`), con `activityFence: 1`, la **misma instancia del adaptador** y el **mismo marcador de actividad humana**. También funciona al cargar el estado tras reiniciar el daemon; no renueva el plazo autorizado ni reutiliza el lease anterior. La comprobación periódica puede tardar unos 30 segundos.
+Una desconexión revoca inmediatamente la inscripción y el lease de la delegación. Si **el único motivo de pausa guardado es `disconnected`**, Capri vuelve a inscribirla automáticamente al observar conectada la misma sesión (`paneId` + `sessionId`), con `activityFence: 1` y `enrollmentProtocol: 1`, la **misma instancia del adaptador** y el **mismo marcador de actividad humana**. También funciona al cargar el estado tras reiniciar el daemon; no renueva el plazo autorizado ni reutiliza el lease anterior. La comprobación periódica puede tardar unos 30 segundos.
 
 Antes de reanudar, Capri inspecciona la pregunta exacta de esa sesión: una pregunta humana o no verificable conserva la pausa y genera una sola pregunta de continuación. Un permiso delegable no se bloquea por haber llegado durante la desconexión: vuelve al flujo habitual de revisión de la instrucción y sus cercas, sin aprobarse desde la recuperación. Si la inspección tarda, se vuelven a comprobar la actividad, la instancia, el plazo y las decisiones humanas antes de cambiar el estado.
 
+Antes de emitir `workflow.enroll` o renovar su autorización, el daemon consulta una snapshot del propio adaptador por el socket del manifiesto y comprueba que `sessionId` e `instanceId` coincidan y que anuncie `enrollmentProtocol: 1`. Los datos persistidos no prueban esa capacidad, tampoco al arrancar el daemon. Sin evidencia verificable no inscribe ni renueva; si el protocolo es antiguo, revoca y pausa con `adapter-outdated` y un solo aviso.
+
 Cada pausa cambia la generación de inscripción. La revocación del socket comienza fuera de la cola de descubrimiento; la reconexión espera su cierre y crea otro socket. Una lectura de registro o confirmación asíncrona de la generación anterior no puede restaurar autoridad. Los grants de permisos ligados a la inscripción anterior siguen inválidos incluso después de reconectar.
 
-Si cambió la instancia o el marcador, permanece pausada y muestra una sola pregunta de continuación. No se reanudan automáticamente pausas humanas, explícitas, por vencimiento, por revisión o por un envío incierto. Los estados antiguos sin motivo de pausa explícito requieren reanudación humana: no se deduce autoridad del texto de `pending`. Una pregunta de continuación ya guardada tampoco permite auto-reanudar.
+Si cambió la instancia o el marcador, permanece pausada y muestra una sola pregunta de continuación. No se reanudan automáticamente pausas humanas, explícitas, por vencimiento, por revisión, por conector antiguo o por un envío incierto. Los estados antiguos sin motivo de pausa explícito requieren reanudación humana: no se deduce autoridad del texto de `pending`. Una pregunta de continuación ya guardada tampoco permite auto-reanudar.
 
 ## Gmail y avisos
 
