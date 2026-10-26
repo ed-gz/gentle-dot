@@ -12,6 +12,13 @@ it("uses short excerpts, Ver más and timed speech",()=>{
  fireEvent.click(screen.getByText("Ver más"));expect(more).toHaveBeenCalledOnce();expect(layout).toHaveBeenLastCalledWith(true,false);
  act(()=>vi.advanceTimersByTime(9000));expect(screen.queryByRole("status")).toBeNull();expect(layout).toHaveBeenLastCalledWith(false,false);
 });
+it.each(["Captura tomada y copiada", "Captura guardada"])("shows only the minimal screenshot line: %s",(text)=>{
+ const speech={id:"screenshot",text,showMore:false};
+ render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} speech={speech} more={vi.fn()} onLayout={vi.fn()}/>);
+ expect(screen.getByRole("status")).toHaveTextContent(text);
+ expect(screen.getByRole("status").textContent).toBe(text);
+ expect(screen.queryByRole("button",{name:"Ver más"})).toBeNull();
+});
 it("sends typed text via Dot send and calls the existing mic hook",()=>{
  const send=vi.fn().mockReturnValue(true);
  render(<CapriConversation state={{...initialState,connection:"open"}} send={send} open close={vi.fn()} more={vi.fn()} onLayout={vi.fn()}/>);

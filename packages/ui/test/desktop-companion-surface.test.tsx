@@ -29,6 +29,16 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.useRealTimers();
 });
+it.each(["notification", "capture"] as const)("uses minimal screenshot text on the %s surface", (kind) => {
+ const value = controls({ context: { musicPlaying: false, musicAvailable: false, notificationsAvailable: true,
+  notification: { id: "shot", kind, summary: "Screenshot Saved", body: "File: Screenshot_2026.png\nFolder: /Pictures/Screenshots", source: { appName: "Screenshot" }, expiresAt: Date.now() + 8000 },
+ } });
+ const { button } = setup(value);
+ expect(button).toHaveAccessibleName("Capri: Captura tomada y copiada. Abrir conversación");
+ expect(button.getAttribute("aria-label")).not.toContain("Screenshot_2026");
+ expect(screen.queryByText("Ver más")).not.toBeInTheDocument();
+});
+
 it("never drags or nudges a pinned companion, but keeps click-to-chat", () => {
  const control = controls({ pinned: true });
  const startDrag = vi.fn(), toggle = vi.fn();

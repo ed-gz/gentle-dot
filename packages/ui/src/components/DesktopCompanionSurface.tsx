@@ -314,15 +314,15 @@ export function DesktopCompanionSurface({
 	}
 	const choreography = useChoreography(controls.state.enabled && preferred3D,
 		behavior.state !== "idle" || interacting || Boolean(cue), cue?.id);
-	const [speech, setSpeech] = useState<{ id: string; until: number; text: string }>();
+	const [speech, setSpeech] = useState<{ id: string; until: number; text: string; showMore?: boolean }>();
 	useEffect(() => {
 		if (!cue?.summary || !["notification", "submitted", "question", "capture", "download"].includes(cue.kind)) {
 			setSpeech(undefined); return;
 		}
-		const presentation = cue.kind === "notification" ? notificationPresentation(cue) : cue;
+		const presentation = cue.kind === "notification" || cue.kind === "capture" ? notificationPresentation(cue) : { ...cue, showMore: undefined };
 		const text = `${presentation.summary}${presentation.body ? ` ${presentation.body}` : ""}`;
 		const duration = Math.min(speechDuration(text), Math.max(0, cue.expiresAt - Date.now()));
-		setSpeech({ id: cue.id, until: Date.now() + duration, text });
+		setSpeech({ id: cue.id, until: Date.now() + duration, text, showMore: presentation.showMore });
 		const timer = setTimeout(() => setSpeech(undefined), duration);
 		return () => clearTimeout(timer);
 	}, [cue?.id, cue?.summary, cue?.body, cue?.kind, cue?.expiresAt]);
@@ -356,7 +356,7 @@ export function DesktopCompanionSurface({
 		face: { animation: desktopFace(faceEvent), form: faceEvent === "typing" ? "face" : "3d" },
 	}), [baseChoice, faceEvent, perched]);
 	const duo = pose.startsWith("duo-") || pose === "invite-rebecca";
-	const externalMessage = cue?.kind === "notification" ? notificationPresentation(cue) : undefined;
+	const externalMessage = cue?.kind === "notification" || cue?.kind === "capture" ? notificationPresentation(cue) : undefined;
 	const message =
 		!connected && !context?.musicPlaying && !cue
 			? "Sin conexión con tu asistente"

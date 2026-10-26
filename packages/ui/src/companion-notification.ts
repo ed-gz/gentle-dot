@@ -26,8 +26,29 @@ function messageEnvelope(cue: DesktopCompanionCue, supported: boolean) {
 	return { sender, body: match[2]! };
 }
 
+/** Only successful screenshot notices lose their details; errors remain actionable notices. */
+function screenshotPresentation(cue: DesktopCompanionCue) {
+	if (cue.kind !== "notification" && cue.kind !== "capture") return;
+	const identity = `${cue.source?.appName ?? ""} ${cue.source?.desktopEntry ?? ""}`;
+	const screenshot = cue.kind === "capture" ||
+		/(?:^|[\s./-])(?:screenshot|hyprshot|grimblast|flameshot|spectacle|gnome-screenshot)(?:$|[\s./-])/i.test(identity) ||
+		/^(?:screenshot|captura)\b/i.test(cue.summary ?? "");
+	if (!screenshot) return;
+	// Filenames and folders are not evidence of clipboard or save status.
+	const status = `${cue.summary ?? ""} ${cue.body ?? ""}`.replace(/(?:File|Folder|Archivo|Carpeta):[^\n]*/gi, "");
+	if (/\b(?:error|failed|failure|denied|warning|authentication|password|login|contraseña|autenticación|advertencia|cancelled|canceled|fallida|falló|cancelada|cancelado|missing dependencies)\b/i.test(status)) return;
+	// The local screenshot tool copies by default; only an explicit "not copied" notice says otherwise.
+	const notCopied = /\b(?:not copied|no copiad[ao]|sin copiar|only saved|solo guardad[ao])\b/i.test(status);
+	return {
+		summary: notCopied ? "Captura guardada" : "Captura tomada y copiada",
+		body: undefined, quoted: false, showMore: false,
+	};
+}
+
 /** Attribution comes from transport metadata or a recognized app-specific envelope. */
-export function notificationPresentation(cue: DesktopCompanionCue) {
+export function notificationPresentation(cue: DesktopCompanionCue): { summary: string; body?: string; quoted: boolean; showMore?: boolean } {
+	const screenshot = screenshotPresentation(cue);
+	if (screenshot) return screenshot;
 	const source = cue.source;
 	if (cue.kind !== "notification" || !source)
 		return { summary: cue.summary ?? "Hay un aviso para ti.", body: cue.body, quoted: false };

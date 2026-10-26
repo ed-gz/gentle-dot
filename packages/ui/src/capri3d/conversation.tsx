@@ -37,7 +37,7 @@ export function overlayMask(mask: number[], bubble: boolean, input: boolean): nu
 }
 interface Props {
  state: DotState; send: Send; open: boolean; close(): void; more(): void;
- speech?: {id:string;text:string};
+ speech?: {id:string;text:string;showMore?:boolean};
  approval?: AgentApproval;
  answer?(action: OrchestrationAction): Promise<void>;
  onLayout(bubble:boolean,input:boolean): void;
@@ -65,7 +65,7 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
   const fade=setTimeout(()=>setLeaving(true),Math.max(0,duration-180));
   const timer=setTimeout(()=>setShown(undefined),duration);
   return()=>{clearTimeout(timer);clearTimeout(fade);};
- },[speech?.id,speech?.text]);
+ },[speech?.id,speech?.text,speech?.showMore]);
  useEffect(()=>{if(open)input.current?.focus();},[open]);
  useEffect(()=>{if(!voice.draft)return;setDraft(voice.draft.text);voice.draftTaken(voice.draft.id);},[voice.draft,voice.draftTaken]);
  const bubble=Boolean(shown || confirmation);
@@ -84,7 +84,7 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
    {confirmation ? <div className="capri3d-confirm">
     <button type="button" disabled={pending} onClick={()=>void respond(true)}>Sí</button>
     <button type="button" disabled={pending} onClick={()=>void respond(false)}>No</button>
-   </div> : <button type="button" className="capri3d-more" onClick={more}>Ver más</button>}
+   </div> : shown?.showMore !== false && <button type="button" className="capri3d-more" onClick={more}>Ver más</button>}
    {error && <span role="alert">{error}</span>}
   </div>}
   {open && <form className="capri3d-chat" onSubmit={event=>{

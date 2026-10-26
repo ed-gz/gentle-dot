@@ -27,6 +27,42 @@ const notification = (patch: Partial<DesktopCompanionCue> = {}): DesktopCompanio
 	...patch,
 });
 
+it.each([
+	{ source: { appName: "Hyprshot" }, summary: "Screenshot copied to clipboard", expected: "Captura tomada y copiada" },
+	{ source: { appName: "grimblast" }, summary: "Copied", expected: "Captura tomada y copiada" },
+	{ source: { appName: "flameshot" }, summary: "Saved and copied", expected: "Captura tomada y copiada" },
+	{ source: { desktopEntry: "org.kde.spectacle" }, summary: "Image saved", expected: "Captura tomada y copiada" },
+	{ source: { appName: "gnome-screenshot" }, summary: "Saved", expected: "Captura tomada y copiada" },
+	{ summary: "Captura guardada", expected: "Captura tomada y copiada" },
+	{ summary: "Screenshot Saved", expected: "Captura tomada y copiada" },
+	{ kind: "capture" as const, source: { appName: "Screenshot" }, summary: "Screenshot Saved", expected: "Captura tomada y copiada" },
+	{ summary: "Captura guardada y copiada", expected: "Captura tomada y copiada" },
+])("minimizes screenshot presentation: $summary", ({ expected, ...patch }) => {
+	expect(notificationPresentation(notification({ ...patch, body: "File: Screenshot_2026.png\nFolder: /Pictures/Screenshots" }))).toEqual({
+		summary: expected, body: undefined, quoted: false, showMore: false,
+	});
+});
+
+it.each([
+ { summary: "Screenshot failed", source: { appName: "Hyprshot" } },
+ { summary: "Authentication required", source: { appName: "Screenshot" } },
+ { summary: "Missing Dependencies", source: { appName: "Screenshot System" } },
+ { summary: "Nuevo mensaje en General", source: { appName: "Slack" }, body: "Alex Rivera: Screenshot Saved" },
+ { summary: "Build complete", body: "Saved /Pictures/Screenshots/a.png" },
+])("does not minimize unrelated messages or screenshot failures: $summary", (patch) => {
+ expect(notificationPresentation(notification(patch)).showMore).toBeUndefined();
+});
+
+it("does not claim copying when a screenshot was only saved", () => {
+ expect(notificationPresentation(notification({ summary: "Screenshot saved, not copied", body: "Clipboard unavailable" })).summary).toBe("Captura guardada");
+});
+
+it("pins a regular notification's existing presentation", () => {
+	expect(notificationPresentation(notification({ summary: "Build complete", body: "All checks passed" }))).toEqual({
+		summary: "Build complete", body: "All checks passed", quoted: false,
+	});
+});
+
 it("keeps Alex's words quoted and attributes the introduction to her actual source", () => {
 	const cue = notification({
 		source: { appName: "Slack", sender: "Alex Rivera" },
