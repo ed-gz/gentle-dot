@@ -225,7 +225,11 @@ export const createRenderer: RendererFactory = async options => {
  void batteryApi.getBattery?.().then(state => { if (disposed) return; batteryState = state; state.addEventListener("chargingchange", batteryChanged); batteryChanged(); }).catch(() => {});
  const home = new THREE.Vector3();
  let queue = Promise.resolve();
- const scheduler = new FrameScheduler(delta => tick(delta));
+ const scheduler = new FrameScheduler(delta => tick(delta), () => {
+  if (transition || (choice?.motion && elapsed * 1000 < (choice.duration ?? 0))) return false;
+  if (form === "face" && head.visible) return true;
+  return !following && (procedural === "quieta" || procedural === "sentada" || procedural === "dormir" || (!procedural && !action));
+ });
  const stop = () => scheduler.dispose();
  const alignSeat = () => {
   if (!choice?.perch || !current) return;
@@ -257,22 +261,32 @@ export const createRenderer: RendererFactory = async options => {
  const tick = (delta: number) => {
   if (!running()) return;
   elapsed += delta;
-  if (procedural) {
-   phase += delta;
-   if (following && phase >= clips[procedural].duration) {
-    procedural = following; following = undefined; phase = 0; player?.play(procedural);
+  // Keep sprite time advancing, but do not animate the invisible 3D body.
+  const spriteOnly = form === "face" && head.visible && !transition;
+  if (!spriteOnly) {
+   if (procedural) {
+    phase += delta;
+    if (following && phase >= clips[procedural].duration) {
+     procedural = following; following = undefined; phase = 0; player?.play(procedural);
+    }
+    player?.update(delta);
+   } else {
+    mixer?.update(delta);
+    // Authored resting GLBs have no playing clip. A live timer alone just
+    // repaints identical pixels; breathe/sway without replacing their pose.
+    if (current && !action) {
+     current.scene.position.y = home.y + 0.025 * Math.sin(elapsed * Math.PI / 2);
+     current.scene.rotation.z = 0.012 * Math.sin(elapsed * Math.PI / 3);
+    }
    }
-   player?.update(delta);
-  } else {
-   mixer?.update(delta);
-   // Authored resting GLBs have no playing clip. A live timer alone just
-   // repaints identical pixels; breathe/sway without replacing their pose.
-   if (current && !action) {
-    current.scene.position.y = home.y + 0.025 * Math.sin(elapsed * Math.PI / 2);
-    current.scene.rotation.z = 0.012 * Math.sin(elapsed * Math.PI / 3);
+   if (currentName === "roja.glb") face?.update(elapsed, procedural === "hablar" || choice?.clip === "Hablar", procedural === "dormir" ? true : undefined);
+   if (!procedural && choice?.end !== undefined && elapsed + (choice.start ?? 0) >= choice.end) {
+    // Wave ends before teleport tracks. Clamp instead of playing the teleport section.
+    mixer?.setTime(choice.end);
+    if (action) action.paused = true;
    }
   }
-  if (currentName === "roja.glb") face?.update(elapsed, procedural === "hablar" || choice?.clip === "Hablar", procedural === "dormir" ? true : undefined);
+  // Motion effects own canvas opacity and arrival transforms even in face-only mode.
   if (current && choice?.motion) {
    const t = elapsed * 1000 / (choice.duration ?? 1);
    if (choice.motion === "walk") {
@@ -288,11 +302,6 @@ export const createRenderer: RendererFactory = async options => {
     options.canvas.style.filter = t < 1 ? "drop-shadow(3px 0 #00e5ef) drop-shadow(-3px 0 #ed4fa7)" : "";
     options.canvas.style.clipPath = t < 1 ? `inset(${Math.floor(t * 17) % 3}% 0)` : "";
    }
-  }
-  if (!procedural && choice?.end !== undefined && elapsed + (choice.start ?? 0) >= choice.end) {
-   // Wave ends before teleport tracks. Clamp instead of playing the teleport section.
-   mixer?.setTime(choice.end);
-   if (action) action.paused = true;
   }
   try { frame(!running()); } catch { stop(); options.failure(); return; }
  };

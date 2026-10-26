@@ -1,3 +1,16 @@
+/* Scoped desktop notice tokens share Capri's default dark palette without
+   giving the transparent native host an opaque chat background. */
+.capri3d-host {
+	--capri-notice-surface: #121d22;
+	--capri-notice-control: #1b2a30;
+	--capri-notice-text: #f0f6ef;
+	--capri-notice-muted: #b0c4c2;
+	--capri-notice-border: #6c858c;
+	--capri-notice-accent: #bcf86a;
+	--capri-notice-accent-ink: #13200c;
+	color-scheme: dark;
+}
+
 /* The companion floats in a body portal, independently of chat layout. */
 :is(.chat, .capri-overlay)[data-companion="capri"] {
 	--bg: #0b1114;

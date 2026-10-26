@@ -41,10 +41,10 @@ describe("reference-compatible procedural rig", () => {
   player.update(1); expect(Number.isFinite(head.quaternion.x)).toBe(true);
  });
 });
-it("caps continuous visible idle at 30fps, 24 on battery, and cancels hidden/reduced/captured work",()=>{
+it("caps active frames at 30fps, 24 on battery, and cancels hidden/reduced/captured work",()=>{
  vi.useFakeTimers(); const frame=vi.fn(); const scheduler=new FrameScheduler(frame);
  scheduler.set({visible:true}); vi.advanceTimersByTime(1000); expect(frame.mock.calls.length).toBeGreaterThanOrEqual(28); expect(frame.mock.calls.length).toBeLessThanOrEqual(30);
- frame.mockClear(); scheduler.set({visible:true,battery:true}); vi.advanceTimersByTime(1000); expect(frame.mock.calls.length).toBeLessThanOrEqual(24);
+ frame.mockClear(); scheduler.set({visible:true,battery:true}); vi.advanceTimersByTime(1000); expect(frame.mock.calls.length).toBeGreaterThanOrEqual(23); expect(frame.mock.calls.length).toBeLessThanOrEqual(24);
  for(const state of [{visible:false},{visible:true,reduced:true},{visible:true,capture:true}]) { scheduler.set(state); frame.mockClear(); vi.advanceTimersByTime(1000); expect(frame).not.toHaveBeenCalled(); }
  scheduler.dispose(); expect(vi.getTimerCount()).toBe(0); vi.useRealTimers();
 });
@@ -65,4 +65,18 @@ it("uses deterministic idle checkpoints, never random wandering",()=>{
  vi.advanceTimersByTime(4600);expect(rest.pose).toBe("float");
  vi.advanceTimersByTime(25400);expect(rest.pose).toBe("sit");
  rest.dispose();vi.useRealTimers();
+});
+
+it("reduces resting work to 12fps and restores active cadence without catch-up",()=>{
+ vi.useFakeTimers();let resting=true;const frame=vi.fn();
+ const scheduler=new FrameScheduler(frame,()=>resting);
+ scheduler.set({visible:true});vi.advanceTimersByTime(1000);
+ expect(frame.mock.calls.length).toBeGreaterThanOrEqual(10);expect(frame.mock.calls.length).toBeLessThanOrEqual(12);
+ resting=false;frame.mockClear();vi.advanceTimersByTime(1000);
+ expect(frame.mock.calls.length).toBeGreaterThanOrEqual(27);expect(frame.mock.calls.length).toBeLessThanOrEqual(30);
+ expect(frame.mock.calls.every(([delta])=>delta>0 && delta<=0.1)).toBe(true);
+ resting=true;scheduler.set({visible:true,battery:true});frame.mockClear();vi.advanceTimersByTime(1000);
+ expect(frame.mock.calls.length).toBe(11);
+ scheduler.set({visible:false});frame.mockClear();vi.advanceTimersByTime(1000);expect(frame).not.toHaveBeenCalled();
+ scheduler.dispose();expect(vi.getTimerCount()).toBe(0);vi.useRealTimers();
 });

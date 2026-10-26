@@ -47,12 +47,15 @@ it("renders continuous idle, caps gestures to 30fps and stops hidden/reduced-mot
  renderer.visibility(true, false);
  await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo" });
  const idleFrames = gpu.render.mock.calls.length;
- vi.advanceTimersByTime(2000); expect(gpu.render.mock.calls.length - idleFrames).toBeGreaterThan(50);
- expect(gpu.render.mock.calls.length - idleFrames).toBeLessThanOrEqual(64);
+ vi.advanceTimersByTime(2000);
+ // 23 visible frames at 12fps, plus three 500ms silhouette readbacks.
+ expect(gpu.render.mock.calls.length - idleFrames).toBeGreaterThanOrEqual(25);
+ expect(gpu.render.mock.calls.length - idleFrames).toBeLessThanOrEqual(27);
  await renderer.choose({ model: "roja.glb", clip: "Pensar" });
  gpu.render.mockClear(); mask.mockClear();
  vi.advanceTimersByTime(1000);
  // Each mask sample renders once more into a readback target; normal frames remain <=30.
+ expect(gpu.render.mock.calls.length).toBeGreaterThanOrEqual(29);
  expect(gpu.render.mock.calls.length).toBeLessThanOrEqual(33);
  expect(mask.mock.calls.length).toBeLessThanOrEqual(2);
  renderer.visibility(false, false); gpu.render.mockClear();
@@ -67,8 +70,9 @@ it("keeps idle lively with bounded silhouette readbacks and cancels when hidden"
  await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo" });
  gpu.render.mockClear(); gpu.reads.mockClear();
  vi.advanceTimersByTime(4340);
- expect(gpu.render.mock.calls.length).toBeGreaterThan(120);
- expect(gpu.render.mock.calls.length).toBeLessThanOrEqual(139);
+ // 51 visible frames and eight silhouette readbacks, not 30fps idle.
+ expect(gpu.render.mock.calls.length).toBeGreaterThanOrEqual(58);
+ expect(gpu.render.mock.calls.length).toBeLessThanOrEqual(60);
  expect(gpu.reads.mock.calls.length).toBeLessThanOrEqual(9);
  renderer.visibility(false, false); gpu.render.mockClear();
  vi.advanceTimersByTime(20_000); expect(gpu.render).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
@@ -221,6 +225,68 @@ it("shares one render owner for heads, metamorphosis in both directions, and 3D 
   expect(vi.getTimerCount()).toBe(1);
   renderer.visibility(false, false); gpu.render.mockClear();
   vi.advanceTimersByTime(2000); expect(gpu.render).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+ } finally { renderer.dispose(); load.mockRestore(); }
+});
+function mockDesktopAtlas() {
+ const frame = (x: number) => ({ x, y: 0, width: 20, height: 20, offsetX: 0, offsetY: 0, durationMs: 100 });
+ vi.mocked(loadDesktopFaces).mockResolvedValueOnce({ href: "fixture.png", manifest: { width: 100, height: 20, animations: {
+  "glitch-transition": { canvas: { width: 20, height: 20 }, frames: [frame(0), frame(20)] },
+  "typing-watch": { canvas: { width: 20, height: 20 }, frames: [frame(40), frame(60)] },
+ } } });
+ const texture = new THREE.Texture(document.createElement("img"));
+ return vi.spyOn(THREE.TextureLoader.prototype, "load").mockImplementation((_url, ready) => { ready?.(texture); return texture; });
+}
+it.each(["procedural", "authored-rest", "authored-clip"] as const)("skips hidden %s body work at 12fps and resumes in 3D", async kind => {
+ const load = mockDesktopAtlas();
+ const base = model(); base.scene.add(articulatedModel()); gpu.parse.mockResolvedValue(base);
+ const update = vi.spyOn(THREE.AnimationMixer.prototype, "update");
+ const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => bytes(), mask: vi.fn(), failure: vi.fn() });
+ const choice = kind === "authored-rest" ? { model: "roja_sentada.glb" as const, clip: null }
+  : { model: "roja.glb" as const, clip: kind === "procedural" ? "Flotar_en_reposo" : "Saludar_y_teletransportarse", ...(kind === "authored-clip" ? { end: 0.4 } : {}) };
+ try {
+  renderer.visibility(true, false);
+  await renderer.choose({ ...choice, face: { form: "face", animation: "typing-watch" } });
+  vi.advanceTimersByTime(300); // Metamorphosis must finish before body work can stop.
+  expect(base.scene.visible).toBe(false);
+  const head = base.scene.getObjectByName("Cabeza")!;
+  const rotation = head.quaternion.clone(), position = base.scene.position.clone();
+  update.mockClear(); gpu.render.mockClear(); gpu.reads.mockClear();
+  vi.advanceTimersByTime(1000);
+  expect(update).not.toHaveBeenCalled();
+  expect(head.quaternion.equals(rotation)).toBe(true);
+  expect(base.scene.position.equals(position)).toBe(true);
+  const visibleFrames = gpu.render.mock.calls.length - gpu.reads.mock.calls.length;
+  expect(visibleFrames).toBeGreaterThanOrEqual(11); expect(visibleFrames).toBeLessThanOrEqual(12);
+  expect(gpu.reads.mock.calls.length).toBeLessThanOrEqual(2);
+  await renderer.choose({ ...choice, face: { form: "3d" } });
+  update.mockClear();
+  vi.advanceTimersByTime(1000);
+  expect(base.scene.visible).toBe(true);
+  if (kind === "procedural") expect(head.quaternion.equals(rotation)).toBe(false);
+  else {
+   expect(update).toHaveBeenCalled();
+   if (kind === "authored-rest") expect(base.scene.position.equals(position)).toBe(false);
+  }
+ } finally { renderer.dispose(); update.mockRestore(); load.mockRestore(); }
+ expect(vi.getTimerCount()).toBe(0);
+});
+it.each(["teleport", "walk", "land"] as const)("finishes %s effects even when only the face is visible", async motion => {
+ const load = mockDesktopAtlas(), base = model(); gpu.parse.mockResolvedValueOnce(base);
+ const canvas = document.createElement("canvas");
+ const renderer = await createRenderer({ canvas, base: bytes(), read: async () => bytes(), mask: vi.fn(), failure: vi.fn() });
+ try {
+  renderer.visibility(true, false);
+  await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo", motion, duration: 1000, face: { form: "face", animation: "typing-watch" } });
+  vi.advanceTimersByTime(510);
+  if (motion === "teleport") expect(Number(canvas.style.opacity)).toBeLessThan(0.15);
+  if (motion === "walk") expect(base.scene.rotation.y).not.toBe(0);
+  if (motion === "land") expect(base.scene.scale.y).toBeLessThan(1);
+  vi.advanceTimersByTime(700);
+  expect(base.scene.rotation.y).toBe(0); expect(base.scene.scale.y).toBe(1);
+  if (motion === "teleport") {
+   expect(Number(canvas.style.opacity)).toBe(1);
+   expect(canvas.style.filter).toBe(""); expect(canvas.style.clipPath).toBe("");
+  }
  } finally { renderer.dispose(); load.mockRestore(); }
 });
 function articulatedModel() {

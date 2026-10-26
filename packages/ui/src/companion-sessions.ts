@@ -136,7 +136,6 @@ export function useDesktopSessionContext(
 		let live = true,
 			last = "",
 			lastPublished = 0;
-		const questionShownAt = new Map<string, number>();
 		let ownedCueId: string | undefined;
 		let timer: ReturnType<typeof setTimeout>;
 		let abort: AbortController | undefined;
@@ -152,14 +151,9 @@ export function useDesktopSessionContext(
 				if (snapshot.version !== 1 || !Array.isArray(snapshot.sessions) || snapshot.sessions.length > 512)
 					throw new Error("Invalid context");
 				const now = Date.now();
-				const pendingIds = new Set(
-					snapshot.sessions.flatMap((s) => (s.pendingQuestion ? [s.pendingQuestion.id] : [])),
-				);
-				for (const id of questionShownAt.keys()) if (!pendingIds.has(id)) questionShownAt.delete(id);
-				const announced = new Set(
-					[...questionShownAt].filter(([, at]) => now - at >= 8000).map(([id]) => id),
-				);
-				const cue = companionSessionCue(snapshot, now, announced);
+				// A fresh pending request remains visible until withdrawn. Snapshot freshness
+				// and the native TTL still bound its lifetime if updates stop arriving.
+				const cue = companionSessionCue(snapshot, now);
 				const signature = JSON.stringify(cue);
 				// Refresh the lifetime of ongoing work; native deduplication does not replay its bubble.
 				const refreshMs = cue.kind === "input-ready" || cue.kind === "typing" ? 1000 : 4000;
@@ -171,10 +165,6 @@ export function useDesktopSessionContext(
 							return;
 						}
 						ownedCueId = cue.id;
-						if (cue.kind === "question" && cue.id) {
-							const id = cue.id.slice("question:".length);
-							if (!questionShownAt.has(id)) questionShownAt.set(id, Date.now());
-						}
 					} else if (ownedCueId) {
 						await latest.current?.({ kind: "rest", id: ownedCueId });
 						ownedCueId = undefined;

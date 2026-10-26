@@ -1,20 +1,36 @@
 .capri3d-host { position: relative; width: 100vw; height: 100vh; }
 .capri3d-host .desktop-companion-surface[data-form="3d"] { position: absolute; width: 144px; height: 204px; top: var(--capri-top, 0px); left: 50%; transform: translateX(-50%); }
-.capri3d-speech { box-sizing: border-box; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 86%; max-height: 138px; background: #fbfbff; color: #22223a; border: 2px solid #2b2b48; border-radius: 14px; padding: 8px 12px; font: 14px/1.3 system-ui, sans-serif; text-align: center; box-shadow: 0 3px 0 #2b2b48; overflow-wrap: anywhere; animation: capri3d-speech-in 180ms ease-out; transition: opacity 180ms, transform 180ms; }
+.capri3d-speech { box-sizing: border-box; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 86%; max-height: 138px; background: var(--capri-notice-surface); color: var(--capri-notice-text); border: 1px solid var(--capri-notice-border); border-radius: 14px; padding: 8px 12px; font: 14px/1.3 system-ui, sans-serif; text-align: center; box-shadow: none; overflow-wrap: anywhere; animation: capri3d-speech-in 180ms ease-out; transition: opacity 180ms, transform 180ms; }
 .capri3d-speech[data-leaving="true"] { opacity: 0; transform: translateX(-50%) scale(.85); }
 .capri3d-speech > span { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-.capri3d-speech::after { content: ""; position: absolute; left: 50%; bottom: -9px; width: 14px; height: 14px; background: #fbfbff; border-right: 2px solid #2b2b48; border-bottom: 2px solid #2b2b48; transform: translateX(-50%) rotate(45deg); }
+.capri3d-speech::after { content: ""; position: absolute; left: 50%; bottom: -9px; width: 14px; height: 14px; background: var(--capri-notice-surface); border-right: 1px solid var(--capri-notice-border); border-bottom: 1px solid var(--capri-notice-border); transform: translateX(-50%) rotate(45deg); }
 .capri3d-confirm { display: flex; justify-content: center; gap: 8px; margin-top: 6px; }
-.capri3d-host .capri3d-speech button, .capri3d-host .capri3d-chat button { border: 2px solid #2b2b48; border-radius: 8px; background: #fbfbff; color: #2b2b48; font: 600 13px/1.2 system-ui; min-width: 40px; min-height: 36px; padding: 4px 8px; box-shadow: none; cursor: pointer; }
+.capri3d-host .capri3d-speech button, .capri3d-host .capri3d-chat button { border: 1px solid var(--capri-notice-border); border-radius: 8px; background: var(--capri-notice-control); color: var(--capri-notice-text); font: 600 13px/1.2 system-ui; min-width: 40px; min-height: 36px; padding: 4px 8px; box-shadow: none; cursor: pointer; }
 .capri3d-host .capri3d-more { display: block; margin: 4px auto 0; border: 0 !important; min-height: 28px !important; text-decoration: underline; }
-.capri3d-host .capri3d-confirm button:first-child { background: #8f86d8; color: #fff; }
-.capri3d-chat { position: absolute; box-sizing: border-box; left: 4px; right: 4px; bottom: 4px; min-height: 80px; display: flex; align-content: start; align-items: center; gap: 4px; flex-wrap: wrap; padding: 4px; border-radius: 12px; background: #fbfbff; color: #22223a; font: 13px/1.3 system-ui; }
-.capri3d-input { flex: 1; min-width: 80px; }
-.capri3d-chat input { box-sizing: border-box; width: 100%; min-width: 0; height: 40px; border: 2px solid #2b2b48; border-radius: 10px; padding: 6px; background: #fbfbff; color: #22223a; font: inherit; }
-.capri3d-host .capri3d-chat button { min-width: 36px; width: 36px; height: 40px; padding: 4px; display: grid; place-items: center; }
-.capri3d-host button:disabled { opacity: .5; cursor: default; }
-.capri3d-chat-note { flex: 1; min-width: 100px; font-size: 12px; }
-.capri3d-chat select { max-width: 110px; height: 26px; border: 1px solid #2b2b48; border-radius: 6px; background: #fbfbff; color: #22223a; font: inherit; }
-.capri3d-host .capri3d-speech button:focus-visible, .capri3d-host .capri3d-chat :focus-visible { outline: 2px solid #6445af; outline-offset: 1px; }
+.capri3d-host .capri3d-confirm button:first-child { background: var(--capri-notice-accent); color: var(--capri-notice-accent-ink); border-color: var(--capri-notice-accent); }
+.capri3d-host .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
+.capri3d-chat { position: absolute; box-sizing: border-box; left: 4px; right: 4px; bottom: 4px; height: 84px; display: flex; flex-direction: column; gap: 2px; padding: 6px; border: 1px solid var(--capri-notice-border); border-radius: 16px; background: var(--capri-notice-surface); color: var(--capri-notice-text); font: 13px/1.3 system-ui; }
+.capri3d-quick-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.capri3d-input { flex: 1 1 auto; min-width: 0; }
+.capri3d-chat input { box-sizing: border-box; width: 100%; min-width: 0; height: 44px; border: 0; border-radius: 0; padding: 6px 2px; background: transparent; color: var(--capri-notice-text); font: 14px/1.3 system-ui; }
+.capri3d-host .capri3d-quick-row button { flex: 0 0 44px; min-width: 44px; width: 44px; min-height: 44px; height: 44px; padding: 4px; display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--capri-notice-muted); }
+.capri3d-host .capri3d-quick-row button svg { width: 20px; height: 20px; }
+.capri3d-host .capri3d-send { background: var(--capri-notice-control); color: var(--capri-notice-text); }
+.capri3d-host .capri3d-send:not(:disabled), .capri3d-host .capri3d-chat button[data-recording="true"] { background: var(--capri-notice-accent); color: var(--capri-notice-accent-ink); }
+.capri3d-host .capri3d-chat button[data-recording="true"] { animation: capri3d-rec 1.2s ease-in-out infinite; }
+.capri3d-chat-tools { display: flex; align-items: center; gap: 8px; min-height: 24px; min-width: 0; }
+.capri3d-host .capri3d-chat-tools button { width: auto; min-height: 24px; padding: 2px 8px; border-color: transparent; background: transparent; color: var(--capri-notice-muted); }
+.capri3d-host .capri3d-chat-tools .capri3d-history { color: var(--capri-notice-text); }
+.capri3d-chat-tools > :last-child:not(:first-child) { margin-left: auto; }
+.capri3d-chat input::placeholder { color: var(--capri-notice-muted); opacity: 1; }
+.capri3d-host .capri3d-speech button:hover:not(:disabled), .capri3d-host .capri3d-chat button:hover:not(:disabled) { border-color: var(--capri-notice-accent); }
+.capri3d-host .capri3d-speech button:active:not(:disabled), .capri3d-host .capri3d-chat button:active:not(:disabled) { filter: brightness(.9); }
+.capri3d-host button:disabled { opacity: .35; cursor: default; }
+.capri3d-chat-note { flex: 1; min-width: 0; color: var(--capri-notice-text); font-size: 12px; line-height: 1.2; }
+.capri3d-chat select { max-width: 140px; height: 24px; border: 1px solid var(--capri-notice-border); border-radius: 6px; background: var(--capri-notice-control); color: var(--capri-notice-text); font: inherit; }
+.capri3d-host .capri3d-speech button:focus-visible, .capri3d-host .capri3d-chat :focus-visible { outline: 2px solid var(--capri-notice-accent); outline-offset: 1px; }
 @keyframes capri3d-speech-in { from { opacity: 0; transform: translateX(-50%) scale(.85); } to { opacity: 1; transform: translateX(-50%) scale(1); } }
+@keyframes capri3d-rec { 50% { box-shadow: 0 0 0 5px rgba(188,248,106,.16); } }
 @media (prefers-reduced-motion: reduce) { .capri3d-speech { animation: none; transition: none; } }
+
+.capri3d-host .capri3d-confirm button { flex: 1; min-width: 88px; min-height: 44px; }

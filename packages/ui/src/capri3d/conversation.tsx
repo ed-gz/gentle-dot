@@ -37,7 +37,7 @@ export function overlayMask(mask: number[], bubble: boolean, input: boolean): nu
 }
 interface Props {
  state: DotState; send: Send; open: boolean; close(): void; more(): void;
- speech?: {id:string;text:string;showMore?:boolean};
+ speech?: {id:string;text:string;showMore?:boolean;approvalKey?:string};
  approval?: AgentApproval;
  answer?(action: OrchestrationAction): Promise<void>;
  onLayout(bubble:boolean,input:boolean): void;
@@ -48,7 +48,19 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
  const [draft,setDraft]=useState(""),[error,setError]=useState<string>(),[pending,setPending]=useState(false);
  const [shown,setShown]=useState(speech);
  const [leaving,setLeaving]=useState(false);
+ const [showGestures,setShowGestures]=useState(false);
  const [answered,setAnswered]=useState<string>();
+ const [receipt,setReceipt]=useState<string>();
+ const sending=useRef(false);
+ const approvalKey=approval ? JSON.stringify([approval.paneId,approval.sessionId,approval.id]) : undefined;
+ const currentKey=useRef(approvalKey);
+ // Removal is expected after answering; only a different request invalidates its receipt.
+ if(approvalKey)currentKey.current=approvalKey;
+ const mounted=useRef(true);
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
+ const dismissedSpeech=useRef<string | undefined>(undefined);
+ useEffect(()=>{if(approvalKey){setError(undefined);setReceipt(undefined);dismissedSpeech.current=undefined;}},[approvalKey]);
+ useEffect(()=>{if(!receipt)return;const timer=setTimeout(()=>setReceipt(undefined),1500);return()=>clearTimeout(timer);},[receipt]);
  const [,expire]=useState(0);
  useEffect(()=>{
   if(!approval)return;
@@ -58,48 +70,60 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
   return()=>clearTimeout(timer);
  },[approval?.id,approval?.expiresAt]);
  const input=useRef<HTMLInputElement>(null);
- const confirmation=approval && answered!==approval.id && confirmationAction(approval,true)?approval:undefined;
+ const confirmation=approval && answered!==approvalKey && confirmationAction(approval,true)?approval:undefined;
  useEffect(()=>{
-  setShown(speech);setLeaving(false);if(!speech)return;
+  setShown(speech?.approvalKey===dismissedSpeech.current && dismissedSpeech.current!==undefined ? undefined : speech);setLeaving(false);if(!speech)return;
   const duration=speechDuration(speech.text);
   const fade=setTimeout(()=>setLeaving(true),Math.max(0,duration-180));
   const timer=setTimeout(()=>setShown(undefined),duration);
   return()=>{clearTimeout(timer);clearTimeout(fade);};
- },[speech?.id,speech?.text,speech?.showMore]);
+ },[speech?.id,speech?.text,speech?.showMore,speech?.approvalKey]);
  useEffect(()=>{if(open)input.current?.focus();},[open]);
  useEffect(()=>{if(!voice.draft)return;setDraft(voice.draft.text);voice.draftTaken(voice.draft.id);},[voice.draft,voice.draftTaken]);
- const bubble=Boolean(shown || confirmation);
+ const bubble=Boolean(shown || confirmation || receipt);
  useEffect(()=>{onLayout(bubble,open);return()=>onLayout(false,false);},[bubble,open,onLayout]);
  const respond=async(approved:boolean)=>{
-  if(!confirmation || !answer || pending)return;
+  if(!confirmation || !answer || sending.current)return;
   const action=confirmationAction(confirmation,approved);if(!action)return;
-  setPending(true);setError(undefined);
-  try { await answer(action);setAnswered(confirmation.id); }
-  catch {setError("No se pudo responder. Volvé a intentarlo o abrí el panel.");}
-  finally {setPending(false);}
+  const key=approvalKey;
+  sending.current=true;setPending(true);setError(undefined);
+  try {
+   await answer(action);
+   if(mounted.current && currentKey.current===key){
+    setAnswered(key);setReceipt("Respuesta enviada");
+    dismissedSpeech.current=key;
+    setShown(value=>value?.approvalKey===dismissedSpeech.current ? undefined : value);
+   }
+  }
+  catch {if(mounted.current && currentKey.current===key)setError("No se pudo responder. Volvé a intentarlo o abrí el panel.");}
+  finally {sending.current=false;if(mounted.current)setPending(false);}
  };
  return <>
-  {bubble && <div className="capri3d-speech" data-leaving={leaving && !confirmation} role="status" aria-live="polite">
-   <span>{excerpt(confirmation ? `${confirmation.title} ${confirmation.message}` : shown!.text)}</span>
+  {bubble && <div className="capri3d-speech" data-leaving={leaving && !confirmation && !receipt} role="status" aria-live="polite">
+   <span>{receipt || (pending && confirmation ? "Enviando respuesta…" : excerpt(confirmation ? `${confirmation.title} ${confirmation.message}` : shown?.text ?? ""))}</span>
    {confirmation ? <div className="capri3d-confirm">
     <button type="button" disabled={pending} onClick={()=>void respond(true)}>Sí</button>
     <button type="button" disabled={pending} onClick={()=>void respond(false)}>No</button>
-   </div> : shown?.showMore !== false && <button type="button" className="capri3d-more" onClick={more}>Ver más</button>}
+   </div> : !receipt && shown?.showMore !== false && <button type="button" className="capri3d-more" onClick={more}>Ver más</button>}
    {error && <span role="alert">{error}</span>}
   </div>}
   {open && <form className="capri3d-chat" onSubmit={event=>{
    event.preventDefault();const text=draft.trim();if(!text || pending)return;
    if(send({type:"send",text,requestId:newRequestId()})===false){setError("Sin conexión. Tu mensaje sigue aquí.");return;}
-   voice.sent();setDraft("");setError(undefined);
+   voice.sent();setDraft("");setError(undefined);input.current?.focus();
   }} onKeyDown={event=>{if(event.key==="Escape"){event.preventDefault();voice.cancel();close();}}}>
-   <label className="capri3d-input"><span className="sr-only">Mensaje para Dot</span><input ref={input} value={draft} onChange={event=>{voice.typed();setDraft(event.target.value);}} placeholder="Escribile o hablale…" /></label>
-   <button type="button" aria-label={voice.phase==="recording"?"Terminar dictado":"Hablar"} disabled={!voice.mic?.available || voice.phase==="transcribing"} title={voice.mic && !voice.mic.available?voice.mic.reason:undefined} onClick={()=>voice.phase==="recording"?voice.stop():voice.start()}>
+   <div className="capri3d-quick-row">
+   <label className="capri3d-input"><span className="sr-only">Mensaje para Dot</span><input ref={input} value={draft} onChange={event=>{voice.typed();setDraft(event.target.value);}} onKeyDown={event=>{if(event.key==="Enter" && !event.nativeEvent.isComposing){event.preventDefault();event.currentTarget.form?.requestSubmit();}}} placeholder="Escribile o hablale…" /></label>
+   <button type="button" data-recording={voice.phase==="recording"} aria-label={voice.phase==="recording"?"Terminar dictado":voice.phase==="transcribing"?"Transcribiendo audio":"Hablar"} disabled={!voice.mic?.available || voice.phase==="transcribing"} title={voice.mic && !voice.mic.available?voice.mic.reason:undefined} onClick={()=>voice.phase==="recording"?voice.stop():voice.start()}>
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>
    </button>
-   <button type="submit" aria-label="Enviar" disabled={!draft.trim() || state.connection!=="open"}>➤</button>
+   <button type="submit" className="capri3d-send" aria-label="Enviar" disabled={!draft.trim() || state.connection!=="open"}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m5 12 7-7 7 7M12 5v15"/></svg></button>
    <button type="button" aria-label="Cerrar entrada" onClick={()=>{voice.cancel();close();}}>×</button>
-   {onGesture && <select aria-label="Gesto de Capri" value="" onChange={event=>onGesture(event.target.value as Gesture)}><option value="" disabled>Gestos…</option>{Object.entries(gestures).map(([id,label])=><option key={id} value={id}>{label}</option>)}</select>}
-   {(error || voice.note || voice.phase!=="idle") && <span className="capri3d-chat-note" role="status">{error || voice.note || (voice.phase==="recording"?"Escuchando…":"Transcribiendo…")}</span>}
+   </div>
+   <div className="capri3d-chat-tools">
+    <button type="button" className="capri3d-history" onClick={more}>Historial</button>
+    {(error || voice.note || voice.phase!=="idle") ? <span className="capri3d-chat-note" role="status">{error || voice.note || (voice.phase==="recording"?"Escuchando…":"Transcribiendo…")}</span> : onGesture && (showGestures ? <select autoFocus aria-label="Gesto de Capri" value="" onChange={event=>{onGesture(event.target.value as Gesture);setShowGestures(false);input.current?.focus();}}><option value="" disabled>Gestos…</option>{Object.entries(gestures).map(([id,label])=><option key={id} value={id}>{label}</option>)}</select> : <button type="button" aria-label="Gestos de Capri" aria-expanded={false} onClick={()=>setShowGestures(true)}>Gestos</button>)}
+   </div>
   </form>}
  </>;
 }

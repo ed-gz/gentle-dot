@@ -34,6 +34,13 @@ S29. Face sprites on phone (user verbatim): "Estos sprites son los buenos, en el
 S30. PC 3D + faces with real interactivity (user verbatim): "Y aca en la PC la idea es que viva tanto este 3D como derrepnte aparezcan estos igual a la hora de estar haciendo otras actividades, como viendo lo que escribo literal, interacciones, anaaliza cada uno y genera una interactividad REAL sobre cada uno, ejemplo, el 3D que se sienta [screenshot] si lo pusieras en el bloque de que literal sentada sobre una de las esquinas derechas asuperior, estaria GOD, por que asi le da mas como que sabe que hay en HERDR y se pone, como justo que se ponga tmabien aqui [screenshot] aqui hay un espacio en blacno perfecto para ella, dale ahi full y prepara las cosas, me ire a dormir". Screenshots .cache/capri-face-sprites/ref-sitting.png (Gentle Shell editor box inside Herdr/Kitty).
 S7. Single branch: "la idea es volver todo junto en uno por que realmente seria la msima logica" / "quiero la version mas trabajada como prioridad"
 
+S31. Performance and boundaries: "optimiza a capri pls" / "Si pero primeramente centrate en optimizar y mantener correctamente la estructura del proyecto"
+
+S32. Persistent permission notices: "extra, caapri medio falla en mandar los avisos de notificaciones de que aprobar un permiso,y cuando aparece, desaparece sin esperar si el digo si o no, esos si deben amntenerse"
+S33. Capri notice styling: "Btw, olvidate de ese diseño feo de blanco texto negro y boton azulito, hazlo al estilo capri"
+
+S34. Quick message composer: "tambien necesito que mejores la visuaklizaicon de como se le escriben mensajes, el esitlo que usa actualmente no me gusta y quuero separar lo que es los mensjaes rapidos, como ejemploclick y rapidamente decirle con audio o escritura que suba un issue a github, a luego querer abrir el historial y ahi ya ver" / "ademas el estilo hacerlo a estilo capruyu, peudes mejrarlo"
+
 ## Tasks
 T0 | S7 | parent | DONE — capri branch is a superset; imported orchestration odd/tasks history docs only.
 T1 | S1,S6 | parent | DONE ff0829a (cargo lib 507 pass/0 fail; live hyprctl getprop on running launcher: no_blur=false no_shadow=false rounding=10 = root cause; deployed: release built from ff0829a snapshot, service relaunched; live getprop no_blur=true no_shadow=true rounding=0 decorate=false; screenshot .cache/ux-overhaul/desktop-after.png shows no ghost) — launcher window stays mapped with profile blur/shadow while hidden (opacity 0) = ghost square; apply the same silhouette rule as dot/bubble, delete launcher_rule/verify_launcher special case.
@@ -70,6 +77,12 @@ T32 | S13,S20 | DONE: final verify PASS on 3f5e844; deployed 22:56, portal deleg
 T33 | S30,S27 | PARTIAL: worker captures show 3D and face forms visible (empty capture was transient; hair clipped at window top noted); readiness probe fixed 80c0038 (cargo frontend tests pass). Worker stopped after its 2nd restart paused delegation f76cb3fc with pauseReason 'uncertain' (in-flight send; correctly not auto-resumed) | worker (live) | after deploying 715f90f+3f5e844 the dot window renders nothing (captures empty) and frontend probe logs mount-or-assets-timeout (probe requires 2D svg image, false failure in 3D). Fix render regression + make the probe accept the 3D canvas/face surface.
 T34 | S20,S13 | follow-up | old session adapters (loaded before 3f5e844/bcf32b5) cannot acknowledge the new enrollment answer protocol, so every Capri answer stays 'uncertain' and the delegation pauses; daemon must detect the adapter protocol version and either keep the legacy answer path or refuse enrollment with a clear 'recargá la sesión' message instead of pausing as uncertain.
 T6 | S1-S8 | parent | IN PROGRESS 8518197: APK 0.22.0/39 built (types, vite, cap sync, gradle assemble+unit+lint pass) SHA256 2462938343bfec3e9f8f3702476501e494fd9eaa14c8df6fd60ffd686a540494, installed -r on Pixel (Success, verified 0.22.0/39); desktop release redeployed from main tree, UI dir repointed, deploy worktree removed, HTTP 200, silhouettes verified; Capri static 63s with no cues (7/7 samples). Pending: phone unlock for overlay/lock-cycle/monitor proof, live typing-in-Herdr proof. | build, install and verify on the connected Pixel 9a
+
+T35 | S31 | IN PROGRESS | worker | Defer never-opened desktop panel assistant startup using existing host visibility/events, preserve first-open readiness and subsequent sessions. No messaging redesign. Validate startup connections and comparable memory before claiming improvement. Commit pending.
+
+T36 | S32,S33 | IN PROGRESS | worker | Keep fresh pending permission cues visible, preserve expiry/withdrawal and authorization guards; apply existing Capri palette. Commit pending.
+
+T37 | S34 | IN PROGRESS | worker | Quick composer near Capri for fast text/voice sends; history opens the panel instead of cluttering the bubble; Capri-styled. Commit pending.
 
 ## Log
 L1 user request verbatim: "Necesito que me ayudes a hacer mas chido el branch que andamos trabajando con lo de gentle dot en respecto a sus funcionalidades, mejorar UX/UI a por mil por que actualmente es una mierda, hacerlo eficiente util y sobre todo mejorar nuestro tema de Capri! Capri me encanta, quiero integrarlo a mil pero hay bugs importantes de vistas, ademas de loq ue encuentres, hay una soibreingeneria tremenda que hay que matar [screenshot] De lo mas sencillo, en la PC se ve ese recuadro fantasma cuando capri esta activa como sprite y no debe exsitir, cuando se oculta capri ahi si aparece en u siti sin molestar Ya dentro de este todas las funcionalidade smoviles pues esta snecilito y creo que podria aprovecharse y mejorarse AHora movil! la belleza real Tengo conectado el cel por si quieres hacer pruebas instalar updates etc Ene ste Comenzando con lo que es Capri en la pantalla como asistente activa permanente no funciona correctmaente, sus diferentes sprites no reaccionan, cuando se bloquea el celular desaparece totalmente al desbloquearlo sus notificaciones dentro del celular no sirven, toda la visual del movil es una basura tanto en manejo de sesiones como otras funciones, su configuracion y organizacion es horrible por lo tecnica y desglozada mal que eesta Analiza y emjoralo"
@@ -126,3 +139,13 @@ L52 Fix: reaction face is drawn only when it replaces the body (face form) or du
 L53 User (2026-10-26 09:16): "las notificaciones me gustaria ya mas especifico las screensjhot en lugar de poner la ruta y eso que no me interesa unicamente sea lo de guardando la img, asi super minimalistade que se tomo la foto y esta copiada, es todo"
 L54 Screenshot notices (tool/desktop entry/summary) render only "Captura tomada y copiada" ("Captura guardada" only when the notice explicitly says not copied); no filename, folder or "Ver más"; errors/auth and other notifications unchanged. 59 focused tests, tsc ok.
 L3 device evidence (Pixel 9a, 0.21.4/code 38): CompanionOverlayService runs as foreground specialUse with overlay window present; AgentMonitorService is NOT running; POST_NOTIFICATIONS and SYSTEM_ALERT_WINDOW granted.
+
+L55 User: "optimiza a capri pls"
+L56 User: "Si pero primeramente centrate en optimizar y mantener correctamente la estructura del proyecto"
+L57 Evidence: panel WebView eagerly mounts Assistant while hidden; defer assistant startup, not native window ownership or theme authority. Performance benefit remains unmeasured.
+
+L58 User: "extra, caapri medio falla en mandar los avisos de notificaciones de que aprobar un permiso,y cuando aparece, desaparece sin esperar si el digo si o no, esos si deben amntenerse"
+L59 User: "Btw, olvidate de ese diseño feo de blanco texto negro y boton azulito, hazlo al estilo capri"
+
+L60 User: "dios mio como batallas, tambien necesito que mejores la visuaklizaicon de como se le escriben mensajes, el esitlo que usa actualmente no me gusta y quuero separar lo que es los mensjaes rapidos, como ejemploclick y rapidamente decirle con audio o escritura que suba un issue a github, a luego querer abrir el historial y ahi ya ver"
+L61 User: "ademas el estilo hacerlo a estilo capruyu, peudes mejrarlo"
