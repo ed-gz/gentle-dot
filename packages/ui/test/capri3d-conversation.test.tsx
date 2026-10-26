@@ -22,7 +22,7 @@ it.each(["Captura tomada y copiada", "Captura guardada"])("shows only the minima
 it("sends typed text via Dot send and calls the existing mic hook",()=>{
  const send=vi.fn().mockReturnValue(true);
  render(<CapriConversation state={{...initialState,connection:"open"}} send={send} open close={vi.fn()} more={vi.fn()} onLayout={vi.fn()}/>);
- fireEvent.change(screen.getByPlaceholderText("Escribile o hablale…"),{target:{value:"hola Dot"}});fireEvent.click(screen.getByRole("button",{name:"Enviar"}));
+ fireEvent.change(screen.getByPlaceholderText("Escríbele a Capri…"),{target:{value:"hola Dot"}});fireEvent.click(screen.getByRole("button",{name:"Enviar"}));
  expect(send).toHaveBeenCalledWith({type:"send",text:"hola Dot",requestId:expect.any(String)});
  fireEvent.click(screen.getByRole("button",{name:"Hablar"}));expect(voice.start).toHaveBeenCalledOnce();
 });
@@ -32,7 +32,11 @@ it("opens history separately without sending or changing the quick draft",()=>{
  const input=screen.getByRole("textbox");
  fireEvent.change(input,{target:{value:"subí un issue a GitHub"}});
  expect(more).not.toHaveBeenCalled();
- fireEvent.click(screen.getByRole("button",{name:"Historial"}));
+ const history=screen.getByRole("button",{name:"Historial"});
+ expect(history).toHaveAttribute("type","button");
+ expect(history.querySelector("svg")).not.toBeNull();
+ expect(history.closest(".capri3d-quick-row")).not.toBeNull();
+ fireEvent.click(history);
  expect(more).toHaveBeenCalledOnce();expect(send).not.toHaveBeenCalled();expect(input).toHaveValue("subí un issue a GitHub");
 });
 it("sends the exact quick contract on Enter, clears and restores focus without opening history",()=>{
@@ -44,10 +48,28 @@ it("sends the exact quick contract on Enter, clears and restores focus without o
  expect(send).toHaveBeenCalledExactlyOnceWith({type:"send",text:"subí un issue a GitHub",requestId:expect.any(String)});
  expect(input).toHaveValue("");expect(input).toHaveFocus();expect(more).not.toHaveBeenCalled();
 });
+it("continues quick message turns after Capri replies without opening history",()=>{
+ const send=vi.fn().mockReturnValue(true),more=vi.fn(),close=vi.fn();
+ const props={state:{...initialState,connection:"open" as const},send,open:true,close,more,onLayout:vi.fn()};
+ const view=render(<CapriConversation {...props}/>);
+ const input=screen.getByRole("textbox");
+ expect(screen.getByRole("button",{name:"Enviar"})).toBeDisabled();
+ fireEvent.change(input,{target:{value:"hola"}});fireEvent.keyDown(input,{key:"Enter"});
+ view.rerender(<CapriConversation {...props} speech={{id:"reply",text:"Hola, ¿qué hacemos?"}}/>);
+ expect(screen.getByRole("status")).toHaveTextContent("Hola, ¿qué hacemos?");
+ expect(input).toHaveFocus();
+ fireEvent.change(input,{target:{value:"creá un issue"}});fireEvent.keyDown(input,{key:"Enter"});
+ expect(send).toHaveBeenCalledTimes(2);
+ expect(send).toHaveBeenLastCalledWith({type:"send",text:"creá un issue",requestId:expect.any(String)});
+ expect(input).toHaveValue("");expect(input).toHaveFocus();
+ expect(more).not.toHaveBeenCalled();expect(close).not.toHaveBeenCalled();
+ fireEvent.keyDown(input,{key:"Escape"});expect(voice.cancel).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
+});
 it("keeps gestures available behind a secondary action, outside the quick row",()=>{
  const onGesture=vi.fn();
  render(<CapriConversation state={initialState} send={vi.fn()} open close={vi.fn()} more={vi.fn()} onLayout={vi.fn()} onGesture={onGesture}/>);
  expect(screen.queryByRole("combobox",{name:"Gesto de Capri"})).toBeNull();
+ expect(screen.getByRole("button",{name:"Gestos de Capri"}).closest(".capri3d-chat-header")).not.toBeNull();
  fireEvent.click(screen.getByRole("button",{name:"Gestos de Capri"}));
  const select=screen.getByRole("combobox",{name:"Gesto de Capri"});
  expect(select.closest(".capri3d-quick-row")).toBeNull();
@@ -67,7 +89,10 @@ it("preserves the unavailable mic reason and close cancellation",()=>{
  render(<CapriConversation state={initialState} send={vi.fn()} open close={close} more={vi.fn()} onLayout={vi.fn()}/>);
  expect(screen.getByRole("button",{name:"Hablar"})).toBeDisabled();
  expect(screen.getByRole("button",{name:"Hablar"})).toHaveAttribute("title","Micrófono no disponible");
- fireEvent.click(screen.getByRole("button",{name:"Cerrar entrada"}));expect(voice.cancel).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
+ const closeButton=screen.getByRole("button",{name:"Cerrar entrada"});
+ expect(closeButton.closest(".capri3d-chat-header")).not.toBeNull();
+ expect(closeButton.closest(".capri3d-quick-row")).toBeNull();
+ fireEvent.click(closeButton);expect(voice.cancel).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
 });
 it("answers only answerable confirm dialogs using exact existing identity and action",()=>{
  const ask={id:"q",paneId:"p",sessionId:"s",title:"¿Continuar?",message:"Permiso",action:"bash",kind:"confirm" as const,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
@@ -80,7 +105,7 @@ it("answers only answerable confirm dialogs using exact existing identity and ac
 });
 it("keeps a failed send in the input and explains the failure",()=>{
  render(<CapriConversation state={{...initialState,connection:"open"}} send={vi.fn().mockReturnValue(false)} open close={vi.fn()} more={vi.fn()} onLayout={vi.fn()}/>);
- const input=screen.getByPlaceholderText("Escribile o hablale…");
+ const input=screen.getByPlaceholderText("Escríbele a Capri…");
  fireEvent.change(input,{target:{value:"conservame"}});fireEvent.click(screen.getByRole("button",{name:"Enviar"}));
  expect(input).toHaveValue("conservame");expect(screen.getByText("Sin conexión. Tu mensaje sigue aquí.")).toBeInTheDocument();
 });
