@@ -29,6 +29,10 @@ La actividad local usa metadatos semánticos del adaptador, no el texto del borr
 
 Una desconexión revoca inmediatamente la inscripción y el lease de la delegación. Si **el único motivo de pausa guardado es `disconnected`**, Capri vuelve a inscribirla automáticamente al observar conectada la misma sesión (`paneId` + `sessionId`), con `activityFence: 1`, la **misma instancia del adaptador** y el **mismo marcador de actividad humana**. También funciona al cargar el estado tras reiniciar el daemon; no renueva el plazo autorizado ni reutiliza el lease anterior. La comprobación periódica puede tardar unos 30 segundos.
 
+Antes de reanudar, Capri inspecciona la pregunta exacta de esa sesión: una pregunta humana o no verificable conserva la pausa y genera una sola pregunta de continuación. Un permiso delegable no se bloquea por haber llegado durante la desconexión: vuelve al flujo habitual de revisión de la instrucción y sus cercas, sin aprobarse desde la recuperación. Si la inspección tarda, se vuelven a comprobar la actividad, la instancia, el plazo y las decisiones humanas antes de cambiar el estado.
+
+Cada pausa cambia la generación de inscripción. La revocación del socket comienza fuera de la cola de descubrimiento; la reconexión espera su cierre y crea otro socket. Una lectura de registro o confirmación asíncrona de la generación anterior no puede restaurar autoridad. Los grants de permisos ligados a la inscripción anterior siguen inválidos incluso después de reconectar.
+
 Si cambió la instancia o el marcador, permanece pausada y muestra una sola pregunta de continuación. No se reanudan automáticamente pausas humanas, explícitas, por vencimiento, por revisión o por un envío incierto. Los estados antiguos sin motivo de pausa explícito requieren reanudación humana: no se deduce autoridad del texto de `pending`. Una pregunta de continuación ya guardada tampoco permite auto-reanudar.
 
 ## Gmail y avisos

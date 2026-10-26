@@ -145,6 +145,49 @@ for (const reload of [false, true]) for (const change of ["instance", "activity"
   expect(question).toHaveBeenCalledTimes(change === "user" ? 0 : 1);
  });
 }
+for (const kind of ["human", "unverifiable", "delegable"] as const) {
+ it(`classifies a ${kind} dialog before reconnecting`, async () => {
+  const h = fixture();
+  const question = vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+  h.options.askContinuation = question;
+  await h.start({ mode: "session", sessions: [h.sessions[0]] });
+  h.coordinator.onEvent({ id: "offline", type: "disconnected", at: new Date(h.options.now!()).toISOString() });
+  h.sessions[0]!.state = "blocked";
+  h.approvals.push({ ...h.sessions[0]!, id: "during-disconnect" });
+  h.inspect.mockResolvedValue({ sessionId: h.sessions[0]!.sessionId, status: "blocked", ...(kind !== "unverifiable" ? { question: {
+   id: "during-disconnect", kind: "confirm", answerable: true,
+   ...(kind === "delegable" ? { workflowPermission: { provider: "dot-session/v1", category: "workspace-tool", scope: "project-workspace", tool: "bash", decision: "instruction" } } : {}),
+  } } : {}) });
+  await h.coordinator.prepare();
+  h.advance(31_000);
+  await h.coordinator.prepare();
+  expect(h.coordinator.status().workflows[0]?.state).toBe(kind === "delegable" ? "waiting" : "paused");
+  expect(question).toHaveBeenCalledTimes(kind === "delegable" ? 0 : 1);
+  expect(h.approve).not.toHaveBeenCalled();
+ });
+}
+for (const change of ["pause", "activity", "instance", "disconnect", "expiry"] as const) {
+ it(`revalidates ${change} after asynchronous reconnect inspection`, async () => {
+  const h = fixture();
+  const question = vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+  h.options.askContinuation = question;
+  const work = await h.start({ mode: "session", sessions: [h.sessions[0]] });
+  h.coordinator.onEvent({ id: "offline", type: "disconnected", at: new Date(h.options.now!()).toISOString() });
+  let finish!: (page: unknown) => void;
+  h.inspect.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const preparing = h.coordinator.prepare();
+  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+  if (change === "pause") await h.coordinator.dispatch({ action: "pause", workflowId: work.id }, "human");
+  if (change === "activity") Object.assign(h.sessions[0]!, { humanActivityAt: new Date(h.options.now!()).toISOString() });
+  if (change === "instance") h.sessions[0]!.activityInstanceId = "replacement";
+  if (change === "disconnect") h.coordinator.onEvent({ id: "offline-again", type: "disconnected", at: new Date(h.options.now!()).toISOString() });
+  if (change === "expiry") h.advance(25 * 3600_000);
+  finish({ sessionId: h.sessions[0]!.sessionId, status: "idle" });
+  await preparing;
+  expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
+  expect(question).toHaveBeenCalledTimes(change === "pause" || change === "disconnect" ? 0 : 1);
+ });
+}
 it("does not infer disconnect authority from legacy pending text", async () => {
  const h = fixture();
  await h.start({ mode: "session", sessions: [h.sessions[0]] });
