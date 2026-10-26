@@ -114,9 +114,13 @@ final class CompanionSpriteView extends View {
     }
     private void fail() { release();state(new RenderState(null,false,LOAD_ERROR));invalidate(); }
     private void load(String name) throws Exception {
-        String next=sheetFor(name);
+        try { loadSheet(name,"3d-core",threeAnimationFor(name),"companion/capri-3d-core-v1.json");return; }
+        catch(Exception unavailable) { /* Personal sheets are optional; keep validated 2D recovery. */ }
+        loadSheet(name,sheetFor(name),name,"companion/capri-motion-"+sheetFor(name)+"-v1.json");
+    }
+    private void loadSheet(String name,String next,String selectedName,String path) throws Exception {
         JSONObject manifest;
-        try(InputStream input=assets.open("companion/capri-motion-"+next+"-v1.json");ByteArrayOutputStream output=new ByteArrayOutputStream()) {
+        try(InputStream input=assets.open(path);ByteArrayOutputStream output=new ByteArrayOutputStream()) {
             byte[] chunk=new byte[8192];int count;
             while((count=input.read(chunk))!=-1) {
                 output.write(chunk,0,count);
@@ -126,7 +130,7 @@ final class CompanionSpriteView extends View {
         }
         int width=manifest.getInt("width"),height=manifest.getInt("height");
         if(width<=0||height<=0||width>4096||height>4096)throw new IOException("Invalid atlas dimensions");
-        Animation selected=new Animation(manifest.getJSONObject("animations").getJSONObject(name),width,height);
+        Animation selected=new Animation(manifest.getJSONObject("animations").getJSONObject(selectedName),width,height);
         Bitmap nextAtlas=atlas;
         if(!next.equals(sheet)||nextAtlas==null) {
             try(InputStream input=assets.open(manifest.getString("image"))) { nextAtlas=BitmapFactory.decodeStream(input); }
@@ -136,6 +140,18 @@ final class CompanionSpriteView extends View {
         // Only replace a complete, validated animation. Optional action failures can return to Capri idle.
         if(atlas!=null&&atlas!=nextAtlas)atlas.recycle();
         atlas=nextAtlas;sheet=next;animation=selected;action=name;frame=0;state(new RenderState("capri",true,null));
+    }
+    static String threeAnimationFor(String name) throws IOException {
+        sheetFor(name); // Unknown actions must not silently become a successful 3D idle.
+        switch(name) {
+            case "working": case "curious": case "duo-watch": return "thinking";
+            case "eyes": case "face": return "typing";
+            case "attentive": case "greeting": case "point-left": case "point-right": return "greeting";
+            case "duo-high-five": return "laughing";
+            case "crying": case "angry": return "error";
+            case "follow-message": return "talking";
+            default: return "idle"; // No locomotion or decorative clips invented for travel/rest.
+        }
     }
     static String sheetFor(String animation) throws IOException {
         switch(animation) {

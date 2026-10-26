@@ -67,9 +67,12 @@ apply from: 'capacitor.build.gradle'
 def companionAssets = layout.buildDirectory.dir('generated/companion-assets')
 def themeAssets = file('../../../../packages/theme-capri/src/assets')
 def webAssets = file('src/main/assets/public/assets')
+// Optional personal derivatives. Never source GLBs or publish these assets.
+def personalCapriAssets = file('../../../../.cache/capri3d-atlases')
 tasks.register('syncCompanionAssets') {
     inputs.files(fileTree(themeAssets) { include 'capri-motion-*-v1.json', 'capri-motion-*-v1.png' })
     inputs.files(fileTree(webAssets) { include 'capri-motion-*-v1-*.png' })
+    inputs.files(fileTree(personalCapriAssets) { include 'capri-3d-*-v1.json', 'capri-3d-*-v1.png' })
     outputs.dir(companionAssets)
     doLast {
         def output = companionAssets.get().dir('companion').asFile
@@ -87,6 +90,16 @@ tasks.register('syncCompanionAssets') {
                 manifest.image = "companion/${stem}.png"
             }
             new File(output, "${stem}.json").text = groovy.json.JsonOutput.toJson(manifest)
+        }
+        if (personalCapriAssets.isDirectory()) {
+            // Native AssetManager and Capacitor's same-origin WebView share the same manifest.
+            [output, companionAssets.get().dir('public/companion').asFile].each { destination ->
+                copy {
+                    from personalCapriAssets
+                    include 'capri-3d-*-v1.json', 'capri-3d-*-v1.png'
+                    into destination
+                }
+            }
         }
     }
 }

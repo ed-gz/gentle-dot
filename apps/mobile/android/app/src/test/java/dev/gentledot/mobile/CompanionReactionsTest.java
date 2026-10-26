@@ -15,6 +15,10 @@ import org.robolectric.annotation.Config;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=35)
 public class CompanionReactionsTest {
+    private java.io.InputStream twoD(String path) throws java.io.IOException {
+        if(path.contains("capri-3d-"))throw new java.io.IOException("2D regression fixture");
+        return RuntimeEnvironment.getApplication().getAssets().open(path);
+    }
     @Test public void purposefulKindsSelectDistinctShippedAnimations() {
         String[][] cases={{"working","working"},{"run","working"},{"reading","eyes"},{"read","eyes"},
             {"thinking","curious"},{"typing","eyes"},{"permission","attentive"},{"agentAttention","attentive"},
@@ -41,7 +45,7 @@ public class CompanionReactionsTest {
             java.util.Iterator<String> names=manifest.getJSONObject("animations").keys();
             while(names.hasNext()) {
                 String animation=names.next();List<String> opened=new ArrayList<>();
-                CompanionSpriteView view=new CompanionSpriteView(context,path->{opened.add(path);return context.getAssets().open(path);});
+                CompanionSpriteView view=new CompanionSpriteView(context,path->{opened.add(path);return twoD(path);});
                 view.theme("capri");opened.clear();view.play(animation);
                 assertTrue(animation,view.renderState().ready);
                 assertTrue(animation+" selects "+sheet,opened.contains("companion/capri-motion-"+sheet+"-v1.json"));
@@ -68,7 +72,7 @@ public class CompanionReactionsTest {
         String[][] cases={{"reactions","crying"},{"context","follow-message"},{"life","attentive"},{"glimpses","eyes"},{"friends","duo-high-five"}};
         for(String[] item:cases) {
             CompanionSpriteView view=new CompanionSpriteView(context,path->{
-                if(!path.equals("companion/capri-motion-"+item[0]+"-v1.json"))return context.getAssets().open(path);
+                if(!path.equals("companion/capri-motion-"+item[0]+"-v1.json"))return twoD(path);
                 try(java.io.InputStream input=context.getAssets().open(path)) {
                     JSONObject manifest=new JSONObject(new String(input.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));
                     manifest.getJSONObject("animations").getJSONObject(item[1]).getJSONArray("frames").getJSONObject(1).put("width",99999);
@@ -81,7 +85,7 @@ public class CompanionReactionsTest {
         }
     }
     @Test public void switchingSheetsRecyclesPreviousBitmap() throws Exception {
-        CompanionSpriteView view=new CompanionSpriteView(RuntimeEnvironment.getApplication());view.theme("capri");
+        CompanionSpriteView view=new CompanionSpriteView(RuntimeEnvironment.getApplication(),this::twoD);view.theme("capri");
         java.lang.reflect.Field atlas=CompanionSpriteView.class.getDeclaredField("atlas");atlas.setAccessible(true);
         android.graphics.Bitmap previous=(android.graphics.Bitmap)atlas.get(view);
         for(String name:new String[]{"crying","eyes","curious","duo-high-five","follow-message","idle"}) {
