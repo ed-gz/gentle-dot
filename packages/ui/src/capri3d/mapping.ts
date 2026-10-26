@@ -3,6 +3,8 @@ import type { AssetName } from "./assets.ts";
 import type { ProceduralClip } from "./procedural.ts";
 
 export interface ClipChoice {
+ face?: import("./desktop-faces.ts").DesktopFace;
+ perch?: boolean;
  model: AssetName;
  /** null = hold the alternate model's authored pose. */
  clip: string | null;

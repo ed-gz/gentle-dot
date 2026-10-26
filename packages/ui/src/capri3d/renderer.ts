@@ -7,6 +7,8 @@ import { injectLegs } from "./rig.ts";
 import { createPosePlayer, clips, type ProceduralClip } from "./procedural.ts";
 import { FrameScheduler } from "./scheduler.ts";
 import { attachFace, type FaceLayer } from "./face.ts";
+import { faceFrame, loadDesktopFaces, transitionFace, type DesktopForm } from "./desktop-faces.ts";
+import { PERCH_SEAT_Y, perchCameraY } from "./perch.ts";
 
 /** WebGL stays behind this interface so the surface can be tested without a GPU. */
 export interface CapriRenderer {
@@ -62,6 +64,33 @@ export const createRenderer: RendererFactory = async options => {
  light.position.set(-3, 6, 8);
  scene.add(light);
  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
+ // The existing frame scheduler owns both forms. No CSS animation, RAF or second timer.
+ const atlas = await loadDesktopFaces();
+ let faceTexture: THREE.Texture | undefined;
+ let pendingTexture: THREE.Texture | undefined;
+ const head = new THREE.Sprite(new THREE.SpriteMaterial({ map: faceTexture, transparent: true, depthTest: false, depthWrite: false }));
+ head.visible = false; head.renderOrder = 10; scene.add(head);
+ let form: DesktopForm = "3d", transition = false;
+ const paintHead = () => {
+  if (!atlas || !faceTexture || !choice) return;
+  const glitch = atlas.manifest.animations["glitch-transition"];
+  const duration = glitch?.frames.reduce((sum, f) => sum + Math.max(34, f.durationMs), 0) ?? 0;
+  if (transition && elapsed * 1000 >= duration) transition = false;
+  const animation = transition ? "glitch-transition" : choice.face?.animation;
+  const clip = animation ? atlas.manifest.animations[animation] : undefined;
+  const f = faceFrame(clip, elapsed * 1000, transition);
+  head.visible = Boolean(f);
+  if (current) current.scene.visible = form !== "face" || !f;
+  if (!f || !clip) return;
+  faceTexture.repeat.set(f.width / atlas.manifest.width, f.height / atlas.manifest.height);
+  faceTexture.offset.set(f.x / atlas.manifest.width, 1 - (f.y + f.height) / atlas.manifest.height);
+  const size = (camera.top - camera.bottom) * (form === "face" || transition ? 112 : 76) / 340;
+  head.scale.set(size * f.width / clip.canvas.width, size * f.height / clip.canvas.height, 1);
+  const topPx = choice.perch ? PERCH_SEAT_Y - (form === "face" || transition ? 112 : 76) : 12;
+  const offsetX = (f.offsetX + f.width / 2 - clip.canvas.width / 2) * size / clip.canvas.width;
+  const offsetY = (f.offsetY + f.height / 2 - clip.canvas.height / 2) * size / clip.canvas.height;
+  head.position.set(camera.position.x + (form === "face" ? 0 : camera.right * 0.57) + offsetX, camera.position.y + camera.top - size / 2 - (camera.top - camera.bottom) * topPx / 340 - offsetY, camera.position.z - 1);
+ };
  const target = new THREE.WebGLRenderTarget(240, 340);
  const pixels = new Uint8Array(240 * 340 * 4);
  const topDown = new Uint8Array(pixels.length);
@@ -88,8 +117,20 @@ export const createRenderer: RendererFactory = async options => {
  let queue = Promise.resolve();
  const scheduler = new FrameScheduler(delta => tick(delta));
  const stop = () => scheduler.dispose();
+ const alignSeat = () => {
+  if (!choice?.perch || !current) return;
+  const left = current.scene.getObjectByName("Muslo_izquierdo");
+  const right = current.scene.getObjectByName("Muslo_derecho");
+  if (!left || !right) return;
+  current.scene.updateMatrixWorld(true);
+  const hip = left.getWorldPosition(new THREE.Vector3()).add(right.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
+  camera.position.x = hip.x; camera.position.y = perchCameraY(hip.y, camera.top);
+  camera.lookAt(hip.x, camera.position.y, hip.z);
+ };
  const frame = (forceMask = false, silhouette = true) => {
   if (disposed || !visible || !current) return;
+  alignSeat();
+  paintHead();
   renderer.render(scene, camera);
   if (silhouette && (forceMask || performance.now() - lastMask >= 500)) {
    renderer.setRenderTarget(target);
@@ -181,6 +222,7 @@ export const createRenderer: RendererFactory = async options => {
   for (const gltf of cache.values()) release(gltf);
   cache.clear();
   target.dispose();
+  pendingTexture?.dispose(); head.material.dispose();
   renderer.dispose();
  };
  try {
@@ -191,6 +233,13 @@ export const createRenderer: RendererFactory = async options => {
   face = attachFace(base.scene);
  }
  catch (error) { dispose(); throw error; }
+ // Never wait for an image decode before the model can render (including offline/absent assets).
+ if (atlas) pendingTexture = new THREE.TextureLoader().load(atlas.href, texture => {
+  if (disposed) { texture.dispose(); return; }
+  texture.magFilter = THREE.NearestFilter; texture.minFilter = THREE.NearestFilter;
+  texture.generateMipmaps = false; texture.colorSpace = THREE.SRGBColorSpace;
+  faceTexture = texture; head.material.map = texture; head.material.needsUpdate = true; resume();
+ }, undefined, () => { /* A broken atlas leaves the visible 3D unchanged. */ });
  return {
   choose(next) {
    const request = ++generation;
@@ -219,7 +268,10 @@ export const createRenderer: RendererFactory = async options => {
     options.canvas.style.filter = "";
     options.canvas.style.clipPath = "";
     const switched = currentName !== undefined && currentName !== name;
-    current = gltf; currentName = name; choice = next;
+    current = gltf; currentName = name;
+    const nextForm = next.face?.form ?? "3d";
+    transition = Boolean(!reduced && faceTexture && transitionFace(form, nextForm)); form = nextForm;
+    choice = next;
     home.copy(gltf.scene.position);
     gltf.scene.rotation.set(0, 0, 0);
     gltf.scene.scale.set(1, 1, 1);
@@ -258,7 +310,8 @@ export const createRenderer: RendererFactory = async options => {
     camera.left = -halfHeight * 240 / 340; camera.right = -camera.left;
     camera.top = halfHeight; camera.bottom = -halfHeight;
     camera.position.set(center.x, center.y, center.z + Math.max(size.z, halfHeight) * 4);
-    camera.lookAt(center); camera.updateProjectionMatrix();
+    camera.lookAt(center);
+    camera.updateProjectionMatrix();
     if (switched && !reduced) {
      options.canvas.classList.remove("capri3d-glitch");
      // Restart a short CSS-only glitch; it never moves the native window.

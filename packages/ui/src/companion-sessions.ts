@@ -20,6 +20,7 @@ export interface CompanionSessionSnapshot {
 		visible: boolean | null;
 		activity: {
 			phase: "idle" | "typing" | "submitted" | "working" | "waiting" | "unknown";
+			geometry?: { version: 1; columns: number; rows: number; rect: DesktopCompanionRect; observedAt: string };
 			at?: string;
 			typingUntil?: string;
 			submittedAt?: string;
@@ -54,7 +55,7 @@ export function companionSessionCue(
 	snapshot: CompanionSessionSnapshot,
 	now = Date.now(),
 	announced: ReadonlySet<string> = new Set(),
-): DesktopCompanionContextRequest {
+): DesktopCompanionContextRequest & { editorGeometry?: CompanionSessionSnapshot["sessions"][number]["activity"]["geometry"] } {
 	if (
 		snapshot.stale ||
 		!snapshot.observedAt ||
@@ -77,7 +78,8 @@ export function companionSessionCue(
 		};
 	const session = snapshot.sessions.find((s) => s.focused);
 	if (!session) return { kind: "rest", id: "sessions-rest" };
-	const base = { sessionId: session.sessionId, paneId: session.paneId };
+	const base = { sessionId: session.sessionId, paneId: session.paneId,
+		...(session.activity.geometry ? { editorGeometry: session.activity.geometry } : {}) };
 	const target = session.visible === true ? freshEditorTarget(session.targets.composer, now) : undefined;
 	if (session.activity.phase === "typing" && Date.parse(session.activity.typingUntil ?? "") > now)
 		return {
@@ -160,7 +162,7 @@ export function useDesktopSessionContext(
 				const cue = companionSessionCue(snapshot, now, announced);
 				const signature = JSON.stringify(cue);
 				// Refresh the lifetime of ongoing work; native deduplication does not replay its bubble.
-				const refreshMs = cue.kind === "input-ready" ? 1000 : 4000;
+				const refreshMs = cue.kind === "input-ready" || cue.kind === "typing" ? 1000 : 4000;
 				if (live && (signature !== last || (cue.kind !== "rest" && Date.now() - lastPublished > refreshMs))) {
 					if (cue.kind !== "rest") {
 						await latest.current?.(cue);

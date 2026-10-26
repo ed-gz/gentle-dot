@@ -12,6 +12,7 @@ import { publish3DSurface, readLocalAsset, usePreferred3D } from "../capri3d/nat
 import { useChoreography } from "../capri3d/useChoreography.ts";
 import { restChoice, responseChoice, speechDuration } from "../capri3d/choreography.ts";
 import { clipForBehavior, type ClipChoice } from "../capri3d/mapping.ts";
+import { desktopFace } from "../capri3d/desktop-faces.ts";
 import { CapriConversation, overlayMask, BUBBLE_HEIGHT, INPUT_HEIGHT } from "../capri3d/conversation.tsx";
 import { useCompanionChat } from "../capri3d/replies.ts";
 import { gestureChoice, type Gesture } from "../capri3d/gestures.ts";
@@ -69,6 +70,12 @@ export function DesktopCompanionSurface({
 	const maskState = useRef({ mask: Array<number>(816).fill(0), bubble: false, input: false });
 	const { state: chatState, send: chatSend } = useCompanionChat();
 	const [approval, setApproval] = useState<AgentApproval>();
+	const [denied, setDenied] = useState(false);
+	useEffect(() => {
+		if (!denied) return;
+		const timer = setTimeout(() => setDenied(false), 6000);
+		return () => clearTimeout(timer);
+	}, [denied]);
 	const orchestration = useRef<OrchestrationClient | undefined>(undefined);
 	const layout = useCallback((bubble: boolean, input: boolean) => {
 		maskState.current = { ...maskState.current, bubble, input };
@@ -251,6 +258,13 @@ export function DesktopCompanionSurface({
 			? activeQuestion
 			: (context?.notification && context.notification.expiresAt > Date.now() ? context.notification
 				: context?.cue && context.cue.expiresAt > Date.now() ? context.cue : undefined);
+	const previousSession = useRef<{ pane?: string; working: boolean }>({ working: false });
+	useEffect(() => {
+		const before = previousSession.current;
+		if (before.working && before.pane === cue?.paneId && cue?.kind === "input-ready")
+			setOutcome({ kind: "done", at: Date.now() });
+		previousSession.current = { pane: cue?.paneId, working: cue?.kind === "working" };
+	}, [cue?.kind, cue?.paneId]);
 	const visualNotification = isVisualNotification(context?.notification) ? context?.notification : undefined;
 	const notificationId = visualNotification?.id;
 	const contextReady = controls.contextReady;
@@ -313,8 +327,8 @@ export function DesktopCompanionSurface({
 		return () => clearTimeout(timer);
 	}, [cue?.id, cue?.summary, cue?.body, cue?.kind, cue?.expiresAt]);
 	const motion = choreography.motion;
-	const perched = cue?.kind === "input-ready" && cue.placement === "perch";
-	const choice = useMemo<ClipChoice>(() => {
+	const perched = (cue?.kind === "input-ready" || cue?.kind === "typing") && cue.placement === "perch";
+	const baseChoice = useMemo<ClipChoice>(() => {
 		if (choreography.absent) return restChoice("sleep");
 		if (holding && !controls.state.pinned) return { model: "roja.glb", clip: null, procedural: "colgando" };
 		if (choreography.rest === "wake" || choreography.rest === "greet") return restChoice(choreography.rest);
@@ -327,9 +341,20 @@ export function DesktopCompanionSurface({
 		}
 		if (motion?.mode === "land") return { model: "roja.glb", clip: null, procedural: "quieta", once: true, motion: "land", duration: 600 };
 		if (speech) return responseChoice("reply");
-		if (behavior.state === "idle") return perched ? { model: "roja.glb", clip: null, procedural: "colgada" } : restChoice(choreography.rest);
+		if (perched && (behavior.state === "idle" || behavior.state === "userTyping")) return { model: "roja.glb", clip: null, procedural: "sentada" };
+		if (behavior.state === "idle") return restChoice(choreography.rest);
 		return clipForBehavior(behavior);
 	}, [choreography.absent, attention, gesture, holding, controls.state.pinned, controls.state.travelling, motion, speech, behavior.state, behavior.animation, behavior.target, choreography.rest, perched]);
+	const faceEvent = attention ? "question" : denied ? "denied" : behavior.state === "error" ? "error"
+		: behavior.state === "done" ? "done" : behavior.state === "userTyping" ? "typing"
+		: behavior.state === "agentWorking" ? "working"
+		: choreography.rest === "wake" || choreography.rest === "greet" ? "return"
+		: choreography.absent || choreography.rest === "sleep" ? "idle"
+		: cue?.kind === "submitted" ? "output" : cue?.kind === "notification" ? "notification" : "";
+	// Typing uses a compact head to leave the editor clear; other events peek alongside 3D.
+	const choice = useMemo<ClipChoice>(() => ({ ...baseChoice, perch: perched && baseChoice.procedural === "sentada",
+		face: { animation: desktopFace(faceEvent), form: faceEvent === "typing" ? "face" : "3d" },
+	}), [baseChoice, faceEvent, perched]);
 	const duo = pose.startsWith("duo-") || pose === "invite-rebecca";
 	const externalMessage = cue?.kind === "notification" ? notificationPresentation(cue) : undefined;
 	const message =
@@ -503,6 +528,7 @@ export function DesktopCompanionSurface({
 				const snapshot = await orchestration.current.snapshot();
 				if (action.action !== "answer" || !snapshot.approvals.some(a => a.id === action.requestId && a.paneId === action.paneId && a.sessionId === action.sessionId && a.answerable && (a.kind ?? "confirm") === "confirm" && Date.parse(a.expiresAt) > Date.now())) throw new Error("La pregunta cambió");
 				await orchestration.current.act(action);
+				if ("approved" in action && !action.approved) setDenied(true);
 			}}
 		/>}
 		</div>

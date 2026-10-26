@@ -42,6 +42,39 @@ pub struct Target {
     pub width: f64,
     pub height: f64,
 }
+/// Numeric-only projection of official Herdr layout metadata into Hyprland logical pixels.
+/// `area` is the terminal grid, pane rectangles are cells, bridge rectangles are pane-local.
+pub(crate) fn herdr_editor_target(window: &Target, layout: &serde_json::Value, agents: &serde_json::Value, expected: Option<&str>, now: u64) -> Option<Target> {
+    fn rect(v: &serde_json::Value) -> Option<Target> {
+        let r = Target { x: v["x"].as_u64()? as f64, y: v["y"].as_u64()? as f64, width: v["width"].as_u64()? as f64, height: v["height"].as_u64()? as f64 };
+        (r.width > 0. && r.height > 0. && r.x + r.width <= 10000. && r.y + r.height <= 10000.).then_some(r)
+    }
+    let layout = &layout["result"]["layout"];
+    let id = layout["focused_pane_id"].as_str()?;
+    if expected.is_some_and(|expected| expected != id) { return None; }
+    let area = rect(&layout["area"])?;
+    let pane = layout["panes"].as_array()?.iter().find(|p| p["pane_id"] == id && p["focused"] == true)?;
+    let pane = rect(&pane["rect"])?;
+    if pane.x < area.x || pane.y < area.y || pane.x + pane.width > area.x + area.width || pane.y + pane.height > area.y + area.height { return None; }
+    let agent = agents["result"]["agents"].as_array()?.iter().find(|a| a["pane_id"] == id && a["focused"] == true)?;
+    // The stock CLI may omit the bridge. Never inspect terminal contents to reconstruct it.
+    let geometry = &agent["companionActivity"]["geometry"];
+    #[cfg(target_os = "linux")]
+    let observed = geometry["observedAt"].as_str().and_then(|s| gtk::glib::DateTime::from_iso8601(s, None).ok()).map(|d| d.to_unix().max(0) as u64 * 1000 + d.microsecond() as u64 / 1000);
+    #[cfg(not(target_os = "linux"))]
+    let observed: Option<u64> = None;
+    let bridge = rect(&geometry["rect"]).filter(|r| {
+        geometry["version"] == 1 && observed.is_some_and(|at| at <= now.saturating_add(500) && now.saturating_sub(at) <= 3000)
+            && geometry["columns"].as_f64() == Some(pane.width) && geometry["rows"].as_f64() == Some(pane.height)
+            && r.x + r.width <= pane.width && r.y + r.height <= pane.height
+    });
+    let editor = bridge.unwrap_or(Target { x: 0., y: (pane.height - 5.).max(0.), width: pane.width, height: 4f64.min(pane.height) });
+    if ![window.x, window.y, window.width, window.height].iter().all(|n| n.is_finite()) || window.width <= 0. || window.height <= 0. { return None; }
+    let cw = window.width / area.width;
+    let ch = window.height / area.height;
+    Some(Target { x: window.x + (pane.x - area.x + editor.x) * cw, y: window.y + (pane.y - area.y + editor.y) * ch, width: editor.width * cw, height: editor.height * ch })
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Request {
@@ -52,6 +85,7 @@ pub struct Request {
     pub session_id: Option<String>,
     pub pane_id: Option<String>,
     pub target: Option<Target>,
+    pub editor_geometry: Option<serde_json::Value>,
     pub source: Option<NotificationSource>,
     pub placement: Option<Placement>,
 }
@@ -315,6 +349,9 @@ impl Request {
                 || !(1. ..=32_768.).contains(&t.height)
         }) {
             return Err("La posición del contexto no es válida".into());
+        }
+        if self.editor_geometry.as_ref().is_some_and(|v| v.to_string().len() > 2048) {
+            return Err("La geometría del editor es demasiado grande".into());
         }
         if self.summary.as_ref().is_some_and(|s| s.len() > 16_384)
             || self.body.as_ref().is_some_and(|s| s.len() > 65_536)
@@ -670,6 +707,26 @@ pub fn start(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn herdr_cells_resolve_editor_border_without_terminal_contents() {
+        // Sanitized on-machine `herdr pane layout --current` / `herdr agent list`.
+        let layout = serde_json::json!({"result":{"layout":{"area":{"height":40,"width":156,"x":0,"y":0},"focused_pane_id":"w3X:p1","panes":[{"focused":true,"pane_id":"w3X:p1","rect":{"height":40,"width":156,"x":0,"y":0}}]}}});
+        let agents = serde_json::json!({"result":{"agents":[{"focused":true,"pane_id":"w3X:p1"}]}});
+        let window = Target { x: 100., y: 50., width: 1560., height: 800. };
+        let target = herdr_editor_target(&window, &layout, &agents, Some("w3X:p1"), 0).unwrap();
+        assert_eq!(target, Target { x: 100., y: 750., width: 1560., height: 80. });
+        assert!(herdr_editor_target(&window, &layout, &agents, Some("other:p1"), 0).is_none());
+        assert!(herdr_editor_target(&window, &serde_json::json!({}), &agents, None, 0).is_none());
+        let mut split = layout.clone();
+        split["result"]["layout"]["panes"][0]["rect"] = serde_json::json!({"x":78,"y":0,"width":78,"height":40});
+        let target = herdr_editor_target(&window, &split, &agents, None, 0).unwrap();
+        assert_eq!(target.x, 880.);
+        assert_eq!(target.width, 780.);
+        let mut bridge = agents.clone();
+        bridge["result"]["agents"][0]["companionActivity"] = serde_json::json!({"geometry":{"version":1,"columns":78,"rows":40,"rect":{"x":1,"y":30,"width":76,"height":6},"observedAt":"1970-01-01T00:00:01Z"}});
+        assert_eq!(herdr_editor_target(&window, &split, &bridge, None, 1000).unwrap(), Target { x: 890., y: 650., width:760., height:120. });
+        assert_eq!(herdr_editor_target(&window, &split, &bridge, None, 10000).unwrap().height, 80.);
+    }
     #[test]
     fn context_is_plain_bounded_and_geometry_is_checked() {
         let r:Request=serde_json::from_value(serde_json::json!({"kind":"question","summary":"<b>Pregunta</b>\u{0}","body":"x".repeat(1000),"target":{"x":-1920,"y":0,"width":100,"height":80}})).unwrap();

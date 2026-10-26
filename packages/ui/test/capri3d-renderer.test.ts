@@ -12,6 +12,10 @@ vi.mock("three", async importOriginal => {
  } };
 });
 vi.mock("three/addons/loaders/GLTFLoader.js", () => ({ GLTFLoader: class { parseAsync = gpu.parse; } }));
+vi.mock("../src/capri3d/desktop-faces.ts", async original => ({
+ ...await original<typeof import("../src/capri3d/desktop-faces.ts")>(), loadDesktopFaces: vi.fn(async () => undefined),
+}));
+import { loadDesktopFaces } from "../src/capri3d/desktop-faces.ts";
 import { createRenderer } from "../src/capri3d/renderer.ts";
 function bytes() {
  const json = new TextEncoder().encode('{"asset":{"version":"2.0"}}  ');
@@ -165,6 +169,53 @@ it.each(["roja_sentada.glb", "roja_recostada_cerrados.glb"] as const)("animates 
   expect(raf).not.toHaveBeenCalled();
  } finally { renderer.dispose(); raf.mockRestore(); }
  expect(vi.getTimerCount()).toBe(0);
+});
+it("keeps the seated hip on the native border anchor throughout sitting and idle", async () => {
+ const base = model();
+ const root = new THREE.Bone(); root.name = "Raiz"; base.scene.add(root);
+ for (const [name, x] of [["Muslo_izquierdo", -0.1], ["Muslo_derecho", 0.1]] as const) {
+  const bone = new THREE.Bone(); bone.name = name; bone.position.set(x, 0.2, 0); root.add(bone);
+ }
+ gpu.parse.mockResolvedValueOnce(base);
+ const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => bytes(), mask: vi.fn(), failure: vi.fn() });
+ try {
+  renderer.visibility(true, false);
+  await renderer.choose({ model: "roja.glb", clip: null, procedural: "sentada", perch: true });
+  for (const duration of [0, 300, 900, 1000]) {
+   vi.advanceTimersByTime(duration);
+   const camera = gpu.render.mock.calls.at(-1)![1] as THREE.Camera;
+   camera.updateMatrixWorld(true);
+   const hip = base.scene.getObjectByName("Muslo_izquierdo")!.getWorldPosition(new THREE.Vector3()).add(base.scene.getObjectByName("Muslo_derecho")!.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5).project(camera);
+   expect((1 - hip.y) * 170).toBeCloseTo(244);
+   expect(root.rotation.z).toBeLessThan(0.1); // seated, never the upside-down colgada clip.
+  }
+ } finally { renderer.dispose(); }
+});
+it("shares one render owner for heads, metamorphosis in both directions, and 3D fallback", async () => {
+ const frame = (x: number) => ({ x, y: 0, width: 20, height: 20, offsetX: 0, offsetY: 0, durationMs: 100 });
+ vi.mocked(loadDesktopFaces).mockResolvedValueOnce({ href: "fixture.png", manifest: { width: 100, height: 20, animations: {
+  "glitch-transition": { canvas: { width: 20, height: 20 }, frames: [frame(0), frame(20)] },
+  "typing-watch": { canvas: { width: 20, height: 20 }, frames: [frame(40)] },
+ } } });
+ const texture = new THREE.Texture(document.createElement("img"));
+ const load = vi.spyOn(THREE.TextureLoader.prototype, "load").mockImplementation((_url, ready) => { ready?.(texture); return texture; });
+ const base = model(); gpu.parse.mockResolvedValueOnce(base);
+ const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => bytes(), mask: vi.fn(), failure: vi.fn() });
+ try {
+  renderer.visibility(true, false);
+  await renderer.choose({ model: "roja.glb", clip: null, face: { form: "face", animation: "typing-watch" } });
+  const scene = gpu.render.mock.calls.at(-1)![0] as THREE.Scene;
+  const head = scene.children.find(child => child instanceof THREE.Sprite) as THREE.Sprite;
+  expect(head.visible).toBe(true); expect(base.scene.visible).toBe(false);
+  expect(texture.offset.x).toBe(0); // 3D -> face uses metamorphosis first.
+  vi.advanceTimersByTime(250); expect(texture.offset.x).toBe(0.4);
+  await renderer.choose({ model: "roja.glb", clip: null, face: { form: "3d" } });
+  expect(texture.offset.x).toBe(0); expect(base.scene.visible).toBe(true);
+  vi.advanceTimersByTime(250); expect(head.visible).toBe(false);
+  expect(vi.getTimerCount()).toBe(1);
+  renderer.visibility(false, false); gpu.render.mockClear();
+  vi.advanceTimersByTime(2000); expect(gpu.render).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+ } finally { renderer.dispose(); load.mockRestore(); }
 });
 it("rejects an external resource before GLTFLoader can request it", async () => {
  const json = new TextEncoder().encode('{"buffers":[{"uri":"https://invalid.test/model.bin"}]}');

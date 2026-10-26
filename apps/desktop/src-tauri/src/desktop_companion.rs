@@ -931,6 +931,38 @@ fn focused_terminal_target() -> Option<Target> {
         && fresh["size"] == active["size"])
     .then_some(target)
 }
+/// No Kitty remote control or patched client required. Bounded official metadata commands only.
+#[cfg(target_os = "linux")]
+fn focused_herdr_editor(expected: Option<&str>, geometry: Option<&Value>) -> Option<Target> {
+    fn cli(args: &[&str]) -> Option<Value> {
+        let mut command = vec!["0.4s", "herdr"];
+        command.extend_from_slice(args);
+        let output = crate::computer::linux::run("timeout", &command, None).ok()?;
+        if output.len() > 512 * 1024 { return None; }
+        serde_json::from_slice(&output).ok()
+    }
+    let active = query("activewindow").ok()?;
+    if active["class"].as_str()? != "herdr" { return None; }
+    let window = terminal_target(&active, &query("clients").ok()?)?;
+    let layout = cli(&["pane", "layout", "--current"])?;
+    let mut agents = cli(&["agent", "list"])?;
+    // Activity from the existing Pi bridge is scoped to the requested pane and
+    // checked for timestamp/grid agreement by the pure projection helper.
+    if let (Some(id), Some(geometry)) = (expected, geometry) {
+        if let Some(agent) = agents["result"]["agents"].as_array_mut()?.iter_mut().find(|a| a["pane_id"] == id) {
+            agent["companionActivity"] = serde_json::json!({"geometry": geometry});
+        }
+    }
+    let target = crate::desktop_context::herdr_editor_target(&window, &layout, &agents, expected, crate::desktop_context::now_ms())?;
+    let fresh_layout = cli(&["pane", "layout", "--current"])?;
+    let fresh = query("activewindow").ok()?;
+    (fresh_layout["result"]["layout"] == layout["result"]["layout"]
+        && ["address", "class", "at", "size"].iter().all(|key| fresh[*key] == active[*key]))
+        .then_some(target)
+}
+#[cfg(not(target_os = "linux"))]
+fn focused_herdr_editor(_: Option<&str>, _: Option<&Value>) -> Option<Target> { None }
+
 fn target_zone(prefs: &Preferences, monitors: &[Monitor], target: &Target) -> Option<Area> {
     let cx = target.x + target.width / 2.;
     let cy = target.y + target.height / 2.;
@@ -983,11 +1015,13 @@ fn context_destination(
             && y + dot.height <= zone.y + zone.height
     };
     if placement == Some(Placement::Perch) && [240, 320].contains(&dot.width) && [340, 428, 492, 580].contains(&dot.height) {
-        // Personal roja knee hook projects to y=74 in the stable 240×340 camera (headless preview).
+        // Renderer projects the injected hip pivot to y=244 (capri3d/perch.ts).
+        // Leave 96px below the seat for dangling legs, not 266px of empty window.
         let top = if dot.height == 492 || dot.height == 580 { 152 } else { 0 };
         let x = (target.x + target.width - 40. - dot.width as f64 / 2.).round() as i32;
-        let y = (target.y - (top + 74) as f64).round() as i32;
-        return fits(x, y).then_some((x, y));
+        let y = (target.y - (top + 244) as f64).round() as i32;
+        return (zone.width >= dot.width && zone.height >= dot.height)
+            .then(|| zone.clamp_rect(x, y, dot.width, dot.height));
     }
     if placement == Some(Placement::Perch) && dot.width == SIZE && dot.height == SIZE {
         // The SVG uses xMidYMid meet inside 140x140 with 8px padding.
@@ -1378,19 +1412,18 @@ impl Controller {
         // to move somewhere else. Only target-less typing cues use window metadata.
         let fallback = request.target.is_none()
             && matches!(request.kind, Kind::Typing | Kind::InputReady);
-        let target = request
-            .target
-            .clone()
-            .or_else(|| fallback.then(focused_terminal_target).flatten());
+        // Pinned companions never even query another target. Ongoing cues refresh this
+        // projection, so focus, resize and pane layout changes are revalidated each time.
+        let editor = if fallback && !self.state().pinned { focused_herdr_editor(request.pane_id.as_deref(), request.editor_geometry.as_ref()) } else { None };
+        let terminal_fallback = fallback && editor.is_none();
+        let placement = if editor.is_some() { Some(Placement::Perch) } else { request.placement };
+        let target = request.target.clone().or(editor)
+            .or_else(|| (terminal_fallback && !self.state().pinned).then(focused_terminal_target).flatten());
         if let Some(target) = target.as_ref() {
-            let placed = self.contextual_move(target, request.placement, fallback)?;
+            let placed = self.contextual_move(target, placement, terminal_fallback)?;
             if placed {
                 if let Some(cue) = self.inner.lock().unwrap().context.cue.as_mut() {
-                    cue.placement = if fallback {
-                        Some(Placement::Aside)
-                    } else {
-                        request.placement
-                    };
+                    cue.placement = if terminal_fallback { Some(Placement::Aside) } else { placement };
                 }
             }
         }
@@ -2274,6 +2307,7 @@ pub(crate) fn offer_notification_with_source(
         session_id: None,
         pane_id: None,
         target: None,
+        editor_geometry: None,
         source,
         placement: None,
     };
@@ -3199,9 +3233,9 @@ mod tests {
             context_destination(&prefs, &monitors, &dot, &target, Some(Placement::Perch)).unwrap();
         assert_eq!(perch, (-1720, 188));
         let tall = Client { width: 240, height: 340, ..dot.clone() };
-        assert_eq!(context_destination(&prefs, &monitors, &tall, &target, Some(Placement::Perch)), Some((-1760, 226)));
+        assert_eq!(context_destination(&prefs, &monitors, &tall, &target, Some(Placement::Perch)), Some((-1760, 56)));
         let expanded = Client { width: 320, height: 580, ..dot.clone() };
-        assert_eq!(context_destination(&prefs, &monitors, &expanded, &target, Some(Placement::Perch)), Some((-1800, 74)));
+        assert_eq!(context_destination(&prefs, &monitors, &expanded, &target, Some(Placement::Perch)), Some((-1800, 44)));
         let aside =
             context_destination(&prefs, &monitors, &dot, &target, Some(Placement::Aside)).unwrap();
         assert!(aside.0 as f64 >= target.x + target.width);
@@ -3227,7 +3261,13 @@ mod tests {
             context_destination(&prefs, &monitors, &dot, &too_high, Some(Placement::Perch))
                 .is_none()
         );
+        let right_edge = Target { x: -400., width: 380., y: 500., height: 80. };
+        let clamped = context_destination(&prefs, &monitors, &tall, &right_edge, Some(Placement::Perch)).unwrap();
+        let zone = target_zone(&prefs, &monitors, &right_edge).unwrap();
+        assert!(clamped.0 >= zone.x && clamped.0 + tall.width <= zone.x + zone.width);
+        assert!(clamped.1 >= zone.y && clamped.1 + tall.height <= zone.y + zone.height);
         prefs.pinned = true;
+        assert!(context_destination(&prefs, &monitors, &tall, &target, Some(Placement::Perch)).is_none());
         assert!(
             context_destination(&prefs, &monitors, &dot, &target, Some(Placement::Perch)).is_none()
         );

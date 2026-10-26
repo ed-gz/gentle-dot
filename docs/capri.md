@@ -279,3 +279,9 @@ La verificación histórica de Linux registró 18 comprobaciones del producto y 
 El cliente opcional de Herdr, su parche reproducible y el procedimiento para abrir una ventana compatible están documentados en [scripts/linux/herdr-companion](../scripts/linux/herdr-companion/README.md). Se conserva el Herdr instalado; no se abre ni sustituye una ventana de trabajo automáticamente.
 
 Puedes preparar un acceso **Herdr con Capri** siguiendo la guía del cliente opcional. Abre un cliente nuevo contra el servidor existente; no reemplaza Herdr ni recarga las sesiones actuales. Para que Capri pueda sentarse en el borde exacto del editor, inicia una sesión compatible desde esa ventana. Las sesiones anteriores conservan su integración hasta un inicio nuevo. El cliente opcional pasó una prueba aislada con geometría real, caducidad y limpieza de procesos; no se abrió una ventana de trabajo para esa comprobación.
+
+### Desktop editor perch and face reactions
+
+Capri can perch on the focused Gentle Shell editor inside stock Herdr/Kitty without the patched client. Placement uses numeric Hyprland window metadata and official Herdr pane-layout/agent metadata; terminal contents are never inspected. Fresh editor-activity geometry is preferred, with a four-row editor estimate otherwise. Pinning prevents automatic relocation.
+
+Typing changes Capri into a compact watching face; working, questions, completion, errors, notifications, idle, and return select matching expressions. Form changes use the metamorphosis atlas. Faces share the 3D renderer's bounded 30 fps scheduler and silhouette mask, and rendering stops while hidden. Missing face images keep the 3D fallback.
