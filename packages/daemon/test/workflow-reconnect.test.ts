@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Socket } from "node:net";
@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDotSession } from "../src/extensions/dot-session.ts";
 import { localRequest } from "../src/orchestration/herdr.ts";
 import * as registry from "../src/orchestration/registry.ts";
-import { WorkflowContinuations } from "../src/workflows.ts";
+import { WorkflowContinuations, type WorkflowOptions } from "../src/workflows.ts";
 
 initTheme("dark", false);
 const cleanups: Array<() => Promise<unknown> | void> = [];
@@ -43,7 +43,7 @@ async function fixture(startImmediately = true) {
   expectedSessionId: "s1", expectedInstanceId: manifest.instanceId, ...params,
  });
  const target = { paneId: "pane-a", sessionId: "s1" };
- const coordinator = new WorkflowContinuations({
+ const options: WorkflowOptions = {
   dataDir: directory, registryDirs: [registryDir],
   snapshot: async () => {
    const page = await call("snapshot");
@@ -52,13 +52,66 @@ async function fixture(startImmediately = true) {
     capabilities: { inspect: true, approvals: true, activityFence: 1 } }],
     approvals: page.question ? [{ ...target, id: String((page.question as { id: string }).id) }] : [] };
   }, inspect: () => call("snapshot"), prompt: vi.fn(),
- });
+ };
+ const coordinator = new WorkflowContinuations(options);
  cleanups.push(() => coordinator.close());
  const start = () => coordinator.dispatch({ action: "start", mode: "session", objective: "Run project tests", authorization: "Aprueba todos los permisos de esta sesión", sessions: [target] }, "agent");
  if (startImmediately) await start();
  const tool = (id: string) => handlers.get("tool_call")?.({ toolName: "bash", toolCallId: id, input: { command: "npm test" } }, ctx);
- return { coordinator, call, tool, start, manifest };
+ return { coordinator, call, tool, start, manifest, options };
 }
+it("revokes and persists snapshot disconnect A before awaiting reconnect inspection B", async () => {
+ const h = await fixture();
+ const snapshot = h.options.snapshot;
+ const targetB = { paneId: "pane-b", sessionId: "s2" };
+ let disconnectedA = false;
+ h.options.snapshot = async () => {
+  const page = await snapshot();
+  return { ...page, sessions: [
+   ...page.sessions.map(session => ({ ...session, connected: !disconnectedA })),
+   { ...targetB, label: "B", state: "working", connected: true, activityInstanceId: "adapter-b",
+    capabilities: { inspect: true, approvals: true, activityFence: 1 } },
+  ] };
+ };
+ await h.coordinator.dispatch({ action: "start", mode: "session", objective: "Run tests in B",
+  authorization: "Aprueba todos los permisos de esta sesión", sessions: [targetB] }, "agent");
+ h.coordinator.onEvent({ id: "offline-b", type: "disconnected", at: new Date().toISOString(), ...targetB });
+ const waiting = h.tool("snapshot-old-grant");
+ const question = (await h.call("snapshot")).question as { id: string };
+ await h.coordinator.poll(false);
+ const registryEntered = deferred<void>();
+ const unblockRegistry = deferred<Awaited<ReturnType<typeof registry.readManifests>>>();
+ vi.spyOn(registry, "readManifests").mockImplementationOnce(async () => {
+  registryEntered.resolve();
+  return unblockRegistry.promise;
+ });
+ const syncing = h.coordinator.poll(false);
+ await registryEntered.promise;
+ const entered = deferred<void>();
+ const unblock = deferred<unknown>();
+ h.options.inspect = async paneId => {
+  expect(paneId).toBe(targetB.paneId);
+  entered.resolve();
+  return unblock.promise;
+ };
+ disconnectedA = true;
+ const preparing = h.coordinator.prepare();
+ try {
+  await entered.promise;
+  // Both B's inspection and enrollment registry I/O remain blocked: A must be revoked.
+  await expect(h.call("answer", { questionId: question.id, confirmed: true, expectedHumanActivityAt: null })).rejects.toMatchObject({ code: "HUMAN_REQUIRED" });
+  const stored = JSON.parse(await readFile(join(h.options.dataDir, "workflows.json"), "utf8"));
+  expect(stored.workflows[0]).toMatchObject({ state: "paused", pauseReason: "disconnected" });
+  expect(stored.workflows[0].observed[JSON.stringify(["pane-a", "s1"])]).toMatchObject({ connected: false });
+ } finally {
+  unblockRegistry.resolve([]);
+  unblock.resolve({ sessionId: targetB.sessionId, status: "idle" });
+  await preparing;
+  await syncing;
+  if ((await h.call("snapshot")).question) await h.call("answer", { questionId: question.id, confirmed: false });
+  await waiting;
+ }
+});
 it("rejects a stale pre-disconnect registry completion before sending enrollment", async () => {
  const h = await fixture(false);
  const entered = deferred<void>();

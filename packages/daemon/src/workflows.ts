@@ -931,6 +931,8 @@ export class WorkflowContinuations {
 						}
 						this.enqueue(work, `Sesión desconectada: ${target.paneId}`);
 						changed = true;
+						// Persist and begin revocation before another workflow's inspection can await.
+						this.save();
 					}
 					continue;
 				}
