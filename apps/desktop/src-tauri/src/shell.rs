@@ -1108,6 +1108,8 @@ pub fn run() {
             shortcut_get,
             shortcut_set,
             connector_command,
+            crate::capri3d::capri3d_asset,
+            crate::capri3d::capri3d_surface,
             desktop_companion::desktop_companion_get,
             desktop_companion::desktop_companion_set,
             desktop_companion::desktop_companion_interaction,
@@ -1201,6 +1203,7 @@ pub fn run() {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             if places_windows { register_panic_shortcut(&handle); }
 
+            crate::capri3d::init(&handle);
             desktop_companion::init(&handle, &config.data_dir);
             build_windows(&handle, &config, places_windows, rose_hidden)?;
             build_tray(&handle, &config, rose_hidden)?;

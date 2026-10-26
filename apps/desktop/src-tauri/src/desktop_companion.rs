@@ -49,6 +49,9 @@ pub struct Preferences {
     pub appearances: bool,
     pub pinned: bool,
     pub areas: Vec<AllowedArea>,
+    /// None selects 3D when the personal assets have been installed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub form_3d: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pin_position: Option<PinPosition>,
 }
@@ -61,6 +64,7 @@ impl Default for Preferences {
             pinned: false,
             areas: Vec::new(),
             pin_position: None,
+            form_3d: None,
         }
     }
 }
@@ -72,6 +76,7 @@ pub struct Patch {
     pub appearances: Option<bool>,
     pub pinned: Option<bool>,
     pub areas: Option<Vec<AllowedArea>>,
+    pub form_3d: Option<bool>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -137,6 +142,7 @@ impl Preferences {
             pinned: patch.pinned.unwrap_or(self.pinned),
             areas: patch.areas.unwrap_or_else(|| self.areas.clone()),
             pin_position: self.pin_position.clone(),
+            form_3d: patch.form_3d.or(self.form_3d),
         };
         next.validate()?;
         Ok(next)
@@ -213,17 +219,20 @@ struct Area {
 }
 impl Area {
     fn clamp(self, x: i32, y: i32, size: i32) -> (i32, i32) {
+        self.clamp_rect(x, y, size, size)
+    }
+    fn clamp_rect(self, x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
         let margin = 12
-            .min((self.width - size).max(0) / 2)
-            .min((self.height - size).max(0) / 2);
+            .min((self.width - width).max(0) / 2)
+            .min((self.height - height).max(0) / 2);
         (
             x.clamp(
                 self.x + margin,
-                self.x + (self.width - size - margin).max(margin),
+                self.x + (self.width - width - margin).max(margin),
             ),
             y.clamp(
                 self.y + margin,
-                self.y + (self.height - size - margin).max(margin),
+                self.y + (self.height - height - margin).max(margin),
             ),
         )
     }
@@ -361,7 +370,8 @@ fn destination(
     current: &Client,
     restore_pin: bool,
 ) -> Option<(String, Area, i32, i32)> {
-    let allowed = allowed_areas(prefs, monitors);
+    let allowed: Vec<_> = allowed_areas(prefs, monitors).into_iter()
+        .filter(|(_, zone)| zone.width >= current.width && zone.height >= current.height).collect();
     let current_name = monitors
         .iter()
         .find(|m| m.id == current.monitor)
@@ -384,7 +394,7 @@ fn destination(
         x = m.x + (p.x * m.width as f64).round() as i32;
         y = m.y + (p.y * m.height as f64).round() as i32;
     }
-    let (x, y) = chosen.1.clamp(x, y, SIZE);
+    let (x, y) = chosen.1.clamp_rect(x, y, current.width, current.height);
     Some((chosen.0.clone(), chosen.1, x, y))
 }
 fn pin_position(monitors: &[Monitor], monitor: &str, x: i32, y: i32) -> Option<PinPosition> {
@@ -661,12 +671,15 @@ fn verify(
     size: i32,
     pin: Option<bool>,
 ) -> Result<(), String> {
+    verify_rect(title, id, x, y, (size, size), pin)
+}
+fn verify_rect(title: &str, id: &str, x: i32, y: i32, size: (i32, i32), pin: Option<bool>) -> Result<(), String> {
     let c = resolve(title)?;
     if c.address != id
         || (c.x - x).abs() > 2
         || (c.y - y).abs() > 2
-        || (c.width - size).abs() > 2
-        || (c.height - size).abs() > 2
+        || (c.width - size.0).abs() > 2
+        || (c.height - size.1).abs() > 2
         || pin.is_some_and(|p| p != c.pinned)
     {
         return Err("Hyprland no confirmó la posición o tamaño de Capri".into());
@@ -773,10 +786,10 @@ fn bubble_position(
     let (width, height) = size;
     let (_, zone, _, _) = destination(prefs, monitors, dot, false)?;
     [
-        (dot.x + SIZE + 8, dot.y),
+        (dot.x + dot.width + 8, dot.y),
         (dot.x - width - 8, dot.y),
         (dot.x, dot.y - height - 8),
-        (dot.x, dot.y + SIZE + 8),
+        (dot.x, dot.y + dot.height + 8),
     ]
     .into_iter()
     .find(|(x, y)| {
@@ -847,19 +860,23 @@ fn target_zone(prefs: &Preferences, monitors: &[Monitor], target: &Target) -> Op
 }
 /// Bottom-aligned aside, or below the bottom border. Never clamp into input rows.
 /// If the terminal fills the permitted area, staying put is safer than covering it.
+#[cfg(test)]
 fn terminal_destination(target: &Target, zone: Area, size: i32) -> Option<(i32, i32)> {
+    terminal_destination_rect(target, zone, size, size)
+}
+fn terminal_destination_rect(target: &Target, zone: Area, width: i32, height: i32) -> Option<(i32, i32)> {
     let right = (target.x + target.width).ceil() as i32;
     let left = target.x.floor() as i32;
     let bottom = (target.y + target.height).ceil() as i32;
-    let y = (bottom - size).clamp(zone.y, zone.y + (zone.height - size).max(0));
-    let x = (right - size).clamp(zone.x, zone.x + (zone.width - size).max(0));
-    [(right, y), (left - size, y), (x, bottom)]
+    let y = (bottom - height).clamp(zone.y, zone.y + (zone.height - height).max(0));
+    let x = (right - width).clamp(zone.x, zone.x + (zone.width - width).max(0));
+    [(right, y), (left - width, y), (x, bottom)]
         .into_iter()
         .find(|(x, y)| {
             *x >= zone.x
                 && *y >= zone.y
-                && *x + size <= zone.x + zone.width
-                && *y + size <= zone.y + zone.height
+                && *x + width <= zone.x + zone.width
+                && *y + height <= zone.y + zone.height
         })
 }
 fn context_destination(
@@ -878,10 +895,10 @@ fn context_destination(
     let fits = |x: i32, y: i32| {
         x >= zone.x
             && y >= zone.y
-            && x + SIZE <= zone.x + zone.width
-            && y + SIZE <= zone.y + zone.height
+            && x + dot.width <= zone.x + zone.width
+            && y + dot.height <= zone.y + zone.height
     };
-    if placement == Some(Placement::Perch) {
+    if placement == Some(Placement::Perch) && dot.width == SIZE && dot.height == SIZE {
         // The SVG uses xMidYMid meet inside 140x140 with 8px padding.
         // Atlas canvas 272x321; authored seat at (140,238), independent of animation frames.
         let scale = (SIZE - 16) as f64 / 321.;
@@ -892,21 +909,22 @@ fn context_destination(
         return fits(x, y).then_some((x, y));
     }
     // Prefer the right edge; a full-width editor can use the clear area above.
-    let y = (cy - SIZE as f64 / 2.).round() as i32;
-    let (_, y) = zone.clamp(dot.x, y, SIZE);
+    let y = (cy - dot.height as f64 / 2.).round() as i32;
+    let (_, y) = zone.clamp_rect(dot.x, y, dot.width, dot.height);
     [
         (target.x + target.width + 8.).ceil() as i32,
-        (target.x - SIZE as f64 - 8.).floor() as i32,
+        (target.x - dot.width as f64 - 8.).floor() as i32,
     ]
     .into_iter()
     .find(|x| fits(*x, y))
     .map(|x| (x, y))
     .or_else(|| {
-        let y = (target.y - SIZE as f64 - 8.).floor() as i32;
-        let (x, _) = zone.clamp(
-            (target.x + target.width - SIZE as f64 - 8.).floor() as i32,
+        let y = (target.y - dot.height as f64 - 8.).floor() as i32;
+        let (x, _) = zone.clamp_rect(
+            (target.x + target.width - dot.width as f64 - 8.).floor() as i32,
             y,
-            SIZE,
+            dot.width,
+            dot.height,
         );
         fits(x, y).then_some((x, y))
     })
@@ -1149,7 +1167,7 @@ impl Controller {
         };
         let destination = if terminal_fallback {
             target_zone(&prefs, &monitors, target)
-                .and_then(|zone| terminal_destination(target, zone, SIZE))
+                .and_then(|zone| terminal_destination_rect(target, zone, dot.width, dot.height))
         } else {
             context_destination(&prefs, &monitors, &dot, target, placement)
         };
@@ -1171,7 +1189,7 @@ impl Controller {
             "move",
             &format!("x={x},y={y},relative=false"),
         )
-        .and_then(|_| verify(crate::platform::DOT_TITLE, &dot.address, x, y, SIZE, None));
+        .and_then(|_| verify_rect(crate::platform::DOT_TITLE, &dot.address, x, y, (dot.width, dot.height), None));
         if moved.is_err() {
             self.cancel_travel();
         }
@@ -1397,7 +1415,7 @@ impl Controller {
                 "move",
                 &format!("x={x},y={y},relative=false"),
             )?;
-            verify(crate::platform::DOT_TITLE, &dot.address, x, y, SIZE, None)?;
+            verify_rect(crate::platform::DOT_TITLE, &dot.address, x, y, (dot.width, dot.height), None)?;
         }
         Ok(true)
     }
@@ -1732,7 +1750,7 @@ impl Controller {
             self.paint(false)?;
             return Err("No hay una zona permitida disponible para Capri".into());
         };
-        let (x, y) = a.clamp(base_x.saturating_add(dx), base_y.saturating_add(dy), SIZE);
+        let (x, y) = a.clamp_rect(base_x.saturating_add(dx), base_y.saturating_add(dy), dot.width, dot.height);
         if (x, y) == (dot.x, dot.y) {
             return Ok(());
         }
@@ -1746,7 +1764,7 @@ impl Controller {
             "move",
             &format!("x={x},y={y},relative=false"),
         )
-        .and_then(|_| verify(crate::platform::DOT_TITLE, &dot.address, x, y, SIZE, None));
+        .and_then(|_| verify_rect(crate::platform::DOT_TITLE, &dot.address, x, y, (dot.width, dot.height), None));
         if moved.is_err() {
             self.cancel_travel();
         }
@@ -1992,6 +2010,29 @@ pub fn stop(app: &AppHandle) {
             }
         }
     }
+}
+pub(crate) fn preferred_3d(app: &AppHandle) -> bool {
+    app.state::<Arc<Controller>>().inner.lock().unwrap().prefs.form_3d
+        .unwrap_or_else(crate::capri3d::installed)
+}
+pub(crate) fn reconcile_3d_bounds(app: &AppHandle) {
+    let c = app.state::<Arc<Controller>>().inner().clone();
+    std::thread::spawn(move || {
+        let _serial = c.operations.lock().unwrap();
+        let prefs = c.inner.lock().unwrap().prefs.clone();
+        if prefs.enabled && !c.control.active() {
+            // The compositor may acknowledge GTK's resize later. This bounded reconciliation
+            // belongs to the explicit form change; it is not a roaming/placement timer.
+            let expected = crate::capri3d::dimensions(&c.app);
+            for _ in 0..20 {
+                if resolve(crate::platform::DOT_TITLE).is_ok_and(|dot| (dot.width, dot.height) == expected) { break; }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            if let Err(error) = c.apply_bounds(&prefs, false) {
+                crate::shell::companion_error(&c.app, &error);
+            }
+        }
+    });
 }
 pub fn enabled(app: &AppHandle) -> bool {
     app.try_state::<Arc<Controller>>()
@@ -2262,7 +2303,9 @@ fn paint_window(app: &AppHandle, label: &str, visible: bool, size: i32) -> Resul
         .into();
     let content = native.child().ok_or("Falta el contenido de Capri")?;
     if visible {
-        circle(&native, size);
+        if label != "dot" || !crate::capri3d::input_shape(app, &native)? {
+            circle(&native, size);
+        }
     } else {
         native.input_shape_combine_region(Some(&gtk::cairo::Region::create()));
     }
@@ -2326,6 +2369,25 @@ pub(crate) fn paint_pair(app: &AppHandle, visible: bool) -> Result<(), String> {
     paint_window(app, "dot", visible, SIZE)?;
     paint_window(app, LAUNCHER, !visible, LAUNCHER_SIZE)
 }
+/// Mask publications only update input; they must never reveal a window hidden for a capture.
+pub(crate) fn refresh_3d_input(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let c = app.state::<Arc<Controller>>();
+        let state = c.state();
+        if !state.enabled || c.control.active() { return Ok(()); }
+        let native: gtk::Window = app.get_webview_window("dot").ok_or("Falta Dot")?
+            .gtk_window().map_err(|e| e.to_string())?.into();
+        if !state.visible {
+            native.input_shape_combine_region(Some(&gtk::cairo::Region::create()));
+        } else if !crate::capri3d::input_shape(app, &native)? {
+            circle(&native, SIZE);
+        }
+        native.display().flush();
+    }
+    Ok(())
+}
 pub(crate) fn restore_shape(app: &AppHandle) {
     #[cfg(target_os = "linux")]
     if enabled(app) {
@@ -2354,7 +2416,9 @@ fn configure_window(app: &AppHandle, label: &str, size: i32, show: bool) -> Resu
             child.set_opacity(1.);
         }
         if size != 72 {
-            circle(&native, size);
+            if label != "dot" || !crate::capri3d::input_shape(app, &native)? {
+                circle(&native, size);
+            }
         } else {
             native.input_shape_combine_region(None);
         }
@@ -2531,6 +2595,8 @@ pub fn desktop_companion_menu(
                 "Traer Capri"
             },
         ),
+        ("capri-form-2d", if preferred_3d(&app) { "Forma: 2D" } else { "Forma: 2D ✓" }),
+        ("capri-form-3d", if preferred_3d(&app) { "Forma: 3D ✓" } else { "Forma: 3D" }),
         ("capri-context-settings", "Configurar Capri"),
     ] {
         menu.append(
@@ -2543,6 +2609,17 @@ pub fn desktop_companion_menu(
     Ok(c.state())
 }
 fn handle_context_action(app: &AppHandle, id: &str) {
+    if matches!(id, "capri-form-2d" | "capri-form-3d") {
+        let c = app.state::<Arc<Controller>>().inner().clone();
+        let form_3d = id == "capri-form-3d";
+        std::thread::spawn(move || {
+            match c.set(Patch { form_3d: Some(form_3d), ..Patch::default() }) {
+                Ok(_) => crate::capri3d::form_changed(&c.app, form_3d),
+                Err(error) => crate::shell::companion_error(&c.app, &error),
+            }
+        });
+        return;
+    }
     if id == "capri-context-settings" {
         if crate::shell::show_panel(app).is_ok() {
             let _ = app.emit_to("panel", "dot://capri-settings", ());
@@ -2612,6 +2689,28 @@ mod tests {
     use super::*;
     fn fixture(pid: u32, title: &str, address: &str) -> Value {
         serde_json::json!({"pid":pid,"title":title,"address":address,"mapped":true,"at":[2652,415],"size":[156,156],"monitor":1,"pinned":true})
+    }
+    #[test]
+    fn form_preference_migrates_and_survives_unrelated_settings_changes() {
+        let old: Preferences = serde_json::from_str(r#"{"enabled":true,"motion":true}"#).unwrap();
+        assert_eq!(old.form_3d, None);
+        let chosen = old.patched(Patch { form_3d: Some(false), ..Patch::default() }).unwrap();
+        let changed = chosen.patched(Patch { pinned: Some(true), ..Patch::default() }).unwrap();
+        let restored: Preferences = serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
+        assert_eq!(restored.form_3d, Some(false));
+        assert!(restored.pinned && restored.enabled);
+    }
+    #[test]
+    fn tall_companion_bounds_and_bubbles_use_its_actual_dimensions() {
+        let area = Area { x: 0, y: 0, width: 1000, height: 800 };
+        assert_eq!(area.clamp_rect(999, 999, 240, 340), (748, 448));
+        let monitors = vec![Monitor { id: 1, name: "screen".into(), x: 0, y: 0, width: 1000, height: 800 }];
+        let dot = Client { x: 700, y: 440, width: 240, height: 340,
+            ..own_client(&serde_json::json!([fixture(8, "own", "0xabc")]), 8, "own").unwrap() };
+        let prefs = Preferences::default();
+        assert_eq!(bubble_position(&prefs, &monitors, &dot, (220, 80)), Some((472, 440)));
+        let too_small = vec![Monitor { width: 200, ..monitors[0].clone() }];
+        assert!(destination(&prefs, &too_small, &dot, false).is_none());
     }
     #[test]
     fn own_identity_rejects_foreign_ambiguous_unmapped_and_injection() {

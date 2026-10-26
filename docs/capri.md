@@ -52,6 +52,38 @@ Elige **Libre** o **Fija aquí**. Fijarla guarda su posición entre reinicios y 
 
 Esta implementación nativa requiere **Linux con Hyprland y configuración Lua**. Los equipos no compatibles muestran el motivo en el control. La activación se guarda por separado en `~/.gentle-dot/desktop-companion.json`. El acceso fijo no mantiene otra conexión ni carga el historial. Las ventanas de Capri se apartan de las capturas y operaciones del control del equipo, igual que la flor original.
 
+## Capri 3D (uso personal)
+
+Los modelos **no se distribuyen con el repositorio ni con la aplicación**. Esta opción de escritorio usa tus diez GLB locales; sin ellos, o si WebGL no está disponible, Capri conserva el sprite 2D. No cambia las sesiones, la personalidad ni los permisos del agente.
+
+1. Conserva los modelos obtenidos para tu uso personal en `.cache/capri-ai-reference/modelos/`, o en otra carpeta fuera del código distribuido.
+2. Desde la raíz del repositorio ejecuta:
+
+   ```sh
+   node scripts/capri3d/install-local.mjs
+   # Otra carpeta de origen:
+   node scripts/capri3d/install-local.mjs /ruta/a/modelos
+   ```
+
+3. El instalador comprueba y copia únicamente los diez nombres permitidos a `~/.local/share/dev.gentleman.gentle-dot/capri-3d/`. Allí escribe `manifest.json` con nombre, tamaño en bytes y SHA-256 de cada archivo. No ejecuta código de la aplicación de referencia.
+4. Activa Capri sobre el escritorio. Si no elegiste una forma antes y están los diez archivos, se selecciona 3D. Con **clic derecho → Forma: 2D / Forma: 3D** puedes cambiarla; la elección se guarda en las preferencias nativas de este equipo. Tras instalar modelos con la aplicación abierta, desactiva y vuelve a activar Capri para detectar la instalación, sin reiniciar el servicio.
+
+El lector nativo acepta sólo los diez nombres de archivo, nunca rutas. Carga primero `roja.glb`; las poses alternativas se solicitan al necesitarlas y conserva como máximo dos, además del modelo base. Si falta una pose alternativa, usa **Pensar** del modelo base. Un archivo base ausente o inválido vuelve a 2D. El gesto de archivar avisos mantiene temporalmente el sprite 2D y su recibo de entrega existente.
+
+| Causa determinista | Modelo / clip |
+|---|---|
+| Reposo | `roja.glb` / `Flotar_en_reposo`, cuadro estático |
+| Trabajo, pensamiento y lectura; cualquier tipo de herramienta | `roja.glb` / `Pensar` |
+| Respuesta hablada o envío confirmado | `roja.glb` / `Hablar` |
+| Terminado | `roja.glb` / `Reir`, una vez |
+| Pregunta / atención | `roja.glb` / primeros 3 segundos de `Saludar_y_teletransportarse`, sin teletransporte |
+| Escritura del usuario | `roja_inclinada.glb`, pose fija |
+| Error | `roja_recostada_cerrados.glb`, pose fija; `Pensar` si no carga |
+
+La ventana 3D mide aproximadamente **240 × 340 píxeles lógicos**; 2D conserva sus 156 × 156. El lienzo es transparente, con cámara ortográfica y texturas sin suavizado. Un glitch breve señala cambios entre archivos, sin mover la ventana. La silueta envía una máscara de 24 × 34 celdas a GTK: el espacio transparente deja pasar clics. El personaje conserva clic para conversar, arrastre, flechas, pin, zonas permitidas y señales nativas; no añade paseos aleatorios ni temporizadores de desplazamiento.
+
+El render se limita a 30 fps mientras reproduce un gesto. El reposo y las poses fijas no mantienen un bucle; al ocultarse o con movimiento reducido se detiene la animación. La máscara se actualiza al cambiar la pose, al volver a mostrarse y como máximo cada 500 ms durante una animación. WebGL en WebKitGTK/Wayland, el encuadre de cada modelo y el coste de GPU requieren verificación en el equipo real; las pruebas sin GPU cubren el contrato del renderer, las decisiones, la recuperación 2D y la región de entrada.
+
 ## Actualización de sesiones y avisos
 
 La actualización de Dot no recarga las extensiones de un Gentle Shell que ya esté abierto. Los recibos nativos de entrega y adaptadores nuevos están disponibles en sesiones nuevas. Para actualizar una sesión existente, escribe `/reload` en su terminal cuando haya terminado su trabajo y no tenga preguntas, mensajes pendientes, subagentes ni monitores que necesites conservar: recarga todas sus extensiones y puede cancelar trabajos auxiliares. La conversación se conserva. La interfaz evita presentar una aceptación del servidor como recepción confirmada por la IA.

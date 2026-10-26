@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capri3d-surface"
+description = "Enables the capri3d_surface command without any pre-configured scope."
+commands.allow = ["capri3d_surface"]
+
+[[permission]]
+identifier = "deny-capri3d-surface"
+description = "Denies the capri3d_surface command without any pre-configured scope."
+commands.deny = ["capri3d_surface"]

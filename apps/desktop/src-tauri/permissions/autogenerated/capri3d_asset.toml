@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capri3d-asset"
+description = "Enables the capri3d_asset command without any pre-configured scope."
+commands.allow = ["capri3d_asset"]
+
+[[permission]]
+identifier = "deny-capri3d-asset"
+description = "Denies the capri3d_asset command without any pre-configured scope."
+commands.deny = ["capri3d_asset"]

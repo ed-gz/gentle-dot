@@ -6,6 +6,8 @@ import { sceneCaption } from "../capri-scenes.ts";
 import { isVisualNotification, notificationPresentation } from "../companion-notification.ts";
 import type { DesktopCompanionControls } from "../desktop-companion.ts";
 import { CapriSprite } from "./CapriCompanion.tsx";
+import { Capri3D } from "../capri3d/Capri3D.tsx";
+import { publish3DSurface, readLocalAsset, usePreferred3D } from "../capri3d/native.ts";
 import "../desktop-companion.css";
 
 interface Props {
@@ -37,6 +39,17 @@ export function DesktopCompanionSurface({
 	toggle,
 	startDrag,
 }: Props) {
+	const preferred3D = usePreferred3D(controls.state.enabled);
+	const [active3D, setActive3D] = useState(false);
+	const [failed3D, setFailed3D] = useState(false);
+	useEffect(() => { setFailed3D(false); }, [preferred3D, controls.state.enabled]);
+	const on3DActive = useCallback((active: boolean) => {
+		setActive3D(active);
+		void publish3DSurface(active).catch(() => { if (active) setFailed3D(true); });
+	}, []);
+	const on3DMask = useCallback((mask: number[]) => {
+		void publish3DSurface(true, mask).catch(() => setFailed3D(true));
+	}, []);
 	const latest = useRef({ controls, inControl, reduced: false });
 	const [awake, setAwake] = useState(() => !document.hidden);
 	const [interacting, setInteracting] = useState(false);
@@ -232,6 +245,7 @@ export function DesktopCompanionSurface({
 		<button
 			type="button"
 			className="desktop-companion-surface"
+			data-form={active3D ? "3d" : "2d"}
 			data-pose={pose}
 			data-duo={duo}
 			data-motion={moving}
@@ -338,7 +352,17 @@ export function DesktopCompanionSurface({
 				void controls.menu().catch(() => {});
 			}}
 		>
-			<CapriSprite
+			<Capri3D
+				enabled={controls.state.enabled && !visualNotification}
+				preferred={preferred3D && !failed3D}
+				visible={visible}
+				reduced={reduced || !controls.state.motion}
+				behavior={behavior}
+				read={readLocalAsset}
+				onActive={on3DActive}
+				onMask={on3DMask}
+			/>
+			{!active3D && <CapriSprite
 				key={notificationId ?? "companion"}
 				pose={pose}
 				animated
@@ -355,7 +379,7 @@ export function DesktopCompanionSurface({
 					pose !== "face" &&
 					pose !== "face-talk"
 				}
-			/>
+			/>}
 			{inControl || yolo ? (
 				<span className="desktop-companion-control" aria-hidden="true">
 					{inControl ? "Control activo" : "Modo directo"}

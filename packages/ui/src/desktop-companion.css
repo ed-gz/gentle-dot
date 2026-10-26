@@ -1,3 +1,28 @@
+.capri3d-canvas {
+	grid-area: 1 / 1;
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	pointer-events: none;
+	image-rendering: pixelated;
+}
+.desktop-companion-surface[data-form="2d"] .capri3d-canvas { visibility: hidden; }
+.desktop-companion-surface[data-form="3d"] { padding: 0; }
+.desktop-companion-surface[data-form="3d"] .capri3d-canvas {
+	position: absolute;
+	inset: 0;
+}
+.desktop-companion-surface:focus-visible .capri3d-canvas {
+	filter: drop-shadow(0 0 2px #fff2fc);
+}
+.capri3d-glitch { animation: capri3d-glitch 180ms steps(3, end); }
+@keyframes capri3d-glitch {
+	0%, 65% { filter: drop-shadow(3px 0 #00e5ef) drop-shadow(-3px 0 #ed4fa7); clip-path: inset(0 0 12% 0); }
+	35% { filter: contrast(1.8); clip-path: inset(8% 0 0 0); }
+	100% { filter: none; clip-path: none; }
+}
+@media (prefers-reduced-motion: reduce) { .capri3d-glitch { animation: none; } }
 html[data-surface="companion-launcher"] body {
 	background: transparent;
 	overflow: hidden;
@@ -155,6 +180,7 @@ button.desktop-companion-bubble-message:hover:not(:disabled) {
 	pointer-events: none;
 }
 .desktop-companion-surface .capri-sprite {
+	grid-area: 1 / 1;
 	width: 100%;
 	height: 100%;
 	min-width: 0;

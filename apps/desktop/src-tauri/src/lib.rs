@@ -5,6 +5,7 @@ pub mod computer;
 pub mod config;
 pub mod daemon;
 pub mod desktop_companion;
+pub mod capri3d;
 pub mod desktop_context;
 #[cfg(target_os = "macos")]
 pub mod disclaimed;
