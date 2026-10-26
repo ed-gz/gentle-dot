@@ -1143,7 +1143,9 @@ impl Controller {
                 bubble_size(&i.context),
             )
         };
-        let position = if show {
+        let reply_in_panel = bubble_id.as_ref().is_some_and(|id| id.starts_with("reply:"))
+            && self.app.get_webview_window("panel").is_some_and(|w| w.is_visible().unwrap_or(false));
+        let position = if show && !reply_in_panel {
             resolve(crate::platform::DOT_TITLE)
                 .ok()
                 .and_then(|dot| bubble_position(&prefs, &monitors, &dot, size))
@@ -2096,7 +2098,12 @@ pub fn start(app: &AppHandle) {
                 eprintln!("gentle-dot desktop companion: {e}");
             }
         }
+        let mut last_absence = Instant::now() - Duration::from_secs(30);
         while !c.stop.load(Ordering::SeqCst) {
+            if last_absence.elapsed() >= Duration::from_secs(30) {
+                last_absence = Instant::now();
+                crate::capri3d::poll_absence(&c.app);
+            }
             let delay = c.inner.lock().unwrap().travel.next_wake(Instant::now());
             std::thread::sleep(delay);
             if c.stop.load(Ordering::SeqCst) {
@@ -2659,8 +2666,16 @@ pub async fn desktop_companion_set(app: AppHandle, patch: Patch) -> Result<State
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub fn desktop_companion_interaction(app: AppHandle, active: bool, released: Option<bool>) -> State {
+pub fn desktop_companion_interaction(app: AppHandle, active: bool, released: Option<bool>, dragging: Option<bool>) -> State {
+    #[cfg(target_os = "linux")]
+    if dragging == Some(true) && crate::capri3d::active(&app) { crate::capri3d::watch_drag(&app); }
+    #[cfg(not(target_os = "linux"))]
+    let _ = dragging;
     let c = app.state::<Arc<Controller>>();
+    if released == Some(true) && crate::capri3d::active(&app)
+        && !app.state::<crate::capri3d::Surface>().dragging.swap(false, Ordering::SeqCst) {
+        return c.state(); // WebKit and native release may race; gravity is delivered once.
+    }
     c.interaction.store(active, Ordering::SeqCst);
     if !active {
         c.settle_position.store(true, Ordering::SeqCst);

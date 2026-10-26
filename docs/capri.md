@@ -84,24 +84,28 @@ La ventana 3D mide aproximadamente **240 × 340 píxeles lógicos**; 2D conserva
 
 El render se limita a 30 fps mientras reproduce un gesto. El reposo y las poses fijas no mantienen un bucle; al ocultarse o con movimiento reducido se detiene la animación. La máscara se actualiza al cambiar la pose, al volver a mostrarse y como máximo cada 500 ms durante una animación. WebGL en WebKitGTK/Wayland, el encuadre de cada modelo y el coste de GPU requieren verificación en el equipo real; las pruebas sin GPU cubren el contrato del renderer, las decisiones, la recuperación 2D y la región de entrada.
 
-### Movimiento y respuesta de escritorio (T23, implementación parcial)
+### Movimiento y respuesta de escritorio (T23–T24)
 
 Cada viaje sigue un destino aceptado por las reglas existentes, nunca un paseo aleatorio. El pin y las zonas permitidas siguen teniendo prioridad. No se ha reiniciado el servicio para validar estos cambios en vivo.
 
 | Motivo | Coreografía implementada |
 |---|---|
-| Destino a ≤600 px, mismo monitor | Interpolación nativa durante el viaje; pose flotante orientada hacia el destino con balanceo procedural |
+| Destino a ≤600 px, mismo monitor | Interpolación nativa; `roja.glb` orientada al destino, con pasos verticales y ligera inclinación sólo durante el viaje. El esqueleto local tiene cabeza/brazos pero no cadera/piernas: no se simulan articulaciones inexistentes ni se reproduce la flotación durante el paso |
 | Destino lejano o en otro monitor | Sección 2.85–4.65 s de `Saludar_y_teletransportarse`; desvanecimiento/glitch, cambio de posición en el punto medio, reaparición |
 | Señal explícita de soltar después de arrastrar, posición ya asentada | Caída acelerada al suelo del área permitida o al borde superior de la terminal enfocada si cabe; reacción de llegada. Asentar o retirar el cursor, por sí solos, nunca inicia una caída |
 | Reposo sin señales durante 2 min / 10 min | Sentada / recostada con ojos cerrados, con un único checkpoint pendiente |
-| Señal después de dormir | Recostada con ojos abiertos, saludo y vuelta al estado actual |
+| Bloqueo o inactividad real del sistema | Rust consulta `loginctl show-session $XDG_SESSION_ID -p LockedHint -p IdleHint` cada 30 s, sólo mientras la superficie 3D está activa. `yes` en cualquiera duerme; ambos `no` despiertan y saludan. Una consulta fallida no inventa un desbloqueo. Sin `XDG_SESSION_ID` usa la sesión `self` de logind |
+| Señal después de dormir / desbloqueo | Recostada con ojos abiertos, saludo y vuelta al estado actual; las señales de sesión no despiertan durante un bloqueo vigente |
 | Borde del editor verificado (`perch`) | Pose sentada; sin inventar geometría de otras ventanas |
-| Aviso hablado o envío con resumen | `Hablar`, con apertura de boca por textura durante el texto (2.2 s + 55 ms/carácter, máximo 12 s, limitado por la caducidad del aviso); conserva el globo nativo |
+| Respuesta nueva de Dot, aviso hablado o envío con resumen | `Hablar`, con apertura de boca por textura durante el texto (2.2 s + 55 ms/carácter, máximo 12 s, limitado por la caducidad del aviso). Las respuestas usan un extracto de hasta 180 caracteres y el globo existente sólo si el panel está cerrado. La suscripción de la ventana acompañante recibe únicamente eventos: no solicita historial ni usa borradores, deltas, respuestas intermedias o detenidas; deduplica respuestas completas por ID |
+| Reposo visible, sin movimiento reducido | Parpadeo cada 4.2 s: un dibujo para cerrar ojos y otro 140 ms después para abrirlos; no hay bucle de cuadros en reposo |
 | Terminado / atención | `Reir` una vez / saludo limitado antes de la sección de teletransporte |
 
-Un solo temporizador del renderer mantiene 30 fps durante gestos o viajes, y ninguno en una pose estática, oculta, con movimiento reducido o durante control del equipo. El temporizador nativo de 16 ms existe sólo mientras hay una trayectoria y vuelve al mantenimiento previo al llegar; cada mutación conserva la validación de identidad de ventana. Las lecturas de máscara se mantienen acotadas y se fuerzan al cambiar de pose.
+Un solo temporizador de cuadros del renderer mantiene 30 fps durante gestos o viajes; las poses estáticas sólo conservan el checkpoint de descanso y, en el reposo base visible, el parpadeo puntual. No hay reloj de cuadros oculto, con movimiento reducido ni durante control del equipo. El temporizador nativo de 16 ms existe sólo mientras hay una trayectoria y vuelve al mantenimiento previo al llegar; cada mutación conserva la validación de identidad de ventana. Las lecturas de máscara se mantienen acotadas y se fuerzan al cambiar de pose.
 
-**Pendiente para cerrar S22:** el desplazamiento corto usa flotación con balanceo, no piernas articuladas; falta conectar la ausencia/bloqueo del sistema al autómata de descanso y asegurar la pose sostenida durante todo el arrastre nativo y comprobar que WebKit entrega `pointerup` después del arrastre del compositor (sin esa señal explícita, no hay caída). El parpadeo por textura funciona durante clips activos, no añade un reloj de reposo. La mirada al puntero no está implementada. La textura facial, sincronización del teletransporte, coste de IPC de Hyprland por cuadro y caída tras soltar necesitan prueba visual real; los tests sin GPU no certifican el aspecto ni 60 Hz efectivos. Los avisos visuales de archivo conservan temporalmente 2D y sus recibos existentes.
+El arrastre 3D mantiene la pose de brazos aunque el compositor termine la petición `start_dragging` o quite la captura del puntero. Un observador GDK nativo consulta el botón cada 100 ms sólo durante ese arrastre explícito y entrega la transición de soltar a la UI; no deduce una caída por dejar de mover la ventana. La señal nativa y `pointerup` se deduplican para iniciar una sola caída. Cambiar a 2D, desactivar Capri o alcanzar el límite defensivo de cinco minutos cancela el observador.
+
+**Verificación pendiente de S22:** no se ha reiniciado el servicio. Hace falta probar visualmente pasos, textura facial, sincronización del teletransporte y caída después del arrastre GTK/Wayland real. Los tests sin GPU no certifican el aspecto ni la entrega de eventos del compositor. Logind depende de que el bloqueador/gestor de inactividad publique `LockedHint`/`IdleHint`; en una sesión que no los actualice se conserva el descanso por tiempo sin inventar señales. La mirada al puntero (opcional) sigue sin implementarse: no hay sondeo global permanente del cursor. La suscripción de respuestas agrega una conexión WebSocket de sólo eventos mientras el acompañante está habilitado, sin consultas de historial; compartir el flujo existente requeriría ampliar el alcance a `useDot.ts`. Los avisos visuales de archivo conservan temporalmente 2D y sus recibos existentes.
 
 ### Atlas 3D para un Android personal
 

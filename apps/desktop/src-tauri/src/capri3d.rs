@@ -46,7 +46,10 @@ pub async fn capri3d_asset(window: tauri::WebviewWindow, name: String) -> Result
         .await.map_err(|e| e.to_string())?
 }
 #[derive(Default)]
-pub struct Surface { pub(crate) inner: Mutex<SurfaceState> }
+pub struct Surface {
+    pub(crate) inner: Mutex<SurfaceState>,
+    pub(crate) dragging: std::sync::atomic::AtomicBool,
+}
 #[derive(Default)]
 pub(crate) struct SurfaceState { pub active: bool, pub mask: Vec<u8> }
 pub fn init(app: &tauri::AppHandle) { app.manage(Surface::default()); }
@@ -122,9 +125,97 @@ pub(crate) fn form_changed(app: &tauri::AppHandle, preferred: bool) {
     let _ = app.emit_to("dot", "dot://capri3d-form", preferred);
 }
 
+/// Unknown/missing logind properties never synthesize an unlock.
+fn parse_absence(text: &str) -> Option<bool> {
+    let property = |key: &str| text.lines().find_map(|line| {
+        let (name, value) = line.split_once('=')?;
+        if name != key { return None; }
+        match value { "yes" => Some(true), "no" => Some(false), _ => None }
+    });
+    Some(property("LockedHint")? || property("IdleHint")?)
+}
+pub(crate) fn poll_absence(app: &tauri::AppHandle) {
+    if !active(app) || !crate::desktop_companion::enabled(app) { return; }
+    #[cfg(target_os = "linux")]
+    {
+        let session = std::env::var("XDG_SESSION_ID").unwrap_or_else(|_| "self".into());
+        if let Ok(bytes) = crate::computer::linux::run("loginctl", &["show-session", &session, "-p", "LockedHint", "-p", "IdleHint"], None) {
+            if let Some(absent) = parse_absence(&String::from_utf8_lossy(&bytes)) {
+                let _ = app.emit_to("dot", "dot://capri3d-absence", absent);
+            }
+        }
+    }
+}
+fn observe_release(held: &mut bool, down: bool) -> bool {
+    let released = *held && !down;
+    *held = down;
+    released
+}
+/// GTK may not deliver button-release to WebKit after a compositor drag. Query
+/// GDK's button state only for this explicit drag, never infer release from movement.
+#[cfg(target_os = "linux")]
+pub(crate) fn watch_drag(app: &tauri::AppHandle) {
+    use gtk::prelude::*;
+    use std::sync::atomic::Ordering;
+    if app.state::<Surface>().dragging.swap(true, Ordering::SeqCst) { return; }
+    let app = app.clone();
+    let scheduler = app.clone();
+    let _ = scheduler.run_on_main_thread(move || {
+        let resources = (|| {
+            let window = app.get_webview_window("dot")?;
+            let native = window.gtk_window().ok()?;
+            Some((native.display().default_seat()?.pointer()?, native.window()?))
+        })();
+        let Some((device, gdk_window)) = resources else {
+            app.state::<Surface>().dragging.store(false, Ordering::SeqCst);
+            let _ = app.emit_to("dot", "dot://capri3d-release", ());
+            return;
+        };
+        let (_, _, _, state) = gdk_window.device_position(&device);
+        // The UI's pointer-down is explicit evidence too: a fast release can occur
+        // before this main-thread closure is scheduled.
+        let mut held = true;
+        let mut attempts = 0;
+        let finish = |app: &tauri::AppHandle| {
+            crate::desktop_companion::desktop_companion_interaction(app.clone(), false, Some(true), None);
+            let _ = app.emit_to("dot", "dot://capri3d-release", ());
+        };
+        if observe_release(&mut held, state.contains(gtk::gdk::ModifierType::BUTTON1_MASK)) { finish(&app); return; }
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+            attempts += 1;
+            if !crate::desktop_companion::enabled(&app) || !active(&app) || attempts > 3000 {
+                app.state::<Surface>().dragging.store(false, Ordering::SeqCst);
+                let _ = app.emit_to("dot", "dot://capri3d-release", ());
+                return gtk::glib::ControlFlow::Break;
+            }
+            if !app.state::<Surface>().dragging.load(Ordering::SeqCst) { return gtk::glib::ControlFlow::Break; }
+            let (_, _, _, state) = gdk_window.device_position(&device);
+            if observe_release(&mut held, state.contains(gtk::gdk::ModifierType::BUTTON1_MASK)) {
+                finish(&app); gtk::glib::ControlFlow::Break
+            } else { gtk::glib::ControlFlow::Continue }
+        });
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parses_logind_without_guessing_on_failure() {
+        assert_eq!(parse_absence("LockedHint=yes\nIdleHint=no\n"), Some(true));
+        assert_eq!(parse_absence("LockedHint=no\nIdleHint=yes\n"), Some(true));
+        assert_eq!(parse_absence("LockedHint=no\nIdleHint=no\n"), Some(false));
+        assert_eq!(parse_absence("LockedHint=no\n"), None);
+        assert_eq!(parse_absence("error"), None);
+    }
+    #[test]
+    fn release_requires_a_previously_observed_held_button() {
+        let mut held = false;
+        assert!(!observe_release(&mut held, false));
+        assert!(!observe_release(&mut held, true));
+        assert!(observe_release(&mut held, false));
+        assert!(!observe_release(&mut held, false));
+    }
     #[test]
     fn asset_allowlist_rejects_paths_and_unknown_names() {
         assert!(allowed_asset("roja.glb"));

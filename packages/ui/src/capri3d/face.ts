@@ -3,7 +3,7 @@ import * as THREE from "three";
 /** Texture-space landmarks measured on the personal roja asset, not screen coordinates. */
 const eyes = [[0.253, 0.307], [0.2775, 0.301]] as const;
 const mouth = [0.2665, 0.3336] as const;
-export interface FaceLayer { update(seconds: number, speaking: boolean): void }
+export interface FaceLayer { update(seconds: number, speaking: boolean, closed?: boolean): void }
 /** Preserve the authored face; redraw only tiny mouth/lid patches on a private texture. */
 export function attachFace(root: THREE.Object3D): FaceLayer {
  const layers: { context: CanvasRenderingContext2D; canvas: HTMLCanvasElement; image: CanvasImageSource; texture: THREE.CanvasTexture }[] = [];
@@ -33,8 +33,8 @@ export function attachFace(root: THREE.Object3D): FaceLayer {
  for (const original of maps.keys()) original.dispose();
  let previous = "";
  return {
-  update(seconds, speaking) {
-   const blink = seconds % 4.2 > 4.05;
+  update(seconds, speaking, closed) {
+   const blink = closed ?? seconds % 4.2 > 4.05;
    const opening = speaking ? Math.round((0.3 + 0.7 * Math.abs(Math.sin(seconds * 11))) * 4) : 0;
    const signature = `${blink}:${opening}`;
    if (previous === signature) return;

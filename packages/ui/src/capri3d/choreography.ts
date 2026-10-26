@@ -28,6 +28,7 @@ export class RestProgression {
   }
  }
  cue() {
+  if (this.away) return;
   this.resting = false;
   this.idleAt = Date.now();
   if (this.pose === "wake" || this.pose === "greet") return;

@@ -50,6 +50,32 @@ it("renders no idle loop, caps gestures to 30fps and stops hidden/reduced-motion
  vi.advanceTimersByTime(1000); expect(gpu.render).not.toHaveBeenCalled();
  renderer.dispose(); expect(failure).not.toHaveBeenCalled(); expect(gpu.dispose).toHaveBeenCalledOnce();
 });
+it("paints each idle eyelid change once without mask readback and cancels when hidden", async () => {
+ const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => bytes(), mask: vi.fn(), failure: vi.fn() });
+ renderer.visibility(true, false);
+ await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo" });
+ gpu.render.mockClear(); gpu.reads.mockClear();
+ vi.advanceTimersByTime(4199); expect(gpu.render).not.toHaveBeenCalled();
+ vi.advanceTimersByTime(1); expect(gpu.render).toHaveBeenCalledTimes(1);
+ vi.advanceTimersByTime(140); expect(gpu.render).toHaveBeenCalledTimes(2);
+ expect(gpu.reads).not.toHaveBeenCalled();
+ renderer.visibility(false, false); gpu.render.mockClear();
+ vi.advanceTimersByTime(20_000); expect(gpu.render).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+ renderer.visibility(true, true); gpu.render.mockClear();
+ vi.advanceTimersByTime(20_000); expect(gpu.render).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+ renderer.dispose();
+});
+it("steps the base body during travel and clears the offsets on arrival", async () => {
+ const base = model(); gpu.parse.mockResolvedValueOnce(base);
+ const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => bytes(), mask: vi.fn(), failure: vi.fn() });
+ renderer.visibility(true, false);
+ await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo", motion: "walk", direction: -1, duration: 600 });
+ vi.advanceTimersByTime(100);
+ expect(base.scene.position.y).toBeGreaterThan(0); expect(base.scene.rotation.y).toBeLessThan(0);
+ vi.advanceTimersByTime(600);
+ expect(base.scene.position.y).toBe(0); expect(base.scene.rotation.y).toBe(0);
+ renderer.dispose(); expect(vi.getTimerCount()).toBe(0);
+});
 it("keeps only two models total, base plus the visible alternate", async () => {
  const read = vi.fn(async () => bytes());
  const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read, mask: vi.fn(), failure: vi.fn() });

@@ -125,9 +125,23 @@ export function DesktopCompanionSurface({
 		publishInteraction();
 	}, [publishInteraction]);
 	const clearInteraction = useCallback(() => {
+		if (press.current?.dragging && active3D) return;
 		held.current = { hover: false, focus: false, press: false };
 		endPointer();
-	}, [endPointer]);
+	}, [endPointer, active3D]);
+	useEffect(() => {
+		if (!controls.state.enabled || !isTauri()) return;
+		let live = true, stop: (() => void) | undefined;
+		void import("@tauri-apps/api/event").then(async ({ listen }) => {
+			const unlisten = await listen("dot://capri3d-release", () => {
+				if (!live) return;
+				held.current = { hover: false, focus: false, press: false };
+				endPointer();
+			});
+			if (live) stop = unlisten; else unlisten();
+		}).catch(() => {});
+		return () => { live = false; stop?.(); };
+	}, [controls.state.enabled, endPointer]);
 	useEffect(() => {
 		if (typeof matchMedia !== "function") return;
 		const query = matchMedia("(prefers-reduced-motion: reduce)");
@@ -250,18 +264,20 @@ export function DesktopCompanionSurface({
 	const motion = choreography.motion;
 	const perched = cue?.kind === "input-ready" && cue.placement === "perch";
 	const choice = useMemo<ClipChoice>(() => {
+		if (choreography.absent) return restChoice("sleep");
 		if (holding && !controls.state.pinned) return { model: "roja_brazos.glb", clip: null };
+		if (choreography.rest === "wake" || choreography.rest === "greet") return restChoice(choreography.rest);
 		if (attention) return responseChoice("attention");
 		if (controls.state.travelling && motion && motion.mode !== "rest") {
 			return motion.mode === "teleport"
 				? { model: "roja.glb", clip: "Saludar_y_teletransportarse", start: 2.85, end: 4.65, once: true, motion: "teleport", duration: motion.duration }
-				: { model: "roja_flotando.glb", clip: null, motion: motion.mode, direction: motion.direction, duration: motion.duration };
+				: { model: "roja.glb", clip: "Flotar_en_reposo", motion: motion.mode, direction: motion.direction, duration: motion.duration };
 		}
 		if (motion?.mode === "land") return { model: "roja.glb", clip: "Reir", once: true, motion: "land", duration: 600 };
 		if (speech) return responseChoice("reply");
 		if (behavior.state === "idle") return restChoice(perched ? "sit" : choreography.rest);
 		return clipForBehavior(behavior);
-	}, [attention, holding, controls.state.pinned, controls.state.travelling, motion, speech, behavior.state, behavior.animation, behavior.target, choreography.rest, perched]);
+	}, [choreography.absent, attention, holding, controls.state.pinned, controls.state.travelling, motion, speech, behavior.state, behavior.animation, behavior.target, choreography.rest, perched]);
 	const duo = pose.startsWith("duo-") || pose === "invite-rebecca";
 	const externalMessage = cue?.kind === "notification" ? notificationPresentation(cue) : undefined;
 	const message =
@@ -331,28 +347,27 @@ export function DesktopCompanionSurface({
 				try {
 					if (current.target.hasPointerCapture?.(current.id))
 						current.target.releasePointerCapture(current.id);
-					void Promise.resolve(startDrag())
-						.catch(() => {})
-						.finally(() => {
-							if (press.current === current) endPointer();
-						});
+					if (isTauri()) void invoke("desktop_companion_interaction", { active: true, dragging: true }).catch(() => {});
+					void Promise.resolve(startDrag()).catch(() => endPointer()).finally(() => { if (!active3D && press.current === current) endPointer(); });
 				} catch {
 					endPointer();
 				}
 			}}
 			onPointerUp={(event) => {
+				if (active3D && press.current?.dragging) held.current = { hover: false, focus: false, press: false };
 				if (suppressClick.current && isTauri() && !controls.state.pinned)
 					void invoke("desktop_companion_interaction", { active: false, released: true }).catch(() => {});
 				if (press.current?.id === event.pointerId) endPointer();
 			}}
 			onPointerCancel={(event) => {
+				if (active3D && press.current?.dragging) return;
 				if (press.current?.id === event.pointerId) {
 					suppressClick.current = true;
 					endPointer();
 				}
 			}}
 			onLostPointerCapture={(event) => {
-				if (press.current?.id === event.pointerId) endPointer();
+				if (press.current?.id === event.pointerId && (!press.current.dragging || !active3D)) endPointer();
 			}}
 			onClick={(event) => {
 				if (suppressClick.current && event.detail !== 0) {

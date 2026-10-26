@@ -6,6 +6,7 @@ import type {
 	DesktopCompanionRect,
 } from "./desktop-companion.ts";
 import { uploadBase } from "./uploads.ts";
+import { watchReplies } from "./capri3d/replies.ts";
 
 export interface CompanionSessionSnapshot {
 	version: 1;
@@ -124,6 +125,10 @@ export function useDesktopSessionContext(
 	const publish = controls.context;
 	const latest = useRef(publish);
 	latest.current = publish;
+	useEffect(() => {
+		if (!enabled || !info || !publish) return;
+		return watchReplies(info, cue => { void latest.current?.(cue).catch(() => {}); });
+	}, [enabled, info, publish]);
 	useEffect(() => {
 		if (!enabled || !info || !publish) return;
 		let live = true,

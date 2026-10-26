@@ -6,10 +6,14 @@ export interface MotionCue { mode: "walk" | "teleport" | "fall" | "land" | "rest
 /** Native events, not pointer polling. The only idle timer is the next rest checkpoint. */
 export function useChoreography(enabled: boolean, active: boolean, identity?: string) {
  const [rest, setRest] = useState<RestPose>("float");
+ const [absent, setAbsent] = useState(false);
  const [motion, setMotion] = useState<MotionCue>();
  const progression = useRef<RestProgression | undefined>(undefined);
+ const activity = useRef(active); activity.current = active;
+ const lastAbsence = useRef<boolean | undefined>(undefined);
  useEffect(() => {
   if (!enabled) return;
+  setAbsent(false); lastAbsence.current = undefined;
   const machine = new RestProgression(setRest);
   progression.current = machine;
   machine.idle();
@@ -28,7 +32,16 @@ export function useChoreography(enabled: boolean, active: boolean, identity?: st
     if (!live || !["walk", "teleport", "fall", "land", "rest"].includes(payload.mode)) return;
     setMotion(payload);
    });
-   if (live) stop = unlisten; else unlisten();
+   const unabsence = await listen<boolean>("dot://capri3d-absence", ({ payload }) => {
+    if (!live || typeof payload !== "boolean" || lastAbsence.current === payload) return;
+    lastAbsence.current = payload;
+    setAbsent(payload);
+    const machine = progression.current;
+    machine?.absent(payload);
+    if (!payload && machine) { if (activity.current) machine.cue(); else machine.idle(); }
+   });
+   const cleanup = () => { unlisten(); unabsence(); };
+   if (live) stop = cleanup; else cleanup();
   }).catch(() => {});
   return () => { live = false; stop?.(); };
  }, [enabled]);
@@ -37,5 +50,5 @@ export function useChoreography(enabled: boolean, active: boolean, identity?: st
   const timer = setTimeout(() => setMotion(undefined), motion.duration);
   return () => clearTimeout(timer);
  }, [motion]);
- return { rest, motion };
+ return { rest, motion, absent };
 }
