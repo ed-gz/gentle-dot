@@ -1,5 +1,6 @@
 import type { AgentState } from "@gentle-dot/protocol";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type CapriAction, capriAnimation } from "../capri-animation.ts";
 import { capriBehavior, CAPRI_OUTCOME_MS, type CapriActionKind } from "@gentle-dot/theme-capri/behavior";
 import { sceneCaption } from "../capri-scenes.ts";
@@ -8,6 +9,9 @@ import type { DesktopCompanionControls } from "../desktop-companion.ts";
 import { CapriSprite } from "./CapriCompanion.tsx";
 import { Capri3D } from "../capri3d/Capri3D.tsx";
 import { publish3DSurface, readLocalAsset, usePreferred3D } from "../capri3d/native.ts";
+import { useChoreography } from "../capri3d/useChoreography.ts";
+import { restChoice, responseChoice, speechDuration } from "../capri3d/choreography.ts";
+import { clipForBehavior, type ClipChoice } from "../capri3d/mapping.ts";
 import "../desktop-companion.css";
 
 interface Props {
@@ -53,6 +57,7 @@ export function DesktopCompanionSurface({
 	const latest = useRef({ controls, inControl, reduced: false });
 	const [awake, setAwake] = useState(() => !document.hidden);
 	const [interacting, setInteracting] = useState(false);
+	const [holding, setHolding] = useState(false);
 	const [outcome, setOutcome] = useState<{ kind: "done" | "error"; at: number }>();
 	const [reduced, setReduced] = useState(
 		() => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches,
@@ -102,6 +107,7 @@ export function DesktopCompanionSurface({
 	}, []);
 	const hold = (kind: keyof typeof held.current, value: boolean) => {
 		held.current[kind] = value;
+		if (kind === "press") setHolding(value);
 		publishInteraction();
 	};
 	const endPointer = useCallback(() => {
@@ -115,6 +121,7 @@ export function DesktopCompanionSurface({
 			}
 		}
 		held.current.press = false;
+		setHolding(false);
 		publishInteraction();
 	}, [publishInteraction]);
 	const clearInteraction = useCallback(() => {
@@ -227,6 +234,34 @@ export function DesktopCompanionSurface({
 		else if (cue?.kind === "notification") pose = "face";
 		else if (cue?.kind === "input-ready" && cue.placement === "perch") pose = "perch";
 	}
+	const choreography = useChoreography(controls.state.enabled && preferred3D,
+		behavior.state !== "idle" || interacting || Boolean(cue), cue?.id);
+	const [speech, setSpeech] = useState<{ id: string; until: number; text: string }>();
+	useEffect(() => {
+		if (!cue?.summary || !["notification", "submitted"].includes(cue.kind)) {
+			setSpeech(undefined); return;
+		}
+		const text = `${cue.summary}${cue.body ? ` ${cue.body}` : ""}`;
+		const duration = Math.min(speechDuration(text), Math.max(0, cue.expiresAt - Date.now()));
+		setSpeech({ id: cue.id, until: Date.now() + duration, text });
+		const timer = setTimeout(() => setSpeech(undefined), duration);
+		return () => clearTimeout(timer);
+	}, [cue?.id, cue?.summary, cue?.body, cue?.kind, cue?.expiresAt]);
+	const motion = choreography.motion;
+	const perched = cue?.kind === "input-ready" && cue.placement === "perch";
+	const choice = useMemo<ClipChoice>(() => {
+		if (holding && !controls.state.pinned) return { model: "roja_brazos.glb", clip: null };
+		if (attention) return responseChoice("attention");
+		if (controls.state.travelling && motion && motion.mode !== "rest") {
+			return motion.mode === "teleport"
+				? { model: "roja.glb", clip: "Saludar_y_teletransportarse", start: 2.85, end: 4.65, once: true, motion: "teleport", duration: motion.duration }
+				: { model: "roja_flotando.glb", clip: null, motion: motion.mode, direction: motion.direction, duration: motion.duration };
+		}
+		if (motion?.mode === "land") return { model: "roja.glb", clip: "Reir", once: true, motion: "land", duration: 600 };
+		if (speech) return responseChoice("reply");
+		if (behavior.state === "idle") return restChoice(perched ? "sit" : choreography.rest);
+		return clipForBehavior(behavior);
+	}, [attention, holding, controls.state.pinned, controls.state.travelling, motion, speech, behavior.state, behavior.animation, behavior.target, choreography.rest, perched]);
 	const duo = pose.startsWith("duo-") || pose === "invite-rebecca";
 	const externalMessage = cue?.kind === "notification" ? notificationPresentation(cue) : undefined;
 	const message =
@@ -284,6 +319,7 @@ export function DesktopCompanionSurface({
 				const current = press.current;
 				if (
 					!current ||
+					controls.state.pinned ||
 					current.id !== event.pointerId ||
 					current.dragging ||
 					Math.hypot(event.clientX - current.x, event.clientY - current.y) < 6
@@ -305,6 +341,8 @@ export function DesktopCompanionSurface({
 				}
 			}}
 			onPointerUp={(event) => {
+				if (suppressClick.current && isTauri() && !controls.state.pinned)
+					void invoke("desktop_companion_interaction", { active: false, released: true }).catch(() => {});
 				if (press.current?.id === event.pointerId) endPointer();
 			}}
 			onPointerCancel={(event) => {
@@ -341,7 +379,7 @@ export function DesktopCompanionSurface({
 				const direction = delta[event.key];
 				if (direction) {
 					event.preventDefault();
-					void controls.move(...direction).catch(() => {});
+					if (!controls.state.pinned) void controls.move(...direction).catch(() => {});
 				} else if (event.key === "Enter" || event.key === " ") {
 					event.preventDefault();
 					toggle();
@@ -355,9 +393,10 @@ export function DesktopCompanionSurface({
 			<Capri3D
 				enabled={controls.state.enabled && !visualNotification}
 				preferred={preferred3D && !failed3D}
-				visible={visible}
+				visible={visible && !inControl}
 				reduced={reduced || !controls.state.motion}
 				behavior={behavior}
+				choice={choice}
 				read={readLocalAsset}
 				onActive={on3DActive}
 				onMask={on3DMask}

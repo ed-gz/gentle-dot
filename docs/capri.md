@@ -48,7 +48,7 @@ Al activarlo, Capri sustituye la flor y aparece en una ventana transparente sobr
 
 En Hyprland, el personaje que pasea desactiva el desenfoque, sombra, borde y redondeo de su propia ventana mediante una regla temporal con identidad privada. Conserva la transparencia del sprite y evita el recuadro de vidrio que el compositor puede añadir incluso cuando WebKit entrega píxeles transparentes. Desactivar Capri retira esa regla y recupera el aspecto previo. El botón circular del perfil conserva su fondo y estilo.
 
-Elige **Libre** o **Fija aquí**. Fijarla guarda su posición entre reinicios y conserva los gestos; todavía puedes arrastrarla para cambiar su sitio. En **Pantallas y espacio** elige qué monitores permite usar y ajusta un rectángulo en cada uno, arrastrando, con teclado o con las zonas rápidas. Los monitores excluidos nunca son destinos automáticos; si desconectas la única pantalla permitida, Capri se oculta hasta que haya una zona disponible. El clic derecho sobre Capri abre Fijar aquí, Ocultar y Configurar Capri. **Traer a Capri** respeta el área permitida. El paseo se pausa al acercar el cursor, al usar sus controles, con movimiento reducido y durante el control del equipo. Desactivar el modo de escritorio restaura la flor y su preferencia anterior de visibilidad.
+Elige **Libre** o **Fija aquí**. Fijarla guarda su posición entre reinicios y conserva los gestos; para arrastrarla o moverla con las flechas, primero elige **Libre**. En **Pantallas y espacio** elige qué monitores permite usar y ajusta un rectángulo en cada uno, arrastrando, con teclado o con las zonas rápidas. Los monitores excluidos nunca son destinos automáticos; si desconectas la única pantalla permitida, Capri se oculta hasta que haya una zona disponible. El clic derecho sobre Capri abre Fijar aquí, Ocultar y Configurar Capri. **Traer a Capri** respeta el área permitida. El paseo se pausa al acercar el cursor, al usar sus controles, con movimiento reducido y durante el control del equipo. Desactivar el modo de escritorio restaura la flor y su preferencia anterior de visibilidad.
 
 Esta implementación nativa requiere **Linux con Hyprland y configuración Lua**. Los equipos no compatibles muestran el motivo en el control. La activación se guarda por separado en `~/.gentle-dot/desktop-companion.json`. El acceso fijo no mantiene otra conexión ni carga el historial. Las ventanas de Capri se apartan de las capturas y operaciones del control del equipo, igual que la flor original.
 
@@ -68,7 +68,7 @@ Los modelos **no se distribuyen con el repositorio ni con la aplicación**. Esta
 3. El instalador comprueba y copia únicamente los diez nombres permitidos a `~/.local/share/dev.gentleman.gentle-dot/capri-3d/`. Allí escribe `manifest.json` con nombre, tamaño en bytes y SHA-256 de cada archivo. No ejecuta código de la aplicación de referencia.
 4. Activa Capri sobre el escritorio. Si no elegiste una forma antes y están los diez archivos, se selecciona 3D. Con **clic derecho → Forma: 2D / Forma: 3D** puedes cambiarla; la elección se guarda en las preferencias nativas de este equipo. Tras instalar modelos con la aplicación abierta, desactiva y vuelve a activar Capri para detectar la instalación, sin reiniciar el servicio.
 
-El lector nativo acepta sólo los diez nombres de archivo, nunca rutas. Carga primero `roja.glb`; las poses alternativas se solicitan al necesitarlas y conserva como máximo dos, además del modelo base. Si falta una pose alternativa, usa **Pensar** del modelo base. Un archivo base ausente o inválido vuelve a 2D. El gesto de archivar avisos mantiene temporalmente el sprite 2D y su recibo de entrega existente.
+El lector nativo acepta sólo los diez nombres de archivo, nunca rutas. Carga primero `roja.glb`; las poses alternativas se solicitan al necesitarlas y conserva como máximo dos modelos en total: el modelo base para recuperación y la pose alternativa visible. Si falta una pose alternativa, usa **Pensar** del modelo base. Un archivo base ausente o inválido vuelve a 2D. El gesto de archivar avisos mantiene temporalmente el sprite 2D y su recibo de entrega existente.
 
 | Causa determinista | Modelo / clip |
 |---|---|
@@ -83,6 +83,25 @@ El lector nativo acepta sólo los diez nombres de archivo, nunca rutas. Carga pr
 La ventana 3D mide aproximadamente **240 × 340 píxeles lógicos**; 2D conserva sus 156 × 156. El lienzo es transparente, con cámara ortográfica y texturas sin suavizado. Un glitch breve señala cambios entre archivos, sin mover la ventana. La silueta envía una máscara de 24 × 34 celdas a GTK: el espacio transparente deja pasar clics. El personaje conserva clic para conversar, arrastre, flechas, pin, zonas permitidas y señales nativas; no añade paseos aleatorios ni temporizadores de desplazamiento.
 
 El render se limita a 30 fps mientras reproduce un gesto. El reposo y las poses fijas no mantienen un bucle; al ocultarse o con movimiento reducido se detiene la animación. La máscara se actualiza al cambiar la pose, al volver a mostrarse y como máximo cada 500 ms durante una animación. WebGL en WebKitGTK/Wayland, el encuadre de cada modelo y el coste de GPU requieren verificación en el equipo real; las pruebas sin GPU cubren el contrato del renderer, las decisiones, la recuperación 2D y la región de entrada.
+
+### Movimiento y respuesta de escritorio (T23, implementación parcial)
+
+Cada viaje sigue un destino aceptado por las reglas existentes, nunca un paseo aleatorio. El pin y las zonas permitidas siguen teniendo prioridad. No se ha reiniciado el servicio para validar estos cambios en vivo.
+
+| Motivo | Coreografía implementada |
+|---|---|
+| Destino a ≤600 px, mismo monitor | Interpolación nativa durante el viaje; pose flotante orientada hacia el destino con balanceo procedural |
+| Destino lejano o en otro monitor | Sección 2.85–4.65 s de `Saludar_y_teletransportarse`; desvanecimiento/glitch, cambio de posición en el punto medio, reaparición |
+| Señal explícita de soltar después de arrastrar, posición ya asentada | Caída acelerada al suelo del área permitida o al borde superior de la terminal enfocada si cabe; reacción de llegada. Asentar o retirar el cursor, por sí solos, nunca inicia una caída |
+| Reposo sin señales durante 2 min / 10 min | Sentada / recostada con ojos cerrados, con un único checkpoint pendiente |
+| Señal después de dormir | Recostada con ojos abiertos, saludo y vuelta al estado actual |
+| Borde del editor verificado (`perch`) | Pose sentada; sin inventar geometría de otras ventanas |
+| Aviso hablado o envío con resumen | `Hablar`, con apertura de boca por textura durante el texto (2.2 s + 55 ms/carácter, máximo 12 s, limitado por la caducidad del aviso); conserva el globo nativo |
+| Terminado / atención | `Reir` una vez / saludo limitado antes de la sección de teletransporte |
+
+Un solo temporizador del renderer mantiene 30 fps durante gestos o viajes, y ninguno en una pose estática, oculta, con movimiento reducido o durante control del equipo. El temporizador nativo de 16 ms existe sólo mientras hay una trayectoria y vuelve al mantenimiento previo al llegar; cada mutación conserva la validación de identidad de ventana. Las lecturas de máscara se mantienen acotadas y se fuerzan al cambiar de pose.
+
+**Pendiente para cerrar S22:** el desplazamiento corto usa flotación con balanceo, no piernas articuladas; falta conectar la ausencia/bloqueo del sistema al autómata de descanso y asegurar la pose sostenida durante todo el arrastre nativo y comprobar que WebKit entrega `pointerup` después del arrastre del compositor (sin esa señal explícita, no hay caída). El parpadeo por textura funciona durante clips activos, no añade un reloj de reposo. La mirada al puntero no está implementada. La textura facial, sincronización del teletransporte, coste de IPC de Hyprland por cuadro y caída tras soltar necesitan prueba visual real; los tests sin GPU no certifican el aspecto ni 60 Hz efectivos. Los avisos visuales de archivo conservan temporalmente 2D y sus recibos existentes.
 
 ### Atlas 3D para un Android personal
 

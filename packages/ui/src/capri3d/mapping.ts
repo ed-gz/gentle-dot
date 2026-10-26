@@ -7,6 +7,10 @@ export interface ClipChoice {
  clip: string | null;
  once?: boolean;
  end?: number;
+ start?: number;
+ motion?: "walk" | "teleport" | "fall" | "land";
+ direction?: number;
+ duration?: number;
 }
 /** All action kinds already resolve through capriBehavior; never invent a clock phase or a random pose. */
 export function clipForBehavior(behavior: CapriBehavior, replyKind?: "reply" | "reading" | "submitted"): ClipChoice {

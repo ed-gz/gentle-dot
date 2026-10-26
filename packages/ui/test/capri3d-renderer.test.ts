@@ -50,18 +50,18 @@ it("renders no idle loop, caps gestures to 30fps and stops hidden/reduced-motion
  vi.advanceTimersByTime(1000); expect(gpu.render).not.toHaveBeenCalled();
  renderer.dispose(); expect(failure).not.toHaveBeenCalled(); expect(gpu.dispose).toHaveBeenCalledOnce();
 });
-it("caches base plus at most two alternate files and evicts least-recently used", async () => {
+it("keeps only two models total, base plus the visible alternate", async () => {
  const read = vi.fn(async () => bytes());
  const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read, mask: vi.fn(), failure: vi.fn() });
  await renderer.choose({ model: "roja_inclinada.glb", clip: null });
  await renderer.choose({ model: "roja_recostada_cerrados.glb", clip: null });
  await renderer.choose({ model: "roja_inclinada.glb", clip: null });
- expect(read).toHaveBeenCalledTimes(2);
+ expect(read).toHaveBeenCalledTimes(3);
  await renderer.choose({ model: "roja_sentada.glb", clip: null });
  await renderer.choose({ model: "roja_recostada_cerrados.glb", clip: null });
- expect(read).toHaveBeenCalledTimes(4);
+ expect(read).toHaveBeenCalledTimes(5);
  await renderer.choose({ model: "roja.glb", clip: "Pensar" });
- expect(read).toHaveBeenCalledTimes(4); renderer.dispose();
+ expect(read).toHaveBeenCalledTimes(5); renderer.dispose();
 });
 it("stops the attention wave before teleport and falls back to base when an alternate is missing", async () => {
  const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => { throw Error("missing"); }, mask: vi.fn(), failure: vi.fn() });
@@ -70,6 +70,35 @@ it("stops the attention wave before teleport and falls back to base when an alte
  vi.advanceTimersByTime(3500); const frames = gpu.render.mock.calls.length;
  vi.advanceTimersByTime(5000); expect(gpu.render).toHaveBeenCalledTimes(frames);
  await expect(renderer.choose({ model: "roja_inclinada.glb", clip: null })).resolves.toBeUndefined();
+ renderer.dispose();
+});
+it("animates an authored travelling pose only until arrival and refreshes its silhouette", async () => {
+ const mask = vi.fn();
+ const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => bytes(), mask, failure: vi.fn() });
+ renderer.visibility(true, false);
+ await renderer.choose({ model: "roja_flotando.glb", clip: null, motion: "walk", direction: -1, duration: 600 });
+ gpu.render.mockClear();
+ vi.advanceTimersByTime(700);
+ expect(gpu.render).toHaveBeenCalled();
+ const frames = gpu.render.mock.calls.length;
+ vi.advanceTimersByTime(2000);
+ expect(gpu.render).toHaveBeenCalledTimes(frames);
+ expect(mask.mock.calls.length).toBeGreaterThanOrEqual(2);
+ renderer.dispose();
+ expect(vi.getTimerCount()).toBe(0);
+});
+it("moves through a transparent teleport midpoint and clears the effect on the next pose", async () => {
+ const canvas = document.createElement("canvas");
+ const renderer = await createRenderer({ canvas, base: bytes(), read: async () => bytes(), mask: vi.fn(), failure: vi.fn() });
+ renderer.visibility(true, false);
+ await renderer.choose({ model: "roja.glb", clip: "Saludar_y_teletransportarse", start: 2.85, end: 4.65, once: true, motion: "teleport", duration: 1800 });
+ vi.advanceTimersByTime(900);
+ expect(Number(canvas.style.opacity)).toBeLessThan(0.15);
+ vi.advanceTimersByTime(1100);
+ expect(Number(canvas.style.opacity)).toBe(1);
+ await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo" });
+ expect(canvas.style.filter).toBe("");
+ expect(canvas.style.opacity).toBe("");
  renderer.dispose();
 });
 it("rejects an external resource before GLTFLoader can request it", async () => {

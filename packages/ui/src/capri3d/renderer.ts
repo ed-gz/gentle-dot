@@ -3,6 +3,8 @@ import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import type { AssetName, AssetReader } from "./assets.ts";
 import type { ClipChoice } from "./mapping.ts";
 import { encodeAlphaMask } from "./mask.ts";
+import { renderFps } from "./choreography.ts";
+import { attachFace, type FaceLayer } from "./face.ts";
 
 /** WebGL stays behind this interface so the surface can be tested without a GPU. */
 export interface CapriRenderer {
@@ -63,6 +65,7 @@ export const createRenderer: RendererFactory = async options => {
  const topDown = new Uint8Array(pixels.length);
  const loader = new GLTFLoader();
  const cache = new Map<AssetName, GLTF>();
+ let face: FaceLayer | undefined;
  let disposed = false, visible = false, reduced = false, generation = 0;
  let timer: ReturnType<typeof setTimeout> | undefined;
  let current: GLTF | undefined, currentName: AssetName | undefined;
@@ -85,7 +88,10 @@ export const createRenderer: RendererFactory = async options => {
    lastMask = performance.now();
   }
  };
- const running = () => visible && !reduced && action && action.isRunning() && choice?.clip !== "Flotar_en_reposo";
+ const running = () => renderFps({ visible, reduced, animating: Boolean(
+  (choice?.motion && elapsed * 1000 < (choice.duration ?? 0)) ||
+  (action?.isRunning() && choice?.clip !== "Flotar_en_reposo")
+ ) }) > 0;
  const tick = () => {
   timer = undefined;
   if (!running() || disposed) return;
@@ -94,10 +100,27 @@ export const createRenderer: RendererFactory = async options => {
   last = now;
   elapsed += delta;
   mixer?.update(delta);
-  if (choice?.end !== undefined && elapsed >= choice.end) {
+  if (currentName === "roja.glb") face?.update(elapsed, choice?.clip === "Hablar");
+  if (current && choice?.motion) {
+   const t = elapsed * 1000 / (choice.duration ?? 1);
+   if (choice.motion === "walk") {
+    current.scene.rotation.y = (choice.direction ?? 1) * 0.45;
+    current.scene.rotation.z = Math.sin(elapsed * 12) * 0.025;
+   } else if (choice.motion === "land") {
+    const squash = Math.max(0, 1 - t) * Math.sin(Math.min(t, 1) * Math.PI);
+    current.scene.scale.y = 1 - squash * 0.12;
+   } else if (choice.motion === "teleport") {
+    // The native path switches at 50%, inside this transparent scanline envelope.
+    const opacity = Math.min(1, Math.abs(t - 0.5) * 5);
+    options.canvas.style.opacity = String(opacity);
+    options.canvas.style.filter = t < 1 ? "drop-shadow(3px 0 #00e5ef) drop-shadow(-3px 0 #ed4fa7)" : "";
+    options.canvas.style.clipPath = t < 1 ? `inset(${Math.floor(t * 17) % 3}% 0)` : "";
+   }
+  }
+  if (choice?.end !== undefined && elapsed + (choice.start ?? 0) >= choice.end) {
    // Wave ends before teleport tracks. Clamp instead of playing the teleport section.
    mixer?.setTime(choice.end);
-   action!.paused = true;
+   if (action) action.paused = true;
   }
   try { frame(!running()); } catch { stop(); options.failure(); return; }
   if (running()) timer = setTimeout(tick, 1000 / 30);
@@ -140,7 +163,11 @@ export const createRenderer: RendererFactory = async options => {
   target.dispose();
   renderer.dispose();
  };
- try { cache.set("roja.glb", await parse(options.base)); }
+ try {
+  const base = await parse(options.base);
+  cache.set("roja.glb", base);
+  face = attachFace(base.scene);
+ }
  catch (error) { dispose(); throw error; }
  return {
   choose(next) {
@@ -155,19 +182,24 @@ export const createRenderer: RendererFactory = async options => {
      if (disposed) { if (name !== "roja.glb") release(gltf); return; }
      cache.set(name, gltf);
     }
-    // Touch LRU; base plus at most two alternate models, including the visible one.
+    // Two models total: base fallback plus the visible alternate.
     cache.delete(name); cache.set(name, gltf);
     if (current) scene.remove(current.scene);
     mixer?.stopAllAction();
     if (current) mixer?.uncacheRoot(current.scene);
-    while (cache.size > 3) {
+    while (cache.size > 2) {
      const victim = [...cache.keys()].find(key => key !== "roja.glb" && key !== name)!;
      release(cache.get(victim)!); cache.delete(victim);
     }
     if (request !== generation) return;
     stop();
+    options.canvas.style.opacity = "";
+    options.canvas.style.filter = "";
+    options.canvas.style.clipPath = "";
     const switched = currentName !== undefined && currentName !== name;
     current = gltf; currentName = name; choice = next;
+    gltf.scene.rotation.set(0, 0, 0);
+    gltf.scene.scale.set(1, 1, 1);
     scene.add(gltf.scene);
     mixer = new THREE.AnimationMixer(gltf.scene);
     elapsed = 0;
@@ -178,6 +210,7 @@ export const createRenderer: RendererFactory = async options => {
      action.setLoop(next.once ? THREE.LoopOnce : THREE.LoopRepeat, next.once ? 1 : Infinity);
      action.clampWhenFinished = true;
      action.play(); mixer.update(0);
+     if (next.start) mixer.setTime(next.start);
     }
     gltf.scene.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(gltf.scene);
@@ -194,6 +227,7 @@ export const createRenderer: RendererFactory = async options => {
      void options.canvas.offsetWidth;
      options.canvas.classList.add("capri3d-glitch");
     }
+    if (name === "roja.glb") face?.update(0, next.clip === "Hablar" && !reduced);
     resume();
    });
    return queue;

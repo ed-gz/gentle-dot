@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { CapriBehavior } from "@gentle-dot/theme-capri/behavior";
 import { loadBaseAsset, type AssetReader } from "./assets.ts";
-import { clipForBehavior } from "./mapping.ts";
+import { clipForBehavior, type ClipChoice } from "./mapping.ts";
 import type { CapriRenderer, RendererFactory } from "./renderer.ts";
 
 const defaultFactory: RendererFactory = async options => {
@@ -15,6 +15,7 @@ interface Props {
  reduced: boolean;
  behavior: CapriBehavior;
  replyKind?: "reply" | "reading" | "submitted";
+ choice?: ClipChoice;
  read: AssetReader;
  factory?: RendererFactory;
  onActive(active: boolean): void;
@@ -44,7 +45,7 @@ export function Capri3D(props: Props) {
    renderer.current = instance;
    const current = latest.current;
    instance.visibility(current.visible, current.reduced);
-   await instance.choose(clipForBehavior(current.behavior, current.replyKind));
+   await instance.choose(current.choice ?? clipForBehavior(current.behavior, current.replyKind));
    if (live && renderer.current === instance) current.onActive(true);
   })().catch(failure);
   return () => {
@@ -56,11 +57,11 @@ export function Capri3D(props: Props) {
  const { state, animation, target } = props.behavior;
  useEffect(() => {
   const instance = renderer.current;
-  if (instance) void instance.choose(clipForBehavior({ state, animation, target }, props.replyKind)).catch(() => {
+  if (instance) void instance.choose(props.choice ?? clipForBehavior({ state, animation, target }, props.replyKind)).catch(() => {
    instance.dispose();
    if (renderer.current === instance) { renderer.current = undefined; latest.current.onActive(false); }
   });
- }, [state, animation, target, props.replyKind]);
+ }, [state, animation, target, props.replyKind, props.choice]);
  useEffect(() => { renderer.current?.visibility(props.visible, props.reduced); }, [props.visible, props.reduced]);
  return <canvas ref={canvas} className="capri3d-canvas" width={240} height={340} aria-hidden="true" />;
 }

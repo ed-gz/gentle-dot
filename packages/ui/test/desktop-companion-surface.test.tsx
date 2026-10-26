@@ -29,6 +29,20 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.useRealTimers();
 });
+it("never drags or nudges a pinned companion, but keeps click-to-chat", () => {
+ const control = controls({ pinned: true });
+ const startDrag = vi.fn(), toggle = vi.fn();
+ render(<DesktopCompanionSurface controls={control} agentState="idle" connected toggle={toggle} startDrag={startDrag} />);
+ const button = screen.getByRole("button", { name: /Abrir conversación/ });
+ fireEvent.pointerDown(button, { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+ fireEvent.pointerMove(button, { pointerId: 1, clientX: 40, clientY: 10 });
+ fireEvent.pointerUp(button, { pointerId: 1 });
+ fireEvent.keyDown(button, { key: "ArrowRight" });
+ expect(startDrag).not.toHaveBeenCalled();
+ expect(control.move).not.toHaveBeenCalled();
+ fireEvent.click(button);
+ expect(toggle).toHaveBeenCalledOnce();
+});
 function controls(patch: Partial<DesktopCompanionControls["state"]> = {}): DesktopCompanionControls {
 	return {
 		state: {

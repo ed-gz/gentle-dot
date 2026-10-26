@@ -703,15 +703,98 @@ fn automatic_actions(
         false,
     )
 }
+#[cfg(test)]
+mod choreography_tests {
+    use super::*;
+    #[test]
+    fn interpolation_arrives_exactly_and_stops_frame_wakes() {
+        let now = Instant::now();
+        let path = MotionPath::new((0, 0), (260, 0), false, false, now);
+        assert_eq!(path.mode, "walk");
+        assert_eq!(path.position(now), (0, 0));
+        assert_eq!(path.position(now + path.duration / 2), (130, 0));
+        assert_eq!(path.position(now + path.duration), (260, 0));
+        let mut travel = TravelPulse::default();
+        travel.until = Some(now + path.duration);
+        travel.path = Some(path);
+        assert_eq!(travel.next_wake(now), Duration::from_millis(16));
+        assert!(travel.finish(now + Duration::from_secs(3)));
+        assert!(travel.path.is_none());
+        assert_eq!(travel.next_wake(now + Duration::from_secs(3)), Duration::from_secs(1));
+    }
+    #[test]
+    fn teleport_changes_position_only_while_invisible() {
+        let now = Instant::now();
+        let path = MotionPath::new((0, 0), (1000, 50), true, false, now);
+        assert_eq!(path.mode, "teleport");
+        assert_eq!(path.position(now + Duration::from_millis(800)), (0, 0));
+        assert_eq!(path.position(now + Duration::from_millis(1000)), (1000, 50));
+    }
+    #[test]
+    fn drop_uses_focused_edge_and_clamps_to_work_area() {
+        let zone = Area { x: -100, y: 0, width: 1000, height: 800 };
+        let body = Client { address: "0x1".into(), x: 50, y: 30, width: 240, height: 340, monitor: 0, pinned: false };
+        assert_eq!(drop_landing(&body, zone, None), (50, 460));
+        let target = Target { x: 0., y: 500., width: 600., height: 300. };
+        assert_eq!(drop_landing(&body, zone, Some(&target)), (50, 160));
+        assert_eq!(drop_landing(&Client { x: 850, ..body }, zone, None), (660, 460));
+    }
+}
+
+/// A bounded, cue-owned path. No frame work survives arrival or cancellation.
+struct MotionPath {
+    from: (i32, i32),
+    to: (i32, i32),
+    started: Instant,
+    duration: Duration,
+    mode: &'static str,
+    address: String,
+    last: Option<(i32, i32)>,
+}
+impl MotionPath {
+    fn new(from: (i32, i32), to: (i32, i32), cross_monitor: bool, falling: bool, started: Instant) -> Self {
+        let distance = ((to.0 - from.0) as f64).hypot((to.1 - from.1) as f64);
+        let mode = if falling { "fall" } else if cross_monitor || distance > 600. { "teleport" } else { "walk" };
+        let seconds = match mode {
+            "teleport" => 1.8,
+            "fall" => (2. * distance / 1800.).sqrt().clamp(0.15, 1.2),
+            _ => (distance / 260.).max(0.4),
+        };
+        Self { from, to, started, duration: Duration::from_secs_f64(seconds), mode, address: String::new(), last: None }
+    }
+    fn position(&self, now: Instant) -> (i32, i32) {
+        let t = (now.saturating_duration_since(self.started).as_secs_f64() / self.duration.as_secs_f64()).clamp(0., 1.);
+        let fraction = match self.mode {
+            "teleport" => if t < 0.5 { 0. } else { 1. },
+            "fall" => t * t,
+            _ => t * t * (3. - 2. * t),
+        };
+        ((self.from.0 as f64 + (self.to.0 - self.from.0) as f64 * fraction).round() as i32,
+         (self.from.1 as f64 + (self.to.1 - self.from.1) as f64 * fraction).round() as i32)
+    }
+}
+fn drop_landing(body: &Client, zone: Area, focused: Option<&Target>) -> (i32, i32) {
+    let x = body.x.clamp(zone.x, zone.x + (zone.width - body.width).max(0));
+    let mut y = zone.y + (zone.height - body.height).max(0);
+    if let Some(target) = focused {
+        if target.y >= (body.y + body.height) as f64 && x as f64 >= target.x
+            && (x + body.width) as f64 <= target.x + target.width {
+            y = y.min(target.y.floor() as i32 - body.height);
+        }
+    }
+    (x, y.max(zone.y))
+}
 #[derive(Default)]
 struct TravelPulse {
     until: Option<Instant>,
+    path: Option<MotionPath>,
 }
 impl TravelPulse {
     fn start(&mut self, now: Instant) {
         self.until = Some(now + TRAVEL_FOR);
     }
     fn cancel(&mut self) -> bool {
+        self.path = None;
         self.until.take().is_some()
     }
     fn finish(&mut self, now: Instant) -> bool {
@@ -730,6 +813,7 @@ impl TravelPulse {
             && self.until.is_some_and(|until| now < until)
     }
     fn next_wake(&self, now: Instant) -> Duration {
+        if self.path.is_some() { return Duration::from_millis(16); }
         self.until
             .map(|until| {
                 until
@@ -946,6 +1030,7 @@ struct Runtime {
     manual_hidden: bool,
     zone_unavailable: bool,
     position_settle: PositionSettle,
+    drop_pending: bool,
 }
 #[derive(Default)]
 pub(crate) struct ControlPause(AtomicU64);
@@ -1180,21 +1265,45 @@ impl Controller {
         if self.state().paused {
             return Ok(false);
         }
-        self.inner.lock().unwrap().travel.start(Instant::now());
-        self.emit();
-        self.programmatic_position(x, y);
-        let moved = dispatch(
-            crate::platform::DOT_TITLE,
-            &dot.address,
-            "move",
-            &format!("x={x},y={y},relative=false"),
-        )
-        .and_then(|_| verify_rect(crate::platform::DOT_TITLE, &dot.address, x, y, (dot.width, dot.height), None));
-        if moved.is_err() {
-            self.cancel_travel();
-        }
-        moved?;
+        let cross_monitor = monitors.iter().find(|m| x >= m.x && x < m.x + m.width)
+            .is_some_and(|m| m.id != dot.monitor);
+        self.begin_path(&dot, (x, y), cross_monitor, false);
         Ok(true)
+    }
+    fn begin_path(&self, dot: &Client, to: (i32, i32), cross_monitor: bool, falling: bool) {
+        let now = Instant::now();
+        let mut path = MotionPath::new((dot.x, dot.y), to, cross_monitor, falling, now);
+        path.address = dot.address.clone();
+        let _ = self.app.emit("dot://capri3d-motion", serde_json::json!({
+            "mode": path.mode, "direction": (to.0 - dot.x).signum(),
+            "duration": path.duration.as_millis() as u64
+        }));
+        let mut i = self.inner.lock().unwrap();
+        i.travel.until = Some(now + path.duration);
+        i.travel.path = Some(path);
+        drop(i);
+        self.emit();
+    }
+    fn advance_path(&self) -> Result<(), String> {
+        let state = self.state();
+        if !state.enabled || !state.visible || state.pinned || state.paused || !state.motion {
+            self.cancel_travel();
+            return Ok(());
+        }
+        let step = {
+            let mut i = self.inner.lock().unwrap();
+            i.travel.path.as_mut().and_then(|path| {
+                let position = path.position(Instant::now());
+                if path.last == Some(position) { return None; }
+                path.last = Some(position);
+                Some((path.address.clone(), position))
+            })
+        };
+        if let Some((address, (x, y))) = step {
+            self.programmatic_position(x, y);
+            dispatch(crate::platform::DOT_TITLE, &address, "move", &format!("x={x},y={y},relative=false"))?;
+        }
+        Ok(())
     }
     fn context(&self, request: ContextRequest) -> Result<State, String> {
         request.validate()?;
@@ -1721,6 +1830,7 @@ impl Controller {
             if !next.enabled {
                 i.baseline = None;
             }
+            if !next.enabled || next.pinned { i.drop_pending = false; }
             i.reason = None;
             i.last_appearance = Instant::now();
         }
@@ -1735,6 +1845,7 @@ impl Controller {
         Ok(self.state())
     }
     fn move_by(&self, dx: i32, dy: i32) -> Result<(), String> {
+        if self.state().pinned { return Ok(()); }
         self.cancel_travel();
         if !self.state().enabled || self.control.active() {
             return Err("Capri no está disponible para moverse ahora".into());
@@ -1811,7 +1922,14 @@ impl Controller {
         if expired {
             self.sync_bubble()?;
         }
+        self.advance_path()?;
+        let landed = {
+            let i = self.inner.lock().unwrap();
+            i.travel.until.is_some_and(|until| Instant::now() >= until)
+                && i.travel.path.as_ref().is_some_and(|path| path.mode == "fall")
+        };
         let finished = self.inner.lock().unwrap().travel.finish(Instant::now()) || expired;
+        if finished { let _ = self.app.emit("dot://capri3d-motion", serde_json::json!({ "mode": if landed { "land" } else { "rest" }, "duration": 600, "direction": 0 })); }
         let topology_due =
             self.inner.lock().unwrap().last_topology.elapsed() >= Duration::from_secs(5);
         let mut changed = false;
@@ -1827,13 +1945,8 @@ impl Controller {
             && (topology_due || self.settle_position.load(Ordering::SeqCst))
         {
             let dot = resolve(crate::platform::DOT_TITLE)?;
-            if self
-                .inner
-                .lock()
-                .unwrap()
-                .position_settle
-                .observe(dot.x, dot.y, Instant::now())
-            {
+            let moved = self.inner.lock().unwrap().position_settle.observe(dot.x, dot.y, Instant::now());
+            if moved {
                 self.settle_position.store(true, Ordering::SeqCst);
                 changed = true;
             }
@@ -1857,6 +1970,18 @@ impl Controller {
             }
             if settle && !topology_changed {
                 self.save_pinned_position()?;
+                // A manual release is the only source of gravity; never fall on a clock phase.
+                let pending = self.inner.lock().unwrap().drop_pending;
+                if pending && !prefs.pinned && prefs.motion && self.state().visible && !self.state().paused {
+                    self.inner.lock().unwrap().drop_pending = false;
+                    let dot = resolve(crate::platform::DOT_TITLE)?;
+                    let zone = { let i = self.inner.lock().unwrap(); destination(&prefs, &i.monitors, &dot, false).map(|(_, zone, _, _)| zone) };
+                    if let Some(zone) = zone {
+                        let target = focused_terminal_target();
+                        let to = drop_landing(&dot, zone, target.as_ref());
+                        if to != (dot.x, dot.y) { self.begin_path(&dot, to, false, true); }
+                    }
+                }
             }
             self.sync_bubble()?;
             changed = true;
@@ -1928,6 +2053,7 @@ pub fn init(app: &AppHandle, data: &std::path::Path) {
             manual_hidden: false,
             zone_unavailable: false,
             position_settle: PositionSettle::new(Instant::now()),
+            drop_pending: false,
         }),
         operations: Mutex::new(()),
         interaction: AtomicBool::new(false),
@@ -2533,7 +2659,7 @@ pub async fn desktop_companion_set(app: AppHandle, patch: Patch) -> Result<State
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub fn desktop_companion_interaction(app: AppHandle, active: bool) -> State {
+pub fn desktop_companion_interaction(app: AppHandle, active: bool, released: Option<bool>) -> State {
     let c = app.state::<Arc<Controller>>();
     c.interaction.store(active, Ordering::SeqCst);
     if !active {
@@ -2542,6 +2668,10 @@ pub fn desktop_companion_interaction(app: AppHandle, active: bool) -> State {
     {
         let mut i = c.inner.lock().unwrap();
         i.travel.cancel();
+        // Settling/hover alone never creates gravity. Require an explicit drag release.
+        if released == Some(true) && !active && i.prefs.enabled && i.prefs.motion && !i.prefs.pinned {
+            i.drop_pending = true;
+        }
         i.last_appearance = Instant::now();
     }
     c.emit();
