@@ -20,6 +20,24 @@ import { connectionInfo } from "../desktop.ts";
 import { createOrchestrationClient, type AgentApproval, type OrchestrationClient } from "../orchestration.ts";
 import "../desktop-companion.css";
 
+// Prefixes emitted by this answer flow: local identity checks, orchestration.ts,
+// daemon orchestration expiry, and the HERDR transport. Never surface other internals.
+const APPROVAL_ERROR_PREFIXES = [
+	"La pregunta cambió",
+	"Sesión no disponible",
+	"Esta solicitud venció",
+	"No se puede conectar con HERDR",
+	"La sesión cerró la conexión",
+	"La conexión local no respondió",
+	"Falló la conexión con los agentes",
+	"El equipo devolvió",
+];
+export function approvalAnswerError(error: unknown): Error {
+	return new Error(error instanceof Error && APPROVAL_ERROR_PREFIXES.some(prefix => error.message.startsWith(prefix))
+		? error.message
+		: "No se pudo responder con la sesión. Volvé a intentarlo o abrí el panel.");
+}
+
 interface Props {
 	controls: DesktopCompanionControls;
 	agentState: AgentState;
@@ -247,20 +265,27 @@ export function DesktopCompanionSurface({
 		}).catch(() => { if (live) setApproval(undefined); });
 		return () => { live = false; abort.abort(); };
 	}, [active3D, context?.cue?.id, context?.cue?.paneId, context?.cue?.sessionId]);
+	// A render can replace the cue before effect cleanup runs; invalidate late snapshots then, too.
+	const approvalGeneration = useMemo(() => ({}), [active3D, approval?.id, context?.cue?.kind, context?.cue?.id, context?.cue?.paneId, context?.cue?.sessionId]);
+	const currentApprovalGeneration = useRef(approvalGeneration);
+	currentApprovalGeneration.current = approvalGeneration;
 	// Self-heal: a request resolved in the terminal, panel or by expiry must not leave dead buttons.
 	useEffect(() => {
 		const cue = context?.cue;
 		if (!approval || !active3D || cue?.kind !== "question" || !isTauri()) return;
+		let live = true, pending = false;
 		const abort = new AbortController();
 		const timer = setInterval(() => {
 			const client = orchestration.current;
-			if (!client) return;
+			const generation = currentApprovalGeneration.current;
+			if (!live || pending || !client || generation !== approvalGeneration) return;
+			pending = true;
 			void client.snapshot(abort.signal).then(snapshot => {
-				if (!pendingApproval(snapshot.approvals, cue)) setApproval(undefined);
-			}).catch(() => {});
+				if (live && currentApprovalGeneration.current === generation && !pendingApproval(snapshot.approvals, cue)) setApproval(undefined);
+			}).catch(() => {}).finally(() => { pending = false; });
 		}, 2000);
-		return () => { clearInterval(timer); abort.abort(); };
-	}, [approval?.id, active3D, context?.cue?.id, context?.cue?.paneId, context?.cue?.sessionId]);
+		return () => { live = false; clearInterval(timer); abort.abort(); };
+	}, [approvalGeneration]);
 	const [, refreshExpiry] = useState(0);
 	useEffect(() => {
 		const deadlines = [context?.cue?.expiresAt, context?.notification?.expiresAt]
@@ -541,12 +566,16 @@ export function DesktopCompanionSurface({
 			speech={speech} approval={approval} onLayout={layout} more={() => { if (cue?.kind === "question") void controls.openContext?.(); toggle(); }}
 			onGesture={name => setGesture({ name, at: Date.now() })}
 			answer={async action => {
-				if (!orchestration.current) throw new Error("Sesión no disponible");
-				// Revalidate immediately before the existing answer action; stale UI never approves a replacement.
-				const snapshot = await orchestration.current.snapshot();
-				if (action.action !== "answer" || !pendingApproval(snapshot.approvals, { id: `question:${action.requestId}`, paneId: action.paneId, sessionId: action.sessionId })) throw new Error("La pregunta cambió");
-				await orchestration.current.act(action);
-				if ("approved" in action && !action.approved) setDenied(true);
+				try {
+					if (!orchestration.current) throw new Error("Sesión no disponible");
+					// Revalidate immediately before the existing answer action; stale UI never approves a replacement.
+					const snapshot = await orchestration.current.snapshot();
+					if (action.action !== "answer" || !pendingApproval(snapshot.approvals, { id: `question:${action.requestId}`, paneId: action.paneId, sessionId: action.sessionId })) throw new Error("La pregunta cambió");
+					await orchestration.current.act(action);
+					if ("approved" in action && !action.approved) setDenied(true);
+				} catch (error) {
+					throw approvalAnswerError(error);
+				}
 			}}
 		/>}
 		</div>

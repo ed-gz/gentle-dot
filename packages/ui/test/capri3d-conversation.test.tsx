@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { initialState } from "../src/store.ts";
+import { approvalAnswerError } from "../src/components/DesktopCompanionSurface.tsx";
 import { notificationPresentation } from "../src/companion-notification.ts";
 import { CapriConversation, excerpt, confirmationAction, overlayMask, pendingApproval, createOverlayPublisher } from "../src/capri3d/conversation.tsx";
 const voice=vi.hoisted(()=>({start:vi.fn(),stop:vi.fn(),cancel:vi.fn(),typed:vi.fn(),sent:vi.fn(),draftTaken:vi.fn(),phase:"idle",mic:{available:true,reason:undefined as string | undefined}}));
@@ -238,12 +239,32 @@ it("surfaces the real failure reason when an answer no longer matches",async()=>
  await act(async()=>fireEvent.click(screen.getByRole("button",{name:"Aprobar"})));
  expect(screen.getByRole("alert")).toHaveTextContent("La pregunta cambió");
 });
+it.each([
+ ["boom /home/secret", "No se pudo responder con la sesión. Volvé a intentarlo o abrí el panel."],
+ ["Esta solicitud venció. Actualiza la sesión antes de responder.", "No se pudo responder: Esta solicitud venció. Actualiza la sesión antes de responder."],
+])("displays normalized parent answer failure: %s",async(message,expected)=>{
+ const ask={id:"failure",paneId:"p",sessionId:"s",title:"Permiso",message:"Ejecutar",action:"bash",kind:"confirm" as const,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
+ const client={act:vi.fn().mockRejectedValue(new Error(message))};
+ const answer=async()=>{try{await client.act();}catch(error){throw approvalAnswerError(error);}};
+ render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} more={vi.fn()} onLayout={vi.fn()} approval={ask} answer={answer}/>);
+ await act(async()=>fireEvent.click(screen.getByRole("button",{name:"Aprobar"})));
+ expect(client.act).toHaveBeenCalledOnce();
+ expect(screen.getByRole("alert").textContent).toBe(expected);
+ expect(screen.getByRole("alert")).not.toHaveTextContent("boom");
+ expect(screen.getByRole("alert")).not.toHaveTextContent("/home/secret");
+});
 it("pendingApproval keeps only a live, exact, answerable confirm",()=>{
  const now=Date.now();
  const a={id:"q1",paneId:"p",sessionId:"s",title:"t",message:"m",action:"x",kind:"confirm" as const,createdAt:new Date(now).toISOString(),expiresAt:new Date(now+60000).toISOString(),answerable:true};
  const cue={id:"question:q1",paneId:"p",sessionId:"s"};
  expect(pendingApproval([a],cue)?.id).toBe("q1");
  expect(pendingApproval([],cue)).toBeUndefined();
+ expect(pendingApproval([a],{...cue,id:"question:other"})).toBeUndefined();
+ expect(pendingApproval([{...a,kind:"select"}],cue)).toBeUndefined();
+ expect(pendingApproval([{...a,expiresAt:"invalid"}],cue)).toBeUndefined();
+ vi.spyOn(Date,"now").mockReturnValue(now);
+ expect(pendingApproval([{...a,expiresAt:new Date(now).toISOString()}],cue)).toBeUndefined();
+ vi.mocked(Date.now).mockRestore();
  expect(pendingApproval([{...a,answerable:false}],cue)).toBeUndefined();
  expect(pendingApproval([{...a,expiresAt:new Date(now-1000).toISOString()}],cue)).toBeUndefined();
  expect(pendingApproval([{...a,paneId:"other"}],cue)).toBeUndefined();

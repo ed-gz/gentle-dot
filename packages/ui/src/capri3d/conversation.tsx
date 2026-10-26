@@ -117,7 +117,7 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
     setShown(value=>value?.approvalKey===dismissedSpeech.current ? undefined : value);
    }
   }
-  catch (error) {if(mounted.current && currentKey.current===key)setError(error instanceof Error && error.message ? `No se pudo responder: ${error.message}` : "No se pudo responder. Volvé a intentarlo o abrí el panel.");}
+  catch (error) {if(mounted.current && currentKey.current===key)setError(error instanceof Error && error.message ? (error.message.startsWith("No se pudo responder") ? error.message : `No se pudo responder: ${error.message}`) : "No se pudo responder. Volvé a intentarlo o abrí el panel.");}
   finally {sending.current=false;if(mounted.current)setPending(false);}
  };
  return <>

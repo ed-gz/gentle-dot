@@ -1,11 +1,24 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+	approvalAnswerError,
 	DesktopCompanionLauncher,
 	DesktopCompanionSurface,
 } from "../src/components/DesktopCompanionSurface.tsx";
 import { DotSurface } from "../src/components/DotSurface.tsx";
 import type { DesktopCompanionControls } from "../src/desktop-companion.ts";
+
+it.each([
+ "La pregunta cambió", "Sesión no disponible", "Esta solicitud venció. Actualiza la sesión antes de responder.",
+ "No se puede conectar con HERDR o la sesión de Pi.", "La sesión cerró la conexión antes de responder.",
+ "La conexión local no respondió a tiempo.", "Falló la conexión con los agentes (503).",
+ "El equipo devolvió un estado de agentes no válido.",
+])("preserves the app approval failure: %s", message => {
+ expect(approvalAnswerError(new Error(message))).toEqual(new Error(message));
+});
+it.each([new Error("boom /home/secret"), new TypeError("Failed to fetch"), new Error(""), "La pregunta cambió", null, {message:"adapter internals"}])("normalizes untrusted approval failure %s", error => {
+ expect(approvalAnswerError(error)).toEqual(new Error("No se pudo responder con la sesión. Volvé a intentarlo o abrí el panel."));
+});
 
 beforeEach(() => {
 	vi.useFakeTimers();
