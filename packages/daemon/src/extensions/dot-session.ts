@@ -376,7 +376,15 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				);
 			const start = Math.max(0, end - Number(limit));
 			const latestAssistant = entries.findLast((entry) => entry.role === "assistant" && !entry.provenance);
-			const messages = entries.slice(start, end);
+			// Enrich the display projection without changing persisted/model-facing messages.
+			const sourceById = new Map(branch.map(entry => [entry.id, entry]));
+			const messages = entries.slice(start, end).map(message => {
+				const source = sourceById.get(message.id);
+				return { ...message,
+					...(source?.timestamp && Number.isFinite(Date.parse(source.timestamp)) ? { timestamp: source.timestamp } : {}),
+					...(source?.type === "message" && source.message.role === "toolResult" ? { isError: source.message.isError === true } : {}),
+				};
+			});
 			return {
 				sessionId,
 				instanceId,

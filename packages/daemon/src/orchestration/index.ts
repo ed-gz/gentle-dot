@@ -94,6 +94,8 @@ export interface Policy {
 	remainingUses: number;
 }
 export interface OrchestrationEvent {
+	dialogKind?: "question" | "permission";
+	dialogTitle?: string;
 	intentional?: boolean;
 	resultChanged?: boolean;
 	requestId?: string;
@@ -306,6 +308,7 @@ export class Orchestrator {
 		requestId?: string,
 		resultChanged?: boolean,
 		intentional?: boolean,
+		dialog?: { dialogKind: "question" | "permission"; dialogTitle: string },
 	) {
 		const event = {
 			id: randomUUID(),
@@ -318,6 +321,7 @@ export class Orchestrator {
 			...(requestId ? { requestId } : {}),
 			...(resultChanged !== undefined ? { resultChanged } : {}),
 			...(intentional !== undefined ? { intentional } : {}),
+			...(dialog ? { dialogKind: dialog.dialogKind, dialogTitle: dialog.dialogTitle.slice(0, 160) } : {}),
 		};
 		this.events.push(event);
 		if (this.events.length > 100) this.events.shift();
@@ -755,11 +759,13 @@ export class Orchestrator {
 				if (
 					previous &&
 					(["working", "blocked"].includes(previous.state) ||
+						this.last.approvals.some(approval => approval.paneId === session.paneId && approval.sessionId === session.sessionId) ||
 						(previous.connected &&
 							session.connected &&
 							session.assistantMessageId &&
 							session.assistantMessageId !== previous.assistantMessageId)) &&
-					["idle", "done"].includes(session.state)
+					["idle", "done"].includes(session.state) &&
+					!approvals.some(approval => approval.paneId === session.paneId && approval.sessionId === session.sessionId)
 				)
 					this.emit(
 						"completed",
@@ -781,14 +787,17 @@ export class Orchestrator {
 			for (const key of this.settledMessages.keys())
 				if (!currentIdentities.has(key)) this.settledMessages.delete(key);
 			for (const session of sessions)
-				if (["idle", "done"].includes(session.state))
+				if (["idle", "done"].includes(session.state) && !approvals.some(approval => approval.paneId === session.paneId && approval.sessionId === session.sessionId))
 					this.settledMessages.set(`${session.terminalId}:${session.sessionId}`, session.assistantMessageId);
 
 			for (const approval of approvals) {
 				if (
 					!this.last.approvals.some((old) => old.id === approval.id && old.sessionId === approval.sessionId)
 				)
-					this.emit("attention", approval.title, approval.paneId, approval.sessionId, undefined, approval.id);
+					this.emit("attention", approval.title, approval.paneId, approval.sessionId, undefined, approval.id, undefined, undefined, {
+						dialogKind: approval.kind === "confirm" ? "permission" : "question",
+						dialogTitle: approval.title,
+					});
 			}
 			for (const previous of this.last.sessions) {
 				if (

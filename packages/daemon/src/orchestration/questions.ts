@@ -21,7 +21,8 @@ export function humanOnlyQuestion(question: unknown): boolean {
 
 export interface RemoteQuestion {
 	kind: "confirm" | "select" | "input" | "questionnaire" | "editor" | "custom";
-	options?: Array<{ id: string; label: string }>;
+	requiresConfirmation?: true;
+	options?: Array<{ id: string; label: string; description?: string; effect?: string; consequence?: string }>;
 	placeholder?: string;
 	questions?: Array<{
 		id: string;
@@ -49,10 +50,22 @@ export function questionDetails(question: Record<string, unknown>): RemoteQuesti
 		for (const option of question.options) {
 			if (!record(option) || typeof option.id !== "string" || !option.id || typeof option.label !== "string")
 				return;
-			options.push({ id: option.id, label: option.label });
+			const descriptions: { description?: string; effect?: string; consequence?: string } = {};
+			for (const key of ["description", "effect", "consequence"] as const) {
+				if (option[key] !== undefined && typeof option[key] !== "string") return;
+				if (typeof option[key] === "string") descriptions[key] = option[key];
+			}
+			options.push({ id: option.id, label: option.label, ...descriptions });
 		}
 		if (new Set(options.map((option) => option.id)).size !== options.length) return;
 		result.options = options;
+		// Display-only brake: never project an opaque provider consent capability.
+		if (question.requiresConfirmation === true || "consentBinding" in question ||
+			(record(question.workflowPermission) && question.workflowPermission.category === "native-review-consent") ||
+			/(?:review|rdd)[-_ ]consent/i.test(String(question.action ?? "")) ||
+			String(question.message ?? "").includes("gentle-ai.review-integration.consent/") ||
+			options.some(option => option.description || option.effect || option.consequence || /(?:effect|consequence|efecto|consecuencia)\s*:/i.test(option.label)))
+			result.requiresConfirmation = true;
 	}
 	if (question.kind === "input" && question.placeholder !== undefined) {
 		if (typeof question.placeholder !== "string") return;
@@ -280,6 +293,7 @@ export function nativeQuestion(tool: string, args: unknown): NativeQuestion | un
 			? {
 					kind: "select",
 					title: source.question,
+					...(options.some(option => record(option) && (option.description || option.effect || option.consequence)) ? { requiresConfirmation: true } : {}),
 					options: questions[0]?.options.map((option, index) => ({
 						id: String(index),
 						label: `${option.label}${option.description ? ` — ${option.description}` : ""}`,

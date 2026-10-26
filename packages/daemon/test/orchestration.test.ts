@@ -28,6 +28,7 @@ afterEach(async () => {
 function harness(extra: Partial<OrchestratorOptions> = {}) {
 	let question: Record<string, unknown> | null = null;
 	let state = "idle";
+	let reportedStatus: string | undefined;
 	let pid = 123;
 	let sessionId = "s1";
 	let unavailable = false;
@@ -56,7 +57,7 @@ function harness(extra: Partial<OrchestratorOptions> = {}) {
 		if (method === "pane.get") return { pane: { pane_id: "w1:p1", terminal_id: "t1" } };
 		if (method === "pane.process_info") return { process_info: { foreground_processes: [{ pid }] } };
 		if (method === "snapshot")
-			return { sessionId, instanceId:manifest.instanceId, status: question ? "waiting" : state, messages, question, capabilities }; 
+			return { sessionId, instanceId:manifest.instanceId, status: reportedStatus ?? (question ? "waiting" : state), messages, question, capabilities };
 		if (method === "answer") {
 			if (params.questionId !== question?.id) throw new Error("Stale question");
 			question = null;
@@ -103,6 +104,7 @@ function harness(extra: Partial<OrchestratorOptions> = {}) {
 		setState: (value: string) => {
 			state = value;
 		},
+		setReportedStatus: (value: string) => { reportedStatus = value; },
 		setMessages: (value: Array<Record<string, unknown>>) => {
 			messages = value;
 		},
@@ -602,6 +604,26 @@ describe("HERDR orchestration authority", () => {
 		await h.orchestrator.dispatch({ action: "revoke", policyId: result.policy.id }, "human");
 		expect((await h.orchestrator.snapshot()).approvals).toHaveLength(1);
 		expect(h.calls.filter((call) => call.method === "answer")).toHaveLength(0);
+	});
+
+	it.each(["confirm", "select", "questionnaire", "input", "editor"])("classifies %s attention and defers completion until its dialog resolves", async kind => {
+		const h = harness();
+		h.setState("working");
+		await h.orchestrator.snapshot();
+		h.setState("idle");
+		// Older adapters can report idle even while a resolvable dialog exists.
+		h.setReportedStatus("idle");
+		h.setRawQuestion({id:"phone-dialog",kind,title:"x".repeat(200),answerable:true,
+			...(kind === "select" ? {options:[{id:"yes",label:"Continuar"}]} : {}),
+			...(kind === "questionnaire" ? {questions:[{id:"q",question:"Pick",options:[{label:"A"},{label:"B"}]}]} : {})});
+		const pending = await h.orchestrator.snapshot();
+		expect(pending.events.filter(event => event.type === "completed")).toHaveLength(0);
+		expect(pending.events.filter(event => event.type === "attention")).toEqual([expect.objectContaining({requestId:"phone-dialog",dialogKind:kind === "confirm" ? "permission" : "question",dialogTitle:"x".repeat(160)})]);
+		await h.orchestrator.snapshot();
+		await h.orchestrator.dispatch({action:"answer",paneId:"w1:p1",sessionId:"s1",requestId:"phone-dialog",...(kind === "confirm" ? {approved:true} : kind === "select" ? {optionId:"yes"} : kind === "questionnaire" ? {answers:[{questionId:"q",optionIndices:[0]}]} : {text:"ok"})}, "human");
+		const finished = await h.orchestrator.snapshot();
+		expect(finished.events.filter(event => event.type === "completed")).toHaveLength(1);
+		expect((await h.orchestrator.snapshot()).events.filter(event => event.type === "completed")).toHaveLength(1);
 	});
 
 	it("notifies completion and attention once, and reports disconnect honestly", async () => {

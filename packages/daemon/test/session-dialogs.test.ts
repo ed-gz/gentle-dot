@@ -13,7 +13,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDotSession } from "../src/extensions/dot-session.ts";
 import { localRequest } from "../src/orchestration/herdr.ts";
 import { WorkflowContinuations } from "../src/workflows.ts";
-import { humanOnlyQuestion } from "../src/orchestration/questions.ts";
+import { humanOnlyQuestion, questionDetails } from "../src/orchestration/questions.ts";
+
+it.each([
+ {workflowPermission:{category:"native-review-consent"}},
+ {consentBinding:"opaque"},
+ {options:[{id:"yes",label:"Allow",effect:"Authorizes candidate"}]},
+])("projects consent as explicit submission without exposing its binding %j", metadata => {
+ const details = questionDetails({kind:"select",title:"Review",options:[{id:"yes",label:"Allow"}],...metadata});
+ expect(details).toMatchObject({requiresConfirmation:true});
+ expect(details).not.toHaveProperty("consentBinding");
+});
 
 initTheme("dark", false);
 
@@ -118,6 +128,23 @@ async function session(withCustom = true) {
 		finishCustom: (value: unknown) => finishCustom?.(value),
 	};
 }
+
+it("preserves transcript timestamps and tool error status for turn disclosures", async () => {
+	const h = await session();
+	vi.spyOn(h.ctx.sessionManager, "getBranch").mockReturnValue([
+		{type:"message",id:"tool",timestamp:"2026-10-25T12:30:00Z",message:{role:"toolResult",isError:true,content:[{type:"text",text:"failed"}]}}
+	] as never);
+	expect((await h.call("snapshot")).messages).toEqual([expect.objectContaining({id:"tool",timestamp:"2026-10-25T12:30:00Z",isError:true})]);
+});
+
+it.each(["git push", "Permiso de seguridad"])("resolves human confirmation %s over the adapter socket", async title => {
+	const h = await session();
+	const waiting = h.ctx.ui.confirm(title, "¿Continuar?");
+	const question = (await h.call("snapshot")).question as Record<string, unknown>;
+	await h.call("answer", {questionId:question.id,confirmed:true});
+	await expect(waiting).resolves.toBe(true);
+	expect((await h.call("snapshot")).question).toBeNull();
+});
 
 async function enroll(h: Awaited<ReturnType<typeof session>>, now?: () => number) {
 	const target = { paneId: "pane-a", sessionId: "s1" };
