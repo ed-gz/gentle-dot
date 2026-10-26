@@ -31,11 +31,11 @@ public class CompanionReactionsTest {
         assertEquals("thinking",CompanionPolicy.aggregate(Arrays.asList("idle","thinking")));
         assertEquals("reading",CompanionPolicy.aggregate(Arrays.asList("reading","idle")));
     }
-    @Test public void everyShippedManifestSelectsItsOwnSheetAndValidatesEveryAnimation() throws Exception {
+    @Test public void facesManifestValidatesEveryAnimation() throws Exception {
         Context context=RuntimeEnvironment.getApplication();
-        for(String sheet:new String[]{"core","actions","reactions","context","life","glimpses","friends"}) {
+        for(String sheet:new String[]{"faces"}) {
             JSONObject manifest;
-            try(java.io.InputStream input=context.getAssets().open("companion/capri-motion-"+sheet+"-v1.json")) {
+            try(java.io.InputStream input=context.getAssets().open("companion/capri-faces-v1.json")) {
                 manifest=new JSONObject(new String(input.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));
             }
             java.util.Iterator<String> names=manifest.getJSONObject("animations").keys();
@@ -44,7 +44,7 @@ public class CompanionReactionsTest {
                 CompanionSpriteView view=new CompanionSpriteView(context,path->{opened.add(path);return context.getAssets().open(path);});
                 view.theme("capri");opened.clear();view.play(animation);
                 assertTrue(animation,view.renderState().ready);
-                assertTrue(animation+" selects "+sheet,opened.contains("companion/capri-motion-"+sheet+"-v1.json"));
+                assertTrue(animation+" selects "+sheet,opened.contains("companion/capri-faces-v1.json"));
                 java.lang.reflect.Field selected=CompanionSpriteView.class.getDeclaredField("action");selected.setAccessible(true);
                 assertEquals("Must not silently fall back to idle",animation,selected.get(view));view.release();
             }
@@ -63,12 +63,12 @@ public class CompanionReactionsTest {
             assertEquals(Arrays.asList("crying"),received);
         } finally { context.unregisterReceiver(receiver); }
     }
-    @Test public void malformedFramesInEachAdditionalAtlasFallBackWithoutReplacingValidatedIdle() throws Exception {
+    @Test public void malformedFaceActionsFallBackWithoutReplacingValidatedIdle() throws Exception {
         Context context=RuntimeEnvironment.getApplication();
         String[][] cases={{"reactions","crying"},{"context","follow-message"},{"life","attentive"},{"glimpses","eyes"},{"friends","duo-high-five"}};
         for(String[] item:cases) {
             CompanionSpriteView view=new CompanionSpriteView(context,path->{
-                if(!path.equals("companion/capri-motion-"+item[0]+"-v1.json"))return context.getAssets().open(path);
+                if(!path.equals("companion/capri-faces-v1.json"))return context.getAssets().open(path);
                 try(java.io.InputStream input=context.getAssets().open(path)) {
                     JSONObject manifest=new JSONObject(new String(input.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8));
                     manifest.getJSONObject("animations").getJSONObject(item[1]).getJSONArray("frames").getJSONObject(1).put("width",99999);
@@ -80,12 +80,12 @@ public class CompanionReactionsTest {
             assertEquals(item[0],"idle",action.get(view));view.release();
         }
     }
-    @Test public void switchingSheetsRecyclesPreviousBitmap() throws Exception {
+    @Test public void switchingFacesReusesTheDecodedAtlasUntilRelease() throws Exception {
         CompanionSpriteView view=new CompanionSpriteView(RuntimeEnvironment.getApplication());view.theme("capri");
         java.lang.reflect.Field atlas=CompanionSpriteView.class.getDeclaredField("atlas");atlas.setAccessible(true);
         android.graphics.Bitmap previous=(android.graphics.Bitmap)atlas.get(view);
         for(String name:new String[]{"crying","eyes","curious","duo-high-five","follow-message","idle"}) {
-            view.play(name);assertTrue(previous.isRecycled());previous=(android.graphics.Bitmap)atlas.get(view);
+            view.play(name);assertFalse(previous.isRecycled());assertSame(previous,atlas.get(view));
         }
         view.release();assertTrue(previous.isRecycled());
     }

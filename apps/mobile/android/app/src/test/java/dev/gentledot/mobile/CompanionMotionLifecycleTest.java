@@ -171,7 +171,7 @@ public class CompanionMotionLifecycleTest {
         MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,20,20,0);sprite.dispatchTouchEvent(down);down.recycle();
         Bitmap touched=draw();assertFalse("Touch triggers a greeting",idle.sameAs(touched));
         MotionEvent drag=MotionEvent.obtain(time,time+20,MotionEvent.ACTION_MOVE,100,80,0);sprite.dispatchTouchEvent(drag);drag.recycle();
-        Bitmap moving=draw();assertFalse("Drag starts walking",touched.sameAs(moving));advance(160);assertFalse("Walking advances",moving.sameAs(draw()));
+        Bitmap moving=draw();assertFalse("Drag starts looking",touched.sameAs(moving));advance(500);assertFalse("Looking advances at the authored face cadence",moving.sameAs(draw()));
         MotionEvent up=MotionEvent.obtain(time,time+200,MotionEvent.ACTION_UP,100,80,0);sprite.dispatchTouchEvent(up);up.recycle();
         advance(1600);Bitmap rested=draw();advance(1700);assertFalse("Reaction returns to blinking idle",rested.sameAs(draw()));
     }

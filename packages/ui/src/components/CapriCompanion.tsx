@@ -11,6 +11,16 @@ import { capriBehavior, CAPRI_OUTCOME_MS, type CapriActionKind } from "@gentle-d
 import { sceneCaption } from "../capri-scenes.ts";
 import { CapriAnimatedSprite } from "./CapriAnimatedSprite.tsx";
 import { CompanionSpaceEditor } from "./CompanionSpaceEditor.tsx";
+import { inDesktop } from "../desktop.ts";
+import { CapriFaceSprite } from "../capri-faces/CapriFaceSprite.tsx";
+
+function usePhoneFaces() {
+ const [mobile, setMobile] = useState(false);
+ useLayoutEffect(() => {
+  setMobile(!inDesktop() && !!document.querySelector('.mobile-shell, .chat-mobile'));
+ }, []);
+ return mobile;
+}
 
 export { CAPRI_POSES, type CapriPose } from "../capri-art.ts";
 
@@ -29,6 +39,7 @@ export function CapriSprite({
 	walking?: boolean;
 	onPresented?: (action: CapriAction) => void;
 }) {
+	const phoneFaces = usePhoneFaces();
 	const { frame, data, href } = capriFrame(pose);
 	const clip = useId();
 	const still = (
@@ -63,6 +74,7 @@ export function CapriSprite({
 		</span>
 	);
 	const animation = animated ? capriAnimation(pose, walking) : undefined;
+	if (phoneFaces) return <CapriFaceSprite action={pose} className={className} playing={animated && playing} />;
 	return animation ? (
 		<CapriAnimatedSprite
 			clip={animation}
@@ -276,6 +288,7 @@ export function CapriCompanion({
 	onAttention?(): void;
 }) {
 	const { settings } = controls;
+	const phoneFaces = usePhoneFaces();
 	const [menu, setMenu] = useState(false);
 	const handle = useRef<HTMLButtonElement>(null);
 	const menuRef = useRef<HTMLFieldSetElement>(null);
@@ -373,7 +386,9 @@ export function CapriCompanion({
 	const face = pose === "face" || pose === "face-talk";
 	const naturalSize = settings.minimized
 		? { width: 52, height: 52 }
-		: compact
+		: phoneFaces
+			? { width: 112, height: 112 }
+			: compact
 			? { width: 80, height: 60 }
 			: face
 				? { width: 80, height: 80 }
@@ -485,7 +500,7 @@ export function CapriCompanion({
 			data-attention={attention}
 			data-activity={interaction}
 			data-duo={duo && !floating.compact}
-			data-form={compact || floating.compact ? "glimpse" : face ? "face" : "body"}
+			data-form={phoneFaces ? "face" : compact || floating.compact ? "glimpse" : face ? "face" : "body"}
 			data-minimized={settings.minimized}
 		>
 			<div
@@ -527,7 +542,7 @@ export function CapriCompanion({
 					}
 				>
 					<CapriSprite
-						pose={settings.minimized || floating.compact ? "eyes" : pose}
+						pose={phoneFaces && speaking ? "face-talk" : settings.minimized || floating.compact ? "eyes" : pose}
 						animated
 						playing={alive && !floating.dragging}
 						walking={floating.travelling && !compact && !face && !duo && !attention}

@@ -116,7 +116,7 @@ final class CompanionSpriteView extends View {
     private void load(String name) throws Exception {
         String next=sheetFor(name);
         JSONObject manifest;
-        try(InputStream input=assets.open("companion/capri-motion-"+next+"-v1.json");ByteArrayOutputStream output=new ByteArrayOutputStream()) {
+        try(InputStream input=assets.open("companion/capri-faces-v1.json");ByteArrayOutputStream output=new ByteArrayOutputStream()) {
             byte[] chunk=new byte[8192];int count;
             while((count=input.read(chunk))!=-1) {
                 output.write(chunk,0,count);
@@ -139,13 +139,17 @@ final class CompanionSpriteView extends View {
     }
     static String sheetFor(String animation) throws IOException {
         switch(animation) {
-            case "idle": case "walk": case "greeting": case "working": return "core";
-            case "file-away": case "perch": case "step-aside": return "actions";
-            case "coffee": case "chill": case "crying": case "angry": return "reactions";
-            case "headphones": case "dancing": case "capture": case "follow-message": return "context";
-            case "snack": case "stretch": case "curious": case "attentive": return "life";
-            case "eyes": case "face": case "point-left": case "point-right": return "glimpses";
-            case "duo-watch": case "duo-coffee": case "duo-couch": case "duo-high-five": return "friends";
+            case "idle": case "walk": case "greeting": case "working":
+            case "file-away": case "perch": case "step-aside":
+            case "coffee": case "chill": case "crying": case "angry":
+            case "headphones": case "dancing": case "capture": case "follow-message":
+            case "snack": case "stretch": case "curious": case "attentive":
+            case "eyes": case "face": case "point-left": case "point-right":
+            case "duo-watch": case "duo-coffee": case "duo-couch": case "duo-high-five":
+            case "typing": case "typing-watch": case "done": case "error": case "thinking":
+            case "talking": case "sleep": case "sleepy": case "wake": case "glitch-transition":
+            case "happy": case "sad": case "look": case "pointing": case "surprised": case "attention":
+            case "face-talk": case "eyes-blink": return "faces";
             default: throw new IOException("Unknown animation");
         }
     }

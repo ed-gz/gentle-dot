@@ -12,6 +12,63 @@ La apariencia y la personalidad son independientes: puedes usar los sprites de C
 
 Las preferencias anteriores conservan su clave `gentle-dot-companion-v1` y su campo `mode`. Las instalaciones que ya usaban Capri migran esa elección a apariencia y personalidad, manteniendo posición, área y visibilidad. La reconexión actualiza únicamente la personalidad confirmada: no sobrescribe el tema local. Las antiguas preferencias manuales de pose, forma y compañía continúan migrándose a selección automática. Cambiar cualquier ajuste no borra conversaciones.
 
+## Rostros en el teléfono (S29, S25)
+
+**En móvil Capri usa sólo los 64 rostros dibujados por el usuario:** ni cuerpo completo, ni modelos 3D ni renders derivados de GLB. El escritorio conserva su renderer actual. El overlay Android y la app móvil comparten `capri-faces-v1.png` y su manifiesto, incluidos los alias de acciones anteriores.
+
+### Regenerar y revisar
+
+1. Conserva las cuatro fuentes de 1254×1254 en `.cache/capri-face-sprites/source/` (no se versionan).
+2. Ejecuta `node --test scripts/capri-faces/helpers.test.mjs` y `node scripts/capri-faces/slice.mjs`. Usa ImageMagick ya instalado; no descarga dependencias.
+3. Revisa los 64 recortes y las cuatro hojas de contacto en `scripts/capri-faces/inspection/` (ignoradas por git). El atlas y JSON finales sí pertenecen a `packages/theme-capri/src/assets/`.
+
+El corte usa los límites fraccionarios de la cuadrícula 4×4, recupera hasta 32 px de dibujo que sobresalen de una celda y elimina fragmentos de celdas vecinas/ruido de exportación. Recorta el alfa y alinea la máscara verde, no el pelo, las manos ni las pupilas móviles. Todos los cuadros comparten escala, centro y lienzo **224×224**; el atlas RGBA sin pérdida mide **1792×1792**, 8×8 celdas. Se reduce una sola vez con Lanczos para el overlay cuadrado de **112 dp** (224 px, referencia ×2); Android sigue validando dimensiones, límites, offsets, número de cuadros y PNG antes de confirmar Capri. No hay bucle de 60 fps.
+
+### Catálogo visual: 64 expresiones
+
+Cada columna corresponde a una hoja fuente. Las celdas se numeran **1–16, por filas**, de izquierda a derecha. Son nombres descriptivos del dibujo, no inferencias sobre emociones del usuario. Los cuatro contactos generados fueron inspeccionados completos.
+
+| Celda | `metamorphosis-atlas` | `floating-heads` | `eye-mask-grid` | `facial-micro` |
+|---|---|---|---|---|
+| 1 | Ojos sin máscara | Rostro neutral | Ojos al centro | Neutral A / boca zigzag |
+| 2 | Aparece la máscara | Sonrisa pequeña | Mirar izquierda | Medio parpadeo |
+| 3 | Aparece la boca | Sonrisa abierta | Mirar derecha | Ojos cerrados |
+| 4 | Aparece el pelo | Risa con ojos cerrados | Mirar arriba | Neutral B |
+| 5 | Máscara sonriente | Guiño izquierdo | Mirar abajo | Neutral C |
+| 6 | Glitch de franjas | Guiño derecho | Arriba-izquierda | Concentración / entrecerrar |
+| 7 | Máscara fragmentada | Escéptica | Arriba-derecha | Sonrisa ladeada / boca pequeña |
+| 8 | Guiño con sonrisa | Sonrisa presumida | Abajo-izquierda | Risa / boca abierta |
+| 9 | Sonrisa estable | Cabeza inclinada curiosa | Abajo-derecha | Neutral D |
+| 10 | Tercer ojo | Sorpresa / boca rombo | Medio parpadeo | Mirada izquierda |
+| 11 | Seis ojos | Enojo / boca zigzag | Parpadeo cerrado | Mirada derecha |
+| 12 | Vórtice de muchos ojos | Enojo / boca plana | Ojos medio abiertos | Neutral E |
+| 13 | Sonrisa inclinada | Rubor / mirada tímida | Guiño izquierdo | Habla: boca cerrada |
+| 14 | Mano sobre la cabeza | Triste / ojos caídos | Guiño derecho | Habla: boca rombo pequeña |
+| 15 | Dedo señala arriba | Sueño / párpados bajos | Concentración / mirada estrecha | Habla: boca abierta |
+| 16 | Dedo señala derecha | Ojos brillantes / ilusión | Ojos muy abiertos | Habla: reposo |
+
+Los identificadores exactos y la procedencia por celda están en `scripts/capri-faces/catalog.mjs` y en `catalog` del JSON generado. «Crying» conserva el nombre de compatibilidad, pero usa el rostro triste disponible: no inventa lágrimas. Los ojos brillantes cumplen la reacción de ilusión; el dibujo no contiene estrellas literales.
+
+### Animaciones con causa
+
+| Animación | Expresiones / causa |
+|---|---|
+| `idle` | Micro 1→2→3→2→4; pausa larga y parpadeo suave, ciclo 3.6 s |
+| `look` | Máscara centro→izquierda→centro→derecha; desplazarse/leer |
+| `typing-watch` | Miradas laterales y diagonales; escritura local, sin leer borradores |
+| `working` | Micro concentración y sonrisa breve; agente trabajando |
+| `thinking` | Miradas arriba/diagonales; agente pensando |
+| `talking` | Micro 13–16; boca cerrada→pequeña→abierta→reposo |
+| `happy` / `done` | Cabeza sonriente/risa/ojos brillantes; saludo o trabajo terminado |
+| `sad` / `error` | Triste, rubor y párpados caídos; error confirmado |
+| `angry` | Cabeza 11–12; reacción solicitada explícitamente |
+| `surprised` / `attention` | Boca rombo y ojos abiertos; pregunta/permiso |
+| `pointing` | Metamorfosis 15–16; señalar una acción concreta |
+| `sleepy`, `sleep`, `wake` | Párpados→cerrados; despertar→abrir→sonreír |
+| `glitch-transition` | Materialización, franjas, fragmentos y muchos ojos; transición explícita, nunca aleatoria |
+
+Los nombres heredados (`walk`, `greeting`, `file-away`, `perch`, `step-aside`, `eyes`, `curious`, `attentive`, `duo-high-five`, `crying`, `follow-message`, etc.) seleccionan secuencias del mismo atlas de rostros. Incluso los nombres `duo-*` muestran sólo Capri en móvil. Las pausas por ahorro de batería, ocultación y reducción de movimiento conservan su política anterior. Las descripciones posteriores de cuerpo completo, Rebecca y atlas antiguos corresponden al renderer de escritorio, no al teléfono.
+
 ## Capri como agente
 
 Puedes pedirle «levantá un issue en OWNER/REPO», «vigilá la sesión X y si falla la prueba pedile que la corrija» o, después de conectar Gmail, «avisame y resumime lo importante». [Issues de GitHub](github-issues.md) explica la confirmación antes de publicar; [Vigilancias](watchers.md) distingue avisos de acciones delegadas a una sesión exacta. Publicar issues y enviar/responder correo siempre requieren confirmación humana, aunque formen parte del encargo.

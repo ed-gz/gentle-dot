@@ -63,31 +63,18 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
-// The overlay uses the exact PNG already packaged by Vite, avoiding a duplicate atlas copy.
+// Phone renderer ships only the user-owned face atlas, never full-body or 3D sheets.
 def companionAssets = layout.buildDirectory.dir('generated/companion-assets')
 def themeAssets = file('../../../../packages/theme-capri/src/assets')
-def webAssets = file('src/main/assets/public/assets')
 tasks.register('syncCompanionAssets') {
-    inputs.files(fileTree(themeAssets) { include 'capri-motion-*-v1.json', 'capri-motion-*-v1.png' })
-    inputs.files(fileTree(webAssets) { include 'capri-motion-*-v1-*.png' })
+    inputs.files(fileTree(themeAssets) { include 'capri-faces-v1.json', 'capri-faces-v1.png' })
     outputs.dir(companionAssets)
     doLast {
         def output = companionAssets.get().dir('companion').asFile
         delete(companionAssets)
         output.mkdirs()
-        ['core', 'actions', 'reactions', 'context', 'life', 'glimpses', 'friends'].each { name ->
-            def stem = "capri-motion-${name}-v1"
-            def images = fileTree(webAssets) { include "${stem}-*.png" }.files
-            def manifest = new groovy.json.JsonSlurper().parse(new File(themeAssets, "${stem}.json"))
-            if (images.size() == 1) {
-                manifest.image = "public/assets/${images.first().name}"
-            } else {
-                // Native reactions must not depend on which animations Vite currently imports.
-                copy { from new File(themeAssets, "${stem}.png"); into output }
-                manifest.image = "companion/${stem}.png"
-            }
-            new File(output, "${stem}.json").text = groovy.json.JsonOutput.toJson(manifest)
-        }
+        copy { from new File(themeAssets, 'capri-faces-v1.png'); into output }
+        copy { from new File(themeAssets, 'capri-faces-v1.json'); into output }
     }
 }
 android.sourceSets.main.assets.srcDir(companionAssets)

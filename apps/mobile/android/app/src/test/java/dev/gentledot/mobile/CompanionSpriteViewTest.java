@@ -56,12 +56,12 @@ public class CompanionSpriteViewTest {
     private void assertCapri(Bitmap bitmap) {
         assertTrue("Sprite paints real pixels",colored(bitmap)>1000);
         assertEquals("Background remains fully transparent",0,bitmap.getPixel(0,0));
-        int pink=0;
+        int green=0;
         for(int y=0;y<bitmap.getHeight();y++)for(int x=0;x<bitmap.getWidth();x++) {
             int color=bitmap.getPixel(x,y);
-            if(Color.alpha(color)>100&&Color.red(color)>170&&Color.green(color)<90&&Color.blue(color)>30)pink++;
+            if(Color.alpha(color)>100&&Color.green(color)>140&&Color.red(color)<100)green++;
         }
-        assertTrue("Capri's magenta silhouette, never the Gentle dot",pink>200);
+        assertTrue("User-drawn green face mask, never the Gentle dot",green>500);
     }
     @Test public void packagedManifestAndPngRenderEveryNativeActionWithAlpha() {
         CompanionSpriteView view=new CompanionSpriteView(context);
@@ -96,7 +96,14 @@ public class CompanionSpriteViewTest {
     }
     @Test public void missingOptionalActionReturnsToCapriIdle() {
         CompanionSpriteView view=new CompanionSpriteView(context,path->{
-            if(path.contains("actions"))throw new IOException("missing optional atlas");return context.getAssets().open(path);
+            if(path.endsWith(".json")) {
+                try(java.io.InputStream input=context.getAssets().open(path)) {
+                    org.json.JSONObject manifest=new org.json.JSONObject(new String(input.readAllBytes(),StandardCharsets.UTF_8));
+                    manifest.getJSONObject("animations").remove("file-away");
+                    return new ByteArrayInputStream(manifest.toString().getBytes(StandardCharsets.UTF_8));
+                } catch(org.json.JSONException invalid) { throw new IOException(invalid); }
+            }
+            return context.getAssets().open(path);
         });
         view.theme("capri");Bitmap idle=draw(view);view.play("file-away");
         assertTrue(view.renderState().ready);assertEquals("capri",view.renderState().appliedTheme);assertNull(view.renderState().error);
@@ -121,7 +128,7 @@ public class CompanionSpriteViewTest {
             if(!path.endsWith(".json"))return context.getAssets().open(path);
             try(java.io.InputStream input=context.getAssets().open(path)) {
                 org.json.JSONObject manifest=new org.json.JSONObject(new String(input.readAllBytes(),StandardCharsets.UTF_8));
-                manifest.getJSONObject("animations").getJSONObject("idle").getJSONArray("frames").getJSONObject(2).put("x",1536);
+                manifest.getJSONObject("animations").getJSONObject("idle").getJSONArray("frames").getJSONObject(2).put("x",manifest.getInt("width"));
                 return new ByteArrayInputStream(manifest.toString().getBytes(StandardCharsets.UTF_8));
             } catch(org.json.JSONException invalid) { throw new IOException(invalid); }
         });
