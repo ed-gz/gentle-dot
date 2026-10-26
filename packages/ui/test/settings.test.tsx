@@ -26,6 +26,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 // As in computer.test.tsx: the panel's other desktop events are not under test.
 vi.mock("../src/desktop.ts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../src/desktop.ts")>()),
+	// Settings fixtures model a panel the user has already opened.
+	panelVisible: async () => true,
 	onDesktopEvent: async () => () => {},
 }));
 
@@ -39,7 +41,10 @@ const LINUX_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML
 async function renderApp(search: string) {
 	window.history.replaceState(null, "", `/${search}`);
 	const { App } = await import("../src/App.tsx");
-	return render(<App />);
+	const view = render(<App />);
+	if (h.tauri && search.includes("surface=panel"))
+		await waitFor(() => expect(view.container.querySelector("[data-panel-dormant]")).toBeNull());
+	return view;
 }
 
 const invoked = (command: string) => h.invoke.mock.calls.filter(([c]) => c === command);

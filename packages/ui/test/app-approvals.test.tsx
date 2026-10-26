@@ -19,6 +19,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
 vi.mock("../src/desktop.ts", async (original) => ({
 	...(await original<typeof import("../src/desktop.ts")>()),
+	// These authorization fixtures exercise an already opened desktop panel.
+	panelVisible: async () => true,
 	onDesktopEvent: async () => () => {},
 }));
 vi.mock("../src/useDot.ts", () => ({
@@ -54,7 +56,9 @@ afterEach(() => {
 
 async function app(surface = "panel") {
 	window.history.replaceState(null, "", `/?surface=${surface}`);
-	return render(<App connection={{ url: "ws://localhost:2345/ws", token: "fixture-key" }} />);
+	const view = render(<App connection={{ url: "ws://localhost:2345/ws", token: "fixture-key" }} />);
+	await screen.findByText(ask.title);
+	return view;
 }
 
 describe("desktop approval route", () => {

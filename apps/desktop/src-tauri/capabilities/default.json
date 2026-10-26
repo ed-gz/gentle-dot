@@ -26,6 +26,12 @@
 			]
 		},
 		{
+			"identifier": "panel-visibility",
+			"description": "Only the panel may read its own visibility to start its assistant on first use.",
+			"windows": ["panel"],
+			"permissions": ["core:window:allow-is-visible"]
+		},
+		{
 			"identifier": "voice",
 			"description": "Voice input (S30.1, S30.5): the panel's mic button records and transcribes natively, and the panel downloads, cancels, and removes the optional local voice model; the Dot never records.",
 			"windows": ["panel"],

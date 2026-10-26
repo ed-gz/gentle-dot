@@ -26,6 +26,7 @@ import {
 	hidePanel,
 	inDesktop,
 	onDesktopEvent,
+	panelVisible,
 	setDotState,
 	startDragging,
 	togglePanel,
@@ -100,6 +101,13 @@ export function App({ connection, mobileControls, mobileDraftScope, onCollapseMo
 		<CompanionBubble />
 	) : surface === "glow" ? (
 		<GlowSurface />
+	) : surface === "panel" && inDesktop() ? (
+		<DesktopPanel
+			connection={connection}
+			mobileControls={mobileControls}
+			mobileDraftScope={mobileDraftScope}
+			onCollapseMobile={onCollapseMobile}
+		/>
 	) : (
 		<Assistant
 			surface={surface}
@@ -109,6 +117,36 @@ export function App({ connection, mobileControls, mobileDraftScope, onCollapseMo
 			onCollapseMobile={onCollapseMobile}
 		/>
 	);
+}
+
+/** Keep native window ownership eager, but start the panel's assistant only on first use. */
+function DesktopPanel(props: AppProps) {
+	const [activated, setActivated] = useState(false);
+	useEffect(() => {
+		document.documentElement.dataset.surface = "panel";
+		document.documentElement.dataset.effects = windowEffects(window.location.search);
+		let live = true;
+		const activate = () => {
+			if (live) setActivated(true);
+		};
+		// Subscribe before the snapshot: first load may already be visible. Only ever set true,
+		// so a delayed hidden snapshot cannot undo a show event or discard a live session.
+		const listening = onDesktopEvent("dot://panel-shown", activate);
+		void listening
+			.then(async () => {
+				if (live && (await panelVisible())) activate();
+			})
+			.catch(() => {
+				// If the host bridge fails, keep the panel usable rather than blank forever.
+				activate();
+			});
+		return () => {
+			live = false;
+			void listening.then((stop) => stop(), () => {});
+		};
+	}, []);
+	// The native readiness probe requires a mounted root child, not a connected assistant.
+	return activated ? <Assistant {...props} surface="panel" /> : <div data-panel-dormant="true" />;
 }
 
 function CompanionBubble() {

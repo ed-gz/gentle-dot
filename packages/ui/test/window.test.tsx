@@ -33,6 +33,8 @@ vi.mock("@tauri-apps/api/event", () => ({
 // imports of the mocked event module can reach the real one.
 vi.mock("../src/desktop.ts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../src/desktop.ts")>()),
+	// Window-control fixtures model the panel after the user has opened it.
+	panelVisible: async () => true,
 	onDesktopEvent: async () => () => {},
 }));
 
@@ -43,7 +45,10 @@ vi.mock("../src/useDot.ts", () => ({
 async function renderApp(search: string) {
 	window.history.replaceState(null, "", `/${search}`);
 	const { App } = await import("../src/App.tsx");
-	return render(<App />);
+	const view = render(<App />);
+	if (h.tauri && search.includes("surface=panel"))
+		await screen.findByRole("textbox", { name: "Message" });
+	return view;
 }
 
 const invoked = (command: string) => h.invoke.mock.calls.filter(([c]) => c === command);

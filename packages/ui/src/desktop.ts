@@ -17,6 +17,13 @@ export function connectorCommand(clientId: string, message: ClientMessage): Prom
 	return invoke<void>("connector_command", { clientId, message });
 }
 
+/** Snapshot after registering panel-shown, so a panel already open at first load activates too. */
+export async function panelVisible(): Promise<boolean> {
+	if (!inDesktop()) return true;
+	const { getCurrentWindow } = await import("@tauri-apps/api/window");
+	return getCurrentWindow().isVisible();
+}
+
 export function togglePanel(): void {
 	void invoke("toggle_panel");
 }
