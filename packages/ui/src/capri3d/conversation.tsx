@@ -35,9 +35,26 @@ export function overlayMask(mask: number[], bubble: boolean, input: boolean): nu
   return 0;
  });
 }
+/** Deduplicate equivalent masks, but never suppress a native layout change. */
+export function createOverlayPublisher(publish: (mask: number[], layout: {bubble:boolean;input:boolean}) => void) {
+ let previous: {body:number[];mask:number[];bubble:boolean;input:boolean} | undefined;
+ return (body:number[], bubble:boolean, input:boolean) => {
+  const sameBody=previous && body.length===previous.body.length && body.every((cell,i)=>cell===previous!.body[i]);
+  if(sameBody && previous!.bubble===bubble && previous!.input===input)return;
+  const mask=overlayMask(sameBody ? previous!.body : body,bubble,input);
+  const sameMask=previous && mask.every((cell,i)=>cell===previous!.mask[i]);
+  const changed=!previous || previous.bubble!==bubble || previous.input!==input || !sameMask;
+  previous={body:sameBody ? previous!.body : body,mask,bubble,input};
+  if(changed)publish(mask,{bubble,input});
+ };
+}
+export interface Speech {
+ id:string; text:string; showMore?:boolean; approvalKey?:string;
+ question?:boolean; confirmation?:boolean; sender?:string; channel?:string; privateMessage?:boolean; body?:string;
+}
 interface Props {
  state: DotState; send: Send; open: boolean; close(): void; more(): void;
- speech?: {id:string;text:string;showMore?:boolean;approvalKey?:string};
+ speech?: Speech;
  approval?: AgentApproval;
  answer?(action: OrchestrationAction): Promise<void>;
  onLayout(bubble:boolean,input:boolean): void;
@@ -81,7 +98,8 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
  useEffect(()=>{if(open)input.current?.focus();},[open]);
  useEffect(()=>{if(!voice.draft)return;setDraft(voice.draft.text);voice.draftTaken(voice.draft.id);},[voice.draft,voice.draftTaken]);
  const bubble=Boolean(shown || confirmation || receipt);
- useEffect(()=>{onLayout(bubble,open);return()=>onLayout(false,false);},[bubble,open,onLayout]);
+ useEffect(()=>{onLayout(bubble,open);},[bubble,open,onLayout]);
+ useEffect(()=>()=>onLayout(false,false),[onLayout]);
  const respond=async(approved:boolean)=>{
   if(!confirmation || !answer || sending.current)return;
   const action=confirmationAction(confirmation,approved);if(!action)return;
@@ -100,11 +118,12 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
  };
  return <>
   {bubble && <div className="capri3d-speech" data-leaving={leaving && !confirmation && !receipt} role="status" aria-live="polite">
-   <span>{receipt || (pending && confirmation ? "Enviando respuesta…" : excerpt(confirmation ? `${confirmation.title} ${confirmation.message}` : shown?.text ?? ""))}</span>
+   <div className="capri3d-speech-frame" aria-hidden="true"/>
+   <span className="capri3d-speech-text">{receipt || (pending && confirmation ? "Enviando respuesta…" : confirmation ? excerpt(`${confirmation.title} ${confirmation.message}`) : shown?.sender ? <><strong>{shown.sender}</strong>{shown.privateMessage ? <span className="capri3d-muted"> (privado)</span> : shown.channel ? <> <span className="capri3d-muted">en </span><span className="capri3d-channel">{shown.channel}</span></> : null}:<br/>{excerpt(shown.body ?? "")}</> : excerpt(shown?.text ?? ""))}{!confirmation && !receipt && shown?.confirmation && <span className="capri3d-check" aria-hidden="true">✓</span>}</span>
    {confirmation ? <div className="capri3d-confirm">
-    <button type="button" disabled={pending} onClick={()=>void respond(true)}>Sí</button>
-    <button type="button" disabled={pending} onClick={()=>void respond(false)}>No</button>
-   </div> : !receipt && shown?.showMore !== false && <button type="button" className="capri3d-more" onClick={more}>Ver más</button>}
+    <button type="button" disabled={pending} onClick={()=>void respond(false)}>Rechazar</button>
+    <button type="button" disabled={pending} onClick={()=>void respond(true)}>Aprobar</button>
+   </div> : !receipt && shown?.showMore !== false && <button type="button" className={shown?.question ? "capri3d-respond" : "capri3d-more"} onClick={more}>{shown?.question ? "Responder" : "Ver más"}</button>}
    {error && <span role="alert">{error}</span>}
   </div>}
   {open && <form className="capri3d-chat" onSubmit={event=>{

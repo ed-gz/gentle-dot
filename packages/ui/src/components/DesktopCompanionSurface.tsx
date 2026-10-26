@@ -13,7 +13,7 @@ import { useChoreography } from "../capri3d/useChoreography.ts";
 import { restChoice, responseChoice, speechDuration } from "../capri3d/choreography.ts";
 import { clipForBehavior, type ClipChoice } from "../capri3d/mapping.ts";
 import { desktopFace } from "../capri3d/desktop-faces.ts";
-import { CapriConversation, overlayMask, BUBBLE_HEIGHT, INPUT_HEIGHT } from "../capri3d/conversation.tsx";
+import { CapriConversation, createOverlayPublisher, type Speech, BUBBLE_HEIGHT, INPUT_HEIGHT } from "../capri3d/conversation.tsx";
 import { useCompanionChat } from "../capri3d/replies.ts";
 import { gestureChoice, type Gesture } from "../capri3d/gestures.ts";
 import { connectionInfo } from "../desktop.ts";
@@ -81,16 +81,19 @@ export function DesktopCompanionSurface({
 		maskState.current = { ...maskState.current, bubble, input };
 		setOverlays(previous => previous.bubble === bubble && previous.input === input ? previous : { bubble, input });
 	}, []);
+	const publishMask = useMemo(() => createOverlayPublisher((mask, layout) => {
+		void publish3DSurface(true, mask, layout).catch(() => setFailed3D(true));
+	}), [active3D]);
 	const on3DMask = useCallback((mask: number[]) => {
 		const current = maskState.current;
 		current.mask = mask;
-		void publish3DSurface(true, overlayMask(mask, current.bubble, current.input), current).catch(() => setFailed3D(true));
-	}, []);
+		publishMask(mask, current.bubble, current.input);
+	}, [publishMask]);
 	useEffect(() => {
 		if (!active3D) return;
 		const current = maskState.current;
-		void publish3DSurface(true, overlayMask(current.mask, overlays.bubble, overlays.input), overlays).catch(() => setFailed3D(true));
-	}, [active3D, overlays]);
+		publishMask(current.mask, overlays.bubble, overlays.input);
+	}, [active3D, overlays, publishMask]);
 	const latest = useRef({ controls, inControl, reduced: false });
 	const [awake, setAwake] = useState(() => !document.hidden);
 	const [interacting, setInteracting] = useState(false);
@@ -232,6 +235,7 @@ export function DesktopCompanionSurface({
 	useEffect(() => {
 		if (!active3D || context?.cue?.kind !== "question" || !isTauri()) { setApproval(undefined); return; }
 		let live = true;
+		setApproval(undefined);
 		const abort = new AbortController();
 		void connectionInfo().then(async info => {
 			const client = createOrchestrationClient(info);
@@ -242,7 +246,7 @@ export function DesktopCompanionSurface({
 			if (live) setApproval(candidate);
 		}).catch(() => { if (live) setApproval(undefined); });
 		return () => { live = false; abort.abort(); };
-	}, [active3D, context?.cue?.id]);
+	}, [active3D, context?.cue?.id, context?.cue?.paneId, context?.cue?.sessionId]);
 	const [, refreshExpiry] = useState(0);
 	useEffect(() => {
 		const deadlines = [context?.cue?.expiresAt, context?.notification?.expiresAt]
@@ -314,7 +318,7 @@ export function DesktopCompanionSurface({
 	}
 	const choreography = useChoreography(controls.state.enabled && preferred3D,
 		behavior.state !== "idle" || interacting || Boolean(cue), cue?.id);
-	const [speech, setSpeech] = useState<{ id: string; until: number; text: string; showMore?: boolean }>();
+	const [speech, setSpeech] = useState<Speech & { until: number }>();
 	useEffect(() => {
 		if (!cue?.summary || !["notification", "submitted", "question", "capture", "download"].includes(cue.kind)) {
 			setSpeech(undefined); return;
@@ -322,10 +326,10 @@ export function DesktopCompanionSurface({
 		const presentation = cue.kind === "notification" || cue.kind === "capture" ? notificationPresentation(cue) : { ...cue, showMore: undefined };
 		const text = `${presentation.summary}${presentation.body ? ` ${presentation.body}` : ""}`;
 		const duration = Math.min(speechDuration(text), Math.max(0, cue.expiresAt - Date.now()));
-		setSpeech({ id: cue.id, until: Date.now() + duration, text, showMore: presentation.showMore });
+		setSpeech({ ...presentation, question: cue.kind === "question", approvalKey: cue.kind === "question" ? JSON.stringify([cue.paneId, cue.sessionId, cue.id.slice("question:".length)]) : undefined, id: cue.id, until: Date.now() + duration, text, showMore: presentation.showMore });
 		const timer = setTimeout(() => setSpeech(undefined), duration);
 		return () => clearTimeout(timer);
-	}, [cue?.id, cue?.summary, cue?.body, cue?.kind, cue?.expiresAt]);
+	}, [cue?.id, cue?.summary, cue?.body, cue?.kind, cue?.expiresAt, cue?.paneId, cue?.sessionId]);
 	const motion = choreography.motion;
 	const perched = (cue?.kind === "input-ready" || cue?.kind === "typing") && cue.placement === "perch";
 	const baseChoice = useMemo<ClipChoice>(() => {

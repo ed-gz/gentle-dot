@@ -107,21 +107,21 @@ function conversation(ask = approval(), answer = vi.fn().mockResolvedValue(undef
 it("keeps a confirmation visible past the transport TTL, but never extends the approval expiry", async () => {
 	conversation();
 	await advance(35_000);
-	expect(screen.getByRole("button", { name: "Sí" })).toBeEnabled();
+	expect(screen.getByRole("button", { name: "Aprobar" })).toBeEnabled();
 	await advance(25_000);
-	expect(screen.queryByRole("button", { name: "Sí" })).toBeNull();
+	expect(screen.queryByRole("button", { name: "Aprobar" })).toBeNull();
 });
 it("removes withdrawn approval controls", () => {
 	const { rerender, props } = conversation();
 	rerender(createElement(CapriConversation, { ...props, approval: undefined }));
-	expect(screen.queryByRole("button", { name: "Sí" })).toBeNull();
+	expect(screen.queryByRole("button", { name: "Aprobar" })).toBeNull();
 });
 it("retains failed-answer retry behavior and sends only the exact request identity", async () => {
 	const answer = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
 	conversation(approval(), answer);
-	await act(async () => fireEvent.click(screen.getByRole("button", { name: "No" })));
+	await act(async () => fireEvent.click(screen.getByRole("button", { name: "Rechazar" })));
 	expect(screen.getByRole("alert")).toHaveTextContent("No se pudo responder");
-	await act(async () => fireEvent.click(screen.getByRole("button", { name: "No" })));
+	await act(async () => fireEvent.click(screen.getByRole("button", { name: "Rechazar" })));
 	expect(answer.mock.calls).toEqual([[{ action: "answer", paneId: "pane-a", sessionId: "session-a", requestId: "permission-a", approved: false }], [{ action: "answer", paneId: "pane-a", sessionId: "session-a", requestId: "permission-a", approved: false }]]);
-	expect(screen.queryByRole("button", { name: "No" })).toBeNull();
+	expect(screen.queryByRole("button", { name: "Rechazar" })).toBeNull();
 });

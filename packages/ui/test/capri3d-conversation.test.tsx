@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { initialState } from "../src/store.ts";
-import { CapriConversation, excerpt, confirmationAction, overlayMask } from "../src/capri3d/conversation.tsx";
+import { notificationPresentation } from "../src/companion-notification.ts";
+import { CapriConversation, excerpt, confirmationAction, overlayMask, createOverlayPublisher } from "../src/capri3d/conversation.tsx";
 const voice=vi.hoisted(()=>({start:vi.fn(),stop:vi.fn(),cancel:vi.fn(),typed:vi.fn(),sent:vi.fn(),draftTaken:vi.fn(),phase:"idle",mic:{available:true,reason:undefined as string | undefined}}));
 vi.mock("../src/useVoice.ts",()=>({useVoice:()=>voice}));
 afterEach(()=>{vi.useRealTimers();vi.clearAllMocks();voice.phase="idle";voice.mic={available:true,reason:undefined};});
@@ -13,10 +14,10 @@ it("uses short excerpts, Ver más and timed speech",()=>{
  act(()=>vi.advanceTimersByTime(9000));expect(screen.queryByRole("status")).toBeNull();expect(layout).toHaveBeenLastCalledWith(false,false);
 });
 it.each(["Captura tomada y copiada", "Captura guardada"])("shows only the minimal screenshot line: %s",(text)=>{
- const speech={id:"screenshot",text,showMore:false};
+ const speech={id:"screenshot",text,showMore:false,confirmation:true};
  render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} speech={speech} more={vi.fn()} onLayout={vi.fn()}/>);
  expect(screen.getByRole("status")).toHaveTextContent(text);
- expect(screen.getByRole("status").textContent).toBe(text);
+ expect(screen.getByRole("status").textContent).toBe(`${text}✓`);
  expect(screen.queryByRole("button",{name:"Ver más"})).toBeNull();
 });
 it("sends typed text via Dot send and calls the existing mic hook",()=>{
@@ -101,7 +102,15 @@ it("answers only answerable confirm dialogs using exact existing identity and ac
  expect(confirmationAction({...ask,expiresAt:"invalid"},true)).toBeUndefined();expect(confirmationAction({...ask,expiresAt:new Date(0).toISOString()},true)).toBeUndefined();
  const answer=vi.fn().mockResolvedValue(undefined);
  render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} more={vi.fn()} onLayout={vi.fn()} approval={ask} answer={answer}/>);
- fireEvent.click(screen.getByRole("button",{name:"No"}));expect(answer).toHaveBeenCalledWith({action:"answer",paneId:"p",sessionId:"s",requestId:"q",approved:false});
+ fireEvent.click(screen.getByRole("button",{name:"Rechazar"}));expect(answer).toHaveBeenCalledWith({action:"answer",paneId:"p",sessionId:"s",requestId:"q",approved:false});
+});
+it("withdraws decision buttons on expiry without authorizing an answer",()=>{
+ vi.useFakeTimers();const answer=vi.fn();
+ const ask={id:"expires",paneId:"p",sessionId:"s",title:"Permiso",message:"Ejecutar",action:"bash",kind:"confirm" as const,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+1000).toISOString(),answerable:true};
+ render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} more={vi.fn()} onLayout={vi.fn()} approval={ask} answer={answer}/>);
+ expect(screen.getByRole("button",{name:"Aprobar"})).toBeEnabled();
+ act(()=>vi.advanceTimersByTime(1000));
+ expect(screen.queryByRole("button",{name:"Aprobar"})).toBeNull();expect(screen.queryByRole("button",{name:"Rechazar"})).toBeNull();expect(answer).not.toHaveBeenCalled();
 });
 it("keeps a failed send in the input and explains the failure",()=>{
  render(<CapriConversation state={{...initialState,connection:"open"}} send={vi.fn().mockReturnValue(false)} open close={vi.fn()} more={vi.fn()} onLayout={vi.fn()}/>);
@@ -123,10 +132,10 @@ it("shows pending feedback and sends a rapid decision only once", async()=>{
  const ask={id:"pending",paneId:"p",sessionId:"s",title:"Permiso",message:"Ejecutar",action:"bash",kind:"confirm" as const,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
  let finish!:()=>void;const answer=vi.fn(()=>new Promise<void>(resolve=>{finish=resolve;}));
  render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} more={vi.fn()} onLayout={vi.fn()} approval={ask} answer={answer}/>);
- const yes=screen.getByRole("button",{name:"Sí"});fireEvent.click(yes);fireEvent.click(yes);
+ const yes=screen.getByRole("button",{name:"Aprobar"});fireEvent.click(yes);fireEvent.click(yes);
  expect(answer).toHaveBeenCalledOnce();expect(screen.getByText("Enviando respuesta…")).toBeInTheDocument();
  await act(async()=>finish());expect(screen.getByText("Respuesta enviada")).toBeInTheDocument();
- expect(screen.queryByRole("button",{name:"Sí"})).toBeNull();
+ expect(screen.queryByRole("button",{name:"Aprobar"})).toBeNull();
 });
 
 it("does not hide a new session's permission when the old answer completes", async()=>{
@@ -134,21 +143,21 @@ it("does not hide a new session's permission when the old answer completes", asy
  let finish!:()=>void; const answer=vi.fn(()=>new Promise<void>(resolve=>{finish=resolve;}));
  const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn(),answer};
  const view=render(<CapriConversation {...props} approval={ask}/>);
- fireEvent.click(screen.getByRole("button",{name:"Sí"}));
+ fireEvent.click(screen.getByRole("button",{name:"Aprobar"}));
  view.rerender(<CapriConversation {...props} approval={{...ask,sessionId:"new",title:"New permission"}}/>);
  await act(async()=>finish());
  expect(screen.getByText(/New permission/)).toBeInTheDocument();
  expect(screen.queryByText("Respuesta enviada")).toBeNull();
- expect(screen.getByRole("button",{name:"Sí"})).toBeEnabled();
+ expect(screen.getByRole("button",{name:"Aprobar"})).toBeEnabled();
 });
 it("keeps a failed decision available for an explicit retry",async()=>{
  const ask={id:"retry",paneId:"p",sessionId:"s",title:"Retry",message:"Execute",action:"bash",kind:"confirm" as const,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
  const answer=vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
  render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} more={vi.fn()} onLayout={vi.fn()} approval={ask} answer={answer}/>);
- await act(async()=>fireEvent.click(screen.getByRole("button",{name:"No"})));
+ await act(async()=>fireEvent.click(screen.getByRole("button",{name:"Rechazar"})));
  expect(screen.getByRole("alert")).toHaveTextContent("No se pudo responder");
  expect(answer).toHaveBeenCalledTimes(1);
- await act(async()=>fireEvent.click(screen.getByRole("button",{name:"No"})));
+ await act(async()=>fireEvent.click(screen.getByRole("button",{name:"Rechazar"})));
  expect(answer).toHaveBeenCalledTimes(2);expect(screen.getByText("Respuesta enviada")).toBeInTheDocument();
 });
 
@@ -157,7 +166,7 @@ it("does not resurrect permission speech after receipt or lose receipt when perm
  const ask={id:"speech",paneId:"p",sessionId:"s",title:"Permission",message:"Run command",action:"bash",kind:"confirm" as const,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
  const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn(),answer:vi.fn().mockResolvedValue(undefined),speech:{id:"question:speech",text:"Permission Run command",approvalKey:JSON.stringify(["p","s","speech"])}};
  const view=render(<CapriConversation {...props} approval={ask}/>);
- await act(async()=>fireEvent.click(screen.getByRole("button",{name:"Sí"})));
+ await act(async()=>fireEvent.click(screen.getByRole("button",{name:"Aprobar"})));
  view.rerender(<CapriConversation {...props}/>);
  expect(screen.getByText("Respuesta enviada")).toBeInTheDocument();
  act(()=>vi.advanceTimersByTime(1500));
@@ -171,9 +180,52 @@ it("preserves another session's same-ID speech after an in-flight answer",async(
  let finish!:()=>void;const answer=vi.fn(()=>new Promise<void>(resolve=>{finish=resolve;}));
  const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn(),answer};
  const view=render(<CapriConversation {...props} approval={ask}/>);
- fireEvent.click(screen.getByRole("button",{name:"Sí"}));
+ fireEvent.click(screen.getByRole("button",{name:"Aprobar"}));
  view.rerender(<CapriConversation {...props} speech={{id:"question:q",text:"Other session request",approvalKey:JSON.stringify(["p","b","q"])}}/>);
  await act(async()=>finish());act(()=>vi.advanceTimersByTime(1500));
  expect(screen.getByText("Other session request")).toBeInTheDocument();
  expect(answer).toHaveBeenCalledOnce();
+});
+
+it("opens questions with Responder without sending an answer",()=>{
+ const more=vi.fn(),answer=vi.fn(),send=vi.fn();
+ render(<CapriConversation state={initialState} send={send} open={false} close={vi.fn()} speech={{id:"question:q",text:"Portal B2B tiene una pregunta.",question:true}} more={more} answer={answer} onLayout={vi.fn()}/>);
+ fireEvent.click(screen.getByRole("button",{name:"Responder"}));
+ expect(more).toHaveBeenCalledOnce();expect(answer).not.toHaveBeenCalled();expect(send).not.toHaveBeenCalled();
+ expect(screen.queryByRole("button",{name:"Ver más"})).toBeNull();
+});
+it("marks a session completion without decorating an ordinary reply",()=>{
+ const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn()};
+ const view=render(<CapriConversation {...props} speech={{id:"done",text:"La sesión terminó.",confirmation:true}}/>);
+ expect(view.container.querySelector(".capri3d-check")).toHaveTextContent("✓");
+ view.rerender(<CapriConversation {...props} speech={{id:"reply",text:"Hola"}}/>);
+ expect(view.container.querySelector(".capri3d-check")).toBeNull();
+});
+it("never bolds a text-inferred sender from the Chrome error counterexample",()=>{
+ const body="Acceso denegado: vuelve a iniciar sesión";
+ const message=notificationPresentation({id:"chrome-error",kind:"notification",expiresAt:Date.now()+8000,source:{appName:"Chrome"},summary:"Nuevo mensaje en #ops",body});
+ render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} speech={{...message,id:"chrome-error",text:`${message.summary} ${message.body}`}} more={vi.fn()} onLayout={vi.fn()}/>);
+ expect(screen.getByRole("status").querySelector("strong")).toBeNull();
+ expect(screen.getByRole("status")).toHaveTextContent(body);
+ expect(message.body).toBe(body);
+ expect(message.sender).toBeUndefined();
+ expect(message.channel).toBeUndefined();
+ expect(message.privateMessage).toBeUndefined();
+});
+it("renders sender metadata separately from quoted message text",()=>{
+ render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} speech={{id:"slack",text:"Leslie te escribió. ¿Me ayudas?",sender:"Leslie",channel:"#distribución",body:"¿Me ayudas?"}} more={vi.fn()} onLayout={vi.fn()}/>);
+ expect(screen.getByText("Leslie").tagName).toBe("STRONG");
+ expect(screen.getByText("#distribución")).toHaveClass("capri3d-channel");
+ expect(screen.getByRole("status")).toHaveTextContent("¿Me ayudas?");
+});
+it("reuses the body mask and only publishes changed overlay masks/layouts",()=>{
+ const publish=vi.fn();const update=createOverlayPublisher(publish);
+ const body=Array(816).fill(0);body[400]=1;
+ update(body,false,false);update([...body],false,false);
+ update(body,true,false);update([...body],true,false);
+ update(body,false,false);update(body,false,false);
+ expect(publish).toHaveBeenCalledTimes(3);
+ expect(publish.mock.calls[0]![0]).toBe(body);
+ expect(publish.mock.calls[2]![0]).toBe(body);
+ expect(publish.mock.calls[1]![1]).toEqual({bubble:true,input:false});
 });

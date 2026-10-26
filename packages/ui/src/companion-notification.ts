@@ -15,17 +15,6 @@ export function spokenCompanionCue(context: DesktopCompanionContext | undefined,
 	);
 }
 
-/** Slack web notifications can arrive under the browser identity. Never infer a website from that. */
-function messageEnvelope(cue: DesktopCompanionCue, supported: boolean) {
-	if (!supported || !/^Nuevo mensaje en(?:\s+\S.*|…|\.{3})$/i.test(cue.summary ?? "")) return undefined;
-	const match = /^([^:\n]{1,80}):[ \t]+([\s\S]+)$/.exec(cue.body ?? "");
-	if (!match) return undefined;
-	const sender = match[1]!.trim();
-	// Ambiguous short labels stay untouched. Explicit sender metadata also supports mononyms.
-	if (!/^[\p{L}\p{M}][\p{L}\p{M} .’'-]*$/u.test(sender) || sender.split(/\s+/).length < 2) return undefined;
-	return { sender, body: match[2]! };
-}
-
 /** Only successful screenshot notices lose their details; errors remain actionable notices. */
 function screenshotPresentation(cue: DesktopCompanionCue) {
 	if (cue.kind !== "notification" && cue.kind !== "capture") return;
@@ -41,14 +30,16 @@ function screenshotPresentation(cue: DesktopCompanionCue) {
 	const notCopied = /\b(?:not copied|no copiad[ao]|sin copiar|only saved|solo guardad[ao])\b/i.test(status);
 	return {
 		summary: notCopied ? "Captura guardada" : "Captura tomada y copiada",
-		body: undefined, quoted: false, showMore: false,
+		body: undefined, quoted: false, showMore: false, confirmation: true,
 	};
 }
 
-/** Attribution comes from transport metadata or a recognized app-specific envelope. */
-export function notificationPresentation(cue: DesktopCompanionCue): { summary: string; body?: string; quoted: boolean; showMore?: boolean } {
+/** Identity and destination attribution come only from explicit transport metadata. */
+export function notificationPresentation(cue: DesktopCompanionCue): { summary: string; body?: string; quoted: boolean; showMore?: boolean; confirmation?:boolean; sender?:string; channel?:string; privateMessage?:boolean } {
 	const screenshot = screenshotPresentation(cue);
 	if (screenshot) return screenshot;
+	if (cue.kind === "notification" && /^La sesión\b.*\bterminó[.!]?$/u.test(cue.summary ?? ""))
+		return {summary:cue.summary!,body:cue.body,quoted:false,confirmation:true};
 	const source = cue.source;
 	if (cue.kind !== "notification" || !source)
 		return { summary: cue.summary ?? "Hay un aviso para ti.", body: cue.body, quoted: false };
@@ -67,9 +58,8 @@ export function notificationPresentation(cue: DesktopCompanionCue): { summary: s
 				: browser
 					? undefined
 					: source.appName;
-	const envelope = source.sender ? undefined : messageEnvelope(cue, app === "Slack" || browser);
-	const sender = source.sender ?? envelope?.sender;
-	let body = envelope?.body ?? cue.body;
+	const sender = source.sender;
+	let body = cue.body;
 	if (app === "Slack" && source.sender && body?.startsWith(`${source.sender}: `))
 		body = body.slice(source.sender.length + 2);
 	const wrapper =
@@ -89,5 +79,9 @@ export function notificationPresentation(cue: DesktopCompanionCue): { summary: s
 			? `${title}\n${body}`
 			: body || title;
 	// The source wording stays a quotation; Capri never claims to have said or performed it.
-	return { summary, body: detail, quoted: true };
+	// Message wording can classify presentation, never supply sender/channel/private metadata.
+	const conversation = source.conversation?.trim();
+	const channel = conversation?.startsWith("#") ? conversation : undefined;
+	return { summary, body: detail, quoted: true, ...(sender ? {sender, ...(channel ? {channel} : {}),
+		...(app === "Slack" && !channel && (conversation === "privado" || conversation === sender) ? {privateMessage:true} : {})} : {}) };
 }

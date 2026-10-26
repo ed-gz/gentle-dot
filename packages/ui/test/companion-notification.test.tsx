@@ -39,7 +39,7 @@ it.each([
 	{ summary: "Captura guardada y copiada", expected: "Captura tomada y copiada" },
 ])("minimizes screenshot presentation: $summary", ({ expected, ...patch }) => {
 	expect(notificationPresentation(notification({ ...patch, body: "File: Screenshot_2026.png\nFolder: /Pictures/Screenshots" }))).toEqual({
-		summary: expected, body: undefined, quoted: false, showMore: false,
+		summary: expected, body: undefined, quoted: false, showMore: false, confirmation: true,
 	});
 });
 
@@ -57,6 +57,33 @@ it("does not claim copying when a screenshot was only saved", () => {
  expect(notificationPresentation(notification({ summary: "Screenshot saved, not copied", body: "Clipboard unavailable" })).summary).toBe("Captura guardada");
 });
 
+it("exposes only evidence-backed sender/channel/private metadata", () => {
+ const cue=notification({source:{appName:"Slack",sender:"Leslie",conversation:"#distribución"},summary:"Nuevo mensaje en #distribución",body:"¿Me ayudas?"});
+ expect(notificationPresentation(cue)).toMatchObject({sender:"Leslie",channel:"#distribución",body:"¿Me ayudas?"});
+ expect(notificationPresentation({...cue,source:{appName:"Slack",sender:"Leslie",conversation:"privado"}})).toMatchObject({sender:"Leslie",privateMessage:true});
+ const unknown=notificationPresentation({...cue,source:{appName:"Slack",sender:"Leslie"},summary:"Nuevo mensaje en…"});
+ expect(unknown.privateMessage).toBeUndefined();expect(unknown.channel).toBeUndefined();
+});
+it.each(["Chrome", "Slack"])("keeps %s message text out of structured identity and destination metadata", (appName) => {
+ const body="Acceso denegado: vuelve a iniciar sesión";
+ const cue=notification({source:{appName},summary:"Nuevo mensaje en #ops",body});
+ expect(notificationPresentation(cue)).toEqual({summary:`Te llegó un mensaje${appName === "Slack" ? " en Slack" : ""}.`,body,quoted:true});
+ const explicitSender=notificationPresentation({...cue,source:{appName,sender:"Leslie"}});
+ expect(explicitSender.sender).toBe("Leslie");
+ expect(explicitSender.channel).toBeUndefined();
+ expect(explicitSender.privateMessage).toBeUndefined();
+ for (const summary of ["Nuevo mensaje en privado", "Nuevo mensaje en Leslie"]) {
+  const message=notificationPresentation({...cue,summary,source:{appName,sender:"Leslie"}});
+  expect(message.channel).toBeUndefined();
+  expect(message.privateMessage).toBeUndefined();
+  expect(message.body).toBe(body);
+ }
+});
+it("marks session completion, not questions or errors, as confirmed",()=>{
+ expect(notificationPresentation(notification({summary:"La sesión «Portal B2B» terminó."})).confirmation).toBe(true);
+ expect(notificationPresentation(notification({kind:"question",summary:"La sesión «Portal B2B» terminó."})).confirmation).toBeUndefined();
+ expect(notificationPresentation(notification({summary:"La sesión falló"})).confirmation).toBeUndefined();
+});
 it("pins a regular notification's existing presentation", () => {
 	expect(notificationPresentation(notification({ summary: "Build complete", body: "All checks passed" }))).toEqual({
 		summary: "Build complete", body: "All checks passed", quoted: false,
@@ -104,15 +131,15 @@ it("never invents a sender from colon-containing text or confuses a source messa
 	).toBe("ChatGPT te avisa.");
 });
 
-it("recognizes the reported Slack envelope while leaving unrelated titles and source messages intact", () => {
+it("classifies the Slack wrapper without inferring identity or stripping source text", () => {
 	const cue = notification({
 		source: { appName: "Slack" },
 		summary: "Nuevo mensaje en…",
 		body: "Alex Rivera: La revisión está lista. Gracias",
 	});
 	expect(notificationPresentation(cue)).toEqual({
-		summary: "Alex Rivera te escribió en Slack.",
-		body: "La revisión está lista. Gracias",
+		summary: "Te llegó un mensaje en Slack.",
+		body: "Alex Rivera: La revisión está lista. Gracias",
 		quoted: true,
 	});
 	expect(notificationPresentation({ ...cue, source: { appName: "Downloads" } }).summary).toBe(
@@ -285,15 +312,15 @@ it("bounds and validates source metadata without accepting arbitrary structures"
 	expect(state.context?.notification?.source).toEqual({ appName: "Slack", sender: "L".repeat(128) });
 });
 
-it("attributes the reported web-message wrapper without inventing the browser's website", () => {
+it("classifies the web-message wrapper without inventing a sender or the browser's website", () => {
 	const message = notification({
 		source: { appName: "Google Chrome", desktopEntry: "google-chrome" },
 		summary: "Nuevo mensaje en...",
 		body: "Alex Rivera: La revisión está lista. Gracias",
 	});
 	expect(notificationPresentation(message)).toEqual({
-		summary: "Alex Rivera te escribió.",
-		body: "La revisión está lista. Gracias",
+		summary: "Te llegó un mensaje.",
+		body: "Alex Rivera: La revisión está lista. Gracias",
 		quoted: true,
 	});
 	expect(notificationPresentation({ ...message, summary: "Error de autenticación" })).toEqual({

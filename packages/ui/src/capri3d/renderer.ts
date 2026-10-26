@@ -215,6 +215,9 @@ export const createRenderer: RendererFactory = async options => {
  let mixer: THREE.AnimationMixer | undefined, action: THREE.AnimationAction | undefined;
  let choice: ClipChoice | undefined;
  let lastMask = -Infinity, elapsed = 0;
+ let maskDirty = true;
+ let publishedMask: number[] | undefined;
+ let sampledPose: number[] | undefined;
  let procedural: ProceduralClip | undefined;
  let phase = 0;
  let following: ProceduralClip | undefined;
@@ -246,14 +249,29 @@ export const createRenderer: RendererFactory = async options => {
   alignSeat();
   paintHead();
   renderer.render(scene, camera);
-  if (silhouette && (forceMask || performance.now() - lastMask >= 500)) {
+  if (silhouette && maskDirty && (forceMask || performance.now() - lastMask >= 500)) {
+   // A stable pose (including camera and sprite crop) can reuse its GPU readback.
+   // Sample only at the existing 500ms cadence, never add a per-frame traversal.
+   scene.updateMatrixWorld(true);
+   const pose = [...camera.matrixWorld.elements, ...camera.projectionMatrix.elements];
+   scene.traverse(object => { pose.push(object.id, Number(object.visible), ...object.matrixWorld.elements); });
+   if (faceTexture) pose.push(...faceTexture.offset.toArray(), ...faceTexture.repeat.toArray());
+   lastMask = performance.now();
+   maskDirty = false;
+   if (sampledPose && pose.length === sampledPose.length && pose.every((value, i) => value === sampledPose![i])) return;
+   sampledPose = pose;
    renderer.setRenderTarget(target);
    try {
     renderer.render(scene, camera);
     renderer.readRenderTargetPixels(target, 0, 0, 240, 340, pixels);
    } finally { renderer.setRenderTarget(null); }
    for (let y = 0; y < 340; y++) topDown.set(pixels.subarray((339 - y) * 960, (340 - y) * 960), y * 960);
-   options.mask(encodeAlphaMask(topDown, 240, 340));
+   const cells = encodeAlphaMask(topDown, 240, 340);
+   if (!publishedMask || cells.some((cell, i) => cell !== publishedMask![i])) {
+    publishedMask = cells;
+    options.mask(cells);
+   }
+   maskDirty = false;
    lastMask = performance.now();
   }
  };
@@ -261,6 +279,8 @@ export const createRenderer: RendererFactory = async options => {
  const tick = (delta: number) => {
   if (!running()) return;
   elapsed += delta;
+  // Animation changes the body/face silhouette; overlay layout alone never invalidates it.
+  maskDirty = true;
   // Keep sprite time advancing, but do not animate the invisible 3D body.
   const spriteOnly = form === "face" && head.visible && !transition;
   if (!spriteOnly) {
@@ -358,7 +378,7 @@ export const createRenderer: RendererFactory = async options => {
   if (disposed) { texture.dispose(); return; }
   texture.magFilter = THREE.NearestFilter; texture.minFilter = THREE.NearestFilter;
   texture.generateMipmaps = false; texture.colorSpace = THREE.SRGBColorSpace;
-  faceTexture = texture; head.material.map = texture; head.material.needsUpdate = true; resume();
+  faceTexture = texture; head.material.map = texture; head.material.needsUpdate = true; maskDirty = true; resume();
  }, undefined, () => { /* A broken atlas leaves the visible 3D unchanged. */ });
  return {
   choose(next) {
@@ -393,6 +413,7 @@ export const createRenderer: RendererFactory = async options => {
     const nextForm = next.face?.form ?? "3d";
     transition = Boolean(!reduced && faceTexture && transitionFace(form, nextForm)); form = nextForm;
     choice = next;
+    maskDirty = true;
     home.copy(gltf.scene.position);
     gltf.scene.rotation.set(0, 0, 0);
     gltf.scene.scale.set(1, 1, 1);
@@ -434,7 +455,10 @@ export const createRenderer: RendererFactory = async options => {
    });
    return queue;
   },
-  visibility(nextVisible, nextReduced) { visible = nextVisible; reduced = nextReduced; resume(); },
+  visibility(nextVisible, nextReduced) {
+   if (visible === nextVisible && reduced === nextReduced) return;
+   visible = nextVisible; reduced = nextReduced; resume();
+  },
   dispose,
  };
 };

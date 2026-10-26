@@ -1,13 +1,25 @@
 .capri3d-host { position: relative; width: 100vw; height: 100vh; }
 .capri3d-host .desktop-companion-surface[data-form="3d"] { position: absolute; width: 144px; height: 204px; top: var(--capri-top, 0px); left: 50%; transform: translateX(-50%); }
-.capri3d-speech { box-sizing: border-box; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 86%; max-height: 138px; background: var(--capri-notice-surface); color: var(--capri-notice-text); border: 1px solid var(--capri-notice-border); border-radius: 14px; padding: 8px 12px; font: 14px/1.3 system-ui, sans-serif; text-align: center; box-shadow: none; overflow-wrap: anywhere; animation: capri3d-speech-in 180ms ease-out; transition: opacity 180ms, transform 180ms; }
+.capri3d-speech { box-sizing: border-box; isolation: isolate; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 86%; max-height: 138px; color: var(--capri-notice-text); padding: 18px 14px 16px; font: 14px/1.3 system-ui, sans-serif; text-align: left; overflow-wrap: anywhere; animation: capri3d-speech-in 180ms ease-out; transition: opacity 180ms, transform 180ms; }
+/* Keep the tail outside the clipped frame; the inset layer supplies the 1px chamfer border. */
+.capri3d-speech-frame { position: absolute; inset: 0; z-index: -1; background: var(--capri-notice-border); clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%); border-radius: 12px 0 0 12px; pointer-events: none; }
+.capri3d-speech-frame::after { content: ""; position: absolute; inset: 1px; background: var(--capri-notice-surface); clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%); border-radius: 11px 0 0 11px; }
+.capri3d-speech::before, .capri3d-speech-frame::before { content: ""; position: absolute; left: 12px; height: 2px; border-radius: 1px; pointer-events: none; }
+.capri3d-speech::before { top: 7px; width: 32px; background: var(--capri-notice-send); }
+.capri3d-speech-frame::before { bottom: 6px; width: 14px; background: var(--capri-notice-accent); z-index: 1; }
+.capri3d-muted { color: var(--capri-notice-muted); }
+.capri3d-channel { color: var(--capri-notice-channel, #bd8cff); }
+.capri3d-check { color: var(--capri-notice-accent); font-size: 20px; padding-left: 8px; font-weight: 700; }
 .capri3d-speech[data-leaving="true"] { opacity: 0; transform: translateX(-50%) scale(.85); }
-.capri3d-speech > span { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.capri3d-speech > span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .capri3d-speech::after { content: ""; position: absolute; left: 50%; bottom: -9px; width: 14px; height: 14px; background: var(--capri-notice-surface); border-right: 1px solid var(--capri-notice-border); border-bottom: 1px solid var(--capri-notice-border); transform: translateX(-50%) rotate(45deg); }
 .capri3d-confirm { display: flex; justify-content: center; gap: 8px; margin-top: 6px; }
 .capri3d-host .capri3d-speech button, .capri3d-host .capri3d-chat button { border: 1px solid var(--capri-notice-border); border-radius: 8px; background: var(--capri-notice-control); color: var(--capri-notice-text); font: 600 13px/1.2 system-ui; min-width: 40px; min-height: 36px; padding: 4px 8px; box-shadow: none; cursor: pointer; }
 .capri3d-host .capri3d-more { display: block; margin: 4px auto 0; border: 0 !important; min-height: 28px !important; text-decoration: underline; }
-.capri3d-host .capri3d-confirm button:first-child { background: var(--capri-notice-accent); color: var(--capri-notice-accent-ink); border-color: var(--capri-notice-accent); }
+.capri3d-host .capri3d-speech button { border-radius: 16px; min-height: 44px; }
+.capri3d-host .capri3d-confirm button:last-child { background: var(--capri-notice-control); border-color: var(--capri-notice-accent); }
+.capri3d-host .capri3d-respond { display: block; position: relative; margin: 8px 0 0 auto; }
+.capri3d-respond::after { content: ""; position: absolute; bottom: 0; left: 12px; right: 12px; height: 2px; background: var(--capri-notice-accent); }
 .capri3d-host .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 .capri3d-chat { position: absolute; box-sizing: border-box; left: 4px; right: 4px; bottom: 4px; height: 84px; display: flex; flex-direction: column; gap: 2px; padding: 6px; border: 1px solid var(--capri-notice-border); border-radius: 16px; background: var(--capri-notice-surface); color: var(--capri-notice-text); font: 13px/1.3 system-ui; }
 .capri3d-chat-header { box-sizing: border-box; position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; height: 24px; flex-shrink: 0; padding-bottom: 2px; }
@@ -37,7 +49,7 @@
 .capri3d-chat select { max-width: 140px; height: 24px; border: 1px solid var(--capri-notice-border); border-radius: 6px; background: var(--capri-notice-control); color: var(--capri-notice-text); font: inherit; }
 .capri3d-host .capri3d-speech button:focus-visible, .capri3d-host .capri3d-chat :focus-visible { outline: 2px solid var(--capri-notice-accent); outline-offset: 1px; }
 @keyframes capri3d-speech-in { from { opacity: 0; transform: translateX(-50%) scale(.85); } to { opacity: 1; transform: translateX(-50%) scale(1); } }
-@keyframes capri3d-rec { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--capri-notice-accent) 16%, transparent); } }
+@keyframes capri3d-rec { 50% { opacity: .65; } }
 @media (prefers-reduced-motion: reduce) { .capri3d-speech { animation: none; transition: none; } .capri3d-host .capri3d-chat button[data-recording="true"] { animation: none; } }
 
 .capri3d-host .capri3d-confirm button { flex: 1; min-width: 88px; min-height: 44px; }

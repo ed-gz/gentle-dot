@@ -48,8 +48,8 @@ it("renders continuous idle, caps gestures to 30fps and stops hidden/reduced-mot
  await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo" });
  const idleFrames = gpu.render.mock.calls.length;
  vi.advanceTimersByTime(2000);
- // 23 visible frames at 12fps, plus three 500ms silhouette readbacks.
- expect(gpu.render.mock.calls.length - idleFrames).toBeGreaterThanOrEqual(25);
+ // Stable fixture poses reuse their silhouette; visible frames stay at 12fps.
+ expect(gpu.render.mock.calls.length - idleFrames).toBeGreaterThanOrEqual(22);
  expect(gpu.render.mock.calls.length - idleFrames).toBeLessThanOrEqual(27);
  await renderer.choose({ model: "roja.glb", clip: "Pensar" });
  gpu.render.mockClear(); mask.mockClear();
@@ -70,8 +70,8 @@ it("keeps idle lively with bounded silhouette readbacks and cancels when hidden"
  await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo" });
  gpu.render.mockClear(); gpu.reads.mockClear();
  vi.advanceTimersByTime(4340);
- // 51 visible frames and eight silhouette readbacks, not 30fps idle.
- expect(gpu.render.mock.calls.length).toBeGreaterThanOrEqual(58);
+ // Roughly 51 visible frames; unchanged fixture poses need no extra readbacks.
+ expect(gpu.render.mock.calls.length).toBeGreaterThanOrEqual(50);
  expect(gpu.render.mock.calls.length).toBeLessThanOrEqual(60);
  expect(gpu.reads.mock.calls.length).toBeLessThanOrEqual(9);
  renderer.visibility(false, false); gpu.render.mockClear();
@@ -79,6 +79,25 @@ it("keeps idle lively with bounded silhouette readbacks and cancels when hidden"
  renderer.visibility(true, true); gpu.render.mockClear();
  vi.advanceTimersByTime(20_000); expect(gpu.render).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
  renderer.dispose();
+});
+it("reuses an unchanged silhouette across visibility resumes and repeated visibility flags", async () => {
+ const mask=vi.fn();
+ const renderer=await createRenderer({canvas:document.createElement("canvas"),base:bytes(),read:async()=>bytes(),mask,failure:vi.fn()});
+ renderer.visibility(true,true);
+ await renderer.choose({model:"roja.glb",clip:null});
+ const reads=gpu.reads.mock.calls.length;
+ renderer.visibility(true,true);renderer.visibility(false,true);renderer.visibility(true,true);
+ expect(gpu.reads).toHaveBeenCalledTimes(reads);
+ expect(mask).toHaveBeenCalledOnce();
+ renderer.dispose();
+});
+it("does not republish identical encoded masks while a moving body still needs sampling", async()=>{
+ const mask=vi.fn();
+ const renderer=await createRenderer({canvas:document.createElement("canvas"),base:bytes(),read:async()=>bytes(),mask,failure:vi.fn()});
+ renderer.visibility(true,false);await renderer.choose({model:"roja_inclinada.glb",clip:null});
+ vi.advanceTimersByTime(1600);
+ expect(gpu.reads.mock.calls.length).toBeGreaterThan(1);
+ expect(mask).toHaveBeenCalledOnce();renderer.dispose();
 });
 it("steps the base body during travel and clears the offsets on arrival", async () => {
  const base = model(); gpu.parse.mockResolvedValueOnce(base);
@@ -126,7 +145,8 @@ it("continues visible rendering after arrival and refreshes its silhouette", asy
  vi.advanceTimersByTime(2000);
  expect(gpu.render.mock.calls.length - frames).toBeLessThanOrEqual(64);
  expect(gpu.render.mock.calls.length).toBeGreaterThan(frames);
- expect(mask.mock.calls.length).toBeGreaterThanOrEqual(2);
+ expect(gpu.reads.mock.calls.length).toBeGreaterThanOrEqual(2);
+ expect(mask).toHaveBeenCalledOnce();
  renderer.dispose();
  expect(vi.getTimerCount()).toBe(0);
 });
