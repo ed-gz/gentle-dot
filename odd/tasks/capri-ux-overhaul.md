@@ -90,4 +90,5 @@ L28 Third-party installer extracted statically (never executed); reference copy 
 L29 Plan decided by parent per S21 ("toma lo que se pueda"): desktop 3D first, then mobile atlases; three.js 0.186 via pnpm (dependency change = risk item 5, verify). GLBs stay out of git.
 L30 0.22.7/46 bump d5c91a4; APK has no 3D atlases (gradle has no capri3d refs after revert). Building APK + desktop.
 L31 0.22.7/46 built (APK SHA256 0aa0de2a7043c026322ccb7eb2a5a0ca3e4b2f8cd59a6b64f70c5375c4b88292, no capri-3d assets inside), published to Tailscale URL (hash verified), PC service restarted with T24-T26 (HTTP 200). Phone not on USB; device proof pending.
+L32 User "instalmae la nueva version": 0.22.7/46 installed over USB (Success), Capri overlay and monitor services restarted on their own after update. Feature device proof still pending user checks.
 L3 device evidence (Pixel 9a, 0.21.4/code 38): CompanionOverlayService runs as foreground specialUse with overlay window present; AgentMonitorService is NOT running; POST_NOTIFICATIONS and SYSTEM_ALERT_WINDOW granted.
