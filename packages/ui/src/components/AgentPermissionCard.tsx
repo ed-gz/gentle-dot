@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { AgentAnswer, AgentApproval, AgentQuestion } from "../orchestration.ts";
 import type { OrchestrationControls } from "../useOrchestration.ts";
 import "../agent-permissions.css";
@@ -27,6 +27,7 @@ export function AgentPermissionCard({
 		approval.kind,
 		approval.options,
 		approval.questions,
+		needsExplicitSubmission(approval),
 	]);
 	const current = useRef({ key, action: controls.act });
 	current.current = { key, action: controls.act };
@@ -50,13 +51,16 @@ export function AgentPermissionCard({
 				requestId: approval.id,
 				...value,
 			});
-			if (accepted && current.current.key === key && current.current.action === action) setAnswered(key);
+			if (current.current.key === key && current.current.action === action) {
+				if (accepted) setAnswered(key);
+				else setError({ key, message: "No se pudo confirmar tu respuesta. Actualiza la solicitud antes de reintentar." });
+			}
 			return accepted;
-		} catch {
+		} catch (problem) {
 			if (current.current.key === key && current.current.action === action)
 				setError({
 					key,
-					message: "No se pudo confirmar tu respuesta. Actualiza el estado antes de volver a intentar.",
+					message: problem instanceof Error ? problem.message : "No se pudo confirmar tu respuesta. Actualiza el estado antes de volver a intentar.",
 				});
 			return false;
 		} finally {
@@ -85,7 +89,7 @@ export function AgentPermissionCard({
 			</p>
 			{error?.key === key ? (
 				<p className="orchestration-error" role="alert">
-					{error.message}
+					{controls.error || error.message}
 				</p>
 			) : null}
 			{!approval.answerable ? (
@@ -136,6 +140,17 @@ function formatDate(value: string): string {
 	});
 }
 
+/** Conservative UX brake, not an authorization decision. Older adapters embed effects in labels. */
+function needsExplicitSubmission(approval: AgentApproval): boolean {
+	const permission = Reflect.get(approval, "workflowPermission");
+	return approval.requiresConfirmation === true || "consentBinding" in approval ||
+		permission?.category === "native-review-consent" ||
+		/(?:review|rdd)[-_ ]consent/i.test(approval.action) ||
+		approval.message.includes("gentle-ai.review-integration.consent/") ||
+		Boolean(approval.options?.some(option => option.description || option.effect || option.consequence ||
+			/(?:effect|consequence|efecto|consecuencia)\s*:/i.test(option.label)));
+}
+
 function QuestionForm({
 	approval,
 	locked,
@@ -146,12 +161,24 @@ function QuestionForm({
 	answer: (value: AgentAnswer) => Promise<boolean>;
 }) {
 	const [optionId, setOptionId] = useState<string>();
+	const explicitSubmission = needsExplicitSubmission(approval);
+	const [step, setStep] = useState(0);
+	const form = useRef<HTMLFormElement>(null);
+	const previousStep = useRef(step);
+	useEffect(() => {
+		if (previousStep.current !== step) form.current?.querySelector<HTMLElement>("fieldset")?.focus();
+		previousStep.current = step;
+	}, [step]);
 	const [text, setText] = useState(approval.kind === "editor" ? approval.message : "");
 	const [responses, setResponses] = useState<
 		Record<string, { indices: number[]; custom: boolean; text: string }>
 	>({});
 	const id = useId();
 	const questions = approval.questions ?? [];
+	const currentQuestion = questions[step];
+	const response = currentQuestion ? responses[currentQuestion.id] : undefined;
+	const stepValid = Boolean(response && (response.custom ? response.text.trim() : response.indices.length));
+	const more = approval.kind === "questionnaire" && step < questions.length - 1;
 	const valid =
 		approval.kind === "select"
 			? approval.options?.some((option) => option.id === optionId)
@@ -166,10 +193,13 @@ function QuestionForm({
 					});
 	return (
 		<form
+			ref={form}
 			className="agent-permission-form"
 			onSubmit={(event) => {
 				event.preventDefault();
-				if (locked || !valid) return;
+				if (locked) return;
+				if (more) { if (stepValid) setStep(step + 1); return; }
+				if (!valid) return;
 				if (approval.kind === "select" && optionId !== undefined) void answer({ optionId });
 				else if (approval.kind === "input" || approval.kind === "editor") void answer({ text });
 				else if (approval.kind === "questionnaire")
@@ -193,9 +223,16 @@ function QuestionForm({
 								name={`${id}-option`}
 								value={option.id}
 								checked={optionId === option.id}
-								onChange={() => setOptionId(option.id)}
+								onChange={() => {
+									setOptionId(option.id);
+									if (!locked && !explicitSubmission) void answer({ optionId: option.id });
+								}}
 							/>
-							<span>{option.label}</span>
+							<span>{option.label}
+								{option.description ? <small>{option.description}</small> : null}
+								{option.effect ? <small>{option.effect}</small> : null}
+								{option.consequence ? <small>{option.consequence}</small> : null}
+							</span>
 						</label>
 					))}
 				</fieldset>
@@ -214,7 +251,7 @@ function QuestionForm({
 				</label>
 			) : null}
 			{approval.kind === "questionnaire"
-				? questions.map((question) => (
+				? questions.slice(step, step + 1).map((question) => (
 						<QuestionChoices
 							key={question.id}
 							question={question}
@@ -224,9 +261,11 @@ function QuestionForm({
 						/>
 					))
 				: null}
+			{approval.kind === "questionnaire" ? <p className="question-progress" role="status">{step + 1} de {questions.length}</p> : null}
 			<div className="agent-actions">
-				<button type="submit" className="primary" aria-label="Enviar respuesta" disabled={locked || !valid}>
-					Enviar
+				{step > 0 ? <button type="button" disabled={locked} onClick={() => setStep(step - 1)}>Atrás</button> : null}
+				<button type="submit" className="primary" aria-label={more ? "Siguiente" : "Enviar respuesta"} disabled={locked || (more ? !stepValid : !valid)}>
+					{more ? "Siguiente" : "Enviar"}
 				</button>
 				<button
 					type="button"
@@ -254,7 +293,7 @@ function QuestionChoices({
 }) {
 	const id = useId();
 	return (
-		<fieldset disabled={locked}>
+		<fieldset disabled={locked} tabIndex={-1}>
 			<legend>
 				{question.header ? <small>{question.header}</small> : null}
 				{question.question}

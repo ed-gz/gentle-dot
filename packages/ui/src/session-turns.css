@@ -1,0 +1,18 @@
+.session-turn {
+ display: grid;
+ gap: 12px;
+ min-width: 0;
+ padding-block: 16px;
+}
+.session-turn + .session-turn {
+ border-top: 1px solid var(--line, var(--border-subtle));
+ margin-top: 16px;
+ padding-top: 24px;
+}
+.session-turn-work { min-width: 0; color: var(--muted); font-size: .875rem; }
+.session-turn-work > summary { cursor: pointer; min-height: 44px; padding: 12px 8px; }
+.session-turn-action { display: flex; gap: 8px; padding: 8px; overflow-wrap: anywhere; }
+.session-turn-action .agent-message-content { min-width: 0; }
+.session-turn-reply { border-top: 1px solid var(--line, var(--border-subtle)); padding-top: 16px; }
+.session-turn-reply-label { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; font-size: .75rem; color: var(--muted); }
+.question-progress { font-variant-numeric: tabular-nums; }

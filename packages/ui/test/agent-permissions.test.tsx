@@ -114,7 +114,7 @@ describe("human agent questions", () => {
 			}
 		},
 	);
-	it("submits the selected id only after an explicit send, without guessing approval from a label", async () => {
+	it("submits a single choice in one tap using its exact id, never its label", async () => {
 		const { act } = setup({
 			...base,
 			kind: "select",
@@ -124,10 +124,7 @@ describe("human agent questions", () => {
 			],
 		});
 		expect(screen.queryByRole("button", { name: "Permiso nocturno" })).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Enviar respuesta" })).toBeDisabled();
 		await userEvent.click(screen.getByRole("radio", { name: "Sí, continúa" }));
-		expect(act).not.toHaveBeenCalled();
-		await userEvent.click(screen.getByRole("button", { name: "Enviar respuesta" }));
 		expect(act).toHaveBeenCalledExactlyOnceWith({ ...answer, optionId: "exact-alpha" });
 	});
 	it("preserves entered text and locks a confirmed answer until refreshed", async () => {
@@ -167,7 +164,13 @@ describe("human agent questions", () => {
 		expect(within(first).getByText("GET /status POST /jobs")).toBeVisible();
 		await userEvent.click(within(first).getByRole("checkbox", { name: /Servidor/ }));
 		await userEvent.click(within(first).getByRole("checkbox", { name: "Interfaz" }));
-		expect(screen.getByRole("button", { name: "Enviar respuesta" })).toBeDisabled();
+		expect(screen.queryByRole("group", { name: "¿Qué sigue?" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+		expect(screen.getByText("2 de 2")).toBeVisible();
+		await userEvent.click(screen.getByRole("button", { name: "Atrás" }));
+		expect(screen.getByRole("checkbox", { name: /Servidor/ })).toBeChecked();
+		expect(screen.getByRole("checkbox", { name: "Interfaz" })).toBeChecked();
+		await userEvent.click(screen.getByRole("button", { name: "Siguiente" }));
 		const second = screen.getByRole("group", { name: "¿Qué sigue?" });
 		await userEvent.click(within(second).getByRole("radio", { name: "Otra respuesta" }));
 		await userEvent.type(

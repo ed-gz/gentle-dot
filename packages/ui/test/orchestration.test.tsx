@@ -90,6 +90,12 @@ it("keeps a waiting session question and its answer options inline above the pho
  fireEvent.click(within(card).getByRole("button",{name:"Enviar respuesta"}));
  await waitFor(()=>expect(controls.act).toHaveBeenCalledWith({action:"answer",paneId:"p1",sessionId:"s1",requestId:"ask1",optionId:"continue"}));
 });
+it("does not treat a refused answer as a disconnected phone", async () => {
+ const { controls, client, view } = setup();
+ view.rerender(<OrchestrationPanel controls={{...controls,error:"Esta solicitud cambió. Actualiza la sesión."}} client={client} mobile />);
+ fireEvent.click(screen.getByRole("button", {name:/Release/}));
+ expect(await screen.findByRole("button", {name:"Permitir"})).toBeEnabled();
+});
 it("shows the waiting-question queue receipt instead of losing the extra detail", async()=>{
  const delivery={id:"queued-human-123",status:"queued" as const,deliverAs:"followUp" as const,preview:"extra detail",acceptedAt:new Date().toISOString()};
  setup({...snapshot,approvals:[]},{sessionId:"s1",status:"waiting",messages:[],question:null,deliveries:[delivery]});
@@ -498,9 +504,9 @@ describe("remote agent controls", () => {
 			status: "idle",
 			question: null,
 			messages: [
-				{ id: "answer", role: "assistant", content: [{ type: "text", text: "La revisión está lista." }] },
 				{ id: "covered", role: "tool", content: [{ type: "text", text: "Resultado de comando plegado" }] },
 				{ id: "other", role: "tool", content: [{ type: "text", text: "Resultado de memoria separado" }] },
+				{ id: "answer", role: "assistant", content: [{ type: "text", text: "La revisión está lista." }] },
 			],
 			work: {
 				version: 1,
@@ -520,10 +526,10 @@ describe("remote agent controls", () => {
 		});
 		await userEvent.click(screen.getByRole("button", { name: "Release · Te necesita" }));
 		expect(await screen.findByText("La revisión está lista.")).toBeVisible();
-		expect(screen.queryByText("Resultado de memoria separado")).not.toBeInTheDocument();
+		expect(screen.getByText("Resultado de memoria separado")).not.toBeVisible();
 		expect(screen.queryByText("Agente", { exact: true })).not.toBeInTheDocument();
 		expect(screen.queryByRole("region", { name: "Actividad reciente" })).not.toBeInTheDocument();
-		expect(screen.queryByText("Resultado de comando plegado")).not.toBeInTheDocument();
+		expect(screen.getByText("Resultado de comando plegado")).not.toBeVisible();
 		await userEvent.type(screen.getByLabelText("Continuar esta sesión"), "Borrador pendiente");
 		expect(screen.queryByText("Ver resultado")).not.toBeInTheDocument();
 		expect(screen.queryByText("Registros")).not.toBeInTheDocument();

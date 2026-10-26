@@ -11,6 +11,7 @@ import { SessionContext, SessionMenu, SessionPendingQuestion } from "./SessionDe
 import { SharedMarkdown } from "./SharedMarkdown.tsx";
 import { TerminalMoodControl } from "./TerminalMoodControl.tsx";
 import "../orchestration.css";
+import "../session-turns.css";
 import "../agent-mobile.css";
 import "../agent-session.css";
 import "../agent-activity.css";
@@ -87,7 +88,10 @@ export function OrchestrationPanel({
 	const session = snapshot?.sessions.find((entry) => entry.paneId === selected);
 	const visiblePaneId = active ? session?.paneId : undefined;
 	const visibleSessionId = active ? session?.sessionId : undefined;
-	const connected = snapshot?.available === true && !error;
+	// A rejected mutation is not a transport disconnect. Every answer is revalidated
+	// by the daemon; keep refresh/retry available after QUESTION_CHANGED or a refusal.
+	const answerConnected = snapshot?.available === true;
+	const connected = answerConnected && !error;
 	const identity = session?.sessionId ? `${session.paneId}:${session.sessionId}` : undefined;
 	useCompanionResponse(conversationMessages.findLast(message => message.role === "assistant")?.id, identity, active, ".agent-message-assistant");
 	const clientEpoch = useRef({ client, epoch: 0 });
@@ -382,34 +386,7 @@ export function OrchestrationPanel({
 						{conversationMessages.length === 0 ? (
 							<p className="muted">Todavía no hay mensajes.</p>
 						) : (
-							conversationMessages.map((message) => (
-								<article
-									key={message.id}
-									className={`agent-message agent-message-${message.role}${message.provenance ? " agent-message-delegated" : ""}`}
-									data-message-id={message.id}
-									aria-label={
-										message.provenance
-											? messageSource(message)
-											: message.role === "user"
-												? "Tu mensaje"
-												: "Respuesta"
-									}
-								>
-									{message.provenance?.kind === "subagent" ? (
-										<details className="agent-subagent-reply">
-											<summary className="agent-message-source">{messageSource(message)}</summary>
-											<AgentMessageContent message={message} />
-										</details>
-									) : (
-										<>
-											{message.provenance ? (
-												<div className="agent-message-source">{messageSource(message)}</div>
-											) : null}
-											<AgentMessageContent message={message} />
-										</>
-									)}
-								</article>
-							))
+							<SessionTurns messages={conversation.messages} />
 						)}
 					</section>
 				) : null}
@@ -438,7 +415,7 @@ export function OrchestrationPanel({
 					Ir al último mensaje ↓
 				</button>
 			) : null}
-			<SessionPendingQuestion session={session} conversation={conversation} controls={controls} disabled={!active || !connected || !session.connected || !!conversationError}/>
+			<SessionPendingQuestion session={session} conversation={conversation} controls={controls} disabled={!active || !answerConnected || !session.connected || !!conversationError}/>
 			{active && connected && session.connected && session.state === "working" ? (
 				<div className="session-working" role="status" aria-label="Actividad de la sesión" aria-atomic="true">
 					<span className="session-working-spinner" aria-hidden="true" />
@@ -574,7 +551,7 @@ export function OrchestrationPanel({
 							key={approval.id}
 							approval={approval}
 							controls={controls}
-							disabled={!connected || !snapshot.sessions.some((entry) => entry.paneId === approval.paneId && entry.sessionId === approval.sessionId && entry.connected)}
+							disabled={!answerConnected || !snapshot.sessions.some((entry) => entry.paneId === approval.paneId && entry.sessionId === approval.sessionId && entry.connected)}
 							label={snapshot.sessions.find((entry) => entry.paneId === approval.paneId && entry.sessionId === approval.sessionId)?.label}
 						/>
 					))}
@@ -698,6 +675,37 @@ function mergeMessages(earlier: AgentConversation["messages"], later: AgentConve
 	const messages = new Map(earlier.map((message) => [message.id, message]));
 	for (const message of later) messages.set(message.id, message);
 	return [...messages.values()];
+}
+
+/** User entries are the only turn boundaries; delegated replies never create new turns. */
+export function SessionTurns({ messages }: { messages: AgentConversation["messages"] }) {
+	const turns: AgentConversation["messages"][] = [];
+	for (const message of messages) {
+		if (message.role === "system") continue;
+		if (!turns.length || (message.role === "user" && !message.provenance)) turns.push([]);
+		turns.at(-1)!.push(message);
+	}
+	return <>{turns.map((turn, index) => {
+		const lastTool = turn.findLastIndex(message => message.role === "tool");
+		const work = turn.filter((message, i) => message.role === "tool" || (message.role === "assistant" && !message.provenance && (i < lastTool || message.stopReason === "toolUse")));
+		const actions = work.filter(message => message.role === "tool").length;
+		return <section className="session-turn" aria-label={`Turno ${index + 1}`} key={turn[0]!.id}>
+			{turn.filter(message => message.role === "user").map(message => <TurnMessage key={message.id} message={message} />)}
+			{work.length ? <details className="session-turn-work"><summary>Trabajó: {actions} {actions === 1 ? "acción" : "acciones"}</summary>
+				{work.map(message => <div key={message.id} className="session-turn-action">
+					{message.role === "tool" ? <span role="img" aria-label={message.isError ? "Error" : "Ejecutada"}>{message.isError ? "!" : "✓"}</span> : null}
+					<AgentMessageContent message={message} />
+				</div>)}
+			</details> : null}
+			{turn.filter(message => message.role === "assistant" && !work.includes(message)).map(message => <TurnMessage key={message.id} message={message} reply={!message.provenance} />)}
+		</section>;
+	})}</>;
+}
+function TurnMessage({ message, reply = false }: { message: AgentConversation["messages"][number]; reply?: boolean }) {
+	return <article className={`agent-message agent-message-${message.role}${reply ? " session-turn-reply" : ""}${message.provenance ? " agent-message-delegated" : ""}`} data-message-id={message.id} aria-label={message.provenance ? messageSource(message) : message.role === "user" ? "Tu mensaje" : "Respuesta"}>
+		{reply ? <header className="session-turn-reply-label">Respuesta{message.timestamp && Number.isFinite(Date.parse(message.timestamp)) ? <time dateTime={message.timestamp}>{new Date(message.timestamp).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" })}</time> : null}</header> : null}
+		{message.provenance?.kind === "subagent" ? <details className="agent-subagent-reply"><summary className="agent-message-source">{messageSource(message)}</summary><AgentMessageContent message={message}/></details> : <>{message.provenance ? <div className="agent-message-source">{messageSource(message)}</div> : null}<AgentMessageContent message={message}/></>}
+	</article>;
 }
 
 function AgentMessageContent({ message }: { message: AgentConversation["messages"][number] }) {

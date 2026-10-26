@@ -54,7 +54,9 @@ export interface AgentApproval {
 	expiresAt: string;
 	answerable: boolean;
 	kind?: "confirm" | "select" | "input" | "questionnaire" | "editor" | "custom";
-	options?: { id: string; label: string }[];
+	/** Provider consent/effect-bearing choices always require an explicit submit. */
+	requiresConfirmation?: boolean;
+	options?: { id: string; label: string; description?: string; effect?: string; consequence?: string }[];
 	placeholder?: string;
 	questions?: AgentQuestion[];
 	policyEligible?: boolean;
@@ -243,6 +245,9 @@ export interface AgentConversation {
 	messages: {
 		id: string;
 		role: "user" | "assistant" | "tool" | "system";
+		timestamp?: string;
+		isError?: boolean;
+		stopReason?: string;
 		provenance?: { kind: "subagent" | "session"; label?: string };
 		content: { type: "text"; text: string }[];
 	}[];
