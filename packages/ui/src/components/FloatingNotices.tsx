@@ -38,7 +38,7 @@ const COMPACT_TITLES: Partial<Record<NotificationEvent, string>> = {
 	agentCompleted: "Respuesta lista",
 	agentAvailable: "Sesión disponible",
 	agentError: "Sesión desconectada",
-	agentAttention: "Una sesión te necesita",
+	agentAttention: "Pregunta pendiente",
 	permission: "Permiso pendiente",
 };
 // Omit only our known boilerplate; meaningful permission/error text stays visible.

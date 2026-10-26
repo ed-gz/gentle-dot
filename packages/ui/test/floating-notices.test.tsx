@@ -52,6 +52,16 @@ it("keeps completion silent for the session being read, but preserves permission
 		/>,
 	);
 	expect(screen.getByRole("status")).toHaveTextContent("Permiso pendiente");
+	view.rerender(
+		<FloatingNotices
+			notices={[{ ...done, id: 4, session, notificationEvent: "agentAttention" }]}
+			dismiss={dismiss}
+			mobile
+			visibleSession={session}
+		/>,
+	);
+	// Session questions arrive as agentAttention; name them as questions, not finished work.
+	expect(screen.getByRole("status")).toHaveTextContent("Pregunta pendiente");
 });
 
 it("opens the specific notified session and hides only repetitive generic copy", () => {
