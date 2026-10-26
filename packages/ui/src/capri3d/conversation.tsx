@@ -123,7 +123,7 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
    {confirmation ? <div className="capri3d-confirm">
     <button type="button" disabled={pending} onClick={()=>void respond(false)}>Rechazar</button>
     <button type="button" disabled={pending} onClick={()=>void respond(true)}>Aprobar</button>
-   </div> : !receipt && shown?.showMore !== false && <button type="button" className={shown?.question ? "capri3d-respond" : "capri3d-more"} onClick={more}>{shown?.question ? "Responder" : "Ver más"}</button>}
+   </div> : !receipt && !shown?.question && shown?.showMore !== false && <button type="button" className="capri3d-more" onClick={more}>Ver más</button>}
    {error && <span role="alert">{error}</span>}
   </div>}
   {open && <form className="capri3d-chat" onSubmit={event=>{

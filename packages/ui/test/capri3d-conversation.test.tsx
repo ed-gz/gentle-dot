@@ -187,12 +187,13 @@ it("preserves another session's same-ID speech after an in-flight answer",async(
  expect(answer).toHaveBeenCalledOnce();
 });
 
-it("opens questions with Responder without sending an answer",()=>{
+it("shows question notice without any respond affordance on desktop",()=>{
  const more=vi.fn(),answer=vi.fn(),send=vi.fn();
  render(<CapriConversation state={initialState} send={send} open={false} close={vi.fn()} speech={{id:"question:q",text:"Portal B2B tiene una pregunta.",question:true}} more={more} answer={answer} onLayout={vi.fn()}/>);
- fireEvent.click(screen.getByRole("button",{name:"Responder"}));
- expect(more).toHaveBeenCalledOnce();expect(answer).not.toHaveBeenCalled();expect(send).not.toHaveBeenCalled();
+ expect(screen.getByText("Portal B2B tiene una pregunta.")).toBeInTheDocument();
+ expect(screen.queryByRole("button",{name:"Responder"})).toBeNull();
  expect(screen.queryByRole("button",{name:"Ver más"})).toBeNull();
+ expect(more).not.toHaveBeenCalled();expect(answer).not.toHaveBeenCalled();expect(send).not.toHaveBeenCalled();
 });
 it("marks a session completion without decorating an ordinary reply",()=>{
  const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn()};
