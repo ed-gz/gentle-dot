@@ -52,8 +52,26 @@ pub struct Surface {
 }
 #[derive(Default)]
 pub(crate) struct SurfaceState { pub active: bool, pub mask: Vec<u8>, pub bubble: bool, pub input: bool }
-fn surface_dimensions(bubble: bool, input: bool) -> (i32, i32) {
-    (if bubble || input { 320 } else { 240 }, 340 + if bubble { 152 } else { 0 } + if input { 88 } else { 0 })
+/// Compact laptop-friendly body; the renderer draws 240x340 internally and the canvas scales down.
+pub(crate) const BODY_WIDTH: i32 = 144;
+pub(crate) const BODY_HEIGHT: i32 = 204;
+const EXPANDED_WIDTH: i32 = 320;
+const BUBBLE_HEIGHT: i32 = 152;
+const INPUT_HEIGHT: i32 = 88;
+/// The renderer projects the hip pivot to y=244 of its 340px frame (capri3d/perch.ts).
+const RENDER_SEAT_Y: i32 = 244;
+const RENDER_HEIGHT: i32 = 340;
+pub(crate) fn surface_dimensions(bubble: bool, input: bool) -> (i32, i32) {
+    (if bubble || input { EXPANDED_WIDTH } else { BODY_WIDTH }, BODY_HEIGHT + if bubble { BUBBLE_HEIGHT } else { 0 } + if input { INPUT_HEIGHT } else { 0 })
+}
+/// Window-space y of Capri's seat for a surface with or without the speech bubble above her.
+pub(crate) fn seat_y(bubble: bool) -> i32 {
+    (if bubble { BUBBLE_HEIGHT } else { 0 }) + (RENDER_SEAT_Y * BODY_HEIGHT + RENDER_HEIGHT / 2) / RENDER_HEIGHT
+}
+/// True when the window has one of the 3D surface sizes; returns whether the bubble is shown.
+pub(crate) fn surface_bubble(width: i32, height: i32) -> Option<bool> {
+    [(false, false), (true, false), (false, true), (true, true)].into_iter()
+        .find(|&(b, i)| surface_dimensions(b, i) == (width, height)).map(|(b, _)| b)
 }
 pub fn init(app: &tauri::AppHandle) { app.manage(Surface::default()); }
 pub(crate) fn active(app: &tauri::AppHandle) -> bool {
@@ -102,7 +120,7 @@ pub(crate) fn input_shape(app: &tauri::AppHandle, native: &gtk::Window) -> Resul
 pub fn capri3d_surface(app: tauri::AppHandle, window: tauri::WebviewWindow, active: Option<bool>, mask: Option<Vec<u8>>, bubble: Option<bool>, input: Option<bool>) -> Result<bool, String> {
     if window.label() != "dot" { return Err("Esta superficie pertenece a Capri".into()); }
     let preferred = crate::desktop_companion::preferred_3d(&app);
-    if let Some(mask) = &mask { mask_rectangles(mask, 240, 340)?; }
+    if let Some(mask) = &mask { mask_rectangles(mask, BODY_WIDTH, BODY_HEIGHT)?; }
     if let Some(wanted) = active {
         let wanted = wanted && preferred && crate::desktop_companion::enabled(&app);
         let (changed, shift) = {
@@ -110,7 +128,7 @@ pub fn capri3d_surface(app: tauri::AppHandle, window: tauri::WebviewWindow, acti
             let mut state = s.inner.lock().unwrap();
             let was_active = state.active;
             let old_dimensions = surface_dimensions(state.bubble, state.input);
-            let old_top = if state.bubble { 152 } else { 0 };
+            let old_top = if state.bubble { BUBBLE_HEIGHT } else { 0 };
             let bubble = wanted && bubble.unwrap_or(false);
             let input = wanted && input.unwrap_or(false);
             let changed = state.active != wanted || state.bubble != bubble || state.input != input;
@@ -121,7 +139,7 @@ pub fn capri3d_surface(app: tauri::AppHandle, window: tauri::WebviewWindow, acti
             else if state.mask.len() != 24 * 34 { state.mask = vec![0; 24 * 34]; }
             let next_dimensions = surface_dimensions(bubble, input);
             let shift = if was_active && wanted {
-                ((old_dimensions.0 - next_dimensions.0) / 2, old_top - if bubble { 152 } else { 0 })
+                ((old_dimensions.0 - next_dimensions.0) / 2, old_top - if bubble { BUBBLE_HEIGHT } else { 0 })
             } else { (0, 0) };
             (changed, shift)
         };
@@ -220,13 +238,15 @@ mod tests {
     use super::*;
     #[test]
     fn speech_and_input_expand_only_the_3d_surface() {
-        assert_eq!(surface_dimensions(false, false), (240, 340));
-        assert_eq!(surface_dimensions(true, false), (320, 492));
-        assert_eq!(surface_dimensions(false, true), (320, 428));
-        assert_eq!(surface_dimensions(true, true), (320, 580));
+        assert_eq!(surface_dimensions(false, false), (144, 204));
+        assert_eq!(surface_dimensions(true, false), (320, 356));
+        assert_eq!(surface_dimensions(false, true), (320, 292));
+        assert_eq!(surface_dimensions(true, true), (320, 444));
+        assert_eq!(seat_y(false), 146);
+        assert_eq!(seat_y(true), 298);
         let mut mask = vec![0; 816];
         mask[0] = 1;
-        assert_eq!(mask_rectangles(&mask, 320, 580).unwrap(), vec![(0, 0, 14, 18)]);
+        assert_eq!(mask_rectangles(&mask, 320, 444).unwrap(), vec![(0, 0, 14, 14)]);
     }
     #[test]
     fn parses_logind_without_guessing_on_failure() {

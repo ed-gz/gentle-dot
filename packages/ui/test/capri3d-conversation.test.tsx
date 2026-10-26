@@ -38,3 +38,8 @@ it("includes only rendered overlays and transformed silhouette in the expanded m
  const mask=overlayMask(Array(816).fill(0),true,true);expect(mask).toHaveLength(816);expect(mask[1*24+12]).toBe(1);expect(mask[33*24+12]).toBe(1);expect(mask[15*24]).toBe(0);
  expect(overlayMask(Array(816).fill(0),false,false).every(x=>x===0)).toBe(true);
 });
+it("reprojects the compact 144x204 body into the expanded surface",()=>{
+ const body=Array(816).fill(0);body[17*24+12]=1;
+ const mask=overlayMask(body,true,false);
+ expect(mask[24*24+12]).toBe(1);expect(mask[30*24+12]).toBe(0);
+});

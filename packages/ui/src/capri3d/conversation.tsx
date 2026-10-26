@@ -16,17 +16,21 @@ export function confirmationAction(approval: AgentApproval, approved: boolean): 
  if (!approval.answerable || (approval.kind ?? "confirm") !== "confirm" || !Number.isFinite(expires) || expires <= Date.now()) return;
  return { action:"answer",paneId:approval.paneId,sessionId:approval.sessionId,requestId:approval.id,approved };
 }
-/** The renderer mask is 240×340. Reproject it, then union the visible UI hit regions. */
+/** Compact body size on screen; the renderer still draws 240×340 and its 24×34 mask is scale-free. */
+export const BODY_WIDTH = 144;
+export const BODY_HEIGHT = 204;
+/** Reproject the body mask into the expanded surface, then union the visible UI hit regions. */
 export function overlayMask(mask: number[], bubble: boolean, input: boolean): number[] {
  if (!bubble && !input) return mask;
- const width=320, top=bubble?BUBBLE_HEIGHT:0, height=340+top+(input?INPUT_HEIGHT:0);
+ const width=320, top=bubble?BUBBLE_HEIGHT:0, height=BODY_HEIGHT+top+(input?INPUT_HEIGHT:0);
+ const left0=(width-BODY_WIDTH)/2, cellX=BODY_WIDTH/24, cellY=BODY_HEIGHT/34;
  return Array.from({length:816},(_,i)=>{
   const x=(i%24+0.5)*width/24,y=(Math.floor(i/24)+0.5)*height/34;
   if (bubble && x>=20 && x<=300 && y>=4 && y<=top) return 1;
-  if (input && x>=4 && x<=316 && y>=top+340) return 1;
+  if (input && x>=4 && x<=316 && y>=top+BODY_HEIGHT) return 1;
   const left=(i%24)*width/24, upper=Math.floor(i/24)*height/34;
-  const x0=Math.max(0,Math.floor((left-40)/10)), x1=Math.min(23,Math.floor((left+width/24-40)/10));
-  const y0=Math.max(0,Math.floor((upper-top)/10)), y1=Math.min(33,Math.floor((upper+height/34-top)/10));
+  const x0=Math.max(0,Math.floor((left-left0)/cellX)), x1=Math.min(23,Math.floor((left+width/24-left0)/cellX));
+  const y0=Math.max(0,Math.floor((upper-top)/cellY)), y1=Math.min(33,Math.floor((upper+height/34-top)/cellY));
   for(let row=y0;row<=y1;row++) for(let col=x0;col<=x1;col++) if(mask[row*24+col]) return 1;
   return 0;
  });

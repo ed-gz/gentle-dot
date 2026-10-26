@@ -1014,12 +1014,10 @@ fn context_destination(
             && x + dot.width <= zone.x + zone.width
             && y + dot.height <= zone.y + zone.height
     };
-    if placement == Some(Placement::Perch) && [240, 320].contains(&dot.width) && [340, 428, 492, 580].contains(&dot.height) {
-        // Renderer projects the injected hip pivot to y=244 (capri3d/perch.ts).
-        // Leave 96px below the seat for dangling legs, not 266px of empty window.
-        let top = if dot.height == 492 || dot.height == 580 { 152 } else { 0 };
+    if let (Some(Placement::Perch), Some(bubble)) = (placement, crate::capri3d::surface_bubble(dot.width, dot.height)) {
+        // Seat the projected hip pivot on the editor box (capri3d::seat_y).
         let x = (target.x + target.width - 40. - dot.width as f64 / 2.).round() as i32;
-        let y = (target.y - (top + 244) as f64).round() as i32;
+        let y = (target.y - crate::capri3d::seat_y(bubble) as f64).round() as i32;
         return (zone.width >= dot.width && zone.height >= dot.height)
             .then(|| zone.clamp_rect(x, y, dot.width, dot.height));
     }
@@ -3232,9 +3230,11 @@ mod tests {
         let perch =
             context_destination(&prefs, &monitors, &dot, &target, Some(Placement::Perch)).unwrap();
         assert_eq!(perch, (-1720, 188));
-        let tall = Client { width: 240, height: 340, ..dot.clone() };
-        assert_eq!(context_destination(&prefs, &monitors, &tall, &target, Some(Placement::Perch)), Some((-1760, 56)));
-        let expanded = Client { width: 320, height: 580, ..dot.clone() };
+        let tall = Client { width: 144, height: 204, ..dot.clone() };
+        assert_eq!(context_destination(&prefs, &monitors, &tall, &target, Some(Placement::Perch)), Some((-1712, 154)));
+        let legacy = Client { width: 240, height: 340, ..dot.clone() };
+        assert_ne!(context_destination(&prefs, &monitors, &legacy, &target, Some(Placement::Perch)), Some((-1760, 56)));
+        let expanded = Client { width: 320, height: 444, ..dot.clone() };
         assert_eq!(context_destination(&prefs, &monitors, &expanded, &target, Some(Placement::Perch)), Some((-1800, 44)));
         let aside =
             context_destination(&prefs, &monitors, &dot, &target, Some(Placement::Aside)).unwrap();

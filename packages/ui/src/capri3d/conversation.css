@@ -1,5 +1,5 @@
 .capri3d-host { position: relative; width: 100vw; height: 100vh; }
-.capri3d-host .desktop-companion-surface[data-form="3d"] { position: absolute; width: 240px; height: 340px; top: var(--capri-top, 0px); left: 50%; transform: translateX(-50%); }
+.capri3d-host .desktop-companion-surface[data-form="3d"] { position: absolute; width: 144px; height: 204px; top: var(--capri-top, 0px); left: 50%; transform: translateX(-50%); }
 .capri3d-speech { box-sizing: border-box; position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 86%; max-height: 138px; background: #fbfbff; color: #22223a; border: 2px solid #2b2b48; border-radius: 14px; padding: 8px 12px; font: 14px/1.3 system-ui, sans-serif; text-align: center; box-shadow: 0 3px 0 #2b2b48; overflow-wrap: anywhere; animation: capri3d-speech-in 180ms ease-out; transition: opacity 180ms, transform 180ms; }
 .capri3d-speech[data-leaving="true"] { opacity: 0; transform: translateX(-50%) scale(.85); }
 .capri3d-speech > span { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
