@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { initialState } from "../src/store.ts";
 import { notificationPresentation } from "../src/companion-notification.ts";
-import { CapriConversation, excerpt, confirmationAction, overlayMask, createOverlayPublisher } from "../src/capri3d/conversation.tsx";
+import { CapriConversation, excerpt, confirmationAction, overlayMask, pendingApproval, createOverlayPublisher } from "../src/capri3d/conversation.tsx";
 const voice=vi.hoisted(()=>({start:vi.fn(),stop:vi.fn(),cancel:vi.fn(),typed:vi.fn(),sent:vi.fn(),draftTaken:vi.fn(),phase:"idle",mic:{available:true,reason:undefined as string | undefined}}));
 vi.mock("../src/useVoice.ts",()=>({useVoice:()=>voice}));
 afterEach(()=>{vi.useRealTimers();vi.clearAllMocks();voice.phase="idle";voice.mic={available:true,reason:undefined};});
@@ -229,4 +229,23 @@ it("reuses the body mask and only publishes changed overlay masks/layouts",()=>{
  expect(publish.mock.calls[0]![0]).toBe(body);
  expect(publish.mock.calls[2]![0]).toBe(body);
  expect(publish.mock.calls[1]![1]).toEqual({bubble:true,input:false});
+});
+
+it("surfaces the real failure reason when an answer no longer matches",async()=>{
+ const ask={id:"gone",paneId:"p",sessionId:"s",title:"Permiso",message:"Ejecutar",action:"bash",kind:"confirm" as const,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
+ const answer=vi.fn().mockRejectedValue(new Error("La pregunta cambió"));
+ render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} more={vi.fn()} onLayout={vi.fn()} approval={ask} answer={answer}/>);
+ await act(async()=>fireEvent.click(screen.getByRole("button",{name:"Aprobar"})));
+ expect(screen.getByRole("alert")).toHaveTextContent("La pregunta cambió");
+});
+it("pendingApproval keeps only a live, exact, answerable confirm",()=>{
+ const now=Date.now();
+ const a={id:"q1",paneId:"p",sessionId:"s",title:"t",message:"m",action:"x",kind:"confirm" as const,createdAt:new Date(now).toISOString(),expiresAt:new Date(now+60000).toISOString(),answerable:true};
+ const cue={id:"question:q1",paneId:"p",sessionId:"s"};
+ expect(pendingApproval([a],cue)?.id).toBe("q1");
+ expect(pendingApproval([],cue)).toBeUndefined();
+ expect(pendingApproval([{...a,answerable:false}],cue)).toBeUndefined();
+ expect(pendingApproval([{...a,expiresAt:new Date(now-1000).toISOString()}],cue)).toBeUndefined();
+ expect(pendingApproval([{...a,paneId:"other"}],cue)).toBeUndefined();
+ expect(pendingApproval([{...a,sessionId:"other"}],cue)).toBeUndefined();
 });

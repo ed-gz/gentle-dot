@@ -13,7 +13,7 @@ import { useChoreography } from "../capri3d/useChoreography.ts";
 import { restChoice, responseChoice, speechDuration } from "../capri3d/choreography.ts";
 import { clipForBehavior, type ClipChoice } from "../capri3d/mapping.ts";
 import { desktopFace } from "../capri3d/desktop-faces.ts";
-import { CapriConversation, createOverlayPublisher, type Speech, BUBBLE_HEIGHT, INPUT_HEIGHT } from "../capri3d/conversation.tsx";
+import { CapriConversation, createOverlayPublisher, pendingApproval, type Speech, BUBBLE_HEIGHT, INPUT_HEIGHT } from "../capri3d/conversation.tsx";
 import { useCompanionChat } from "../capri3d/replies.ts";
 import { gestureChoice, type Gesture } from "../capri3d/gestures.ts";
 import { connectionInfo } from "../desktop.ts";
@@ -247,6 +247,20 @@ export function DesktopCompanionSurface({
 		}).catch(() => { if (live) setApproval(undefined); });
 		return () => { live = false; abort.abort(); };
 	}, [active3D, context?.cue?.id, context?.cue?.paneId, context?.cue?.sessionId]);
+	// Self-heal: a request resolved in the terminal, panel or by expiry must not leave dead buttons.
+	useEffect(() => {
+		const cue = context?.cue;
+		if (!approval || !active3D || cue?.kind !== "question" || !isTauri()) return;
+		const abort = new AbortController();
+		const timer = setInterval(() => {
+			const client = orchestration.current;
+			if (!client) return;
+			void client.snapshot(abort.signal).then(snapshot => {
+				if (!pendingApproval(snapshot.approvals, cue)) setApproval(undefined);
+			}).catch(() => {});
+		}, 2000);
+		return () => { clearInterval(timer); abort.abort(); };
+	}, [approval?.id, active3D, context?.cue?.id, context?.cue?.paneId, context?.cue?.sessionId]);
 	const [, refreshExpiry] = useState(0);
 	useEffect(() => {
 		const deadlines = [context?.cue?.expiresAt, context?.notification?.expiresAt]
@@ -530,7 +544,7 @@ export function DesktopCompanionSurface({
 				if (!orchestration.current) throw new Error("Sesión no disponible");
 				// Revalidate immediately before the existing answer action; stale UI never approves a replacement.
 				const snapshot = await orchestration.current.snapshot();
-				if (action.action !== "answer" || !snapshot.approvals.some(a => a.id === action.requestId && a.paneId === action.paneId && a.sessionId === action.sessionId && a.answerable && (a.kind ?? "confirm") === "confirm" && Date.parse(a.expiresAt) > Date.now())) throw new Error("La pregunta cambió");
+				if (action.action !== "answer" || !pendingApproval(snapshot.approvals, { id: `question:${action.requestId}`, paneId: action.paneId, sessionId: action.sessionId })) throw new Error("La pregunta cambió");
 				await orchestration.current.act(action);
 				if ("approved" in action && !action.approved) setDenied(true);
 			}}

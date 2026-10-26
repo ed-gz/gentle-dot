@@ -10,6 +10,10 @@ import "./conversation.css";
 export const BUBBLE_HEIGHT = 152;
 export const INPUT_HEIGHT = 88;
 export function excerpt(text: string) { const clean=text.replace(/\s+/g," ").trim(); return clean.length>160?`${clean.slice(0,159)}…`:clean; }
+/** The single matcher for "this exact request is still live": same identity, answerable confirm, unexpired. */
+export function pendingApproval(approvals: AgentApproval[], cue: { id: string; paneId?: string; sessionId?: string }): AgentApproval | undefined {
+ return approvals.find(a => cue.id === `question:${a.id}` && a.paneId === cue.paneId && a.sessionId === cue.sessionId && a.answerable && (a.kind ?? "confirm") === "confirm" && Date.parse(a.expiresAt) > Date.now());
+}
 /** Never infer consent from labels; only the existing answerable boolean-confirm contract qualifies. */
 export function confirmationAction(approval: AgentApproval, approved: boolean): OrchestrationAction | undefined {
  const expires = Date.parse(approval.expiresAt);
@@ -113,7 +117,7 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
     setShown(value=>value?.approvalKey===dismissedSpeech.current ? undefined : value);
    }
   }
-  catch {if(mounted.current && currentKey.current===key)setError("No se pudo responder. Volvé a intentarlo o abrí el panel.");}
+  catch (error) {if(mounted.current && currentKey.current===key)setError(error instanceof Error && error.message ? `No se pudo responder: ${error.message}` : "No se pudo responder. Volvé a intentarlo o abrí el panel.");}
   finally {sending.current=false;if(mounted.current)setPending(false);}
  };
  return <>
