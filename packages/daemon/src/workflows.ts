@@ -29,7 +29,9 @@ export type WorkflowState =
 	| "cancelled"
 	| "expired"
 	| "failed";
+type WorkflowPauseReason = "disconnected" | "human" | "expired" | "user" | "review" | "uncertain" | "limit";
 export interface WorkflowStatus {
+	pauseReason?: WorkflowPauseReason;
 	id: string;
 	/** Session delegation remains active independently of any finite objective. */
 	mode?: "objective" | "session";
@@ -176,6 +178,8 @@ const record = (value: unknown): value is Record<string, unknown> =>
 	value !== null && typeof value === "object" && !Array.isArray(value);
 const pair = (session: {paneId:string; sessionId?:string}) => JSON.stringify([session.paneId, session.sessionId]);
 const active = (work: StoredWorkflow) => work.state === "waiting" || work.state === "running";
+const reconnectable = (work: StoredWorkflow) => work.state === "paused" && work.pauseReason === "disconnected";
+const recoverable = (work: StoredWorkflow) => active(work) || reconnectable(work);
 const terminal = (work: StoredWorkflow) => ["completed", "cancelled", "expired"].includes(work.state);
 const MAX_STATE_BYTES = 4 * 1024 * 1024;
 const MAX_AUTHORIZATION_CHARS = 100_000;
@@ -419,8 +423,9 @@ export class WorkflowContinuations {
 				this.claimSequence = Math.max(this.claimSequence, work.claimOrder ?? 0);
 				// The previous engine cannot acknowledge a lease after daemon restart. Never replay an uncertain send.
 				if (work.lease) this.release(work, "error", true);
-				if (active(work) && work.operations.some((operation) => operation.state === "dispatching")) {
+				if (recoverable(work) && work.operations.some((operation) => operation.state === "dispatching")) {
 					work.state = "paused";
+					work.pauseReason = "uncertain";
 					work.lastMessage =
 						"No se pudo confirmar una respuesta anterior. Revisa la sesión antes de reanudar.";
 				}
@@ -471,6 +476,7 @@ export class WorkflowContinuations {
 			objective: work.objective,
 			sessions: work.sessions.map((session) => ({ ...session })),
 			state: work.state,
+			...(work.pauseReason ? { pauseReason: work.pauseReason } : {}),
 			createdAt: work.createdAt,
 			updatedAt: work.updatedAt,
 			...(work.expiresAt ? { expiresAt: work.expiresAt } : {}),
@@ -530,13 +536,14 @@ export class WorkflowContinuations {
 	onInteraction(target: WorkflowSession, origin: "human" | "workflow"): void {
 		if (origin !== "human" || this.closed || this.storageError) return;
 		for (const work of this.works.values()) {
-			if (active(work) && work.sessions.some(session => pair(session) === pair(target)))
+			if (recoverable(work) && work.sessions.some(session => pair(session) === pair(target)))
 				this.yieldToHuman(work, "La persona volvió a trabajar en esta sesión.");
 		}
 	}
-	private yieldToHuman(work: StoredWorkflow, reason: string): void {
-		if (!active(work)) return;
+	private yieldToHuman(work: StoredWorkflow, reason: string, pauseReason: WorkflowPauseReason = "human"): void {
+		if (!recoverable(work)) return;
 		work.state = "paused";
+		work.pauseReason = pauseReason;
 		delete work.lease;
 		work.lastMessage = reason;
 		work.updatedAt = stamp(this.now());
@@ -556,8 +563,8 @@ export class WorkflowContinuations {
 	private expire(): void {
 		let changed = false;
 		for (const work of this.works.values()) {
-			if (active(work) && deadline(work) <= this.now()) {
-				this.yieldToHuman(work, "Venció el plazo autorizado; espera tu decisión para continuar.");
+			if (recoverable(work) && deadline(work) <= this.now()) {
+				this.yieldToHuman(work, "Venció el plazo autorizado; espera tu decisión para continuar.", "expired");
 				changed = true;
 			} else if (work.lease && work.lease.expiresAt <= this.now()) {
 				this.release(work, "error", true);
@@ -684,6 +691,7 @@ export class WorkflowContinuations {
 					work.runs--; // The adapter guarantees that no answer was dispatched.
 				} else if (active(work)) {
 					work.state = "paused";
+					work.pauseReason = "uncertain";
 					work.lastMessage =
 						"No se pudo confirmar una aprobación. Revisa la sesión antes de reanudar; no se repetirá automáticamente.";
 				}
@@ -738,7 +746,7 @@ export class WorkflowContinuations {
 					work.observed[key] = { ...work.observed[key], state: "unknown", connected: false };
 				}
 				if (work.mode === "session") {
-					work.state = "paused";
+					this.pauseDisconnected(work);
 					delete work.lease;
 					this.approvalRevisions.set(work.id, (this.approvalRevisions.get(work.id) ?? 0) + 1);
 				}
@@ -775,7 +783,7 @@ export class WorkflowContinuations {
 					continue;
 				}
 				if (event.type === "disconnected" && work.mode === "session") {
-					work.state = "paused";
+					this.pauseDisconnected(work);
 					delete work.lease;
 					this.approvalRevisions.set(work.id, (this.approvalRevisions.get(work.id) ?? 0) + 1);
 				}
@@ -820,8 +828,13 @@ export class WorkflowContinuations {
 		}
 		return handled;
 	}
+	private pauseDisconnected(work: StoredWorkflow): void {
+		work.state = "paused";
+		// An uncertain send must never be replayed or regain authority on reconnect.
+		work.pauseReason = work.operations.some(operation => operation.state === "dispatching") ? "uncertain" : "disconnected";
+	}
 	private async recover(authorize: () => boolean): Promise<void> {
-		if (this.now() - this.recoveredAt < 30_000 || ![...this.works.values()].some(active)) return;
+		if (this.now() - this.recoveredAt < 30_000 || ![...this.works.values()].some(recoverable)) return;
 		const revision = this.eventRevision;
 		const grants = new Map([...this.works.keys()].map((id) => [id, this.approvalRevisions.get(id)]));
 		// A command may start or finish while this read is pending. Reconcile only
@@ -839,7 +852,7 @@ export class WorkflowContinuations {
 		this.recoveredAt = this.now();
 		let changed = false;
 		for (const work of this.works.values()) {
-			if (!active(work) || grants.get(work.id) !== this.approvalRevisions.get(work.id)) continue;
+			if (!recoverable(work) || grants.get(work.id) !== this.approvalRevisions.get(work.id)) continue;
 			for (const target of work.sessions) {
 				const session = snapshot.sessions.find(
 					(item) => item.paneId === target.paneId && item.sessionId === target.sessionId,
@@ -857,7 +870,7 @@ export class WorkflowContinuations {
 					if (previous?.connected !== false) {
 						work.observed[key] = { ...previous, state: "unknown", connected: false };
 						if (work.mode === "session") {
-							work.state = "paused";
+							this.pauseDisconnected(work);
 							delete work.lease;
 							this.approvalRevisions.set(work.id, (this.approvalRevisions.get(work.id) ?? 0) + 1);
 						}
@@ -865,6 +878,29 @@ export class WorkflowContinuations {
 						changed = true;
 					}
 					continue;
+				}
+				if (reconnectable(work)) {
+					if (deadline(work) <= this.now()) {
+						this.yieldToHuman(work, "Venció el plazo autorizado; espera tu decisión para continuar.", "expired");
+						continue;
+					}
+					if (work.yieldQuestion || runLimitReached(work) || work.operations.some(operation => operation.state === "dispatching")) {
+						this.yieldToHuman(work, "La delegación requiere revisión antes de continuar.", "review");
+						continue;
+					}
+					if (!this.matchesActivity(work, target, {
+						version: session.capabilities?.activityFence ?? 0,
+						at: session.humanActivityAt ?? null,
+						instanceId: session.activityInstanceId,
+					})) {
+						this.yieldToHuman(work, "La actividad o el adaptador de la sesión cambió o no pudo comprobarse.");
+						continue;
+					}
+					work.state = "waiting";
+					delete work.pauseReason;
+					work.updatedAt = stamp(this.now());
+					work.lastMessage = "Sesión reconectada sin cambios de actividad; se reanuda la delegación.";
+					changed = true;
 				}
 				const approval = snapshot.approvals?.find(
 					(item) => item.paneId === target.paneId && item.sessionId === target.sessionId,
@@ -932,7 +968,7 @@ export class WorkflowContinuations {
 		if (
 			this.now() < this.recoveryRetryAt ||
 			this.now() - this.recoveredAt < 30_000 ||
-			![...this.works.values()].some(active)
+			![...this.works.values()].some(recoverable)
 		)
 			return Promise.resolve();
 		this.recoveryRetryAt = this.now() + 1000;
@@ -970,6 +1006,7 @@ export class WorkflowContinuations {
 			if (!work) return this.status();
 			if (runLimitReached(work)) {
 				work.state = "paused";
+				work.pauseReason = "limit";
 				work.lastMessage = "Se alcanzó el límite de continuaciones autorizado.";
 				this.save();
 				return this.status();
@@ -1042,6 +1079,7 @@ export class WorkflowContinuations {
 		work.updatedAt = stamp(this.now());
 		if (work.operations.some((operation) => operation.state === "dispatching")) {
 			work.state = "paused";
+			work.pauseReason = "uncertain";
 			work.lastMessage =
 				"No se pudo confirmar si una instrucción llegó al agente. Revisa la sesión antes de reanudar para evitar duplicarla.";
 		} else if (outcome === "settled") {
@@ -1094,9 +1132,10 @@ export class WorkflowContinuations {
 				throw new WorkflowError("Sólo la persona puede detener todos los seguimientos.", 403);
 			this.controlRevision++;
 			for (const work of this.works.values())
-				if (active(work)) {
+				if (recoverable(work)) {
 					this.approvalRevisions.set(work.id, (this.approvalRevisions.get(work.id) ?? 0) + 1);
 					work.state = "paused";
+					work.pauseReason = "user";
 					delete work.lease;
 					work.lastMessage = "La persona detuvo el seguimiento.";
 					work.updatedAt = stamp(this.now());
@@ -1282,6 +1321,7 @@ export class WorkflowContinuations {
 				}
 				if (renew) work.expiresAt = stamp(this.now() + (work.renewalHours ?? 24) * 3600_000);
 				work.state = "waiting";
+				delete work.pauseReason;
 				if (!work.authorization && resumeAuthorization) work.authorization = resumeAuthorization;
 				work.attempts = 0;
 				work.nextAttemptAt = this.now();
@@ -1328,6 +1368,7 @@ export class WorkflowContinuations {
 				if (!active(work) && work.state !== "paused" && !(action === "stop" && work.state === "failed"))
 					throw new WorkflowError("Este seguimiento ya terminó.", 409);
 				work.state = action === "complete" ? "completed" : action === "stop" ? "cancelled" : "paused";
+				work.pauseReason = action === "pause" ? (actor === "human" ? "user" : "review") : undefined;
 				work.lastMessage =
 					action === "complete"
 						? "Dot marcó el objetivo como completado; consulta su informe final."
@@ -1496,6 +1537,7 @@ export class WorkflowContinuations {
 					"No se pudo confirmar el envío. Revisa la sesión antes de reanudar; no se repetirá automáticamente.";
 				if (active(work) && work.lease?.id === lease.id) {
 					work.state = "paused";
+					work.pauseReason = "uncertain";
 					delete work.lease;
 					work.lastMessage = message;
 				}
@@ -1629,6 +1671,7 @@ export class WorkflowContinuations {
 		this.works.set(work.id, work);
 		if (snapshot.sessions.some(session => sessions.some(target => pair(target) === pair(session)) && session.capabilities?.activityFence !== 1)) {
 			work.state = "paused";
+			work.pauseReason = "review";
 			work.lastMessage = "Sólo avisos: el adaptador no tiene protección de actividad versionada. Actualízalo antes de activar autonomía.";
 		}
 		this.save();

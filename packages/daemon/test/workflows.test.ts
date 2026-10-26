@@ -104,6 +104,72 @@ function fixture() {
 		},
 	};
 }
+for (const reload of [false, true]) for (const source of ["discovery", "session", "snapshot"] as const) {
+ it(`resumes a disconnect-only delegation with matching activity (${source}, reload=${reload})`, async () => {
+  const h = fixture();
+  const question = vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+  h.options.askContinuation = question;
+  Object.assign(h.sessions[0]!, { humanActivityAt: "2026-10-10T23:00:00Z" });
+  await h.start({ mode: "session", sessions: [h.sessions[0]] });
+  if (source === "snapshot") {
+   h.sessions[0]!.connected = false;
+   await h.coordinator.prepare();
+   h.sessions[0]!.connected = true;
+   h.advance(31_000);
+  } else h.coordinator.onEvent({ id: "offline", type: "disconnected", at: new Date(h.options.now!()).toISOString(),
+   ...(source === "session" ? { paneId: h.sessions[0]!.paneId, sessionId: h.sessions[0]!.sessionId } : {}) });
+  expect(h.coordinator.status().workflows[0]).toMatchObject({ state: "paused", pauseReason: "disconnected" });
+  if (reload) h.restart();
+  await h.coordinator.prepare();
+  expect(h.coordinator.status().workflows[0]?.state).toBe("waiting");
+  expect(question).not.toHaveBeenCalled();
+ });
+}
+for (const reload of [false, true]) for (const change of ["instance", "activity", "user", "human", "expired"] as const) {
+ it(`never auto-resumes after disconnect when ${change} changed (reload=${reload})`, async () => {
+  const h = fixture();
+  const question = vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
+  h.options.askContinuation = question;
+  const work = await h.start({ mode: "session", sessions: [h.sessions[0]] });
+  h.coordinator.onEvent({ id: "offline", type: "disconnected", at: new Date(h.options.now!()).toISOString() });
+  if (change === "instance") h.sessions[0]!.activityInstanceId = "replacement";
+  if (change === "activity") Object.assign(h.sessions[0]!, { humanActivityAt: new Date(h.options.now!()).toISOString() });
+  if (change === "user") await h.coordinator.dispatch({ action: "pause", workflowId: work.id }, "human");
+  if (change === "human") h.coordinator.onInteraction(h.sessions[0]!, "human");
+  if (reload) h.restart();
+  if (change === "expired") h.advance(25 * 3600_000);
+  await h.coordinator.prepare();
+  h.advance(31_000);
+  await h.coordinator.prepare();
+  expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
+  expect(question).toHaveBeenCalledTimes(change === "user" ? 0 : 1);
+ });
+}
+it("does not infer disconnect authority from legacy pending text", async () => {
+ const h = fixture();
+ await h.start({ mode: "session", sessions: [h.sessions[0]] });
+ h.coordinator.onEvent({ id: "offline", type: "disconnected", at: new Date(h.options.now!()).toISOString() });
+ const path = join(h.dataDir, "workflows.json");
+ const stored = JSON.parse(readFileSync(path, "utf8"));
+ delete stored.workflows[0].pauseReason;
+ writeFileSync(path, JSON.stringify(stored));
+ h.restart();
+ await h.coordinator.prepare();
+ expect(h.coordinator.status().workflows[0]?.state).toBe("paused");
+});
+it("does not auto-resume if the person pauses during reconnection discovery", async () => {
+ const h = fixture();
+ await h.start({ mode: "session", sessions: [h.sessions[0]] });
+ h.coordinator.onEvent({ id: "offline", type: "disconnected", at: new Date(h.options.now!()).toISOString() });
+ const snapshot = await h.options.snapshot();
+ let finish!: (value: typeof snapshot) => void;
+ h.options.snapshot = () => new Promise(resolve => { finish = resolve; });
+ const recovering = h.coordinator.prepare();
+ await h.coordinator.dispatch({ action: "pauseAll" }, "human");
+ finish(snapshot);
+ await recovering;
+ expect(h.coordinator.status().workflows[0]).toMatchObject({ state: "paused", pauseReason: "user" });
+});
 it("yields to personal input once, ignores watch prompts, and only resumes on a human answer", async () => {
  const h = fixture();
  const question = vi.fn<NonNullable<WorkflowOptions["askContinuation"]>>();
