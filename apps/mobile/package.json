@@ -1,6 +1,6 @@
 {
 	"name": "@gentle-dot/mobile",
-	"version": "0.22.8",
+	"version": "0.22.9",
 	"private": true,
 	"type": "module",
 	"scripts": {
