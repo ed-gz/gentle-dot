@@ -64,11 +64,12 @@ describe("purposeful 3D choreography", () => {
   expect(responseChoice("done")).toMatchObject({ clip: "Reir", once: true });
   expect(responseChoice("attention")).toMatchObject({ clip: "Saludar_y_teletransportarse", end: 3, once: true });
   expect(speechDuration("hello")).toBeGreaterThan(2000);
-  expect(speechDuration("x".repeat(10000))).toBe(12_000);
+  expect(speechDuration("x".repeat(10000))).toBe(9000);
  });
- it("schedules 30fps only for active visible animation, never static/hidden/reduced/capture", () => {
-  expect(renderFps({ visible: true, animating: true })).toBe(30);
-  for (const state of [{ visible: true }, { visible: false, animating: true }, { visible: true, animating: true, reduced: true }, { visible: true, animating: true, capture: true }])
+ it("schedules visible idle at 30fps, 24 on battery, never hidden/reduced/capture", () => {
+  expect(renderFps({ visible: true })).toBe(30);
+  expect(renderFps({ visible: true, battery: true })).toBe(24);
+  for (const state of [{ visible: false, animating: true }, { visible: true, animating: true, reduced: true }, { visible: true, animating: true, capture: true }])
    expect(renderFps(state)).toBe(0);
  });
 });

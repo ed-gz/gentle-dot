@@ -8,10 +8,10 @@ export const readLocalAsset: AssetReader = async name => {
 };
 // Preserve order: a delayed mask must never reactivate the surface after unmount/fallback.
 let publications = Promise.resolve();
-export function publish3DSurface(active: boolean, mask?: number[]): Promise<void> {
+export function publish3DSurface(active: boolean, mask?: number[], layout?: { bubble: boolean; input: boolean }): Promise<void> {
  if (!isTauri()) return Promise.resolve();
  const publication = publications.then(async () => {
-  await invoke("capri3d_surface", { active, mask: mask ?? null });
+  await invoke("capri3d_surface", { active, mask: mask ?? null, bubble: layout?.bubble ?? false, input: layout?.input ?? false });
  });
  publications = publication.catch(() => {});
  return publication;

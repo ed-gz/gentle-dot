@@ -1,6 +1,6 @@
 import type { ClipChoice } from "./mapping.ts";
 
-export type RestPose = "float" | "sit" | "sleep" | "wake" | "greet";
+export type RestPose = "float" | "stretch" | "bored" | "sit" | "sleep" | "wake" | "greet";
 /** One outstanding checkpoint, never an interval or random phase. */
 export class RestProgression {
  pose: RestPose = "float";
@@ -23,8 +23,16 @@ export class RestProgression {
   if (elapsed >= 600_000) this.set("sleep");
   else if (elapsed >= 120_000) {
    this.set("sit"); this.later(600_000 - elapsed, () => this.idle());
-  } else {
+  } else if (elapsed >= 94_600) {
    this.set("float"); this.later(120_000 - elapsed, () => this.idle());
+  } else if (elapsed >= 90_000) {
+   this.set("bored"); this.later(94_600 - elapsed, () => this.idle());
+  } else if (elapsed >= 63_200) {
+   this.set("float"); this.later(90_000 - elapsed, () => this.idle());
+  } else if (elapsed >= 60_000) {
+   this.set("stretch"); this.later(63_200 - elapsed, () => this.idle());
+  } else {
+   this.set("float"); this.later(60_000 - elapsed, () => this.idle());
   }
  }
  cue() {
@@ -61,18 +69,20 @@ export function landingPoint(body: Rect, area: Rect, focused?: Rect): Point {
   y = Math.min(y, focused.y - body.height);
  return { x, y: Math.max(area.y, y) };
 }
-export function speechDuration(text: string) { return Math.min(12_000, 2200 + [...text].length * 55); }
+export function speechDuration(text: string) { return Math.min(9000, 2200 + text.length * 55); }
 export function responseChoice(kind: "reply" | "done" | "attention"): ClipChoice {
  if (kind === "reply") return { model: "roja.glb", clip: "Hablar" };
  if (kind === "done") return { model: "roja.glb", clip: "Reir", once: true };
  return { model: "roja.glb", clip: "Saludar_y_teletransportarse", end: 3, once: true };
 }
-export function renderFps(state: { visible: boolean; reduced?: boolean; capture?: boolean; animating?: boolean }) {
- return state.visible && !state.reduced && !state.capture && state.animating ? 30 : 0;
+export function renderFps(state: { visible: boolean; reduced?: boolean; capture?: boolean; animating?: boolean; battery?: boolean }) {
+ return state.visible && !state.reduced && !state.capture ? state.battery ? 24 : 30 : 0;
 }
 export function restChoice(pose: RestPose): ClipChoice {
  switch (pose) {
-  case "sit": return { model: "roja_sentada.glb", clip: null };
+  case "sit": return { model: "roja.glb", clip: null, procedural: "sentada" };
+  case "stretch": return { model: "roja.glb", clip: null, procedural: "estirarse" };
+  case "bored": return { model: "roja.glb", clip: null, procedural: "aburrida" };
   case "sleep": return { model: "roja_recostada_cerrados.glb", clip: null };
   case "wake": return { model: "roja_recostada_abiertos.glb", clip: null };
   case "greet": return responseChoice("attention");

@@ -36,7 +36,8 @@ export function attachFace(root: THREE.Object3D): FaceLayer {
   update(seconds, speaking, closed) {
    const blink = closed ?? seconds % 4.2 > 4.05;
    const opening = speaking ? Math.round((0.3 + 0.7 * Math.abs(Math.sin(seconds * 11))) * 4) : 0;
-   const signature = `${blink}:${opening}`;
+   const gaze = Math.round(Math.sin(seconds * 0.7) * 2);
+   const signature = `${blink}:${opening}:${gaze}`;
    if (previous === signature) return;
    previous = signature;
    for (const { context: ctx, canvas, image, texture } of layers) {
@@ -48,6 +49,15 @@ export function attachFace(root: THREE.Object3D): FaceLayer {
      ctx.fillRect(x - w * 0.005, y - h * 0.006, w * 0.01, h * 0.012);
      ctx.fillStyle = "#6e1935";
      ctx.beginPath(); ctx.ellipse(x, y, w * 0.0037, h * (0.001 + opening * 0.0006), 0, 0, Math.PI * 2); ctx.fill();
+    }
+    if (!blink) for (const [u, v] of eyes) {
+     // Coarse, deterministic glance. Keep texture uploads bounded to visible changes.
+     const x = (u + gaze * 0.001) * w, y = v * h;
+     ctx.fillStyle = "#04e241";
+     ctx.beginPath(); ctx.ellipse(u * w, y, w * 0.0038, h * 0.006, 0, 0, Math.PI * 2); ctx.fill();
+     ctx.fillStyle = "#0a0f0e";
+     ctx.beginPath(); ctx.ellipse(x, y, w * 0.0018, h * 0.004, 0, 0, Math.PI * 2); ctx.fill();
+     ctx.fillStyle = "#f4f6ff"; ctx.fillRect(x, y - h * 0.002, Math.max(1,w*0.0007), Math.max(1,h*0.0007));
     }
     if (blink) for (const [u, v] of eyes) {
      ctx.fillStyle = "#04e241";

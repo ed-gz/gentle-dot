@@ -51,13 +51,18 @@ pub struct Surface {
     pub(crate) dragging: std::sync::atomic::AtomicBool,
 }
 #[derive(Default)]
-pub(crate) struct SurfaceState { pub active: bool, pub mask: Vec<u8> }
+pub(crate) struct SurfaceState { pub active: bool, pub mask: Vec<u8>, pub bubble: bool, pub input: bool }
+fn surface_dimensions(bubble: bool, input: bool) -> (i32, i32) {
+    (if bubble || input { 320 } else { 240 }, 340 + if bubble { 152 } else { 0 } + if input { 88 } else { 0 })
+}
 pub fn init(app: &tauri::AppHandle) { app.manage(Surface::default()); }
 pub(crate) fn active(app: &tauri::AppHandle) -> bool {
     app.try_state::<Surface>().is_some_and(|s| s.inner.lock().unwrap().active)
 }
 pub(crate) fn dimensions(app: &tauri::AppHandle) -> (i32, i32) {
-    if active(app) { (240, 340) } else { (156, 156) }
+    let surface = app.state::<Surface>();
+    let state = surface.inner.lock().unwrap();
+    if state.active { surface_dimensions(state.bubble, state.input) } else { (156, 156) }
 }
 pub fn mask_rectangles(mask: &[u8], width: i32, height: i32) -> Result<Vec<(i32, i32, i32, i32)>, String> {
     if mask.len() != 24 * 34 || mask.iter().any(|&cell| cell > 1) || width <= 0 || height <= 0 {
@@ -87,26 +92,38 @@ pub(crate) fn input_shape(app: &tauri::AppHandle, native: &gtk::Window) -> Resul
     let state = s.inner.lock().unwrap();
     if !state.active { return Ok(false); }
     // Use the requested logical size, not GTK's previous allocation during an asynchronous resize.
-    let region = mask_region(&state.mask, 240, 340)?;
+    let (width, height) = surface_dimensions(state.bubble, state.input);
+    let region = mask_region(&state.mask, width, height)?;
     native.input_shape_combine_region(Some(&region));
     Ok(true)
 }
 /// Query preferred form or publish a rendered silhouette. Only the companion can publish geometry.
 #[tauri::command]
-pub fn capri3d_surface(app: tauri::AppHandle, window: tauri::WebviewWindow, active: Option<bool>, mask: Option<Vec<u8>>) -> Result<bool, String> {
+pub fn capri3d_surface(app: tauri::AppHandle, window: tauri::WebviewWindow, active: Option<bool>, mask: Option<Vec<u8>>, bubble: Option<bool>, input: Option<bool>) -> Result<bool, String> {
     if window.label() != "dot" { return Err("Esta superficie pertenece a Capri".into()); }
     let preferred = crate::desktop_companion::preferred_3d(&app);
     if let Some(mask) = &mask { mask_rectangles(mask, 240, 340)?; }
     if let Some(wanted) = active {
         let wanted = wanted && preferred && crate::desktop_companion::enabled(&app);
-        let changed = {
+        let (changed, shift) = {
             let s = app.state::<Surface>();
             let mut state = s.inner.lock().unwrap();
-            let changed = state.active != wanted;
+            let was_active = state.active;
+            let old_dimensions = surface_dimensions(state.bubble, state.input);
+            let old_top = if state.bubble { 152 } else { 0 };
+            let bubble = wanted && bubble.unwrap_or(false);
+            let input = wanted && input.unwrap_or(false);
+            let changed = state.active != wanted || state.bubble != bubble || state.input != input;
             state.active = wanted;
+            state.bubble = bubble;
+            state.input = input;
             if let Some(mask) = mask { state.mask = mask; }
             else if state.mask.len() != 24 * 34 { state.mask = vec![0; 24 * 34]; }
-            changed
+            let next_dimensions = surface_dimensions(bubble, input);
+            let shift = if was_active && wanted {
+                ((old_dimensions.0 - next_dimensions.0) / 2, old_top - if bubble { 152 } else { 0 })
+            } else { (0, 0) };
+            (changed, shift)
         };
         if changed && crate::desktop_companion::enabled(&app) {
             let (width, height) = dimensions(&app);
@@ -115,9 +132,10 @@ pub fn capri3d_surface(app: tauri::AppHandle, window: tauri::WebviewWindow, acti
             window.set_size(tauri::LogicalSize::new(width, height)).map_err(|e| e.to_string())?;
             window.set_min_size(Some(tauri::LogicalSize::new(width, height))).map_err(|e| e.to_string())?;
             window.set_max_size(Some(tauri::LogicalSize::new(width, height))).map_err(|e| e.to_string())?;
-            crate::desktop_companion::reconcile_3d_bounds(&app);
+            crate::desktop_companion::reconcile_3d_bounds(&app, shift);
         }
         crate::desktop_companion::refresh_3d_input(&app)?;
+        if changed { crate::desktop_companion::refresh_3d_bubble(&app); }
     }
     Ok(preferred)
 }
@@ -200,6 +218,16 @@ pub(crate) fn watch_drag(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn speech_and_input_expand_only_the_3d_surface() {
+        assert_eq!(surface_dimensions(false, false), (240, 340));
+        assert_eq!(surface_dimensions(true, false), (320, 492));
+        assert_eq!(surface_dimensions(false, true), (320, 428));
+        assert_eq!(surface_dimensions(true, true), (320, 580));
+        let mut mask = vec![0; 816];
+        mask[0] = 1;
+        assert_eq!(mask_rectangles(&mask, 320, 580).unwrap(), vec![(0, 0, 14, 18)]);
+    }
     #[test]
     fn parses_logind_without_guessing_on_failure() {
         assert_eq!(parse_absence("LockedHint=yes\nIdleHint=no\n"), Some(true));

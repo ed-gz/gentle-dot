@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import type { CapriBehavior } from "@gentle-dot/theme-capri/behavior";
 import { loadBaseAsset, type AssetReader } from "./assets.ts";
 import { clipForBehavior, type ClipChoice } from "./mapping.ts";
@@ -24,6 +25,21 @@ interface Props {
 export function Capri3D(props: Props) {
  const { enabled, preferred, read, factory = defaultFactory } = props;
  const canvas = useRef<HTMLCanvasElement>(null);
+ const [captured, setCaptured] = useState(false);
+ const capture = useRef(false);
+ useEffect(() => {
+  if (!enabled || !isTauri()) return;
+  let live = true, stop: (() => void) | undefined;
+  void import("@tauri-apps/api/event").then(async ({ listen }) => {
+   const unlisten = await listen<boolean>("dot://capri3d-capture", event => {
+    if (!live) return;
+    capture.current = event.payload; setCaptured(event.payload);
+    renderer.current?.visibility(latest.current.visible && !event.payload, latest.current.reduced);
+   });
+   if (live) stop = unlisten; else unlisten();
+  }).catch(() => {});
+  return () => { live = false; stop?.(); };
+ }, [enabled]);
  const renderer = useRef<CapriRenderer | undefined>(undefined);
  const latest = useRef(props);
  latest.current = props;
@@ -44,7 +60,7 @@ export function Capri3D(props: Props) {
    if (!live) { instance.dispose(); return; }
    renderer.current = instance;
    const current = latest.current;
-   instance.visibility(current.visible, current.reduced);
+   instance.visibility(current.visible && !capture.current, current.reduced);
    await instance.choose(current.choice ?? clipForBehavior(current.behavior, current.replyKind));
    if (live && renderer.current === instance) current.onActive(true);
   })().catch(failure);
@@ -62,6 +78,6 @@ export function Capri3D(props: Props) {
    if (renderer.current === instance) { renderer.current = undefined; latest.current.onActive(false); }
   });
  }, [state, animation, target, props.replyKind, props.choice]);
- useEffect(() => { renderer.current?.visibility(props.visible, props.reduced); }, [props.visible, props.reduced]);
+ useEffect(() => { renderer.current?.visibility(props.visible && !captured, props.reduced); }, [props.visible, props.reduced, captured]);
  return <canvas ref={canvas} className="capri3d-canvas" width={240} height={340} aria-hidden="true" />;
 }

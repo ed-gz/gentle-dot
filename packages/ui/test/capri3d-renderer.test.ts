@@ -31,13 +31,14 @@ beforeEach(() => {
  vi.clearAllMocks(); gpu.parse.mockImplementation(async () => model());
 });
 afterEach(() => vi.useRealTimers());
-it("renders no idle loop, caps gestures to 30fps and stops hidden/reduced-motion", async () => {
+it("renders continuous idle, caps gestures to 30fps and stops hidden/reduced-motion", async () => {
  const mask = vi.fn(); const failure = vi.fn();
  const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => bytes(), mask, failure });
  renderer.visibility(true, false);
  await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo" });
  const idleFrames = gpu.render.mock.calls.length;
- vi.advanceTimersByTime(2000); expect(gpu.render).toHaveBeenCalledTimes(idleFrames);
+ vi.advanceTimersByTime(2000); expect(gpu.render.mock.calls.length - idleFrames).toBeGreaterThan(50);
+ expect(gpu.render.mock.calls.length - idleFrames).toBeLessThanOrEqual(64);
  await renderer.choose({ model: "roja.glb", clip: "Pensar" });
  gpu.render.mockClear(); mask.mockClear();
  vi.advanceTimersByTime(1000);
@@ -50,15 +51,15 @@ it("renders no idle loop, caps gestures to 30fps and stops hidden/reduced-motion
  vi.advanceTimersByTime(1000); expect(gpu.render).not.toHaveBeenCalled();
  renderer.dispose(); expect(failure).not.toHaveBeenCalled(); expect(gpu.dispose).toHaveBeenCalledOnce();
 });
-it("paints each idle eyelid change once without mask readback and cancels when hidden", async () => {
+it("keeps idle lively with bounded silhouette readbacks and cancels when hidden", async () => {
  const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => bytes(), mask: vi.fn(), failure: vi.fn() });
  renderer.visibility(true, false);
  await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo" });
  gpu.render.mockClear(); gpu.reads.mockClear();
- vi.advanceTimersByTime(4199); expect(gpu.render).not.toHaveBeenCalled();
- vi.advanceTimersByTime(1); expect(gpu.render).toHaveBeenCalledTimes(1);
- vi.advanceTimersByTime(140); expect(gpu.render).toHaveBeenCalledTimes(2);
- expect(gpu.reads).not.toHaveBeenCalled();
+ vi.advanceTimersByTime(4340);
+ expect(gpu.render.mock.calls.length).toBeGreaterThan(120);
+ expect(gpu.render.mock.calls.length).toBeLessThanOrEqual(139);
+ expect(gpu.reads.mock.calls.length).toBeLessThanOrEqual(9);
  renderer.visibility(false, false); gpu.render.mockClear();
  vi.advanceTimersByTime(20_000); expect(gpu.render).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
  renderer.visibility(true, true); gpu.render.mockClear();
@@ -71,7 +72,7 @@ it("steps the base body during travel and clears the offsets on arrival", async 
  renderer.visibility(true, false);
  await renderer.choose({ model: "roja.glb", clip: "Flotar_en_reposo", motion: "walk", direction: -1, duration: 600 });
  vi.advanceTimersByTime(100);
- expect(base.scene.position.y).toBeGreaterThan(0); expect(base.scene.rotation.y).toBeLessThan(0);
+ expect(base.scene.rotation.y).toBeLessThan(0);
  vi.advanceTimersByTime(600);
  expect(base.scene.position.y).toBe(0); expect(base.scene.rotation.y).toBe(0);
  renderer.dispose(); expect(vi.getTimerCount()).toBe(0);
@@ -94,11 +95,12 @@ it("stops the attention wave before teleport and falls back to base when an alte
  renderer.visibility(true, false);
  await renderer.choose({ model: "roja.glb", clip: "Saludar_y_teletransportarse", once: true, end: 3 });
  vi.advanceTimersByTime(3500); const frames = gpu.render.mock.calls.length;
- vi.advanceTimersByTime(5000); expect(gpu.render).toHaveBeenCalledTimes(frames);
+ vi.advanceTimersByTime(5000); expect(gpu.render.mock.calls.length - frames).toBeLessThanOrEqual(160);
+ expect(gpu.render.mock.calls.length).toBeGreaterThan(frames);
  await expect(renderer.choose({ model: "roja_inclinada.glb", clip: null })).resolves.toBeUndefined();
  renderer.dispose();
 });
-it("animates an authored travelling pose only until arrival and refreshes its silhouette", async () => {
+it("continues visible rendering after arrival and refreshes its silhouette", async () => {
  const mask = vi.fn();
  const renderer = await createRenderer({ canvas: document.createElement("canvas"), base: bytes(), read: async () => bytes(), mask, failure: vi.fn() });
  renderer.visibility(true, false);
@@ -108,7 +110,8 @@ it("animates an authored travelling pose only until arrival and refreshes its si
  expect(gpu.render).toHaveBeenCalled();
  const frames = gpu.render.mock.calls.length;
  vi.advanceTimersByTime(2000);
- expect(gpu.render).toHaveBeenCalledTimes(frames);
+ expect(gpu.render.mock.calls.length - frames).toBeLessThanOrEqual(64);
+ expect(gpu.render.mock.calls.length).toBeGreaterThan(frames);
  expect(mask.mock.calls.length).toBeGreaterThanOrEqual(2);
  renderer.dispose();
  expect(vi.getTimerCount()).toBe(0);

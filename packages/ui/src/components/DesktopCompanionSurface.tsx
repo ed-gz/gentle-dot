@@ -12,6 +12,11 @@ import { publish3DSurface, readLocalAsset, usePreferred3D } from "../capri3d/nat
 import { useChoreography } from "../capri3d/useChoreography.ts";
 import { restChoice, responseChoice, speechDuration } from "../capri3d/choreography.ts";
 import { clipForBehavior, type ClipChoice } from "../capri3d/mapping.ts";
+import { CapriConversation, overlayMask, BUBBLE_HEIGHT, INPUT_HEIGHT } from "../capri3d/conversation.tsx";
+import { useCompanionChat } from "../capri3d/replies.ts";
+import { gestureChoice, type Gesture } from "../capri3d/gestures.ts";
+import { connectionInfo } from "../desktop.ts";
+import { createOrchestrationClient, type AgentApproval, type OrchestrationClient } from "../orchestration.ts";
 import "../desktop-companion.css";
 
 interface Props {
@@ -51,9 +56,34 @@ export function DesktopCompanionSurface({
 		setActive3D(active);
 		void publish3DSurface(active).catch(() => { if (active) setFailed3D(true); });
 	}, []);
-	const on3DMask = useCallback((mask: number[]) => {
-		void publish3DSurface(true, mask).catch(() => setFailed3D(true));
+	const [chatOpen, setChatOpen] = useState(false);
+	const [gesture, setGesture] = useState<{ name: Gesture; at: number }>();
+	useEffect(() => {
+		if (!gesture) return;
+		const choice = gestureChoice(gesture.name);
+		const duration = choice.procedural ? ({ saludar: 3000, bailar: 7200, salto: 1300, voltereta: 1600, estirarse: 3200 }[gesture.name as "saludar" | "bailar" | "salto" | "voltereta" | "estirarse"] ?? 3200) : 6000;
+		const timer = setTimeout(() => setGesture(undefined), duration);
+		return () => clearTimeout(timer);
+	}, [gesture]);
+	const [overlays, setOverlays] = useState({ bubble: false, input: false });
+	const maskState = useRef({ mask: Array<number>(816).fill(0), bubble: false, input: false });
+	const { state: chatState, send: chatSend } = useCompanionChat();
+	const [approval, setApproval] = useState<AgentApproval>();
+	const orchestration = useRef<OrchestrationClient | undefined>(undefined);
+	const layout = useCallback((bubble: boolean, input: boolean) => {
+		maskState.current = { ...maskState.current, bubble, input };
+		setOverlays(previous => previous.bubble === bubble && previous.input === input ? previous : { bubble, input });
 	}, []);
+	const on3DMask = useCallback((mask: number[]) => {
+		const current = maskState.current;
+		current.mask = mask;
+		void publish3DSurface(true, overlayMask(mask, current.bubble, current.input), current).catch(() => setFailed3D(true));
+	}, []);
+	useEffect(() => {
+		if (!active3D) return;
+		const current = maskState.current;
+		void publish3DSurface(true, overlayMask(current.mask, overlays.bubble, overlays.input), overlays).catch(() => setFailed3D(true));
+	}, [active3D, overlays]);
 	const latest = useRef({ controls, inControl, reduced: false });
 	const [awake, setAwake] = useState(() => !document.hidden);
 	const [interacting, setInteracting] = useState(false);
@@ -192,6 +222,20 @@ export function DesktopCompanionSurface({
 		return () => clearTimeout(timer);
 	}, [outcome]);
 	const context = controls.state.context;
+	useEffect(() => {
+		if (!active3D || context?.cue?.kind !== "question" || !isTauri()) { setApproval(undefined); return; }
+		let live = true;
+		const abort = new AbortController();
+		void connectionInfo().then(async info => {
+			const client = createOrchestrationClient(info);
+			orchestration.current = client;
+			const snapshot = await client.snapshot(abort.signal);
+			const cue = context.cue;
+			const candidate = snapshot.approvals.find(a => cue?.id === `question:${a.id}` && a.paneId === cue.paneId && a.sessionId === cue.sessionId);
+			if (live) setApproval(candidate);
+		}).catch(() => { if (live) setApproval(undefined); });
+		return () => { live = false; abort.abort(); };
+	}, [active3D, context?.cue?.id]);
 	const [, refreshExpiry] = useState(0);
 	useEffect(() => {
 		const deadlines = [context?.cue?.expiresAt, context?.notification?.expiresAt]
@@ -232,6 +276,12 @@ export function DesktopCompanionSurface({
 		},
 		[notificationId, visible, inControl, attention, visualExpiresAt, contextReady],
 	);
+	useEffect(() => {
+		if (!active3D || !visualNotification || !visible) return;
+		let second = 0;
+		const first = requestAnimationFrame(() => { second = requestAnimationFrame(() => visualReady("file-away")); });
+		return () => { cancelAnimationFrame(first); cancelAnimationFrame(second); };
+	}, [active3D, visualNotification?.id, visible, visualReady]);
 	const behavior = capriBehavior({
 		now: Date.now(),
 		pendingQuestion: attention,
@@ -252,10 +302,11 @@ export function DesktopCompanionSurface({
 		behavior.state !== "idle" || interacting || Boolean(cue), cue?.id);
 	const [speech, setSpeech] = useState<{ id: string; until: number; text: string }>();
 	useEffect(() => {
-		if (!cue?.summary || !["notification", "submitted"].includes(cue.kind)) {
+		if (!cue?.summary || !["notification", "submitted", "question", "capture", "download"].includes(cue.kind)) {
 			setSpeech(undefined); return;
 		}
-		const text = `${cue.summary}${cue.body ? ` ${cue.body}` : ""}`;
+		const presentation = cue.kind === "notification" ? notificationPresentation(cue) : cue;
+		const text = `${presentation.summary}${presentation.body ? ` ${presentation.body}` : ""}`;
 		const duration = Math.min(speechDuration(text), Math.max(0, cue.expiresAt - Date.now()));
 		setSpeech({ id: cue.id, until: Date.now() + duration, text });
 		const timer = setTimeout(() => setSpeech(undefined), duration);
@@ -265,19 +316,20 @@ export function DesktopCompanionSurface({
 	const perched = cue?.kind === "input-ready" && cue.placement === "perch";
 	const choice = useMemo<ClipChoice>(() => {
 		if (choreography.absent) return restChoice("sleep");
-		if (holding && !controls.state.pinned) return { model: "roja_brazos.glb", clip: null };
+		if (holding && !controls.state.pinned) return { model: "roja.glb", clip: null, procedural: "colgando" };
 		if (choreography.rest === "wake" || choreography.rest === "greet") return restChoice(choreography.rest);
 		if (attention) return responseChoice("attention");
+		if (gesture) return gestureChoice(gesture.name);
 		if (controls.state.travelling && motion && motion.mode !== "rest") {
 			return motion.mode === "teleport"
 				? { model: "roja.glb", clip: "Saludar_y_teletransportarse", start: 2.85, end: 4.65, once: true, motion: "teleport", duration: motion.duration }
 				: { model: "roja.glb", clip: "Flotar_en_reposo", motion: motion.mode, direction: motion.direction, duration: motion.duration };
 		}
-		if (motion?.mode === "land") return { model: "roja.glb", clip: "Reir", once: true, motion: "land", duration: 600 };
+		if (motion?.mode === "land") return { model: "roja.glb", clip: null, procedural: "quieta", once: true, motion: "land", duration: 600 };
 		if (speech) return responseChoice("reply");
-		if (behavior.state === "idle") return restChoice(perched ? "sit" : choreography.rest);
+		if (behavior.state === "idle") return perched ? { model: "roja.glb", clip: null, procedural: "colgada" } : restChoice(choreography.rest);
 		return clipForBehavior(behavior);
-	}, [choreography.absent, attention, holding, controls.state.pinned, controls.state.travelling, motion, speech, behavior.state, behavior.animation, behavior.target, choreography.rest, perched]);
+	}, [choreography.absent, attention, gesture, holding, controls.state.pinned, controls.state.travelling, motion, speech, behavior.state, behavior.animation, behavior.target, choreography.rest, perched]);
 	const duo = pose.startsWith("duo-") || pose === "invite-rebecca";
 	const externalMessage = cue?.kind === "notification" ? notificationPresentation(cue) : undefined;
 	const message =
@@ -293,6 +345,7 @@ export function DesktopCompanionSurface({
 							? cue.summary
 							: sceneCaption(pose);
 	return (
+		<div className="capri3d-host" data-expanded={active3D && (overlays.bubble || overlays.input)} style={{ "--capri-top": `${active3D && overlays.bubble ? BUBBLE_HEIGHT : 0}px`, "--capri-bottom": `${active3D && overlays.input ? INPUT_HEIGHT : 0}px` } as React.CSSProperties}>
 		<button
 			type="button"
 			className="desktop-companion-surface"
@@ -375,7 +428,7 @@ export function DesktopCompanionSurface({
 					event.preventDefault();
 					return;
 				}
-				if (visible) toggle();
+				if (visible) { if (active3D) setChatOpen(true); else toggle(); }
 			}}
 			onKeyDown={(event) => {
 				if (!visible || event.altKey || event.metaKey || event.ctrlKey) return;
@@ -397,7 +450,7 @@ export function DesktopCompanionSurface({
 					if (!controls.state.pinned) void controls.move(...direction).catch(() => {});
 				} else if (event.key === "Enter" || event.key === " ") {
 					event.preventDefault();
-					toggle();
+					if (active3D) setChatOpen(true); else toggle();
 				}
 			}}
 			onContextMenu={(event) => {
@@ -406,7 +459,7 @@ export function DesktopCompanionSurface({
 			}}
 		>
 			<Capri3D
-				enabled={controls.state.enabled && !visualNotification}
+				enabled={controls.state.enabled}
 				preferred={preferred3D && !failed3D}
 				visible={visible && !inControl}
 				reduced={reduced || !controls.state.motion}
@@ -440,6 +493,19 @@ export function DesktopCompanionSurface({
 				</span>
 			) : null}
 		</button>
+		{active3D && visible && <CapriConversation
+			state={chatState} send={chatSend} open={chatOpen} close={() => setChatOpen(false)}
+			speech={speech} approval={approval} onLayout={layout} more={() => { if (cue?.kind === "question") void controls.openContext?.(); toggle(); }}
+			onGesture={name => setGesture({ name, at: Date.now() })}
+			answer={async action => {
+				if (!orchestration.current) throw new Error("Sesión no disponible");
+				// Revalidate immediately before the existing answer action; stale UI never approves a replacement.
+				const snapshot = await orchestration.current.snapshot();
+				if (action.action !== "answer" || !snapshot.approvals.some(a => a.id === action.requestId && a.paneId === action.paneId && a.sessionId === action.sessionId && a.answerable && (a.kind ?? "confirm") === "confirm" && Date.parse(a.expiresAt) > Date.now())) throw new Error("La pregunta cambió");
+				await orchestration.current.act(action);
+			}}
+		/>}
+		</div>
 	);
 }
 

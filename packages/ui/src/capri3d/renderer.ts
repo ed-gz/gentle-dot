@@ -3,8 +3,9 @@ import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import type { AssetName, AssetReader } from "./assets.ts";
 import type { ClipChoice } from "./mapping.ts";
 import { encodeAlphaMask } from "./mask.ts";
-import { renderFps } from "./choreography.ts";
-import { IdleBlink, walkPose } from "./interaction.ts";
+import { injectLegs } from "./rig.ts";
+import { createPosePlayer, clips, type ProceduralClip } from "./procedural.ts";
+import { FrameScheduler } from "./scheduler.ts";
 import { attachFace, type FaceLayer } from "./face.ts";
 
 /** WebGL stays behind this interface so the surface can be tested without a GPU. */
@@ -68,14 +69,25 @@ export const createRenderer: RendererFactory = async options => {
  const cache = new Map<AssetName, GLTF>();
  let face: FaceLayer | undefined;
  let disposed = false, visible = false, reduced = false, generation = 0;
- let timer: ReturnType<typeof setTimeout> | undefined;
+ let battery = false;
+ const players = new WeakMap<THREE.Object3D, ReturnType<typeof createPosePlayer>>();
+ let player: ReturnType<typeof createPosePlayer> | undefined;
  let current: GLTF | undefined, currentName: AssetName | undefined;
  let mixer: THREE.AnimationMixer | undefined, action: THREE.AnimationAction | undefined;
  let choice: ClipChoice | undefined;
- let last = 0, lastMask = -Infinity, elapsed = 0, bodyHeight = 1;
+ let lastMask = -Infinity, elapsed = 0;
+ let procedural: ProceduralClip | undefined;
+ let phase = 0;
+ let following: ProceduralClip | undefined;
+ const framing = new WeakMap<THREE.Object3D, THREE.Box3>();
+ const batteryApi = navigator as Navigator & { getBattery?: () => Promise<EventTarget & { charging: boolean }> };
+ let batteryState: (EventTarget & { charging: boolean }) | undefined;
+ const batteryChanged = () => { battery = batteryState?.charging === false; resume(); };
+ void batteryApi.getBattery?.().then(state => { if (disposed) return; batteryState = state; state.addEventListener("chargingchange", batteryChanged); batteryChanged(); }).catch(() => {});
  const home = new THREE.Vector3();
  let queue = Promise.resolve();
- const stop = () => { clearTimeout(timer); timer = undefined; };
+ const scheduler = new FrameScheduler(delta => tick(delta));
+ const stop = () => scheduler.dispose();
  const frame = (forceMask = false, silhouette = true) => {
   if (disposed || !visible || !current) return;
   renderer.render(scene, camera);
@@ -90,36 +102,23 @@ export const createRenderer: RendererFactory = async options => {
    lastMask = performance.now();
   }
  };
- const blink = new IdleBlink(closed => {
-  if (disposed || currentName !== "roja.glb") return;
-  face?.update(0, false, closed);
-  if (!visible || reduced) return;
-  // Eyelids do not change the silhouette: one render, no GPU readback/IPC.
-  try { frame(false, false); } catch { options.failure(); }
- });
- const idleBlink = () => blink.enable(!disposed && visible && !reduced && currentName === "roja.glb" && choice?.clip === "Flotar_en_reposo" && !choice?.motion);
- const running = () => renderFps({ visible, reduced, animating: Boolean(
-  (choice?.motion && elapsed * 1000 < (choice.duration ?? 0)) ||
-  (action?.isRunning() && choice?.clip !== "Flotar_en_reposo")
- ) }) > 0;
- const tick = () => {
-  timer = undefined;
-  if (!running() || disposed) return;
-  const now = performance.now();
-  const delta = Math.min((now - last) / 1000, 0.1);
-  last = now;
+ const running = () => visible && !reduced && !disposed;
+ const tick = (delta: number) => {
+  if (!running()) return;
   elapsed += delta;
-  if (choice?.motion !== "walk") mixer?.update(delta);
-  if (currentName === "roja.glb") face?.update(elapsed, choice?.clip === "Hablar");
+  if (procedural) {
+   phase += delta;
+   if (following && phase >= clips[procedural].duration) {
+    procedural = following; following = undefined; phase = 0; player?.play(procedural);
+   }
+   player?.update(delta);
+  } else mixer?.update(delta);
+  if (currentName === "roja.glb") face?.update(elapsed, procedural === "hablar" || choice?.clip === "Hablar", procedural === "dormir" ? true : undefined);
   if (current && choice?.motion) {
    const t = elapsed * 1000 / (choice.duration ?? 1);
    if (choice.motion === "walk") {
-    // roja has head/arm bones only (no hip/leg joints). Step the whole body,
-    // not its floating clip: two planted beats per stride plus a travel lean.
-    const gait = walkPose(elapsed, t < 1, choice.direction ?? 1);
-    current.scene.position.copy(home); current.scene.position.y += gait.bob * bodyHeight;
-    current.scene.rotation.y = gait.facing;
-    current.scene.rotation.z = gait.lean;
+    current.scene.rotation.y = t < 1 ? (choice.direction ?? 1) * 0.45 : 0;
+    if (t >= 1 && procedural === "caminar") { procedural = "quieta"; player?.play("quieta"); }
    } else if (choice.motion === "land") {
     const squash = Math.max(0, 1 - t) * Math.sin(Math.min(t, 1) * Math.PI);
     current.scene.scale.y = 1 - squash * 0.12;
@@ -131,21 +130,18 @@ export const createRenderer: RendererFactory = async options => {
     options.canvas.style.clipPath = t < 1 ? `inset(${Math.floor(t * 17) % 3}% 0)` : "";
    }
   }
-  if (choice?.end !== undefined && elapsed + (choice.start ?? 0) >= choice.end) {
+  if (!procedural && choice?.end !== undefined && elapsed + (choice.start ?? 0) >= choice.end) {
    // Wave ends before teleport tracks. Clamp instead of playing the teleport section.
    mixer?.setTime(choice.end);
    if (action) action.paused = true;
   }
   try { frame(!running()); } catch { stop(); options.failure(); return; }
-  if (running()) timer = setTimeout(tick, 1000 / 30);
  };
  const resume = () => {
   stop();
-  idleBlink();
   if (!visible || disposed) return;
   try { frame(true); } catch { options.failure(); return; }
-  last = performance.now();
-  if (running()) timer = setTimeout(tick, 1000 / 30);
+  scheduler.set({ visible, reduced, battery });
  };
  const parse = async (bytes: ArrayBuffer) => {
   embeddedOnly(bytes);
@@ -169,7 +165,7 @@ export const createRenderer: RendererFactory = async options => {
   if (disposed) return;
   disposed = true;
   generation++;
-  blink.enable(false);
+  batteryState?.removeEventListener("chargingchange", batteryChanged);
   stop();
   options.canvas.removeEventListener("webglcontextlost", lost);
   mixer?.stopAllAction();
@@ -181,6 +177,8 @@ export const createRenderer: RendererFactory = async options => {
  };
  try {
   const base = await parse(options.base);
+  injectLegs(base.scene);
+  players.set(base.scene, createPosePlayer(base.scene));
   cache.set("roja.glb", base);
   face = attachFace(base.scene);
  }
@@ -200,7 +198,6 @@ export const createRenderer: RendererFactory = async options => {
     }
     // Two models total: base fallback plus the visible alternate.
     cache.delete(name); cache.set(name, gltf);
-    blink.enable(false);
     if (current) { current.scene.position.copy(home); scene.remove(current.scene); }
     mixer?.stopAllAction();
     if (current) mixer?.uncacheRoot(current.scene);
@@ -221,7 +218,18 @@ export const createRenderer: RendererFactory = async options => {
     scene.add(gltf.scene);
     mixer = new THREE.AnimationMixer(gltf.scene);
     elapsed = 0;
-    const clip = next.clip ? gltf.animations.find(clip => clip.name === next.clip) : undefined;
+    const previousProcedural = procedural;
+    player = players.get(gltf.scene);
+    const aliases: Record<string, ProceduralClip> = { Flotar_en_reposo: "quieta", Pensar: "pensar", Hablar: "hablar", Reir: "celebrar" };
+    procedural = name === "roja.glb" ? next.procedural ?? (next.motion === "walk" ? "caminar" : next.motion === "fall" ? "colgando" : aliases[next.clip ?? ""]) : undefined;
+    following = undefined; phase = 0;
+    if (procedural === "sentada" && previousProcedural !== "sentada") { procedural = "sentarse"; following = "sentada"; }
+    else if (procedural === "colgada" && previousProcedural !== "colgada") { procedural = "colgarse"; following = "colgada"; }
+    else if (previousProcedural === "sentada" && procedural === "quieta") { procedural = "pararse"; following = "quieta"; }
+    else if (procedural === "sorpresa") following = "triste";
+    if (procedural && !following && !("loop" in clips[procedural])) following = "quieta";
+    if (procedural && player) { player.play(procedural); if (reduced) player.update(0.3); }
+    const clip = !procedural ? next.clip ? gltf.animations.find(clip => clip.name === next.clip) : next.once ? gltf.animations[0] : undefined : undefined;
     // Alternate models are authored poses; don't animate an arbitrary clip.
     action = clip ? mixer.clipAction(clip) : undefined;
     if (action) {
@@ -231,11 +239,14 @@ export const createRenderer: RendererFactory = async options => {
      if (next.start) mixer.setTime(next.start);
     }
     gltf.scene.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(gltf.scene);
+    // Stable bind-pose framing: changing a clip must not zoom/pan around its previous pose.
+    const box = framing.get(gltf.scene) ?? new THREE.Box3().setFromObject(gltf.scene);
+    framing.set(gltf.scene, box);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
-    bodyHeight = size.y;
-    const halfHeight = Math.max(size.y * 0.62, size.x * 0.62 * 340 / 240, 0.1);
+
+    const extraRoom = procedural === "voltereta" ? 1.65 : procedural === "salto" ? 1.25 : 1;
+    const halfHeight = Math.max(size.y * 0.62, size.x * 0.62 * 340 / 240, 0.1) * extraRoom;
     camera.left = -halfHeight * 240 / 340; camera.right = -camera.left;
     camera.top = halfHeight; camera.bottom = -halfHeight;
     camera.position.set(center.x, center.y, center.z + Math.max(size.z, halfHeight) * 4);

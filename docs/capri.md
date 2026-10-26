@@ -68,44 +68,53 @@ Los modelos **no se distribuyen con el repositorio ni con la aplicación**. Esta
 3. El instalador comprueba y copia únicamente los diez nombres permitidos a `~/.local/share/dev.gentleman.gentle-dot/capri-3d/`. Allí escribe `manifest.json` con nombre, tamaño en bytes y SHA-256 de cada archivo. No ejecuta código de la aplicación de referencia.
 4. Activa Capri sobre el escritorio. Si no elegiste una forma antes y están los diez archivos, se selecciona 3D. Con **clic derecho → Forma: 2D / Forma: 3D** puedes cambiarla; la elección se guarda en las preferencias nativas de este equipo. Tras instalar modelos con la aplicación abierta, desactiva y vuelve a activar Capri para detectar la instalación, sin reiniciar el servicio.
 
-El lector nativo acepta sólo los diez nombres de archivo, nunca rutas. Carga primero `roja.glb`; las poses alternativas se solicitan al necesitarlas y conserva como máximo dos modelos en total: el modelo base para recuperación y la pose alternativa visible. Si falta una pose alternativa, usa **Pensar** del modelo base. Un archivo base ausente o inválido vuelve a 2D. El gesto de archivar avisos mantiene temporalmente el sprite 2D y su recibo de entrega existente.
+El lector nativo acepta sólo los diez nombres de archivo, nunca rutas. Carga primero `roja.glb`; las poses alternativas se solicitan al necesitarlas y conserva como máximo dos modelos en total: el modelo base para recuperación y la pose alternativa visible. Si falta una pose alternativa, usa **Pensar** del modelo base. Un archivo base ausente o inválido vuelve a 2D. Los avisos también permanecen en 3D; el recibo existente se confirma tras dos cuadros visibles, sin reactivar el globo nativo 2D.
 
 | Causa determinista | Modelo / clip |
 |---|---|
-| Reposo | `roja.glb` / `Flotar_en_reposo`, cuadro estático |
-| Trabajo, pensamiento y lectura; cualquier tipo de herramienta | `roja.glb` / `Pensar` |
-| Respuesta hablada o envío confirmado | `roja.glb` / `Hablar` |
-| Terminado | `roja.glb` / `Reir`, una vez |
-| Pregunta / atención | `roja.glb` / primeros 3 segundos de `Saludar_y_teletransportarse`, sin teletransporte |
+| Reposo | `quieta`: respiración, flotación, balanceo, parpadeo y mirada suave |
+| Trabajo / pensamiento / lectura | `reparar` para edición/ejecución; `pensar` para los demás casos |
+| Respuesta o envío confirmado | `hablar`, con boca animada durante el texto |
+| Terminado | `celebrar`, una vez |
+| Pregunta / atención | Primeros 3 segundos de `Saludar_y_teletransportarse`, sin teletransporte |
 | Escritura del usuario | `roja_inclinada.glb`, pose fija |
-| Error | `roja_recostada_cerrados.glb`, pose fija; `Pensar` si no carga |
+| Error | `sorpresa` → `triste` |
 
 La ventana 3D mide aproximadamente **240 × 340 píxeles lógicos**; 2D conserva sus 156 × 156. El lienzo es transparente, con cámara ortográfica y texturas sin suavizado. Un glitch breve señala cambios entre archivos, sin mover la ventana. La silueta envía una máscara de 24 × 34 celdas a GTK: el espacio transparente deja pasar clics. El personaje conserva clic para conversar, arrastre, flechas, pin, zonas permitidas y señales nativas; no añade paseos aleatorios ni temporizadores de desplazamiento.
 
-El render se limita a 30 fps mientras reproduce un gesto. El reposo y las poses fijas no mantienen un bucle; al ocultarse o con movimiento reducido se detiene la animación. La máscara se actualiza al cambiar la pose, al volver a mostrarse y como máximo cada 500 ms durante una animación. WebGL en WebKitGTK/Wayland, el encuadre de cada modelo y el coste de GPU requieren verificación en el equipo real; las pruebas sin GPU cubren el contrato del renderer, las decisiones, la recuperación 2D y la región de entrada.
+El render visible, incluido el reposo, se limita a 30 fps (24 con batería cuando `navigator.getBattery` está disponible). Se detiene al ocultarse, durante una captura/control del equipo y con movimiento reducido. No mantiene el antiguo reposo de cero cuadros. La máscara se actualiza al cambiar la pose, al volver a mostrarse y como máximo cada 500 ms durante una animación. WebGL en WebKitGTK/Wayland, el encuadre de cada modelo y el coste de GPU requieren verificación en el equipo real; las pruebas sin GPU cubren el contrato del renderer, las decisiones, la recuperación 2D y la región de entrada.
 
-### Movimiento y respuesta de escritorio (T23–T24)
+### Movimiento y respuesta de escritorio (T27, S27 y S22)
 
 Cada viaje sigue un destino aceptado por las reglas existentes, nunca un paseo aleatorio. El pin y las zonas permitidas siguen teniendo prioridad. No se ha reiniciado el servicio para validar estos cambios en vivo.
 
 | Motivo | Coreografía implementada |
 |---|---|
-| Destino a ≤600 px, mismo monitor | Interpolación nativa; `roja.glb` orientada al destino, con pasos verticales y ligera inclinación sólo durante el viaje. El esqueleto local tiene cabeza/brazos pero no cadera/piernas: no se simulan articulaciones inexistentes ni se reproduce la flotación durante el paso |
+| Destino a ≤600 px, mismo monitor | Interpolación nativa y `caminar` de 1.6 s, con muslos/rodillas articulados y orientación al destino; al llegar vuelve al reposo |
 | Destino lejano o en otro monitor | Sección 2.85–4.65 s de `Saludar_y_teletransportarse`; desvanecimiento/glitch, cambio de posición en el punto medio, reaparición |
 | Señal explícita de soltar después de arrastrar, posición ya asentada | Caída acelerada al suelo del área permitida o al borde superior de la terminal enfocada si cabe; reacción de llegada. Asentar o retirar el cursor, por sí solos, nunca inicia una caída |
-| Reposo sin señales durante 2 min / 10 min | Sentada / recostada con ojos cerrados, con un único checkpoint pendiente |
+| Reposo sin señales | A los 60 s `estirarse`, 90 s `aburrida`, 2 min `sentarse` → `sentada`, 10 min recostada con ojos cerrados. Un único checkpoint pendiente; nunca elige destinos |
 | Bloqueo o inactividad real del sistema | Rust consulta `loginctl show-session $XDG_SESSION_ID -p LockedHint -p IdleHint` cada 30 s, sólo mientras la superficie 3D está activa. `yes` en cualquiera duerme; ambos `no` despiertan y saludan. Una consulta fallida no inventa un desbloqueo. Sin `XDG_SESSION_ID` usa la sesión `self` de logind |
 | Señal después de dormir / desbloqueo | Recostada con ojos abiertos, saludo y vuelta al estado actual; las señales de sesión no despiertan durante un bloqueo vigente |
-| Borde del editor verificado (`perch`) | Pose sentada; sin inventar geometría de otras ventanas |
-| Respuesta nueva de Dot, aviso hablado o envío con resumen | `Hablar`, con apertura de boca por textura durante el texto (2.2 s + 55 ms/carácter, máximo 12 s, limitado por la caducidad del aviso). Las respuestas usan un extracto de hasta 180 caracteres y el globo existente sólo si el panel está cerrado. La suscripción de la ventana acompañante recibe únicamente eventos: no solicita historial ni usa borradores, deltas, respuestas intermedias o detenidas; deduplica respuestas completas por ID |
-| Reposo visible, sin movimiento reducido | Parpadeo cada 4.2 s: un dibujo para cerrar ojos y otro 140 ms después para abrirlos; no hay bucle de cuadros en reposo |
-| Terminado / atención | `Reir` una vez / saludo limitado antes de la sección de teletransporte |
+| Borde del editor verificado (`perch`) | `colgarse` → `colgada`; las rodillas se alinean con el borde usando la proyección del modelo local (y≈74 en el lienzo de 240×340). Sin geometría verificada no inventa un borde |
+| Respuesta nueva de Dot, aviso o envío con resumen | `hablar` y bocadillo dentro de la misma ventana; duración `min(9000, 2200 + texto.length * 55)` ms, limitada además por la caducidad del aviso. Extracto de hasta 160 caracteres y **Ver más** abre el panel. No habla por borradores, deltas, respuestas intermedias o detenidas |
+| Reposo visible, sin movimiento reducido | Bucle continuo acotado; parpadeo cada 4.2 s y mirada determinista, sin sondeo global del cursor |
+| Arrastre / soltar | `colgando` hasta la señal nativa de soltar; caída y compresión al aterrizar |
+| Gesto pedido por el usuario | Selector **Gestos…** en la entrada: saludo, baile, salto, voltereta, estirarse, guiño, abrazo y transformación. Los tres últimos conservan sus GLB propios |
 
-Un solo temporizador de cuadros del renderer mantiene 30 fps durante gestos o viajes; las poses estáticas sólo conservan el checkpoint de descanso y, en el reposo base visible, el parpadeo puntual. No hay reloj de cuadros oculto, con movimiento reducido ni durante control del equipo. El temporizador nativo de 16 ms existe sólo mientras hay una trayectoria y vuelve al mantenimiento previo al llegar; cada mutación conserva la validación de identidad de ventana. Las lecturas de máscara se mantienen acotadas y se fuerzan al cambiar de pose.
+`rig.ts` inyecta `Muslo_izquierdo`, `Pierna_izquierda`, `Muslo_derecho` y `Pierna_derecha` bajo `Raiz`, calcula sus inversas y redistribuye sólo los vértices de las piernas que dependían de la raíz. Conserva la pose de enlace y mezcla pesos alrededor de cadera/rodilla. Una geometría incompleta se rechaza sin instalar transformaciones inválidas. `procedural.ts` muestrea 22 clips y mezcla rotaciones con slerp durante 300 ms; no ejecuta ni importa código de la referencia.
 
-El arrastre 3D mantiene la pose de brazos aunque el compositor termine la petición `start_dragging` o quite la captura del puntero. Un observador GDK nativo consulta el botón cada 100 ms sólo durante ese arrastre explícito y entrega la transición de soltar a la UI; no deduce una caída por dejar de mover la ventana. La señal nativa y `pointerup` se deduplican para iniciar una sola caída. Cambiar a 2D, desactivar Capri o alcanzar el límite defensivo de cinco minutos cancela el observador.
+Un solo temporizador de cuadros mantiene el límite visible; no hay reloj oculto, con movimiento reducido ni durante capturas. El temporizador nativo de 16 ms existe sólo mientras hay una trayectoria. La máscara se lee como máximo cada 500 ms y se transforma conservadoramente al ampliar la ventana para incluir los controles.
 
-**Verificación pendiente de S22:** no se ha reiniciado el servicio. Hace falta probar visualmente pasos, textura facial, sincronización del teletransporte y caída después del arrastre GTK/Wayland real. Los tests sin GPU no certifican el aspecto ni la entrega de eventos del compositor. Logind depende de que el bloqueador/gestor de inactividad publique `LockedHint`/`IdleHint`; en una sesión que no los actualice se conserva el descanso por tiempo sin inventar señales. La mirada al puntero (opcional) sigue sin implementarse: no hay sondeo global permanente del cursor. La suscripción de respuestas agrega una conexión WebSocket de sólo eventos mientras el acompañante está habilitado, sin consultas de historial; compartir el flujo existente requeriría ampliar el alcance a `useDot.ts`. Los avisos visuales de archivo conservan temporalmente 2D y sus recibos existentes.
+**Conversar sin abrir el panel:** haz clic en Capri o pulsa Enter/Espacio con el personaje enfocado. Aparece **Escribile o hablale…**, micrófono, enviar y cerrar; Escape cierra la entrada. El micrófono reutiliza `useVoice` y deja un borrador revisable. El envío usa el mensaje `send` existente sobre la misma suscripción autenticada del acompañante, sin abrir otra conexión. Un fallo conserva el borrador y explica el problema.
+
+El bocadillo usa fondo `#fbfbff`, borde de 2 px `#2b2b48`, radio de 14 px, cola y transición de escala/opacidad. La ventana crece temporalmente de 240×340 a 320×492 (bocadillo), 320×428 (entrada) o 320×580 (ambos); al cerrar vuelve a su tamaño normal. El lienzo conserva su tamaño y se compensa la posición, dentro de las zonas permitidas. Los controles visibles forman parte de la máscara de entrada; el resto sigue dejando pasar clics. El globo nativo pequeño sólo se usa en 2D.
+
+Las preguntas de sesión booleanas y respondibles ofrecen **Sí / No** dentro del bocadillo. Se conserva la identidad exacta de panel, sesión y solicitud; se consulta de nuevo el estado inmediatamente antes de enviar la acción existente `answer`. Una pregunta caducada, no respondible o de selección múltiple no se convierte en permiso booleano. Las preguntas complejas continúan en el panel/terminal.
+
+El arrastre 3D mantiene `colgando` aunque el compositor termine la petición `start_dragging` o quite la captura del puntero. Un observador GDK nativo consulta el botón cada 100 ms sólo durante ese arrastre explícito y entrega la transición de soltar a la UI; no deduce una caída por dejar de mover la ventana. La señal nativa y `pointerup` se deduplican para iniciar una sola caída. Cambiar a 2D, desactivar Capri o alcanzar el límite defensivo de cinco minutos cancela el observador.
+
+**Verificación:** `.cache/ux-overhaul/t27-clips.png` muestra seis clips del modelo instalado, renderizados con Chromium/SwiftShader y el rig/poses TypeScript de producción. No se ha reiniciado el servicio: siguen pendientes el ajuste del borde real, expansión/foco de la entrada, máscara GTK/Wayland, teletransporte y caída en el escritorio en vivo. Las pruebas sin GPU no certifican la entrega de eventos del compositor. Logind depende de que el bloqueador publique `LockedHint`/`IdleHint`; si no lo hace se conserva el descanso por tiempo sin inventar señales. La mirada al puntero sigue fuera de alcance: la mirada suave del reposo no sondea el escritorio.
 
 ### Atlas 3D para un Android personal
 

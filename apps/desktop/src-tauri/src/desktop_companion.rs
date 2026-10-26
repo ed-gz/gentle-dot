@@ -982,6 +982,13 @@ fn context_destination(
             && x + dot.width <= zone.x + zone.width
             && y + dot.height <= zone.y + zone.height
     };
+    if placement == Some(Placement::Perch) && [240, 320].contains(&dot.width) && [340, 428, 492, 580].contains(&dot.height) {
+        // Personal roja knee hook projects to y=74 in the stable 240×340 camera (headless preview).
+        let top = if dot.height == 492 || dot.height == 580 { 152 } else { 0 };
+        let x = (target.x + target.width - 40. - dot.width as f64 / 2.).round() as i32;
+        let y = (target.y - (top + 74) as f64).round() as i32;
+        return fits(x, y).then_some((x, y));
+    }
     if placement == Some(Placement::Perch) && dot.width == SIZE && dot.height == SIZE {
         // The SVG uses xMidYMid meet inside 140x140 with 8px padding.
         // Atlas canvas 272x321; authored seat at (140,238), independent of animation frames.
@@ -1135,6 +1142,7 @@ impl Controller {
                     && i.visible
                     && !i.manual_hidden
                     && i.context.bubble().is_some()
+                    && !crate::capri3d::active(&self.app)
                     && !self.control.active(),
                 i.prefs.clone(),
                 i.monitors.clone(),
@@ -2148,7 +2156,7 @@ pub(crate) fn preferred_3d(app: &AppHandle) -> bool {
     app.state::<Arc<Controller>>().inner.lock().unwrap().prefs.form_3d
         .unwrap_or_else(crate::capri3d::installed)
 }
-pub(crate) fn reconcile_3d_bounds(app: &AppHandle) {
+pub(crate) fn reconcile_3d_bounds(app: &AppHandle, shift: (i32, i32)) {
     let c = app.state::<Arc<Controller>>().inner().clone();
     std::thread::spawn(move || {
         let _serial = c.operations.lock().unwrap();
@@ -2160,6 +2168,14 @@ pub(crate) fn reconcile_3d_bounds(app: &AppHandle) {
             for _ in 0..20 {
                 if resolve(crate::platform::DOT_TITLE).is_ok_and(|dot| (dot.width, dot.height) == expected) { break; }
                 std::thread::sleep(Duration::from_millis(25));
+            }
+            if shift != (0, 0) {
+                if let Ok(dot) = resolve(crate::platform::DOT_TITLE) {
+                    let (x, y) = (dot.x + shift.0, dot.y + shift.1);
+                    c.cancel_travel();
+                    c.programmatic_position(x, y);
+                    let _ = dispatch(crate::platform::DOT_TITLE, &dot.address, "move", &format!("x={x},y={y},relative=false"));
+                }
             }
             if let Err(error) = c.apply_bounds(&prefs, false) {
                 crate::shell::companion_error(&c.app, &error);
@@ -2363,6 +2379,7 @@ pub fn prepare_control(app: &AppHandle, operation: u64) -> Result<(), String> {
     if let Some(c) = app.try_state::<Arc<Controller>>() {
         let _serial = c.operations.lock().unwrap();
         c.control.begin(operation);
+        let _ = app.emit_to("dot", "dot://capri3d-capture", true);
         {
             let mut i = c.inner.lock().unwrap();
             i.travel.cancel();
@@ -2379,6 +2396,7 @@ pub fn prepare_control(app: &AppHandle, operation: u64) -> Result<(), String> {
                     .map(|b| format!("hyprland:{}", b.address));
                 if let Err(error) = c.main(|app| paint_bubble(&app, false)) {
                     c.control.end(operation);
+                    let _ = app.emit_to("dot", "dot://capri3d-capture", false);
                     return Err(error);
                 }
                 crate::computer::LinuxDesktop::set_hidden_companion_bubble(identity);
@@ -2394,6 +2412,7 @@ pub fn restore_control(app: &AppHandle, operation: u64) {
         if !c.control.end(operation) {
             return;
         }
+        let _ = app.emit_to("dot", "dot://capri3d-capture", false);
         #[cfg(target_os = "linux")]
         crate::computer::LinuxDesktop::set_hidden_companion_bubble(None);
         let worker = c.inner().clone();
@@ -2501,6 +2520,11 @@ fn paint_bubble(app: &AppHandle, visible: bool) -> Result<(), String> {
 pub(crate) fn paint_pair(app: &AppHandle, visible: bool) -> Result<(), String> {
     paint_window(app, "dot", visible, SIZE)?;
     paint_window(app, LAUNCHER, !visible, LAUNCHER_SIZE)
+}
+/// Hide the redundant native speech window on a 3D form change; keep 2D delivery intact.
+pub(crate) fn refresh_3d_bubble(app: &AppHandle) {
+    let controller = app.state::<Arc<Controller>>().inner().clone();
+    std::thread::spawn(move || { let _ = controller.sync_bubble(); });
 }
 /// Mask publications only update input; they must never reveal a window hidden for a capture.
 pub(crate) fn refresh_3d_input(app: &AppHandle) -> Result<(), String> {
@@ -3174,6 +3198,10 @@ mod tests {
         let perch =
             context_destination(&prefs, &monitors, &dot, &target, Some(Placement::Perch)).unwrap();
         assert_eq!(perch, (-1720, 188));
+        let tall = Client { width: 240, height: 340, ..dot.clone() };
+        assert_eq!(context_destination(&prefs, &monitors, &tall, &target, Some(Placement::Perch)), Some((-1760, 226)));
+        let expanded = Client { width: 320, height: 580, ..dot.clone() };
+        assert_eq!(context_destination(&prefs, &monitors, &expanded, &target, Some(Placement::Perch)), Some((-1800, 74)));
         let aside =
             context_destination(&prefs, &monitors, &dot, &target, Some(Placement::Aside)).unwrap();
         assert!(aside.0 as f64 >= target.x + target.width);

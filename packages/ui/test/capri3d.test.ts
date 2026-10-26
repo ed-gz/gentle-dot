@@ -9,7 +9,7 @@ describe("deterministic desktop 3D", () => {
   [{}, "roja.glb", "Flotar_en_reposo"],
   [{ pendingQuestion: true }, "roja.glb", "Saludar_y_teletransportarse"],
   [{ outcome: { kind: "done", at: 10 } }, "roja.glb", "Reir"],
-  [{ outcome: { kind: "error", at: 10 } }, "roja_recostada_cerrados.glb", null],
+  [{ outcome: { kind: "error", at: 10 } }, "roja.glb", null],
   [{ typingUntil: 100 }, "roja_inclinada.glb", null],
   [{ agentWorking: true }, "roja.glb", "Pensar"],
   [{ reply: { kind: "reading", at: 10 } }, "roja.glb", "Pensar"],

@@ -27,7 +27,7 @@ it("holds through compositor completion, capture loss and cancellation until nat
  fireEvent.pointerMove(button, { clientX: 40, clientY: 10 });
  await act(async () => {}); expect(drag).toHaveBeenCalledOnce();
  fireEvent.lostPointerCapture(button); fireEvent.pointerCancel(button); fireEvent(window, new Event("blur"));
- expect(observed.choice?.model).toBe("roja_brazos.glb");
+ expect(observed.choice).toMatchObject({ model: "roja.glb", procedural: "colgando" });
  act(() => observed.handlers.get("dot://capri3d-release")!({ payload: null }));
  expect(observed.choice?.model).toBe("roja.glb");
 });
