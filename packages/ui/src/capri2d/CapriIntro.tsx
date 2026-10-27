@@ -87,7 +87,6 @@ export function CapriIntro() {
    {faceSource&&<img src={faceSource} alt="" style={{width:'100%',height:'100%',objectFit:'contain'}}/>}
   </div>}
   {stage>=9&&stage<=12&&<div className="capri-intro-tag" style={{left:w*.5+size*.35,top:h*.3}}><b>hi</b><span>{'CAPRI'.slice(0,Math.min(5,Math.floor((t-2750)/95)))}</span></div>}
-  {beat==='unfold'&&<div className="capri-intro-unfold" style={{left:target.x,top:target.y,width:target.width,height:target.height,transform:`scaleY(${ease(p)})`}}>{art['capri-full.png']&&<img src={art['capri-full.png']} alt="" style={{width:'100%',height:'100%',objectFit:'contain'}}/>}</div>}
   {(beat==='impact-white'||beat==='impact-ink')&&<div className="capri-intro-flash" style={{background:beat==='impact-white'?'#fff9e5':'#08080d'}}/>}
   <small className="capri-intro-skip" style={{left:target.x,top:Math.min(h-24,target.y+target.height)}}>Clic en Capri pequeña para omitir</small>
  </div>;

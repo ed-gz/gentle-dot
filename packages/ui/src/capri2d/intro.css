@@ -1,20 +1,20 @@
 /* Spawn choreography adapted from capri-desktop (MIT); see ./LICENSE. */
 html[data-surface="capri-intro"],html[data-surface="capri-intro"] body,html[data-surface="capri-intro"] #root{margin:0;width:100%;height:100%;overflow:hidden;background:transparent!important;pointer-events:none}
-.capri-intro{position:fixed;inset:0;overflow:hidden;pointer-events:none;color:#d8ff50;font-family:monospace}
+.capri-intro{position:fixed;inset:0;overflow:hidden;pointer-events:none;color:#ff315d;font-family:monospace}
 .capri-intro *{pointer-events:none!important;box-sizing:border-box}
 .capri-intro-limbs{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}
 .capri-intro-edge{fill:none;stroke:#ff315d;stroke-width:6;filter:drop-shadow(0 0 6px #ff315d);animation:capri-edge-crackle 240ms steps(2,end) infinite}
 @keyframes capri-edge-crackle{from{opacity:.65;stroke-dasharray:70 4}to{opacity:1;stroke-dasharray:48 2}}
-.capri-intro-arm{fill:none;stroke:#d8ff50;stroke-width:28;stroke-linecap:round;filter:drop-shadow(4px 5px 0 #6931b8)}
-.capri-intro-hand{fill:#d8ff50;stroke:#26162e;stroke-width:3}
+.capri-intro-arm{fill:none;stroke:#ff315d;stroke-width:28;stroke-linecap:round;filter:drop-shadow(4px 5px 0 #6931b8)}
+.capri-intro-hand{fill:#ff315d;stroke:#26162e;stroke-width:3}
 .capri-intro-head{position:absolute;transform-origin:50% 80%;filter:drop-shadow(3px 5px 0 #af216c)}
 .capri-intro-head .capri-sprite{width:100%;height:100%}
 .capri-intro-split{filter:drop-shadow(-9px 0 0 #f31558) drop-shadow(9px 0 0 #23efb3)}
 .capri-intro-tag{position:absolute;transform:rotate(-8deg);display:flex;flex-direction:column;gap:8px}
-.capri-intro-tag b{background:#d8ff50;color:#15151d;font-size:clamp(32px,5vw,72px);padding:0 15px;clip-path:polygon(4% 0,100% 8%,96% 89%,0 100%)}
+.capri-intro-tag b{background:#ff315d;color:#15151d;font-size:clamp(32px,5vw,72px);padding:0 15px;clip-path:polygon(4% 0,100% 8%,96% 89%,0 100%)}
 .capri-intro-tag span{font-size:18px;letter-spacing:4px;text-shadow:2px 2px #1a1321}
 .capri-intro-mouth{position:absolute;left:46%;top:68%;width:10%;height:8%;background:#241122;border:2px solid #f16ca1;border-radius:50%}
-.capri-intro-shard{position:absolute;width:22px;height:50px;background:#d8ff50;clip-path:polygon(0 0,100% 30%,20% 100%)}
+.capri-intro-shard{position:absolute;width:22px;height:50px;background:#ff315d;clip-path:polygon(0 0,100% 30%,20% 100%)}
 .capri-intro-unfold{position:absolute;transform-origin:50% 16%}
 .capri-intro-unfold>.capri-sprite{display:block;width:100%;height:100%}
 .capri-intro-flash{position:absolute;inset:0;opacity:.48}

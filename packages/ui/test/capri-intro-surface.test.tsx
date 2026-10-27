@@ -31,7 +31,7 @@ describe('temporary intro surface',()=>{
   act(()=>vi.advanceTimersByTime(3300));expect(container.querySelector('.capri-intro-tag span')).toHaveTextContent('CAPRI');
   act(()=>vi.advanceTimersByTime(450));expect(container.querySelector('[data-beat="wave"]')).not.toBeNull();
   act(()=>vi.advanceTimersByTime(1500));expect(container.querySelectorAll('.capri-intro-shard')).toHaveLength(24);
-  act(()=>vi.advanceTimersByTime(2100));expect(container.querySelector('.capri-intro-unfold')).toHaveStyle({left:'900px',top:'500px',width:'144px',height:'204px'});
+  act(()=>vi.advanceTimersByTime(2100));expect(container.querySelector('.capri-intro-unfold')).toBeNull();
   act(()=>vi.advanceTimersByTime(800));expect(container).toBeEmptyDOMElement();
  });
  it('reduced motion and document occlusion never leave a flashing surface',()=>{
