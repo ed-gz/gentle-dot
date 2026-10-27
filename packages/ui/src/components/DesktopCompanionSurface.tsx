@@ -93,7 +93,6 @@ export function DesktopCompanionSurface({
 			const wasOpen = current.chatOpen;
 			current.chatOpen = !wasOpen;
 			setChatOpen(!wasOpen);
-			if (wasOpen) current.toggle();
 		}).then(unlisten => { if (live) stop = unlisten; else unlisten(); }).catch(() => {});
 		return () => { live = false; stop?.(); };
 	}, [controls.state.enabled]);
