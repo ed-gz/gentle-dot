@@ -605,7 +605,7 @@ pub(crate) struct MappingRule {
 }
 impl MappingRule {
     pub(crate) fn install(role: &str, nonce: &str) -> Result<Self, String> {
-        if !matches!(role, "dot" | "launcher" | "bubble" | "fixture")
+        if !matches!(role, "dot" | "launcher" | "bubble" | "fixture" | "intro")
             || nonce.is_empty()
             || !nonce.bytes().all(|c| c.is_ascii_hexdigit())
         {
@@ -1530,6 +1530,10 @@ impl Controller {
         Ok(())
     }
     fn context(&self, request: ContextRequest) -> Result<State, String> {
+        if matches!(request.kind,Kind::Question|Kind::Attention) {
+            self.app.state::<IntroSession>().lifecycle.lock().unwrap().close();
+            self.main(|app| { crate::shell::close_intro(&app); Ok(()) })?;
+        }
         request.validate()?;
         let _serial = self.operations.lock().unwrap();
         {
@@ -2186,6 +2190,14 @@ impl Controller {
             changed = self.topology_dirty.swap(false, Ordering::SeqCst);
         }
         let topology_changed = changed;
+        if topology_changed {
+            let session = self.app.state::<IntroSession>();
+            let active = { let lifecycle = session.lifecycle.lock().unwrap(); lifecycle.pending || lifecycle.shown.is_some() };
+            if active && intro_area(&query("monitors")?) != *session.frame.lock().unwrap() {
+                session.lifecycle.lock().unwrap().close();
+                self.main(|app| { crate::shell::close_intro(&app); Ok(()) })?;
+            }
+        }
         if topology_due && self.state().enabled && self.state().render_mode == RenderMode::TwoD {
             // Publish no window titles/content. Re-query clients so minimization/workspace changes expire the region.
             let feed = (|| -> Result<Value, String> {
@@ -2325,6 +2337,184 @@ pub fn init(app: &AppHandle, data: &std::path::Path) {
         context_ready: Condvar::new(),
     }));
     app.manage(StartEnabled(prefs.enabled));
+    let receipt = data.join("capri-intro-service");
+    let mut lifecycle = IntroLifecycle::default();
+    if std::fs::symlink_metadata(&receipt).is_ok_and(|m| m.is_file() && m.len() <= 256) {
+        if let Ok(service) = std::fs::read_to_string(&receipt) {
+            lifecycle.consumed.insert(service);
+        }
+    }
+    app.manage(IntroSession { clock: Instant::now(), lifecycle: Mutex::new(lifecycle), receipt, frame:Mutex::new(None) });
+}
+/// Service-owned latch: a WebView reload cannot reset this state. Blocked starts are consumed,
+/// never queued to interrupt somebody later. A missing heartbeat closes a crashed/reloaded UI.
+#[derive(Default)]
+struct IntroLifecycle {
+    consumed: std::collections::HashSet<String>,
+    pending: bool,
+    shown: Option<u64>,
+    heartbeat: u64,
+}
+#[derive(Debug, PartialEq)]
+enum IntroAction { None, Create, Show, Close }
+impl IntroLifecycle {
+    fn close(&mut self) -> IntroAction {
+        let active = self.pending || self.shown.is_some();
+        self.pending = false; self.shown = None;
+        if active { IntroAction::Close } else { IntroAction::None }
+    }
+    fn update(&mut self, service: &str, now: u64, connected: bool, blocked: bool, reduced: bool) -> IntroAction {
+        self.heartbeat = now;
+        if self.pending || self.shown.is_some() {
+            if service.is_empty() || !self.consumed.contains(service) || !connected || blocked || reduced || self.shown.is_some_and(|at| now.saturating_sub(at) >= 8000) {
+                return self.close();
+            }
+            return IntroAction::None;
+        }
+        if service.is_empty() || !self.consumed.insert(service.to_owned()) || !connected || blocked || reduced {
+            return IntroAction::None;
+        }
+        self.pending = true; IntroAction::Create
+    }
+    fn ready(&mut self, now: u64) -> IntroAction {
+        if !self.pending { return IntroAction::None; }
+        self.pending = false; self.shown = Some(now); IntroAction::Show
+    }
+    fn watchdog(&mut self, now: u64) -> IntroAction {
+        if now.saturating_sub(self.heartbeat) > 1200 || self.shown.is_some_and(|at| now.saturating_sub(at) >= 8000) { self.close() }
+        else { IntroAction::None }
+    }
+}
+fn intro_area(values: &Value) -> Option<Area> {
+    let m = values.as_array()?.iter().find(|m| m["name"] == "eDP-1" && m["disabled"] != true)?;
+    let mut values = values.clone();
+    let id = m["id"].as_i64()?;
+    for m in values.as_array_mut()? { m["reserved"] = serde_json::json!([0,0,0,0]); }
+    let rect = area(&values,id).ok()?;
+    (rect.width > 0 && rect.height > 0).then_some(rect)
+}
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase", deny_unknown_fields)]
+pub struct IntroHeartbeat { connected: bool, blocked: bool, reduced: bool, #[serde(default)] skip: bool }
+struct IntroSession { clock: Instant, lifecycle: Mutex<IntroLifecycle>, receipt: PathBuf, frame:Mutex<Option<Area>> }
+
+/// Existing dot-only interaction permission carries a narrowly typed heartbeat, not arbitrary
+/// window operations, scripts, coordinates, or file names. The overlay itself has no IPC grants.
+fn intro_heartbeat(app: &AppHandle, pulse: IntroHeartbeat) {
+    let c = app.state::<Arc<Controller>>();
+    let session = app.state::<IntroSession>();
+    let now = session.clock.elapsed().as_millis() as u64;
+    let blocked = pulse.blocked || !enabled(app) || controlled(app) || {
+        let i = c.inner.lock().unwrap();
+        i.context.cue.as_ref().is_some_and(|cue| matches!(cue.kind,Kind::Question|Kind::Attention))
+            || i.context.notification.as_ref().is_some_and(|cue| matches!(cue.kind,Kind::Question|Kind::Attention))
+    };
+    // The process-start identity survives session /reload, unlike WebView storage. If no owned
+    // live daemon can be proved, do not guess at a service identity or show an intro.
+    let service = c.path.parent().and_then(crate::daemon::live_orphan)
+        .map(|p| format!("{}:{}",p.pid,p.started)).unwrap_or_default();
+    let action = {
+        let mut lifecycle = session.lifecycle.lock().unwrap();
+        if pulse.skip { lifecycle.close() }
+        else if !starts_enabled(app) { IntroAction::None }
+        else {
+            // Persist BEFORE creating a window: restarting just the desktop UI against the
+            // same daemon, or a crash between create/show, cannot replay the service intro.
+            let recorded = service.is_empty() || lifecycle.consumed.contains(&service)
+                || crate::config::write_private(&session.receipt,&service).is_ok();
+            lifecycle.update(&service,now,pulse.connected,blocked || !recorded,pulse.reduced)
+        }
+    };
+    match action {
+        IntroAction::Close => crate::shell::close_intro(app),
+        IntroAction::Create => {
+            let geometry = (|| -> Result<_,String> {
+                let rect = intro_area(&query("monitors")?).ok_or("eDP-1 no disponible")?;
+                let dot = resolve(crate::platform::DOT_TITLE)?;
+                if dot.x < rect.x || dot.y < rect.y || dot.x+dot.width > rect.x+rect.width || dot.y+dot.height > rect.y+rect.height {
+                    return Err("Capri no está en eDP-1".into());
+                }
+                Ok((rect,dot))
+            })();
+            let Ok((rect,dot)) = geometry else { session.lifecycle.lock().unwrap().close(); return; };
+            *session.frame.lock().unwrap() = Some(rect);
+            if crate::shell::create_intro(app,(rect.x,rect.y,rect.width,rect.height),
+                (dot.x-rect.x,dot.y-rect.y,dot.width,dot.height)).is_err() {
+                session.lifecycle.lock().unwrap().close(); crate::shell::close_intro(app); return;
+            }
+            let app = app.clone();
+            std::thread::spawn(move || {
+                // Resolve this process's new window only. It is visually empty until placement
+                // has been verified, so a compositor's initial placement can never flash HDMI.
+                let result = (|| -> Result<(),String> {
+                    let mut found = None;
+                    for _ in 0..20 {
+                        if let Ok(window) = resolve(crate::shell::INTRO_TITLE) { found = Some(window); break; }
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                    let window = found.ok_or("Intro no disponible")?;
+                    dispatch(crate::shell::INTRO_TITLE,&window.address,"float","action='on'")?;
+                    dispatch(crate::shell::INTRO_TITLE,&window.address,"resize",&format!("x={},y={},relative=false",rect.width,rect.height))?;
+                    dispatch(crate::shell::INTRO_TITLE,&window.address,"move",&format!("x={},y={},relative=false",rect.x,rect.y))?;
+                    verify_rect(crate::shell::INTRO_TITLE,&window.address,rect.x,rect.y,(rect.width,rect.height),None)?;
+                    Ok(())
+                })();
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    let session = handle.state::<IntroSession>();
+                    if result.is_ok() && session.lifecycle.lock().unwrap().ready(session.clock.elapsed().as_millis() as u64) == IntroAction::Show {
+                        crate::shell::show_intro(&handle);
+                    } else { session.lifecycle.lock().unwrap().close(); crate::shell::close_intro(&handle); }
+                });
+            });
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod intro_tests {
+    use super::*;
+    #[test]
+    fn intro_lifecycle_creates_shows_closes_and_never_replays_a_service() {
+        let mut intro = IntroLifecycle::default();
+        assert_eq!(intro.update("one", 0, true, false, false), IntroAction::Create);
+        assert_eq!(intro.ready(10), IntroAction::Show);
+        assert_eq!(intro.update("one", 8100, true, false, false), IntroAction::Close);
+        assert_eq!(intro.update("one", 9000, true, false, false), IntroAction::None);
+        assert_eq!(intro.update("two", 10000, true, false, false), IntroAction::Create);
+    }
+    #[test]
+    fn intro_fails_closed_on_questions_reduced_motion_disconnect_and_timeout() {
+        for (connected, blocked, reduced) in [(false,false,false),(true,true,false),(true,false,true)] {
+            let mut intro = IntroLifecycle::default();
+            assert_eq!(intro.update("one",0,connected,blocked,reduced), IntroAction::None);
+            assert_eq!(intro.update("one",100,true,false,false), IntroAction::None);
+        }
+        let mut intro = IntroLifecycle::default();
+        intro.update("one",0,true,false,false); intro.ready(1);
+        assert_eq!(intro.update("one",100,false,false,false),IntroAction::Close);
+        let mut orphaned = IntroLifecycle::default();
+        orphaned.update("one",0,true,false,false); orphaned.ready(1);
+        assert_eq!(orphaned.update("",100,true,false,false),IntroAction::Close); // native daemon proof lost
+        let mut intro = IntroLifecycle::default();
+        intro.update("one",0,true,false,false);
+        assert_eq!(intro.watchdog(1500),IntroAction::Close);
+        assert_eq!(intro.ready(1600),IntroAction::None); // late native placement cannot reopen it
+        let mut restored = IntroLifecycle::default();
+        restored.consumed.insert("one".into());
+        assert_eq!(restored.update("one",0,true,false,false),IntroAction::None);
+        assert_eq!(restored.update("two",0,true,false,false),IntroAction::Create);
+    }
+    #[test]
+    fn intro_covers_only_the_laptop_in_logical_coordinates() {
+        let monitors = serde_json::json!([
+            {"id":1,"name":"HDMI-A-1","x":0,"y":0,"width":1920,"height":1080,"scale":1},
+            {"id":2,"name":"eDP-1","x":1920,"y":0,"width":1920,"height":1080,"scale":1.25,"reserved":[0,30,0,0]}
+        ]);
+        assert_eq!(intro_area(&monitors),Some(Area{x:1920,y:0,width:1536,height:864}));
+        assert_eq!(intro_area(&serde_json::json!([monitors[0].clone()])),None);
+    }
 }
 struct StartEnabled(bool);
 pub fn starts_enabled(app: &AppHandle) -> bool {
@@ -2353,6 +2543,23 @@ pub fn start(app: &AppHandle) {
         }
         let mut last_absence = Instant::now() - Duration::from_secs(30);
         while !c.stop.load(Ordering::SeqCst) {
+            let session = c.app.state::<IntroSession>();
+            // A daemon generation first observed while Capri is disabled is ineligible,
+            // even if the user enables her much later in that same service lifetime.
+            if !c.state().enabled {
+                if let Some(process) = c.path.parent().and_then(crate::daemon::live_orphan) {
+                    let service = format!("{}:{}",process.pid,process.started);
+                    let mut lifecycle = session.lifecycle.lock().unwrap();
+                    if lifecycle.consumed.insert(service.clone()) {
+                        let _ = crate::config::write_private(&session.receipt,&service);
+                    }
+                }
+            }
+            if session.lifecycle.lock().unwrap().watchdog(session.clock.elapsed().as_millis() as u64) == IntroAction::Close {
+                let app = c.app.clone();
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || crate::shell::close_intro(&handle));
+            }
             if last_absence.elapsed() >= Duration::from_secs(30) {
                 last_absence = Instant::now();
                 crate::capri3d::poll_absence(&c.app);
@@ -2377,6 +2584,7 @@ pub fn start(app: &AppHandle) {
     });
 }
 pub fn stop(app: &AppHandle) {
+    crate::shell::close_intro(app);
     if let Some(c) = app.try_state::<Arc<Controller>>() {
         c.stop.store(true, Ordering::SeqCst);
         c.context_ready.notify_all();
@@ -2944,7 +3152,19 @@ pub async fn desktop_companion_set(app: AppHandle, patch: Patch) -> Result<State
         .await
         .map_err(|e| e.to_string())?
 }
-#[tauri::command]
+pub mod intro_bridge {
+    use super::*;
+    #[tauri::command]
+    pub fn desktop_companion_interaction(app: AppHandle, active: bool, released: Option<bool>, dragging: Option<bool>, intro: Option<IntroHeartbeat>) -> Value {
+        if let Some(pulse) = intro {
+            intro_heartbeat(&app,pulse);
+            let session = app.state::<IntroSession>();
+            let lifecycle = session.lifecycle.lock().unwrap();
+            return serde_json::json!({"introActive":lifecycle.pending || lifecycle.shown.is_some()});
+        }
+        serde_json::to_value(super::desktop_companion_interaction(app,active,released,dragging)).unwrap_or(Value::Null)
+    }
+}
 pub fn desktop_companion_interaction(app: AppHandle, active: bool, released: Option<bool>, dragging: Option<bool>) -> State {
     #[cfg(target_os = "linux")]
     if dragging == Some(true) && crate::capri3d::active(&app) { crate::capri3d::watch_drag(&app); }

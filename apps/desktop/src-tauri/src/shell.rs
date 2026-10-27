@@ -38,6 +38,50 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, S
 use tauri_plugin_opener::OpenerExt;
 
 const DOT: &str = "dot";
+pub(crate) const INTRO_TITLE: &str = "Gentle Dot Intro";
+const INTRO: &str = "capri-intro";
+struct IntroMapping(Mutex<Option<desktop_companion::MappingRule>>);
+
+/// Temporary, non-fullscreen-mode window: covers only eDP-1, never the virtual desktop.
+/// It has no command capability and cannot intercept input or focus another application.
+pub(crate) fn create_intro(app: &AppHandle, rect: (i32,i32,i32,i32), target: (i32,i32,i32,i32)) -> Result<(),String> {
+    close_intro(app);
+    let rule = desktop_companion::MappingRule::install("intro",&desktop_companion::nonce()?)?;
+    let configuration = serde_json::json!({"target":{"x":target.0,"y":target.1,"width":target.2,"height":target.3},"ready":false});
+    let window = WebviewWindowBuilder::new(app,INTRO,WebviewUrl::App("index.html?surface=capri-intro".into()))
+        .on_navigation(crate::navigation::handler(app.clone()))
+        .initialization_script(format!("window.__CAPRI_INTRO__={configuration};"))
+        .title(&rule.title).position(rect.0 as f64,rect.1 as f64)
+        .inner_size(rect.2 as f64,rect.3 as f64)
+        .min_inner_size(rect.2 as f64,rect.3 as f64).max_inner_size(rect.2 as f64,rect.3 as f64)
+        .transparent(true).decorations(false).shadow(false).always_on_top(true)
+        .skip_taskbar(true).visible_on_all_workspaces(true).focused(false).visible(false).build().map_err(err)?;
+    // Set the empty input region BEFORE mapping, including the GTK native surface.
+    if let Err(error) = window.set_ignore_cursor_events(true) { let _ = window.close(); return Err(err(error)); }
+    #[cfg(target_os="linux")]
+    {
+        use gtk::prelude::*;
+        let native: gtk::Window = window.gtk_window().map_err(err)?.into();
+        native.set_accept_focus(false); native.set_focus_on_map(false);
+        native.input_shape_combine_region(Some(&cairo::Region::create()));
+        mask_dot_content(&native)?; // even a pre-React WebKit background must stay invisible before placement
+    }
+    *app.state::<IntroMapping>().0.lock().unwrap() = Some(rule);
+    window.set_title(INTRO_TITLE).map_err(err)?;
+    computer::show_without_focus(&window)?;
+    Ok(())
+}
+pub(crate) fn show_intro(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(INTRO) {
+        let _ = window.eval("document.documentElement.dataset.surface='capri-intro'; window.__CAPRI_INTRO__.ready=true; window.__CAPRI_INTRO__.started=performance.now(); window.dispatchEvent(new Event('capri-intro-ready')); ");
+        #[cfg(target_os="linux")]
+        if let Ok(native) = window.gtk_window() { let _ = unmask_dot_content(&native.into(),1.); }
+    }
+}
+pub(crate) fn close_intro(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(INTRO) { let _ = window.close(); }
+    if let Some(mapping) = app.try_state::<IntroMapping>() { mapping.0.lock().unwrap().take(); }
+}
 pub(crate) const PANEL: &str = "panel";
 const TRAY: &str = "main";
 /// The Dot window, in points: a 66 pt black disc with the rose, plus a 3 pt
@@ -779,6 +823,7 @@ fn build_windows(
     places_windows: bool,
     rose_hidden: bool,
 ) -> tauri::Result<()> {
+    app.manage(IntroMapping(Mutex::new(None)));
     let dot = WebviewWindowBuilder::new(app, DOT, WebviewUrl::App("index.html?surface=dot".into()))
         .on_navigation(crate::navigation::handler(app.clone()))
         .on_page_load(crate::frontend::page_loaded)
@@ -1138,7 +1183,7 @@ pub fn run() {
             crate::capri3d::capri3d_surface,
             desktop_companion::desktop_companion_get,
             desktop_companion::desktop_companion_set,
-            desktop_companion::desktop_companion_interaction,
+            desktop_companion::intro_bridge::desktop_companion_interaction,
             desktop_companion::desktop_companion_recall,
             desktop_companion::desktop_companion_move,
             desktop_companion::desktop_companion_hide,

@@ -12,6 +12,7 @@ import { CapriSprite } from "./CapriCompanion.tsx";
 import { Capri3D } from "../capri3d/Capri3D.tsx";
 import { Capri2D } from "../capri2d/Capri2D.tsx";
 import { useRoaming } from "../capri2d/useRoaming.ts";
+import { useIntro } from "../capri2d/useIntro.ts";
 import { publish3DSurface, readLocalAsset, usePreferred3D } from "../capri3d/native.ts";
 import { useChoreography } from "../capri3d/useChoreography.ts";
 import { restChoice, responseChoice, speechDuration } from "../capri3d/choreography.ts";
@@ -443,10 +444,11 @@ export function DesktopCompanionSurface({
 		const timer = setTimeout(() => setSpeech(undefined), duration);
 		return () => clearTimeout(timer);
 	}, [cue?.id, cue?.summary, cue?.body, cue?.kind, cue?.expiresAt, cue?.paneId, cue?.sessionId]);
+ const introActive=useIntro(controls.state.enabled,connected,Boolean(activeQuestion)||Boolean(approval)||attention||inControl||chatOpen,reduced||!controls.state.motion);
  const roaming=useRoaming(renderMode==='2d' && visible,{
   composer:chatOpen,question:Boolean(activeQuestion),approval:Boolean(approval)||attention,
   sleeping:choreography.absent||choreography.rest==='sleep',reduced:reduced||!controls.state.motion,
-  paused:inControl||interacting||controls.state.pinned||(controls.state.paused&&!reduced),
+  paused:introActive||inControl||interacting||controls.state.pinned||(controls.state.paused&&!reduced),
  });
 	const motion = choreography.motion;
 	const perched = (cue?.kind === "input-ready" || cue?.kind === "typing") && cue.placement === "perch";

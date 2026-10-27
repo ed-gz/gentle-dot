@@ -7,6 +7,7 @@ import { CapriCompanion } from "./components/CapriCompanion.tsx";
 import { currentAgentAction } from "./agent-activity.ts";
 import { ChatSurface, type CompanionActivity } from "./components/ChatSurface.tsx";
 import type { ComputerControls } from "./components/Computer.tsx";
+import { CapriIntro } from "./capri2d/CapriIntro.tsx";
 import { DesktopCompanionBubble } from "./components/DesktopCompanionBubble.tsx";
 import { DesktopCompanionLauncher } from "./components/DesktopCompanionSurface.tsx";
 import { DotSurface } from "./components/DotSurface.tsx";
@@ -45,9 +46,9 @@ import { createWatchersClient } from "./watchers.ts";
 
 type Surface = "dot" | "panel" | "web";
 
-function currentSurface(): Surface | "glow" | "companion-launcher" | "companion-bubble" {
+function currentSurface(): Surface | "glow" | "companion-launcher" | "companion-bubble" | "capri-intro" {
 	const surface = new URLSearchParams(window.location.search).get("surface");
-	return surface === "dot" ||
+	return surface === "capri-intro" || surface === "dot" ||
 		surface === "panel" ||
 		surface === "glow" ||
 		surface === "companion-launcher" ||
@@ -95,7 +96,7 @@ export interface AppProps {
 
 export function App({ connection, mobileControls, mobileDraftScope, onCollapseMobile }: AppProps = {}) {
 	const surface = currentSurface();
-	return surface === "companion-launcher" ? (
+	return surface === "capri-intro" ? <CapriIntro /> : surface === "companion-launcher" ? (
 		<CompanionLauncher />
 	) : surface === "companion-bubble" ? (
 		<CompanionBubble />
