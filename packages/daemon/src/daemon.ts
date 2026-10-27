@@ -1172,6 +1172,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		);
 
 	server.on("upgrade", (req, socket, head) => {
+		// A client reset between the upgrade hand-off and ws taking over the raw socket would
+		// otherwise emit an unhandled 'error' event and kill the daemon (ECONNRESET crash).
+		socket.once("error", () => socket.destroy());
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const origin = req.headers.origin;
 		if (url.pathname !== "/ws" || (origin !== undefined && !allowedOrigins(port, options).has(origin))) {
