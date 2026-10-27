@@ -30,6 +30,7 @@ export function CapriSprite({
 	animated = false,
 	playing = true,
 	walking = false,
+	fullBody = false,
 	onPresented,
 }: {
 	pose?: CapriPose;
@@ -37,6 +38,8 @@ export function CapriSprite({
 	animated?: boolean;
 	playing?: boolean;
 	walking?: boolean;
+	/** The phone dock uses authored body art; headers and other phone sprites keep faces. */
+	fullBody?: boolean;
 	onPresented?: (action: CapriAction) => void;
 }) {
 	const phoneFaces = usePhoneFaces();
@@ -74,7 +77,7 @@ export function CapriSprite({
 		</span>
 	);
 	const animation = animated ? capriAnimation(pose, walking) : undefined;
-	if (phoneFaces) return <CapriFaceSprite action={pose} className={className} playing={animated && playing} />;
+	if (phoneFaces && !fullBody) return <CapriFaceSprite action={pose} className={className} playing={animated && playing} />;
 	return animation ? (
 		<CapriAnimatedSprite
 			clip={animation}
@@ -289,6 +292,7 @@ export function CapriCompanion({
 }) {
 	const { settings } = controls;
 	const phoneFaces = usePhoneFaces();
+	const bodyDock = phoneFaces && settings.mode === "capri" && !settings.minimized;
 	const [menu, setMenu] = useState(false);
 	const handle = useRef<HTMLButtonElement>(null);
 	const menuRef = useRef<HTMLFieldSetElement>(null);
@@ -500,7 +504,7 @@ export function CapriCompanion({
 			data-attention={attention}
 			data-activity={interaction}
 			data-duo={duo && !floating.compact}
-			data-form={phoneFaces ? "face" : compact || floating.compact ? "glimpse" : face ? "face" : "body"}
+			data-form={bodyDock ? "body" : phoneFaces ? "face" : compact || floating.compact ? "glimpse" : face ? "face" : "body"}
 			data-minimized={settings.minimized}
 		>
 			<div
@@ -542,10 +546,11 @@ export function CapriCompanion({
 					}
 				>
 					<CapriSprite
-						pose={phoneFaces && speaking ? "face-talk" : settings.minimized || floating.compact ? "eyes" : pose}
+						pose={bodyDock ? "idle" : phoneFaces && speaking ? "face-talk" : settings.minimized || floating.compact ? "eyes" : pose}
+						fullBody={bodyDock}
 						animated
 						playing={alive && !floating.dragging}
-						walking={floating.travelling && !compact && !face && !duo && !attention}
+						walking={!bodyDock && floating.travelling && !compact && !face && !duo && !attention}
 					/>
 				</button>
 				<span id={descriptionId} className="capri-sr-only">

@@ -661,7 +661,7 @@
 	--capri-mobile-raised: #1b2a30;
 	--capri-mobile-user: #192b24;
 	--capri-mobile-lime: #bcf86a;
-	--capri-mobile-send: #ff3558;
+	--capri-notice-send: #ff5a5a;
 	--capri-mobile-code: #b6a5ff;
 	--capri-mobile-line: #34474e;
 	--capri-mobile-muted: #b0c4c2;
@@ -815,16 +815,32 @@ body:has(.chat-mobile[data-companion="capri"][data-capri-docked="false"]) .capri
 	color: var(--capri-mobile-muted);
 	background: transparent;
 }
-.chat-mobile[data-companion="capri"] .composer-send {
+.chat-mobile[data-companion="capri"] .composer-send.composer-send-capri {
 	border-radius: 50%;
-	background: var(--capri-mobile-send);
+	background: var(--capri-notice-send);
 	color: #fff;
+	box-shadow: none;
+}
+/* Explicit colors also beat the shared chat-theme disabled rules, regardless of load order. */
+.chat-mobile[data-companion="capri"] .composer-send.composer-send-capri:disabled {
+	background: var(--capri-notice-send);
+	color: #fff;
+	opacity: .5;
+	box-shadow: none;
+}
+.chat-mobile[data-companion="capri"] .composer-mic.composer-mic-on {
+	background: var(--capri-mobile-lime);
+	color: var(--accent-ink);
+	animation: capri-mobile-recording-pulse 1.6s ease-in-out infinite;
+}
+@keyframes capri-mobile-recording-pulse { 50% { opacity: .6; } }
+@media (prefers-reduced-motion: reduce) {
+	.chat-mobile[data-companion="capri"] .composer-mic.composer-mic-on { animation: none; }
 }
 .chat-mobile[data-companion="capri"] .composer-stop {
 	background: var(--capri-mobile-raised);
 	color: var(--capri-mobile-lime);
 }
-.chat-mobile[data-companion="capri"] .composer-send:disabled { opacity: .5; }
 .chat-mobile[data-companion="capri"] :is(button, summary):active { opacity: .75; }
 .chat-mobile[data-companion="capri"] :is(button, summary, textarea, input):focus-visible {
 	outline: 1px solid var(--text);

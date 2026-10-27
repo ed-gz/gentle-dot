@@ -306,7 +306,7 @@ export function Composer({
 				) : recording ? null : (
 					<button
 						type="submit"
-						className="composer-send"
+						className={`composer-send${capriMobile ? " composer-send-capri" : ""}`}
 						disabled={disabled || pending || uploading || blocked || (text.trim() === "" && files.length === 0)}
 						aria-label={labels?.send ?? copy("Send", "Enviar mensaje")}
 						title={copy("Send", "Enviar mensaje")}

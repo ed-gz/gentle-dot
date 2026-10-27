@@ -7,7 +7,10 @@ import { FloatingNotices } from "../src/components/FloatingNotices.tsx";
 import { SessionWorkShelf } from "../src/components/SessionMobileControls.tsx";
 import { AgentWorkflow } from "../src/components/AgentWorkflow.tsx";
 import { initialState } from "../src/store.ts";
-import { COMPANION_KEY } from "../src/useCompanion.ts";
+import { COMPANION_KEY, useCompanion } from "../src/useCompanion.ts";
+import { CapriCompanion } from "../src/components/CapriCompanion.tsx";
+import { capriAnimation } from "../src/capri-animation.ts";
+import { capriFrame } from "../src/capri-art.ts";
 import type { AgentWork, OrchestrationSnapshot, OrchestrationClient } from "../src/orchestration.ts";
 import type { VoiceControls } from "../src/useVoice.ts";
 import type { AttachmentControls } from "../src/useAttachments.ts";
@@ -20,6 +23,78 @@ import capriCss from "../../theme-capri/src/style.css?raw";
 const themeCss = capriCss || readFileSync(resolve(__dirname, "../../theme-capri/src/style.css"), "utf8");
 
 afterEach(() => localStorage.clear());
+it("marks only the Capri send action and explicitly retains red/white styling when disabled", () => {
+ const view = render(<Composer mobile capriMobile busy={false} disabled={false} send={vi.fn()} />);
+ const button = screen.getByRole("button", { name: "Enviar mensaje" });
+ expect(button).toHaveClass("composer-send-capri");
+ expect(button).toBeDisabled();
+ expect(button.querySelector("svg")).not.toBeNull();
+ fireEvent.change(screen.getByRole("textbox"), { target: { value: "Hola" } });
+ expect(button).toBeEnabled();
+ const rule = (selector: string) => themeCss.slice(themeCss.indexOf(selector)).split("}")[0];
+ for (const selector of [
+  '.chat-mobile[data-companion="capri"] .composer-send.composer-send-capri {',
+  '.chat-mobile[data-companion="capri"] .composer-send.composer-send-capri:disabled {',
+ ]) {
+  expect(themeCss.includes(selector)).toBe(true);
+  expect(rule(selector)).toContain("background: var(--capri-notice-send)");
+  expect(rule(selector)).toContain("color: #fff");
+ }
+ expect(rule('.chat-mobile[data-companion="capri"] .composer-send.composer-send-capri:disabled {')).toMatch(/opacity:\s*\.5/);
+ fireEvent.change(screen.getByRole("textbox"), { target: { value: "" } });
+ view.rerender(<Composer mobile capriMobile busy disabled={false} send={vi.fn()} />);
+ expect(screen.getByRole("button", { name: "Detener respuesta" })).not.toHaveClass("composer-send-capri");
+ view.rerender(<Composer mobile busy={false} disabled={false} send={vi.fn()} />);
+ expect(screen.getByRole("button", { name: "Enviar mensaje" })).not.toHaveClass("composer-send-capri");
+});
+it("keeps a lime recording mic instead of a red send action", () => {
+ const voice = { phase: "recording", mic: { available: true }, elapsed: 1, level: .5, stop: vi.fn(), cancel: vi.fn() } as unknown as VoiceControls;
+ render(<Composer mobile capriMobile busy={false} disabled={false} send={vi.fn()} voice={voice} />);
+ expect(screen.queryByRole("button", { name: "Enviar mensaje" })).toBeNull();
+ expect(screen.getByRole("button", { name: "Terminar y revisar" })).toHaveClass("composer-mic-on");
+ const selector = '.chat-mobile[data-companion="capri"] .composer-mic.composer-mic-on {';
+ expect(themeCss.includes(selector)).toBe(true);
+ const rule = themeCss.slice(themeCss.indexOf(selector)).split("}")[0];
+ expect(rule).toContain("var(--capri-mobile-lime)");
+ expect(rule).toContain("capri-mobile-recording-pulse");
+ expect(themeCss).toContain(".composer-mic.composer-mic-on { animation: none;");
+});
+it.each([true, false])("keeps the full-body phone dock and its controls with motion asset ready=%s", ready => {
+ localStorage.setItem(COMPANION_KEY, JSON.stringify({ mode: "capri", motion: false }));
+ const image = vi.spyOn(window, "Image").mockImplementation(function () {
+  const element = document.createElement("img");
+  Object.defineProperties(element, { complete: { value: true }, naturalWidth: { value: ready ? 1536 : 0 } });
+  return element;
+ });
+ function Fixture({ state = "idle" }: { state?: "idle" | "working" }) {
+  const controls = useCompanion();
+  return <><div className="chat-mobile" data-companion="capri" /><CapriCompanion controls={controls} state={state} connected /></>;
+ }
+ try {
+  const view = render(<Fixture />);
+  const overlay = screen.getByLabelText("Capri, tu acompañante");
+  expect(overlay).toHaveAttribute("data-form", "body");
+  const handle = screen.getByRole("button", { name: "Mover a Capri" });
+  const sprite = handle.querySelector(".capri-sprite")!;
+  expect(sprite).toHaveAttribute("data-animation", ready ? "idle" : "static");
+  expect(sprite).toHaveAttribute("data-pose", "idle");
+  expect(sprite).not.toHaveAttribute("data-faces-animation");
+  expect(sprite).toHaveAttribute("data-playing", "false");
+  expect(sprite.querySelector("image")).toHaveAttribute("href", ready ? capriAnimation("idle")!.href : capriFrame("idle").href);
+  expect(capriAnimation("idle")!.href).toContain("capri-motion-core-v1.png");
+  view.rerender(<Fixture state="working" />);
+  expect(handle.querySelector(".capri-sprite")).toHaveAttribute("data-pose", "idle");
+  fireEvent.click(handle);
+  expect(screen.getByRole("group", { name: "Controles de Capri" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Cerrar controles de Capri" }));
+  expect(screen.queryByRole("group", { name: "Controles de Capri" })).toBeNull();
+  fireEvent.click(handle);
+  fireEvent.click(screen.getByRole("button", { name: "Ocultar a Capri" }));
+  expect(screen.getByRole("button", { name: "Mostrar a Capri" }).querySelector("[data-faces-animation]")).not.toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Mostrar a Capri" }));
+  expect(screen.getByRole("button", { name: "Mover a Capri" }).querySelector(".capri-sprite")).toHaveAttribute("data-pose", "idle");
+ } finally { image.mockRestore(); }
+});
 it("bounds the phone avatar independently of face sprite inline sizing and reserves a corner outside messages", () => {
  const view = phone(true);
  const root = view.container.querySelector('.chat-mobile[data-companion="capri"]')!;
@@ -27,6 +102,7 @@ it("bounds the phone avatar independently of face sprite inline sizing and reser
  const avatar = nav.querySelector(".capri-mobile-avatar")!;
  expect(avatar).not.toBeNull();
  expect(avatar.querySelector(".capri-sprite svg")).not.toBeNull();
+ expect(avatar.querySelector("[data-faces-animation]")).not.toBeNull();
  expect(root.querySelector(".chat-header")).toBeNull();
  const dock = root.querySelector(".capri-mobile-dock")!;
  expect(dock).not.toBeNull();
