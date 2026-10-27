@@ -55,15 +55,9 @@ export function observeCompanionActions(pi: ExtensionAPI) {
   if (event.parentToolCallId) return;
   const args = record(event.args) ? event.args : {};
   // Capri supervises the agents; labels never identify files or quote tool arguments.
-  let verb = "MONITOREO", subject = "las sesiones activas";
-  if (event.toolName === "read") {
-   verb = "CONSULTO"; subject = "el contexto de sesión";
-  } else if (["grep","find","ls"].includes(event.toolName)) {
-   verb = "EXAMINO"; subject = "el estado de las sesiones";
-  } else if (["edit","write"].includes(event.toolName)) {
-   verb = "SUPERVISO"; subject = "el avance de los agentes";
-  } else if (event.toolName === "bash") {
-   verb = "DIRIJO"; subject = "la operación en curso";
+  let verb: string, subject: string;
+  // No generic narration: only concrete, verifiable work gets narrated; everything else stays silent.
+  if (event.toolName === "bash") {
    // Exact allowlist, not prefixes: flags, assignments and shell expansions stay private.
    switch (typeof args.command === "string" ? args.command.trim() : "") {
     case "npm test": case "pnpm test":
@@ -72,7 +66,11 @@ export function observeCompanionActions(pi: ExtensionAPI) {
      verb = "VALIDO"; subject = "la compilación"; break;
     case "git status": case "git diff":
      verb = "REVISOPROGRESO"; subject = "de los entregables"; break;
+    default:
+     return;
    }
+  } else {
+   return;
   }
   const at = new Date(Math.max(Date.now(), Date.parse(lastAction?.at ?? "") + 1 || 0)).toISOString();
   lastAction = {verb,subject,at};
