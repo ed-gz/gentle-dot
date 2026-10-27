@@ -1,8 +1,7 @@
 // "When she starts" choreography adapted from mochiiwuff/capri-desktop (MIT).
-// See ./LICENSE. Close-up art is NOT copied: user face atlas + procedural limbs instead.
+// See ./LICENSE. Personal close-up drawings load through the local-art allowlist.
 import { useEffect, useState } from 'react';
-import { CapriFaceSprite } from '../capri-faces/CapriFaceSprite.tsx';
-import { CapriSprite } from '../components/CapriCompanion.tsx';
+import { INTRO_ART, useLocalArt } from './local-art.ts';
 import { IntroDriver, INTRO_BEATS } from './intro.ts';
 import './intro.css';
 import { CapriPossession } from './CapriPossession.tsx';
@@ -11,6 +10,7 @@ declare global { interface Window { __CAPRI_INTRO__?:Configuration } }
 const ease=(p:number)=>p*p*(3-2*p);
 export function CapriIntro() {
  const [config,setConfig]=useState(window.__CAPRI_INTRO__);
+ const art=useLocalArt(INTRO_ART,Boolean(config?.ready&&!config.possession));
  const [frame,setFrame]=useState({beat:'done',progress:1,elapsed:0} as ReturnType<IntroDriver['sample']>);
  useEffect(()=>{
   document.documentElement.dataset.surface='capri-intro';
@@ -52,7 +52,9 @@ export function CapriIntro() {
  const y=h*.43+(target.y+target.height*.26-h*.43)*travel-(diving?Math.sin(travel*Math.PI)*h*.12:0);
  const shake=stage>=4&&stage<=6?Math.sin(t*.15)*2:0;
  const headLift=beat==='haul'?(1-ease(p))*h*.6:0;
- const faceAction=beat==='hi'?'talk':beat==='blink'?'sleep':beat==='glance'?'curious':'face';
+ const cel=Math.min(3,1+Math.floor(p*3));
+ const faceName=beat==='blink'?'face-calm.png':beat==='hi'?`intro-mouth${cel}.webp`:beat==='wave'?`intro-wave${cel}.webp`:beat==='haul'||beat==='regrab'?'intro-grab.webp':beat==='look'||beat==='glance'||beat==='shatter'?'intro-happy.webp':'intro-smear.webp';
+ const faceSource=art[faceName]??(beat==='hi'?art['face-smug.png']:undefined);
  const arms=stage>=1&&stage<14;
  const right=stage>=2;
  const wave=beat==='wave';
@@ -82,11 +84,10 @@ export function CapriIntro() {
    return <i key={i} className="capri-intro-shard" style={{left:`${(right?1-inward*.45:inward*.45)*100}%`,top:`${40+q*30}%`,opacity:q>0?1-q:0,transform:`translate(${(right?1:-1)*q*60}px,${q*70}px) rotate(${i*27+q*180}deg)`}}/>;
   })}
   {stage>=3&&<div className={`capri-intro-head ${beat==='split'?'capri-intro-split':''}`} style={{left:x,top:y+headLift,width:headSize,height:headSize,transform:`translate(-50%,-50%) scaleY(${beat==='crouch'?1-p*.4:beat==='unfold'?1-p:1}) rotate(${beat==='look'?Math.sin(p*Math.PI*2)*8:beat==='glance'?12:0}deg)`}}>
-   <CapriFaceSprite action={faceAction}/>
-   {beat==='hi'&&<i className="capri-intro-mouth" style={{transform:`scaleY(${.35+Math.sin(p*Math.PI*3)**2})`}}/>}
+   {faceSource&&<img src={faceSource} alt="" style={{width:'100%',height:'100%',objectFit:'contain'}}/>}
   </div>}
   {stage>=9&&stage<=12&&<div className="capri-intro-tag" style={{left:w*.5+size*.35,top:h*.3}}><b>hi</b><span>{'CAPRI'.slice(0,Math.min(5,Math.floor((t-2750)/95)))}</span></div>}
-  {beat==='unfold'&&<div className="capri-intro-unfold" style={{left:target.x,top:target.y,width:target.width,height:target.height,transform:`scaleY(${ease(p)})`}}><CapriSprite fullBody pose="idle"/></div>}
+  {beat==='unfold'&&<div className="capri-intro-unfold" style={{left:target.x,top:target.y,width:target.width,height:target.height,transform:`scaleY(${ease(p)})`}}>{art['capri-full.png']&&<img src={art['capri-full.png']} alt="" style={{width:'100%',height:'100%',objectFit:'contain'}}/>}</div>}
   {(beat==='impact-white'||beat==='impact-ink')&&<div className="capri-intro-flash" style={{background:beat==='impact-white'?'#fff9e5':'#08080d'}}/>}
   <small className="capri-intro-skip" style={{left:target.x,top:Math.min(h-24,target.y+target.height)}}>Clic en Capri pequeña para omitir</small>
  </div>;

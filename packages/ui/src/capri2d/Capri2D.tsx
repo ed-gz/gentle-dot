@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { createEngine, frameAt, type InputRectangle } from "./engine.ts";
 import { RigDirector, type RigIntent } from "./director.ts";
 import { RigFx } from "./fx.ts";
-import { CapriFaceSprite } from '../capri-faces/CapriFaceSprite.tsx';
+import { CHIP_ART, useLocalArt } from './local-art.ts';
 import './possession.css';
 let warned = false;
 export interface Capri2DProps {
@@ -15,6 +15,7 @@ export interface Capri2DProps {
  intent?: RigIntent;
 }
 export function Capri2D({ enabled, visible, reduced, possessing=false, sleepingPerched=false, onActive, onMask, intent = {} }: Capri2DProps) {
+ const art = useLocalArt(CHIP_ART, enabled);
  const canvas = useRef<HTMLCanvasElement>(null);
  const fxCanvas = useRef<HTMLCanvasElement>(null);
  const current = useRef({ visible, reduced, onActive, onMask, intent, possessing, sleepingPerched });
@@ -54,7 +55,7 @@ export function Capri2D({ enabled, visible, reduced, possessing=false, sleepingP
     if(!hidden&&!state.reduced)fx?.burst(now,!state.possessing);
     wasPossessing=state.possessing;
    }
-   director.update(state.intent, now, hidden);
+   director.update(state.sleepingPerched ? {...state.intent,resting:'sleep'} : state.intent, now, hidden);
    const suppressFx=hidden||state.reduced;
    if (suppressFx && !fxSuppressed) fx?.clear();
    fxSuppressed=suppressFx;
@@ -67,8 +68,8 @@ export function Capri2D({ enabled, visible, reduced, possessing=false, sleepingP
      const mask = engine.draw(sample.pose, frame);
      if (!state.reduced) for (const cue of sample.cues) fx?.cue(cue,now,state.intent.direction);
      // Visual-only proxies have no input: never retain the invisible body's silhouette
-     // or introduce rectangular hit areas over transparent face-atlas pixels.
-     const bodyRects:InputRectangle[]=state.possessing||state.sleepingPerched?[]:engine.inputRectangles();
+     // or introduce rectangular hit areas over transparent local-art pixels.
+     const bodyRects:InputRectangle[]=state.possessing?[]:engine.inputRectangles();
      const key = JSON.stringify(bodyRects);
      if (key !== previousMask) { previousMask = key; state.onMask(mask,bodyRects); }
     }
@@ -113,8 +114,8 @@ export function Capri2D({ enabled, visible, reduced, possessing=false, sleepingP
   };
  }, [enabled]);
  return <>
-  {(possessing||sleepingPerched)&&<div data-capri-biochip={possessing?'true':undefined} data-capri-sleep-face={sleepingPerched?'true':undefined} style={{position:'absolute',left:possessing?54:22,top:possessing?104:40,width:possessing?36:100,height:possessing?36:100,pointerEvents:'none',filter:possessing?'sepia(1) saturate(3) hue-rotate(45deg)':undefined,transition:reduced?'none':'all 350ms'}}><CapriFaceSprite action={sleepingPerched?'sleep':'face'}/></div>}
-  <canvas ref={canvas} className="capri3d-canvas" data-capri2d="true" aria-hidden="true" style={{ width: 144, height: 204, display: "block", pointerEvents: "none",opacity:possessing||sleepingPerched?0:1,transition:reduced?'none':'opacity 350ms' }} />
+  {possessing&&<div data-capri-biochip="true" style={{position:'absolute',left:54,top:104,width:36,height:36,pointerEvents:'none',filter:'sepia(1) saturate(3) hue-rotate(45deg)',transition:reduced?'none':'all 350ms'}}>{art['face-many.png']&&<img src={art['face-many.png']} alt="" style={{width:'100%',height:'100%',objectFit:'contain'}}/>}</div>}
+  <canvas ref={canvas} className="capri3d-canvas" data-capri2d="true" aria-hidden="true" style={{ width: 144, height: 204, display: "block", pointerEvents: "none",opacity:possessing?0:1,transition:reduced?'none':'opacity 350ms' }} />
   <canvas ref={fxCanvas} data-capri2d-fx="true" aria-hidden="true" style={{ position:"absolute",left:0,top:0,width:144,height:204,pointerEvents:"none" }} />
  </>;
 }

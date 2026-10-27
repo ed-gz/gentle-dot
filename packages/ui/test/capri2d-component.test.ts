@@ -87,7 +87,7 @@ it("missing local artwork falls back and logs once across remounts", async () =>
  expect(log).toHaveBeenCalledOnce(); expect(props.onActive).not.toHaveBeenCalledWith(true);
  expect(mocks.draw).not.toHaveBeenCalled();
 });
-it('shatters into a green chip, replaces the input silhouette, restores body, and enlarges only a perched sleep face',async()=>{
+it('uses the local many-eyes chip and keeps only the procedural sleep body',async()=>{
  const props={enabled:true,visible:true,reduced:false,onActive:vi.fn(),onMask:vi.fn()};
  const view=render(createElement(Capri2D,props));await act(async()=>{});
  expect(view.container.querySelector('[data-capri-biochip]')).toBeNull();
@@ -95,11 +95,18 @@ it('shatters into a green chip, replaces the input silhouette, restores body, an
  expect(mocks.fxBurst).toHaveBeenLastCalledWith(200,false);
  expect(props.onMask).toHaveBeenLastCalledWith(Array(816).fill(1),[]);
  expect(view.container.querySelector('[data-capri-biochip]')).toHaveStyle({width:'36px',height:'36px'});
+ await act(async()=>{});
+ expect(mocks.invoke).toHaveBeenCalledWith('capri2d_asset',{name:'face-many.png'});
+ expect(view.container.querySelector('[data-capri-biochip] img')).toHaveAttribute('src');
+ expect(view.container.querySelector('[data-capri-biochip] svg')).toBeNull();
  view.rerender(createElement(Capri2D,props));act(()=>nextFrame(400));
  expect(mocks.fxBurst).toHaveBeenLastCalledWith(400,true);
  expect(props.onMask).toHaveBeenLastCalledWith(Array(816).fill(1),[[10,20,1,1]]);
  view.rerender(createElement(Capri2D,{...props,sleepingPerched:true}));act(()=>nextFrame(600));
- expect(view.container.querySelector('[data-capri-sleep-face]')).toHaveStyle({width:'100px'});
- expect(props.onMask).toHaveBeenLastCalledWith(Array(816).fill(1),[]);
+ expect(view.container.querySelector('[data-capri-sleep-face]')).toBeNull();
+ expect(view.container.querySelector('[data-capri2d]')).toHaveStyle({opacity:'1'});
+ act(()=>nextFrame(21600));
+ expect(mocks.draw.mock.calls.at(-1)![0].mask).toBe(1);
+ expect(props.onMask).toHaveBeenLastCalledWith(Array(816).fill(1),[[10,20,1,1]]);
  view.unmount();
 });

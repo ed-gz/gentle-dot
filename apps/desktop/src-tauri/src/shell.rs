@@ -1477,9 +1477,19 @@ mod tests {
         let grants: Vec<_> = capabilities["capabilities"].as_array().unwrap().iter()
             .filter(|cap| cap["permissions"].as_array().unwrap().iter().any(|p| p == "allow-capri2d-asset"))
             .collect();
-        assert_eq!(grants.len(), 1);
+        assert_eq!(grants.len(), 2);
         assert_eq!(grants[0]["identifier"], "desktop-companion-motion");
         assert_eq!(grants[0]["windows"], serde_json::json!(["dot"]));
+        assert_eq!(grants[0]["permissions"], serde_json::json!([
+            "allow-capri2d-asset", "allow-capri3d-asset", "allow-capri3d-surface",
+            "allow-desktop-companion-interaction", "allow-desktop-companion-move",
+            "allow-desktop-companion-menu", "allow-desktop-companion-context-dismiss",
+            "allow-desktop-companion-context-ready", "allow-desktop-companion-context-open",
+            "allow-desktop-companion-context"
+        ]));
+        assert_eq!(grants[1]["identifier"], "capri-intro-art");
+        assert_eq!(grants[1]["windows"], serde_json::json!(["capri-intro"]));
+        assert_eq!(grants[1]["permissions"], serde_json::json!(["allow-capri2d-asset"]));
     }
     #[test]
     fn the_shortcut_and_connector_commands_are_registered_and_granted_to_the_panel_only() {

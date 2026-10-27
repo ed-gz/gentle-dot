@@ -12,10 +12,10 @@ const MAX_BYTES: u64 = 64 * 1024 * 1024;
 mod art2d_tests {
     #[test]
     fn exact_png_allowlist() {
-        for name in ["capri-full.png", "cutin-grin.png", "cutin-laugh.png", "cutin-eyes.png"] {
+        for name in ["capri-full.png", "cutin-grin.png", "cutin-laugh.png", "cutin-eyes.png", "face-many.png", "face-calm.png", "face-smug.png", "intro-grab.webp", "intro-happy.webp", "intro-mouth1.webp", "intro-mouth2.webp", "intro-mouth3.webp", "intro-smear.webp", "intro-wave1.webp", "intro-wave2.webp", "intro-wave3.webp"] {
             assert!(super::allowed_2d_asset(name), "{name}");
         }
-        for name in ["../cutin-grin.png", "cutin-many.png", "intro-grab.webp"] {
+        for name in ["../cutin-grin.png", "cutin-many.png", "intro-wave4.webp", "../intro-grab.webp", "INTRO-GRAB.WEBP", "face-wide.png"] {
             assert!(!super::allowed_2d_asset(name), "{name}");
         }
         for name in ["../capri-full.png", "/tmp/capri-full.png", "other/capri-full.png", "capri-full.jpg", "roja.glb", "unknown.png", "CAPRI-FULL.PNG"] {
@@ -64,11 +64,16 @@ pub async fn capri3d_asset(window: tauri::WebviewWindow, name: String) -> Result
         .await.map_err(|e| e.to_string())?
 }
 /// Ported choreography/engine from https://github.com/mochiiwuff/capri-desktop (MIT); artwork not included — personal-use assets loaded locally.
-const ART_2D: [&str; 4] = ["capri-full.png", "cutin-grin.png", "cutin-laugh.png", "cutin-eyes.png"];
+const ART_2D: [&str; 16] = [
+    "capri-full.png", "cutin-grin.png", "cutin-laugh.png", "cutin-eyes.png",
+    "face-many.png", "face-calm.png", "face-smug.png",
+    "intro-grab.webp", "intro-happy.webp", "intro-mouth1.webp", "intro-mouth2.webp",
+    "intro-mouth3.webp", "intro-smear.webp", "intro-wave1.webp", "intro-wave2.webp", "intro-wave3.webp",
+];
 pub fn allowed_2d_asset(name: &str) -> bool { ART_2D.contains(&name) }
 #[tauri::command]
 pub async fn capri2d_asset(window: tauri::WebviewWindow, name: String) -> Result<tauri::ipc::Response, String> {
-    if window.label() != "dot" || !allowed_2d_asset(&name) { return Err("Imagen de Capri no permitida".into()); }
+    if !matches!(window.label(), "dot" | "capri-intro") || !allowed_2d_asset(&name) { return Err("Imagen de Capri no permitida".into()); }
     tauri::async_runtime::spawn_blocking(move || {
         let home = std::env::var_os("HOME").ok_or("No se encontró la carpeta personal")?;
         let root = PathBuf::from(home).join(".local/share/dev.gentleman.gentle-dot/capri-desktop-art");

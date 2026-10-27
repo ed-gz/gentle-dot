@@ -99,6 +99,12 @@
 			]
 		},
 		{
+			"identifier": "capri-intro-art",
+			"description": "The transparent intro can read only allowlisted personal 2D artwork.",
+			"windows": ["capri-intro"],
+			"permissions": ["allow-capri2d-asset"]
+		},
+		{
 			"identifier": "companion-launcher",
 			"description": "Access to chat and the native companion menu only. No daemon connection, files, voice or computer control.",
 			"windows": ["companion-launcher"],
