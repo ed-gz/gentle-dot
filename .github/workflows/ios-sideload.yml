@@ -37,7 +37,7 @@ jobs:
       - name: Rust and Tauri CLI
         run: |
           rustup target add aarch64-apple-ios
-          cargo install tauri-cli --version 2.8.4 --locked --jobs 4
+          cargo install tauri-cli --locked --jobs 4
       - name: Build device app without signing or provisioning
         working-directory: apps/ios
         run: bash scripts/build-unsigned.sh
