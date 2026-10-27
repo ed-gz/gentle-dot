@@ -45,9 +45,15 @@ struct IntroMapping(Mutex<Option<desktop_companion::MappingRule>>);
 /// Temporary, non-fullscreen-mode window: covers only eDP-1, never the virtual desktop.
 /// It has no command capability and cannot intercept input or focus another application.
 pub(crate) fn create_intro(app: &AppHandle, rect: (i32,i32,i32,i32), target: (i32,i32,i32,i32)) -> Result<(),String> {
+    create_transient(app,rect,target,false)
+}
+pub(crate) fn create_possession(app: &AppHandle, rect:(i32,i32,i32,i32)) -> Result<(),String> {
+    create_transient(app,rect,(0,0,rect.2,rect.3),true)
+}
+fn create_transient(app:&AppHandle,rect:(i32,i32,i32,i32),target:(i32,i32,i32,i32),possession:bool)->Result<(),String>{
     close_intro(app);
     let rule = desktop_companion::MappingRule::install("intro",&desktop_companion::nonce()?)?;
-    let configuration = serde_json::json!({"target":{"x":target.0,"y":target.1,"width":target.2,"height":target.3},"ready":false});
+    let configuration = serde_json::json!({"target":{"x":target.0,"y":target.1,"width":target.2,"height":target.3},"ready":false,"possession":possession});
     let window = WebviewWindowBuilder::new(app,INTRO,WebviewUrl::App("index.html?surface=capri-intro".into()))
         .on_navigation(crate::navigation::handler(app.clone()))
         .initialization_script(format!("window.__CAPRI_INTRO__={configuration};"))
@@ -63,7 +69,7 @@ pub(crate) fn create_intro(app: &AppHandle, rect: (i32,i32,i32,i32), target: (i3
         use gtk::prelude::*;
         let native: gtk::Window = window.gtk_window().map_err(err)?.into();
         native.set_accept_focus(false); native.set_focus_on_map(false);
-        native.input_shape_combine_region(Some(&cairo::Region::create()));
+        native.input_shape_combine_region(Some(&gtk::cairo::Region::create()));
         mask_dot_content(&native)?; // even a pre-React WebKit background must stay invisible before placement
     }
     *app.state::<IntroMapping>().0.lock().unwrap() = Some(rule);
