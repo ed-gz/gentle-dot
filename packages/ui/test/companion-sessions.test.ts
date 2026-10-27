@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { type CompanionSessionSnapshot, useDesktopSessionContext } from "../src/companion-sessions.ts";
+import { type CompanionSessionSnapshot, useDesktopSessionContext, useWorkingSession } from "../src/companion-sessions.ts";
 import { DEFAULT_DESKTOP_COMPANION, type DesktopCompanionControls } from "../src/desktop-companion.ts";
 import { CapriConversation } from "../src/capri3d/conversation.tsx";
 import { initialState } from "../src/store.ts";
@@ -33,6 +33,19 @@ function setup(read: () => CompanionSessionSnapshot = snapshot) {
 }
 async function advance(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
 const question = { kind: "question", id: "question:permission-a", paneId: "pane-a", sessionId: "session-a" };
+
+it("reads working metadata only for the fresh focused session and clears on failure",async()=>{
+ let data=snapshot();delete data.sessions[0]!.pendingQuestion;
+ data.sessions[0]!.activity={phase:"working",lastAction:{verb:"EDITO",subject:"gigs.ts",at:new Date().toISOString()}};
+ const fetcher=vi.fn(async()=>({ok:true,json:async()=>data}));vi.stubGlobal("fetch",fetcher);
+ const info={url:"ws://localhost:4317/ws",token:"fixture"};
+ const view=renderHook(()=>useWorkingSession(info,true));await advance(1);
+ expect(view.result.current).toMatchObject({sessionId:"session-a",activity:{lastAction:{subject:"gigs.ts"}}});
+ data={...data,stale:true};await advance(1000);expect(view.result.current).toBeUndefined();
+ data={...data,stale:false};await advance(1000);expect(view.result.current).toBeDefined();
+ fetcher.mockRejectedValueOnce(new Error("offline"));await advance(1000);expect(view.result.current).toBeUndefined();
+ view.unmount();const count=fetcher.mock.calls.length;await advance(5000);expect(fetcher).toHaveBeenCalledTimes(count);
+});
 
 it("refreshes a still-pending question beyond eight seconds and the native 30-second TTL", async () => {
 	const { publish, unmount } = setup();

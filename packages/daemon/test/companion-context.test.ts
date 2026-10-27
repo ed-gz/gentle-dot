@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { observeCompanionActions } from "../src/extensions/dot-session.ts";
 import { dirname, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CompanionActivityTracker, EDITOR_ACTIVITY_EVENT } from "../src/orchestration/companion-activity.ts";
@@ -55,6 +57,59 @@ const herdr = {
 		},
 	],
 };
+
+it("projects actual tool events as bounded action metadata without arguments or contents", () => {
+ const handlers = new Map<string, (event: unknown) => void>();
+ const pi = { on: (name: string, handler: (event: unknown) => void) => handlers.set(name, handler) } as unknown as ExtensionAPI;
+ const actions = observeCompanionActions(pi);
+ handlers.get("tool_execution_start")?.({toolName:"edit", args:{path:`/private/project/${"x".repeat(200)}.ts`,oldText:"SECRET CONTENT",newText:"PRIVATE BODY"}});
+ const activity = {...new CompanionActivityTracker().snapshot(false,false), lastAction:actions.snapshot()};
+ const context = new CompanionContext();
+ context.update(snapshot,herdr,new Map([["p1",activity]]));
+ const action = context.read().sessions[0]?.activity.lastAction;
+ expect(action).toMatchObject({verb:"EDITO",at:expect.any(String)});
+ expect(action!.subject.length).toBeLessThanOrEqual(64);
+ expect(JSON.stringify(action)).not.toMatch(/private|project|SECRET|PRIVATE/);
+ handlers.get("tool_execution_start")?.({toolName:"bash",args:{command:"TOKEN=secret npm test --password=secret",env:{SECRET:"value"}}});
+ expect(actions.snapshot()).toMatchObject({verb:"EJECUTO",subject:"comando"});
+ handlers.get("tool_execution_start")?.({toolName:"bash",args:{command:"npm test"}});
+ expect(actions.snapshot()).toMatchObject({verb:"EJECUTO",subject:"npm test"});
+ handlers.get("tool_execution_start")?.({toolName:"read",args:{path:"/private/.env"}});
+ expect(actions.snapshot()?.subject).toBe("archivo");
+ const before=actions.snapshot();
+ handlers.get("tool_execution_start")?.({toolName:"read",parentToolCallId:"nested",args:{path:"hidden.ts"}});
+ expect(actions.snapshot()).toEqual(before);
+ handlers.get("tool_execution_start")?.({toolName:"grep",args:{pattern:"SECRET QUERY",path:"/private/project"}});
+ expect(actions.snapshot()).toMatchObject({verb:"BUSCO",subject:"coincidencias"});
+ handlers.get("tool_execution_start")?.({toolName:"unknown-secret-tool",args:{content:"PRIVATE BODY"}});
+ expect(actions.snapshot()).toMatchObject({verb:"HAGO",subject:"tarea"});
+ actions.reset(); expect(actions.snapshot()).toBeUndefined();
+});
+
+it("validates optional action fields on both polling paths and binds live updates to the exact session",()=>{
+ const context=new CompanionContext();
+ const activity={...new CompanionActivityTracker().snapshot(false,false,time),lastAction:{verb:"EDITO",subject:"file.ts",at:new Date(time).toISOString()}};
+ context.update(snapshot,herdr,new Map([["p1",activity]]),time);
+ expect(context.read(time).sessions[0]?.activity.lastAction).toEqual(activity.lastAction);
+ for(const lastAction of [
+  {...activity.lastAction,subject:"x".repeat(65)},
+  {...activity.lastAction,verb:"x".repeat(17)},
+  {...activity.lastAction,at:"invalid"},
+  {...activity.lastAction,subject:"line\ncontent"},
+  {...activity.lastAction,at:new Date(time+5000).toISOString()},
+ ]){
+  context.update(snapshot,herdr,new Map([["p1",{...activity,lastAction}]]),time);
+  expect(context.read(time).sessions[0]?.activity.lastAction).toBeUndefined();
+ }
+ context.update(snapshot,herdr,new Map(),Date.now());
+ const live={...activity,lastAction:{...activity.lastAction,at:new Date().toISOString()}};
+ context.acceptActivity("p1","wrong-session",live);
+ expect(context.read().sessions[0]?.activity.lastAction).toBeUndefined();
+ context.acceptActivity("p1","s-p1",live);
+ const first=context.read().sessions[0]!.activity.lastAction!;
+ expect(first).toEqual(live.lastAction);first.subject="mutated";
+ expect(context.read().sessions[0]?.activity.lastAction?.subject).toBe("file.ts");
+});
 
 describe("contextual companion projection", () => {
 	it("projects focus, zoomed visibility and exact pending session without transcript or invented pixels", () => {

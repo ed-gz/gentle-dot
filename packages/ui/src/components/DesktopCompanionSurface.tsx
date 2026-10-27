@@ -1,3 +1,5 @@
+// Action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+import { useWorkingSession } from "../companion-sessions.ts";
 import type { AgentState } from "@gentle-dot/protocol";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -127,6 +129,14 @@ export function DesktopCompanionSurface({
 	const suppressClick = useRef(false);
 	const previousBusy = useRef(false);
 	const visible = controls.state.enabled && controls.state.visible && awake;
+ const [activityInfo,setActivityInfo] = useState<Awaited<ReturnType<typeof connectionInfo>>>();
+ useEffect(() => {
+  if (!active3D || !visible || !isTauri()) return;
+  let live = true;
+  void connectionInfo().then(info => { if (live) setActivityInfo(info); }).catch(() => {});
+  return () => { live = false; };
+ },[active3D,visible]);
+ const workingSession = useWorkingSession(activityInfo,active3D && visible);
 	const animated = visible && !reduced;
 	const actionAtlas = useRef<HTMLImageElement | undefined>(undefined);
 	useEffect(() => {
@@ -358,6 +368,25 @@ export function DesktopCompanionSurface({
 	const choreography = useChoreography(controls.state.enabled && preferred3D,
 		behavior.state !== "idle" || interacting || Boolean(cue), cue?.id);
 	const [speech, setSpeech] = useState<Speech & { until: number }>();
+ const thinkingEpisode = useRef<{key:string;said:Set<string>}>({key:"",said:new Set()});
+ const thinkingKey = workingSession?.activity.lastAction ? JSON.stringify([
+  workingSession.paneId,workingSession.sessionId,workingSession.activity.lastAction,
+ ]) : undefined;
+ const thinkingSpeech = useCallback((text: string) => {
+  if (!thinkingKey) return;
+  if (thinkingEpisode.current.key !== thinkingKey) thinkingEpisode.current={key:thinkingKey,said:new Set()};
+  if (thinkingEpisode.current.said.has(text)) return;
+  thinkingEpisode.current.said.add(text);
+  // Retain once-per-episode delivery across temporary hide/show; real notices always win.
+  setSpeech(current => current && current.until > Date.now() ? current : {
+   id: `thinking:${Date.now()}`, text, showMore: false, until: Date.now() + speechDuration(text),
+  });
+ },[thinkingKey]);
+ useEffect(() => {
+  if (!speech) return;
+  const timer=setTimeout(()=>setSpeech(undefined),Math.max(0,speech.until-Date.now()));
+  return()=>clearTimeout(timer);
+ },[speech?.until]);
 	useEffect(() => {
 		if (!cue?.summary || !["notification", "submitted", "question", "capture", "download"].includes(cue.kind)) {
 			setSpeech(undefined); return;
@@ -563,7 +592,7 @@ export function DesktopCompanionSurface({
 		</button>
 		{active3D && visible && <CapriConversation
 			state={chatState} send={chatSend} open={chatOpen} close={() => setChatOpen(false)}
-			speech={speech} approval={approval} onLayout={layout} more={() => { if (cue?.kind === "question") void controls.openContext?.(); toggle(); }}
+			speech={speech} approval={approval} activity={attention ? undefined : workingSession?.activity} episodeKey={workingSession ? `${workingSession.paneId}:${workingSession.sessionId}` : undefined} onThinkingSpeech={thinkingSpeech} onLayout={layout} more={() => { if (cue?.kind === "question") void controls.openContext?.(); toggle(); }}
 			onGesture={name => setGesture({ name, at: Date.now() })}
 			answer={async action => {
 				try {

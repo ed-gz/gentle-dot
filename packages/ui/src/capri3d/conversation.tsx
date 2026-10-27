@@ -1,3 +1,5 @@
+// Action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+import type { CompanionSessionSnapshot } from "../companion-sessions.ts";
 import { useEffect, useRef, useState } from "react";
 import type { DotState } from "../store.ts";
 import { newRequestId, type Send } from "../components/types.ts";
@@ -63,8 +65,31 @@ interface Props {
  answer?(action: OrchestrationAction): Promise<void>;
  onLayout(bubble:boolean,input:boolean): void;
  onGesture?(gesture: Gesture): void;
+ activity?: CompanionSessionSnapshot["sessions"][number]["activity"];
+ episodeKey?: string;
+ onThinkingSpeech?(text: string): void;
 }
-export function CapriConversation({state,send,open,close,more,speech,approval,answer,onLayout,onGesture}:Props) {
+export function CapriConversation({state,send,open,close,more,speech,approval,answer,onLayout,onGesture,activity,episodeKey,onThinkingSpeech}:Props) {
+ const action=activity?.phase === "working" ? activity.lastAction : undefined;
+ const validAction=action && action.verb.length<=16 && action.subject.length<=64 && Number.isFinite(Date.parse(action.at)) ? action : undefined;
+ const actionKey=validAction ? JSON.stringify([episodeKey,validAction.verb,validAction.subject,validAction.at]) : undefined;
+ const [quiet,setQuiet]=useState(0);
+ const say=useRef(onThinkingSpeech);say.current=onThinkingSpeech;
+ useEffect(()=>{
+  setQuiet(0);
+  if(!actionKey || !validAction)return;
+  const since=Date.parse(validAction.at);
+  let said=0;
+  const tick=()=>{
+   const seconds=Math.max(0,Math.floor((Date.now()-since)/1000));
+   setQuiet(seconds);
+   if(seconds>=120 && said<2){said=2;say.current?.("No está trabada, está pensando");}
+   else if(seconds>=40 && said<1){said=1;say.current?.("Lo estoy pensando con calma.");}
+  };
+  tick();const timer=setInterval(tick,1000);
+  return()=>clearInterval(timer);
+ },[actionKey]);
+ const ticker=validAction ? quiet>=15 ? `PIENSO… ${quiet}s` : `${validAction.verb} ${validAction.subject}` : undefined;
  const voice=useVoice(state,send,{inputOnly:true,enabled:open});
  const [draft,setDraft]=useState(""),[error,setError]=useState<string>(),[pending,setPending]=useState(false);
  const [shown,setShown]=useState(speech);
@@ -101,7 +126,7 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
  },[speech?.id,speech?.text,speech?.showMore,speech?.approvalKey]);
  useEffect(()=>{if(open)input.current?.focus();},[open]);
  useEffect(()=>{if(!voice.draft)return;setDraft(voice.draft.text);voice.draftTaken(voice.draft.id);},[voice.draft,voice.draftTaken]);
- const bubble=Boolean(shown || confirmation || receipt);
+ const bubble=Boolean(shown || confirmation || receipt || ticker);
  useEffect(()=>{onLayout(bubble,open);},[bubble,open,onLayout]);
  useEffect(()=>()=>onLayout(false,false),[onLayout]);
  const respond=async(approved:boolean)=>{
@@ -121,7 +146,8 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
   finally {sending.current=false;if(mounted.current)setPending(false);}
  };
  return <>
-  {bubble && <div className="capri3d-speech" data-leaving={leaving && !confirmation && !receipt} role="status" aria-live="polite">
+  {ticker && <div className="capri3d-action" data-thinking={quiet>=15} aria-live="off">{ticker}</div>}
+  {Boolean(shown || confirmation || receipt) && <div className="capri3d-speech" data-with-action={Boolean(ticker)} data-leaving={leaving && !confirmation && !receipt} role="status" aria-live="polite">
    <div className="capri3d-speech-frame" aria-hidden="true"/>
    <span className="capri3d-speech-text">{receipt || (pending && confirmation ? "Enviando respuesta…" : confirmation ? excerpt(`${confirmation.title} ${confirmation.message}`) : shown?.sender ? <><strong>{shown.sender}</strong>{shown.privateMessage ? <span className="capri3d-muted"> (privado)</span> : shown.channel ? <> <span className="capri3d-muted">en </span><span className="capri3d-channel">{shown.channel}</span></> : null}:<br/>{excerpt(shown.body ?? "")}</> : excerpt(shown?.text ?? ""))}{!confirmation && !receipt && shown?.confirmation && <span className="capri3d-check" aria-hidden="true">✓</span>}</span>
    {confirmation ? <div className="capri3d-confirm">

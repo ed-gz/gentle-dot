@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+// Action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+import { useEffect, useRef, useState } from "react";
 import type { ConnectionInfo } from "./client.ts";
 import type {
 	DesktopCompanionContextRequest,
@@ -24,6 +25,7 @@ export interface CompanionSessionSnapshot {
 			at?: string;
 			typingUntil?: string;
 			submittedAt?: string;
+   lastAction?: { verb: string; subject: string; at: string };
 		};
 		pendingQuestion?: { id: string; title: string; createdAt: string; answerable: boolean };
 		targets: { composer: CompanionEditorTarget | null; sidebar: DesktopCompanionRect | null };
@@ -116,6 +118,39 @@ export async function focusCompanionSession(
 		signal: AbortSignal.timeout(5000),
 	});
 	if (!response.ok) throw new Error("No se pudo abrir esa sesión. Puede haber terminado.");
+}
+
+type WorkingSession = CompanionSessionSnapshot["sessions"][number];
+/** Native context cues intentionally omit action metadata. Read the same small cache in the 3D WebView. */
+export function useWorkingSession(info: ConnectionInfo | undefined, enabled: boolean) {
+ const [session,setSession] = useState<WorkingSession>();
+ useEffect(() => {
+  setSession(undefined);
+  if (!enabled || !info) return;
+  let live = true;
+  let timer: ReturnType<typeof setTimeout>;
+  let abort: AbortController | undefined;
+  const update = async () => {
+   try {
+    abort = new AbortController();
+    const response = await fetch(`${uploadBase(info.url)}/orchestration/companion`, {
+     headers:{Authorization:`Bearer ${info.token}`},
+     signal:AbortSignal.any([abort.signal,AbortSignal.timeout(4000)]),
+    });
+    if (!response.ok) throw new Error("Unavailable");
+    const snapshot = await response.json() as CompanionSessionSnapshot;
+    const age = Date.now() - Date.parse(snapshot.observedAt ?? "");
+    const current = snapshot.version === 1 && !snapshot.stale && Number.isFinite(age) && age >= -1000 && age <= 12_000 &&
+     Array.isArray(snapshot.sessions) && snapshot.sessions.length <= 512
+     ? snapshot.sessions.find(s => s.focused === true && s.activity?.phase === "working" && !s.pendingQuestion) : undefined;
+    if (live) setSession(current);
+   } catch { if (live) setSession(undefined); }
+   finally { if (live) timer = setTimeout(update,1000); }
+  };
+  void update();
+  return () => { live = false; abort?.abort(); clearTimeout(timer); };
+ },[info,enabled]);
+ return enabled ? session : undefined;
 }
 
 /** Only the roaming native surface polls this small cached endpoint; no transcripts or screen captures. */

@@ -7,6 +7,38 @@ import { CapriConversation, excerpt, confirmationAction, overlayMask, pendingApp
 const voice=vi.hoisted(()=>({start:vi.fn(),stop:vi.fn(),cancel:vi.fn(),typed:vi.fn(),sent:vi.fn(),draftTaken:vi.fn(),phase:"idle",mic:{available:true,reason:undefined as string | undefined}}));
 vi.mock("../src/useVoice.ts",()=>({useVoice:()=>voice}));
 afterEach(()=>{vi.useRealTimers();vi.clearAllMocks();voice.phase="idle";voice.mic={available:true,reason:undefined};});
+it("shows working actions, counts quiet seconds and speaks once per thinking episode",()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+ const say=vi.fn(),layout=vi.fn();
+ const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:layout,onThinkingSpeech:say};
+ const activity={phase:"working" as const,lastAction:{verb:"EDITO",subject:"gigs.ts",at:new Date().toISOString()}};
+ const view=render(<CapriConversation {...props} activity={activity} episodeKey="s1"/>);
+ expect(screen.getByText("EDITO gigs.ts")).toBeVisible();expect(layout).toHaveBeenLastCalledWith(true,false);
+ act(()=>vi.advanceTimersByTime(14_000));expect(screen.queryByText(/PIENSO/)).toBeNull();
+ act(()=>vi.advanceTimersByTime(1000));expect(screen.getByText("PIENSO… 15s")).toHaveAttribute("data-thinking","true");
+ act(()=>vi.advanceTimersByTime(24_000));expect(say).not.toHaveBeenCalled();
+ act(()=>vi.advanceTimersByTime(1000));expect(say).toHaveBeenCalledExactlyOnceWith("Lo estoy pensando con calma.");
+ view.rerender(<CapriConversation {...props} activity={{...activity}} episodeKey="s1"/>);
+ act(()=>vi.advanceTimersByTime(80_000));expect(say).toHaveBeenLastCalledWith("No está trabada, está pensando");expect(say).toHaveBeenCalledTimes(2);
+ act(()=>vi.advanceTimersByTime(120_000));expect(say).toHaveBeenCalledTimes(2);
+ const next={...activity,lastAction:{verb:"EJECUTO",subject:"npm test",at:new Date().toISOString()}};
+ view.rerender(<CapriConversation {...props} activity={next} episodeKey="s1"/>);
+ expect(screen.getByText("EJECUTO npm test")).toBeVisible();expect(screen.queryByText(/PIENSO/)).toBeNull();
+ act(()=>vi.advanceTimersByTime(40_000));expect(say).toHaveBeenCalledTimes(3);
+ view.rerender(<CapriConversation {...props} activity={{...next,phase:"waiting"}} episodeKey="s1"/>);
+ expect(screen.queryByText(/PIENSO|EJECUTO/)).toBeNull();expect(layout).toHaveBeenLastCalledWith(false,false);
+ act(()=>vi.advanceTimersByTime(120_000));expect(say).toHaveBeenCalledTimes(3);
+});
+it("preserves legacy behavior without action metadata and hides nonworking chips",()=>{
+ vi.useFakeTimers();const say=vi.fn();
+ const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn(),onThinkingSpeech:say};
+ const view=render(<CapriConversation {...props} activity={{phase:"working"}}/>);
+ act(()=>vi.advanceTimersByTime(150_000));expect(screen.queryByText(/PIENSO/)).toBeNull();expect(say).not.toHaveBeenCalled();
+ for(const phase of ["idle","typing","submitted","waiting","unknown"] as const){
+  view.rerender(<CapriConversation {...props} activity={{phase,lastAction:{verb:"LEO",subject:"gigs.ts",at:new Date().toISOString()}}}/>);
+  expect(screen.queryByText("LEO gigs.ts")).toBeNull();
+ }
+});
 it("uses short excerpts, Ver más and timed speech",()=>{
  vi.useFakeTimers();const more=vi.fn(),layout=vi.fn();
  render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} speech={{id:"r",text:"A".repeat(300)}} more={more} onLayout={layout}/>);

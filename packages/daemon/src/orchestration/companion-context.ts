@@ -1,7 +1,21 @@
+// Action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
 import type { ComposerTarget } from "./composer-geometry.ts";
 import { type CompanionActivity, parseCompanionActivity } from "./companion-activity.ts";
 import { record } from "./herdr.ts";
 import type { OrchestrationSnapshot, Session } from "./index.ts";
+
+export interface CompanionLastAction { verb: string; subject: string; at: string }
+type ContextActivity = CompanionActivity & { lastAction?: CompanionLastAction };
+function contextActivity(value: unknown, now = Date.now()): ContextActivity | undefined {
+ const parsed: ContextActivity | undefined = parseCompanionActivity(value, now);
+ if (!parsed || !record(value) || !record(value.lastAction)) return parsed;
+ const {verb,subject,at} = value.lastAction;
+ if (typeof verb === "string" && /^[A-ZÁÉÍÓÚÑ ]{1,16}$/.test(verb) &&
+     typeof subject === "string" && subject.length <= 64 && !/[\x00-\x1f\x7f]/.test(subject) &&
+     typeof at === "string" && at.length < 40 && Number.isFinite(Date.parse(at)) && Date.parse(at) <= now + 1000)
+  parsed.lastAction = {verb,subject,at};
+ return parsed;
+}
 
 export interface CompanionContextSession {
 	paneId: string;
@@ -10,7 +24,7 @@ export interface CompanionContextSession {
 	label: string;
 	focused: boolean | null;
 	visible: boolean | null;
-	activity: CompanionActivity;
+	activity: ContextActivity;
 	pendingQuestion?: { id: string; title: string; createdAt: string; answerable: boolean };
 	// HERDR protocol 22 publishes terminal-cell layouts, not screen-pixel rectangles.
 	targets: { composer: ComposerTarget | null; sidebar: null };
@@ -36,7 +50,7 @@ export class CompanionContext {
 	private visible: Set<string> | undefined;
 	private herdrAvailable = false;
 	private snapshot: OrchestrationSnapshot | undefined;
-	private activity = new Map<string, CompanionActivity>();
+	private activity = new Map<string, ContextActivity>();
 	acceptActivity(paneId: string, sessionId: string, value: unknown) {
 		if (
 			!this.snapshot?.sessions.some(
@@ -44,7 +58,7 @@ export class CompanionContext {
 			)
 		)
 			return;
-		const parsed = parseCompanionActivity(value);
+		const parsed = contextActivity(value);
 		if (parsed) this.activity.set(paneId, parsed);
 	}
 	activityUnavailable(paneId: string, sessionId: string) {
@@ -85,7 +99,7 @@ export class CompanionContext {
 		}
 		this.activity.clear();
 		for (const [paneId, raw] of activity) {
-			const parsed = parseCompanionActivity(raw, now);
+			const parsed = contextActivity(raw, now);
 			if (parsed) this.activity.set(paneId, parsed);
 		}
 	}
@@ -93,7 +107,7 @@ export class CompanionContext {
 		const stale = this.observedAt === undefined || now - this.observedAt > 12000;
 		const sessions = (this.snapshot?.sessions ?? []).map((session): CompanionContextSession => {
 			const raw = this.activity.get(session.paneId);
-			const activity: CompanionActivity = raw
+			const activity: ContextActivity = raw
 				? structuredClone(raw)
 				: {
 						phase:

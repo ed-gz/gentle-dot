@@ -1,3 +1,5 @@
+// Action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+import type { CompanionLastAction } from "../orchestration/companion-context.ts";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -46,6 +48,35 @@ interface PendingDialog extends DialogDetails {
 // adapter owns the runner's shared UI object; neither shadows the other's pending dialog.
 const UI_OWNER = Symbol.for("gentle-dot.session-adapter-owner");
 
+/** Observe executed, transcript-visible calls only; never expose content, env, or raw shell arguments. */
+export function observeCompanionActions(pi: ExtensionAPI) {
+ let lastAction: CompanionLastAction | undefined;
+ pi.on("tool_execution_start", event => {
+  if (event.parentToolCallId) return;
+  const args = record(event.args) ? event.args : {};
+  const file = () => {
+   if (typeof args.path !== "string") return "archivo";
+   const name = args.path.split(/[\\/]/).pop() ?? "";
+   if (!name || /env|secret|credential|token|password|private|\.pem$|\.key$/i.test(name)) return "archivo";
+   return name.replace(/[^a-zA-Z0-9._ -]/g,"_").slice(0,64);
+  };
+  let verb = "HAGO", subject = "tarea";
+  if (["read","edit","write"].includes(event.toolName)) {
+   verb = event.toolName === "read" ? "LEO" : event.toolName === "edit" ? "EDITO" : "ESCRIBO";
+   subject = file();
+  } else if (["grep","find","ls"].includes(event.toolName)) {
+   verb = "BUSCO"; subject = event.toolName === "grep" ? "coincidencias" : "archivos";
+  } else if (event.toolName === "bash") {
+   verb = "EJECUTO"; subject = "comando";
+   // Exact safe labels, not prefixes: flags, assignments and shell expansions stay private.
+   if (typeof args.command === "string" && /^(npm test|pnpm test|npm run build|pnpm build|git status|git diff)$/.test(args.command.trim())) subject = args.command.trim();
+  }
+  const at = new Date(Math.max(Date.now(), Date.parse(lastAction?.at ?? "") + 1 || 0)).toISOString();
+  lastAction = {verb,subject,at};
+ });
+ return { snapshot: () => lastAction ? {...lastAction} : undefined, reset: () => { lastAction = undefined; } };
+}
+
 /** Runs inside Pi; remote answers resolve the original native dialog Promise. */
 export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.env) {
 	let ctx: ExtensionContext | undefined;
@@ -79,6 +110,11 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 	const busDisposers: Array<() => void> = [];
 	const activity = new SessionActivity();
 	const companionActivity = new CompanionActivityTracker();
+ const companionActions = observeCompanionActions(pi);
+ const companionSnapshot = (idle: boolean, waiting: boolean) => ({
+  ...companionActivity.snapshot(idle, waiting),
+  ...(companionActions.snapshot() ? {lastAction: companionActions.snapshot()} : {}),
+ });
 	const deliveries = new SessionDeliveries();
 	const deliveryEvidence = new Map<string, {text: string; acceptedAt: number; baseline: Set<string>}>();
 	const deliveredAttachments = new Map<string, string>();
@@ -106,6 +142,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 		deliveries.clear();
 		deliveryEvidence.clear();
 		companionActivity.reset();
+  companionActions.reset();
 		deliveredAttachments.clear();
 		deliveredTokens.clear();
 		reviewConsent?.detach();
@@ -352,7 +389,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
             pi.events?.emit("gentle-dot:editor-activity:probe", { sessionId: ctx.sessionManager.getSessionId() });
             return {
 			sessionId, instanceId,
-			companionActivity: companionActivity.snapshot(ctx.isIdle(), !!question || !!terminalQuestion),
+			companionActivity: companionSnapshot(ctx.isIdle(), !!question || !!terminalQuestion),
 		};
         }
 		if (method === "snapshot") {
@@ -413,7 +450,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				instanceId,
 				revision: `${sessionId}:${revision}`,
 				deliveries: deliveries.snapshot(ctx.isIdle(), !!question || !!terminalQuestion || queuedHuman.length > 0 || (ctx.hasPendingMessages?.() ?? true)),
-				companionActivity: companionActivity.snapshot(ctx.isIdle(), !!question || !!terminalQuestion),
+				companionActivity: companionSnapshot(ctx.isIdle(), !!question || !!terminalQuestion),
 				messages,
 				history: {
 					supported: true,
@@ -864,7 +901,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 		flushQueuedHuman();
 	};
 	pi.on("input", (_event, context) => { if (_event.source !== "extension") companionActivity.human(); companionActivity.submitted(); refresh(_event, context); });
-	pi.on("agent_start", (event, context) => { companionActivity.response(true); refresh(event, context); });
+	pi.on("agent_start", (event, context) => { companionActions.reset(); companionActivity.response(true); refresh(event, context); });
 	pi.on("agent_end", (event, context) => { companionActivity.response(false); refresh(event, context); });
 	pi.on("agent_settled", (event, context) => {
 		activity.settled();
@@ -876,6 +913,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 	});
 	pi.on("message_end", refresh);
 	pi.on("session_tree", (event, context) => {
+  companionActions.reset();
 		activity.reset();
 		refresh(event, context);
 	});
