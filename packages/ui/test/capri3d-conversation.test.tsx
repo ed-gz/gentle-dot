@@ -8,6 +8,52 @@ import { readFileSync } from "node:fs";
 const voice=vi.hoisted(()=>({start:vi.fn(),stop:vi.fn(),cancel:vi.fn(),typed:vi.fn(),sent:vi.fn(),draftTaken:vi.fn(),phase:"idle",mic:{available:true,reason:undefined as string | undefined}}));
 vi.mock("../src/useVoice.ts",()=>({useVoice:()=>voice}));
 afterEach(()=>{vi.useRealTimers();vi.clearAllMocks();voice.phase="idle";voice.mic={available:true,reason:undefined};});
+it("shows a compact question once for four seconds despite cue refreshes and gaps",()=>{
+ vi.useFakeTimers();
+ const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn()};
+ const speech={id:'question:notice',text:'Hay una pregunta en velosport-odoo.',question:true};
+ const view=render(<CapriConversation {...props} speech={speech}/>);
+ const card=screen.getByRole('status');
+ expect(card).toHaveAttribute('data-size','compact');
+ act(()=>vi.advanceTimersByTime(1000));
+ view.rerender(<CapriConversation {...props}/>);
+ expect(screen.getByRole('status')).toBe(card);
+ view.rerender(<CapriConversation {...props} speech={{...speech}}/>);
+ expect(screen.getByRole('status')).toBe(card);
+ act(()=>vi.advanceTimersByTime(2000));
+ view.rerender(<CapriConversation {...props} speech={{...speech,text:speech.text+' '}}/>);
+ expect(screen.getByRole('status')).toBe(card);
+ expect(card).toHaveAttribute('data-leaving','false');
+ act(()=>vi.advanceTimersByTime(1000));
+ expect(screen.queryByRole('status')).toBeNull();
+ view.rerender(<CapriConversation {...props}/>);
+ view.rerender(<CapriConversation {...props} speech={{...speech,text:speech.text+' '}}/>);
+ expect(screen.queryByRole('status')).toBeNull();
+ view.rerender(<CapriConversation {...props} speech={{...speech,id:'question:new'}}/>);
+ expect(screen.getByRole('status')).toBeTruthy();
+ view.rerender(<CapriConversation {...props}/>);
+ act(()=>vi.advanceTimersByTime(4000));
+ expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('does not replay a question card after native remount or interruption by another notice',()=>{
+ vi.useFakeTimers();
+ const enteredQuestions=new Set<string>();
+ const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn(),enteredQuestions};
+ const speech={id:'question:once',approvalKey:'session:q',text:'Hay una pregunta en velosport-odoo.',question:true};
+ const view=render(<CapriConversation {...props} speech={speech}/>);
+ expect(screen.getByRole('status')).toBeTruthy();
+ view.rerender(<CapriConversation {...props} speech={{id:'capture',text:'Captura copiada',showMore:false}}/>);
+ expect(screen.getByText('Captura copiada')).toBeTruthy();
+ view.rerender(<CapriConversation {...props} speech={speech}/>);
+ expect(screen.queryByRole('status')).toBeNull();
+ view.unmount();
+ const resumed=render(<CapriConversation {...props} speech={speech}/>);
+ expect(screen.queryByRole('status')).toBeNull();
+ resumed.rerender(<CapriConversation {...props} speech={{...speech,id:'question:next',approvalKey:'session:next'}}/>);
+ expect(screen.getByRole('status')).toBeTruthy();
+});
+
 it("enters once per question, points only with a target and clears on withdrawal",()=>{
  const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn()};
  const question={id:"question:q",paneId:"p",sessionId:"s"};
@@ -177,7 +223,7 @@ it.each([
 ])("sizes the actual conversation card for $id",speech=>{
  const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn()};
  render(<CapriConversation {...props} speech={speech}/>);
- expect(screen.getByRole("status")).toHaveAttribute("data-size",speech.id==="end" ? "compact" : "full");
+ expect(screen.getByRole("status")).toHaveAttribute("data-size",speech.id==="body" ? "full" : "compact");
 });
 it("never compacts an actionable permission with a short title",()=>{
  const approval={id:"size",paneId:"p",sessionId:"s",title:"Permiso",message:"¿Sí?",action:"bash",kind:"confirm" as const,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};

@@ -151,7 +151,8 @@ const SUPERVISOR_VERBS=new Map(["LEO,CONSULTO","BUSCO,EXAMINO","EDITO,SUPERVISO"
 const ticker=validAction && quiet<15 ? `${SUPERVISOR_VERBS.get(validAction.verb) ?? validAction.verb} ${validAction.subject}` : undefined;
  const voice=useVoice(state,send,{inputOnly:true,enabled:open});
  const [draft,setDraft]=useState(""),[error,setError]=useState<string>(),[pending,setPending]=useState(false);
- const [shown,setShown]=useState(speech);
+ const [shown,setShown]=useState<Speech>();
+ const questionNotice=useRef<{speech:Speech;until:number} | undefined>(undefined);
  const [leaving,setLeaving]=useState(false);
  const [showGestures,setShowGestures]=useState(false);
  const [answered,setAnswered]=useState<string>();
@@ -177,12 +178,31 @@ const ticker=validAction && quiet<15 ? `${SUPERVISOR_VERBS.get(validAction.verb)
  const input=useRef<HTMLInputElement>(null);
  const confirmation=approval && answered!==approvalKey && confirmationAction(approval,true)?approval:undefined;
  useEffect(()=>{
-  setShown(speech?.approvalKey===dismissedSpeech.current && dismissedSpeech.current!==undefined ? undefined : speech);setLeaving(false);if(!speech)return;
-  const duration=speechDuration(speech.text);
+  let next=speech;
+  let duration=next ? speechDuration(next.text) : 0;
+  // Question cue expiry/summary refreshes must not restart the comic entrance.
+  // Keep the original mounted notice across brief stream gaps, with one absolute
+  // deadline. Shared history also consumes it across native hide/unmount cycles.
+  if(next?.question){
+   const key=`notice:${next.approvalKey ?? next.id}`;
+   if(questionNotice.current?.speech.id!==next.id || questionNotice.current?.speech.approvalKey!==next.approvalKey){
+    questionNotice.current=history.has(key) ? undefined : {speech:next,until:Date.now()+4000};
+    history.add(key);
+   }
+   next=questionNotice.current?.speech;
+   duration=Math.max(0,(questionNotice.current?.until ?? 0)-Date.now());
+  } else if(!next && questionNotice.current){
+   next=questionNotice.current.speech;
+   duration=Math.max(0,questionNotice.current.until-Date.now());
+  } else if(next){
+   questionNotice.current=undefined;
+  }
+  if(duration<=0 || (next?.approvalKey===dismissedSpeech.current && dismissedSpeech.current!==undefined))next=undefined;
+  setShown(next);setLeaving(false);if(!next)return;
   const fade=setTimeout(()=>setLeaving(true),Math.max(0,duration-180));
   const timer=setTimeout(()=>setShown(undefined),duration);
   return()=>{clearTimeout(timer);clearTimeout(fade);};
- },[speech?.id,speech?.text,speech?.showMore,speech?.approvalKey]);
+ },[speech?.id,speech?.text,speech?.showMore,speech?.approvalKey,speech?.question,history]);
  useEffect(()=>{if(open)input.current?.focus();},[open]);
  useEffect(()=>{if(!voice.draft)return;setDraft(voice.draft.text);voice.draftTaken(voice.draft.id);},[voice.draft,voice.draftTaken]);
  const bubble=Boolean(shown || confirmation || receipt || ticker);
@@ -222,7 +242,7 @@ const ticker=validAction && quiet<15 ? `${SUPERVISOR_VERBS.get(validAction.verb)
    {fx.kind==="done" ? <><div className="capri3d-speed-lines"/><div className="capri3d-shockwave"/><div className="capri3d-celebratory-cut"/></> : impact && <div className="capri3d-impact"/>}
   </div>}
   {ticker && <div className="capri3d-action" data-thinking={quiet>=15} aria-live="off">{ticker}</div>}
-  {Boolean((shown && !delaySummary) || confirmation || receipt) && <CapriNotificationCard key={confirmation ? approvalKey : shown?.id ?? "receipt"} avatar={avatar} reduced={reduced} summary={receipt ?? (confirmation ? `${confirmation.title} ${confirmation.message}` : shown?.sender ?? shown?.text ?? "")} body={receipt || confirmation ? undefined : shown?.body} prominent={Boolean(confirmation || (!receipt && shown?.question))} withAction={Boolean(ticker)} leaving={leaving && !confirmation && !receipt} onAcknowledge={!confirmation && !receipt && !shown?.question && shown?.showMore===false ? ()=>{setShown(undefined);setLeaving(false);} : undefined}>
+  {Boolean((shown && !delaySummary) || confirmation || receipt) && <CapriNotificationCard key={confirmation ? approvalKey : shown?.id ?? "receipt"} avatar={avatar} reduced={reduced} summary={receipt ?? (confirmation ? `${confirmation.title} ${confirmation.message}` : shown?.sender ?? shown?.text ?? "")} body={receipt || confirmation ? undefined : shown?.body} prominent={Boolean(confirmation)} withAction={Boolean(ticker)} leaving={leaving && !confirmation && !receipt} onAcknowledge={!confirmation && !receipt && !shown?.question && shown?.showMore===false ? ()=>{setShown(undefined);setLeaving(false);} : undefined}>
    <span className="capri3d-speech-text">{receipt || (pending && confirmation ? "Enviando respuesta…" : confirmation ? excerpt(`${confirmation.title} ${confirmation.message}`) : shown?.sender ? <><strong>{shown.sender}</strong>{shown.privateMessage ? <span className="capri3d-muted"> (privado)</span> : shown.channel ? <> <span className="capri3d-muted">en </span><span className="capri3d-channel">{shown.channel}</span></> : null}:<br/>{excerpt(shown.body ?? "")}</> : excerpt(shown?.text ?? ""))}{!confirmation && !receipt && shown?.confirmation && <span className="capri3d-check" aria-hidden="true">✓</span>}</span>
    {confirmation ? <div className="capri3d-confirm">
     <button type="button" className="capri3d-reject" disabled={pending} onClick={()=>void respond(false)}>Rechazar</button>

@@ -1,11 +1,14 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { CapriNotificationCard, notificationCardSize, useNotificationAvatar } from "../src/capri3d/CapriNotificationCard.tsx";
 
 vi.mock("@tauri-apps/api/core",()=>({invoke:vi.fn()}));
 import { invoke } from "@tauri-apps/api/core";
 
 it.each([
+ ["Hay una pregunta en velosport-odoo.", undefined, false, "compact"],
+ ["Hay una pregunta en velosport-odoo.", "  ", false, "compact"],
  ["", undefined, false, "compact"],
  ["x".repeat(40), undefined, false, "compact"],
  ["x".repeat(41), undefined, false, "medium"],
@@ -30,6 +33,19 @@ it.each([
 ] as const)("renders a text-proportional size for %s", (summary, body, prominent, size) => {
  render(<CapriNotificationCard summary={summary} body={body} prominent={prominent}>{summary}{body}</CapriNotificationCard>);
  expect(screen.getByRole("status").getAttribute("data-size")).toBe(size);
+});
+
+it("does not inflate the compact question with the base fixed height", () => {
+ const text='Hay una pregunta en velosport-odoo.';
+ const css=readFileSync(`${process.cwd()}/packages/ui/src/capri3d/notification-card.css`,'utf8');
+ const style=document.createElement('style');style.textContent=css;document.head.append(style);
+ try {
+  render(<CapriNotificationCard summary={text}>{text}</CapriNotificationCard>);
+  const card=screen.getByRole('status');
+  expect(card).toHaveAttribute('data-size','compact');
+  expect(getComputedStyle(card).height).toBe('auto');
+  expect(getComputedStyle(card).minHeight).toBe('56px');
+ } finally { style.remove(); }
 });
 
 it("keeps compact acknowledgement and reduced-motion semantics", () => {
