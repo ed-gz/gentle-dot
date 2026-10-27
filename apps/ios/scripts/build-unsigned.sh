@@ -24,14 +24,14 @@ if (!c.includes("CODE_SIGNING_ALLOWED = NO")) {
 }' "$project/project.pbxproj"
 mkdir -p out
 rm -rf src-tauri/gen/apple/build out/Payload out/Capri-unsigned.ipa
-if cargo tauri ios build --target aarch64-apple-ios --no-sign; then
+if cargo tauri ios build --target aarch64 --no-sign --ci; then
   # Newer CLIs package the unsigned IPA themselves.
   ipa=$(find src-tauri/gen/apple src-tauri/target -maxdepth 6 -name '*.ipa' -type f 2>/dev/null | head -1 || true)
   if [[ -n "$ipa" ]]; then cp "$ipa" out/Capri-unsigned.ipa; fi
 fi
 if [[ ! -f out/Capri-unsigned.ipa ]]; then
   # Older CLIs: the archive/product is on disk; package the Payload ourselves.
-  cargo tauri ios build --target aarch64-apple-ios --export-method debugging || true
+  cargo tauri ios build --target aarch64 --export-method debugging --ci || true
   app=$(find src-tauri/gen/apple src-tauri/target ~/Library/Developer/Xcode/Archives \
     -maxdepth 8 -name '*.app' -type d -path '*iphoneos*' 2>/dev/null | head -1 || true)
   [[ -n "$app" ]] || { printf 'No unsigned device .app produced\n' >&2; exit 1; }

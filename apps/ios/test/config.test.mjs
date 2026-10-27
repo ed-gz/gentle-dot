@@ -42,7 +42,7 @@ test('workflow parses as YAML, is manual, unsigned, bounded, and secret-free', (
   assert.ok(job.steps.some(step => step.uses?.startsWith('actions/upload-artifact@')));
   assert.doesNotMatch(read('../../../.github/workflows/ios-sideload.yml'), /secrets\./);
   const script = read('../scripts/build-unsigned.sh');
-  assert.match(script, /tauri ios build --target aarch64-apple-ios/);
+  assert.match(script, /tauri ios build --target aarch64 /);
   assert.match(script, /CODE_SIGNING_ALLOWED = NO/);
   assert.match(script, /project\.pbxproj/);
   assert.doesNotMatch(script, /xcodebuild -project/);
