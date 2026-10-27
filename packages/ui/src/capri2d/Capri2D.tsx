@@ -1,43 +1,81 @@
-// Ported choreography/engine from https://github.com/mochiiwuff/capri-desktop (MIT); artwork not included — personal-use assets loaded locally.
+// Ported from https://github.com/mochiiwuff/capri-desktop (MIT).
+// Artwork is not included; personal-use assets are loaded locally.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
-import { createEngine, frameAt, sampleSheet, STAND } from "./engine.ts";
+import { createEngine, frameAt } from "./engine.ts";
+import { RigDirector, type RigIntent } from "./director.ts";
+import { RigFx } from "./fx.ts";
 let warned = false;
 export interface Capri2DProps {
  enabled: boolean; visible: boolean; reduced: boolean;
  onActive(active: boolean): void; onMask(mask: number[]): void;
+ intent?: RigIntent;
 }
-export function Capri2D({ enabled, visible, reduced, onActive, onMask }: Capri2DProps) {
+export function Capri2D({ enabled, visible, reduced, onActive, onMask, intent = {} }: Capri2DProps) {
  const canvas = useRef<HTMLCanvasElement>(null);
- const current = useRef({ visible, reduced, onActive, onMask });
- current.current = { visible, reduced, onActive, onMask };
+ const fxCanvas = useRef<HTMLCanvasElement>(null);
+ const current = useRef({ visible, reduced, onActive, onMask, intent });
+ current.current = { visible, reduced, onActive, onMask, intent };
  useEffect(() => {
   if (!enabled || !canvas.current) return;
   const element = canvas.current;
   let live = true, raf = 0, url: string | undefined;
+  const urls: string[] = [];
+  const director = new RigDirector();
+  let fx: RigFx | undefined;
+  try { if (fxCanvas.current) fx = new RigFx(fxCanvas.current); } catch { /* Body still works without the optional FX context. */ }
   let engine: ReturnType<typeof createEngine> | undefined;
-  let last = -1, previousMask = "";
-  const fail = () => {
-   cancelAnimationFrame(raf); engine?.dispose(); engine = undefined;
+  let sourceImage: HTMLImageElement | undefined;
+  let last = -1, previousMask = "", previousIntent = "", wasHidden = false, fxSuppressed = false;
+  const loadImage = async (name: string) => {
+   const bytes = await invoke<ArrayBuffer | number[]>("capri2d_asset", { name });
+   if (!live) throw new Error("Disposed");
+   const buffer = bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes).buffer;
+   const objectUrl = URL.createObjectURL(new Blob([buffer], { type: "image/png" }));
+   urls.push(objectUrl);
+   const image = new Image(); image.src = objectUrl; await image.decode();
+   return image;
+  };
+  const fail = (warn = true) => {
+   cancelAnimationFrame(raf); engine?.dispose(); engine = undefined; fx?.clear();
    if (!live) return;
    current.current.onActive(false);
-   if (!warned) { warned = true; console.warn("Capri 2D: arte local o WebGL no disponible; se conserva la vista alternativa."); }
+   if (warn && !warned) { warned = true; console.warn("Capri 2D: arte local o WebGL no disponible; se conserva la vista alternativa."); }
   };
   const tick = (now: number) => {
    if (!live || !engine) return;
-   if (current.current.visible && !document.hidden) {
-    const frame = current.current.reduced ? 0 : frameAt(now);
-    if (frame !== last) {
-     last = frame;
-     const mask = engine.draw(sampleSheet(STAND, frame).pose, frame);
+   const state = current.current;
+   const hidden = !state.visible || document.hidden;
+   director.update(state.intent, now, hidden);
+   const suppressFx=hidden||state.reduced;
+   if (suppressFx && !fxSuppressed) fx?.clear();
+   fxSuppressed=suppressFx;
+   if (!hidden) {
+    const frame = state.reduced ? 0 : frameAt(now, director.fps());
+    const intentKey = JSON.stringify([state.intent,state.reduced]);
+    if (frame !== last || intentKey !== previousIntent || wasHidden) {
+     last = frame; previousIntent = intentKey;
+     const sample = director.sample(now,state.reduced);
+     const mask = engine.draw(sample.pose, frame);
+     if (!state.reduced) for (const cue of sample.cues) fx?.cue(cue,now,state.intent.direction);
      const key = mask.join("");
-     if (key !== previousMask) { previousMask = key; current.current.onMask(mask); }
+     if (key !== previousMask) { previousMask = key; state.onMask(mask); }
     }
+    if (!state.reduced) fx?.draw(now);
    }
+   wasHidden = hidden;
    raf = requestAnimationFrame(tick);
   };
-  const lost = (event: Event) => { event.preventDefault(); fail(); };
+  const lost = (event: Event) => { event.preventDefault(); fail(false); };
+  const restored = () => {
+   if (!live || !sourceImage) return;
+   try {
+    engine = createEngine(element,sourceImage); last=-1;
+    current.current.onActive(true); tick(performance.now());
+   } catch { fail(); }
+  };
   element.addEventListener("webglcontextlost", lost);
+  element.addEventListener("webglcontextrestored", restored);
   void (async () => {
    const bytes = await invoke<ArrayBuffer | number[]>("capri2d_asset", { name: "capri-full.png" });
    if (!live) return;
@@ -46,16 +84,25 @@ export function Capri2D({ enabled, visible, reduced, onActive, onMask }: Capri2D
    const image = new Image(); image.src = url; await image.decode();
    if (!live) return;
    if (image.naturalWidth !== 240 || image.naturalHeight !== 420) throw new Error("Invalid cutout dimensions");
+   sourceImage = image;
    engine = createEngine(element, image);
+   for (const kind of ["grin","laugh","eyes"] as const) {
+    void loadImage(`cutin-${kind}.png`).then(image => { if (live && fx) fx.cutins[kind] = image; }).catch(() => {});
+   }
    current.current.onActive(true);
    tick(performance.now());
   })().catch(fail);
   return () => {
-   live = false; cancelAnimationFrame(raf); engine?.dispose();
+   live = false; cancelAnimationFrame(raf); engine?.dispose(); fx?.clear();
+   for (const objectUrl of urls) URL.revokeObjectURL(objectUrl);
    element.removeEventListener("webglcontextlost", lost);
+   element.removeEventListener("webglcontextrestored", restored);
    if (url) URL.revokeObjectURL(url);
    current.current.onActive(false);
   };
  }, [enabled]);
- return <canvas ref={canvas} className="capri3d-canvas" data-capri2d="true" aria-hidden="true" style={{ width: 144, height: 204, display: "block", pointerEvents: "none" }} />;
+ return <>
+  <canvas ref={canvas} className="capri3d-canvas" data-capri2d="true" aria-hidden="true" style={{ width: 144, height: 204, display: "block", pointerEvents: "none" }} />
+  <canvas ref={fxCanvas} data-capri2d-fx="true" aria-hidden="true" style={{ position:"absolute",left:0,top:0,width:144,height:204,pointerEvents:"none" }} />
+ </>;
 }

@@ -1,5 +1,6 @@
-import { expect, it } from "vitest";
-import { alphaMask, frameAt, samplePose, sampleSheet, STAND } from "../src/capri2d/engine.ts";
+import { expect, it, vi } from "vitest";
+import { UNIFORMS } from "../src/capri2d/shaders.ts";
+import { alphaMask, createEngine, frameAt, samplePose, sampleSheet, STAND } from "../src/capri2d/engine.ts";
 it("projects alpha bottom-up into the native 24x34 grid, ignoring transparent pixels", () => {
  const pixels = new Uint8Array(144*204*4);
  expect(alphaMask(pixels,144,204).every(cell => cell === 0)).toBe(true);
@@ -32,4 +33,30 @@ it("clamps one-shot sheets and preserves cues", () => {
  expect(sampleSheet(sheet, 2).cue).toBe("peak");
  expect(sampleSheet(sheet, 99).index).toBe(1);
  expect(() => sampleSheet({ keys: [] }, 0)).toThrow();
+});
+it("binds the entire reference shader rig including smear, echo, grading and body-space mask transforms", () => {
+ const calls: Record<string,ReturnType<typeof vi.fn>>={};
+ const gl=new Proxy({}, {get(_target,key:string){
+  if(key.toUpperCase()===key)return 1;
+  if(!calls[key])calls[key]=vi.fn((...args:unknown[])=>{
+   if(key==='getUniformLocation')return args[1];
+   if(key==='getShaderParameter'||key==='getProgramParameter')return true;
+   if(key==='getAttribLocation')return 0;
+   if(key.startsWith('create'))return {};
+   return undefined;
+  });
+  return calls[key];
+ }}) as WebGLRenderingContext;
+ const canvas={getContext:()=>gl,width:0,height:0} as unknown as HTMLCanvasElement;
+ const engine=createEngine(canvas,{} as HTMLImageElement);
+ engine.draw({armL:.5,armR:1.2,longR:2.3,smear:[-18,0],echo:[14,0],sx:.94,sy:1.1,tilt:8,bob:-16},7);
+ const bound=new Set(['uniform1i','uniform1f','uniform2f','uniform3f','uniform4f'].flatMap(method=>calls[method]!.mock.calls.map(args=>args[0])));
+ expect([...bound].sort()).toEqual([...UNIFORMS].sort());
+ expect(calls.uniform1f).toHaveBeenCalledWith('uLongR',2.3);
+ expect(calls.uniform2f).toHaveBeenCalledWith('uSmear',-18,0);
+ expect(calls.uniform2f).toHaveBeenCalledWith('uEcho',14,0);
+ expect(calls.uniform4f).toHaveBeenCalledWith('uBody',-16,8*Math.PI/180,.94,1.1);
+ expect(calls.readPixels).toHaveBeenCalledOnce();
+ expect(canvas).toMatchObject({width:144,height:204});
+ engine.dispose();expect(calls.deleteTexture).toHaveBeenCalledOnce();expect(calls.deleteShader).toHaveBeenCalledTimes(2);
 });

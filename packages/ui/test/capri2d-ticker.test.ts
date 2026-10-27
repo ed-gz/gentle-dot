@@ -25,3 +25,13 @@ it("retains the T44a conversation ticker over the active 2D canvas", () => {
  expect(screen.getByText(/EDITE/)).toBeInTheDocument();
  expect(screen.getByText(/engine.ts/)).toBeInTheDocument();
 });
+it('uses the ported 2D outcome FX instead of stacking the old 3D placeholder FX',()=>{
+ vi.spyOn(document,'hidden','get').mockReturnValue(false);
+ const props={controls:{state:{...DEFAULT_DESKTOP_COMPANION,enabled:true,visible:true,available:true,renderMode:'2d' as const},pending:false,change:vi.fn(),interact:vi.fn().mockResolvedValue(undefined),recall:vi.fn(),hide:vi.fn(),menu:vi.fn(),move:vi.fn()},connected:true,toggle:vi.fn(),startDrag:vi.fn()};
+ const view=render(createElement(DesktopCompanionSurface,{...props,agentState:'working'}));
+ view.rerender(createElement(DesktopCompanionSurface,{...props,agentState:'idle'}));
+ expect(view.container.querySelector('.capri3d-outcome')).toBeNull();
+ expect(screen.getByText(/EDITE/)).toBeInTheDocument();
+ view.rerender(createElement(DesktopCompanionSurface,{...props,agentState:'error'}));
+ expect(view.container.querySelector('.capri3d-outcome')).toBeNull();
+});

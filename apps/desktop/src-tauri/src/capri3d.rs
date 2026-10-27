@@ -12,7 +12,12 @@ const MAX_BYTES: u64 = 64 * 1024 * 1024;
 mod art2d_tests {
     #[test]
     fn exact_png_allowlist() {
-        assert!(super::allowed_2d_asset("capri-full.png"));
+        for name in ["capri-full.png", "cutin-grin.png", "cutin-laugh.png", "cutin-eyes.png"] {
+            assert!(super::allowed_2d_asset(name), "{name}");
+        }
+        for name in ["../cutin-grin.png", "cutin-many.png", "intro-grab.webp"] {
+            assert!(!super::allowed_2d_asset(name), "{name}");
+        }
         for name in ["../capri-full.png", "/tmp/capri-full.png", "other/capri-full.png", "capri-full.jpg", "roja.glb", "unknown.png", "CAPRI-FULL.PNG"] {
             assert!(!super::allowed_2d_asset(name), "{name}");
         }
@@ -59,7 +64,7 @@ pub async fn capri3d_asset(window: tauri::WebviewWindow, name: String) -> Result
         .await.map_err(|e| e.to_string())?
 }
 /// Ported choreography/engine from https://github.com/mochiiwuff/capri-desktop (MIT); artwork not included — personal-use assets loaded locally.
-const ART_2D: [&str; 1] = ["capri-full.png"];
+const ART_2D: [&str; 4] = ["capri-full.png", "cutin-grin.png", "cutin-laugh.png", "cutin-eyes.png"];
 pub fn allowed_2d_asset(name: &str) -> bool { ART_2D.contains(&name) }
 #[tauri::command]
 pub async fn capri2d_asset(window: tauri::WebviewWindow, name: String) -> Result<tauri::ipc::Response, String> {

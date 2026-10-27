@@ -378,7 +378,7 @@ export function DesktopCompanionSurface({
 		else if (cue?.kind === "notification") pose = "face";
 		else if (cue?.kind === "input-ready" && cue.placement === "perch") pose = "perch";
 	}
-	const choreography = useChoreography(controls.state.enabled && preferred3D,
+	const choreography = useChoreography(controls.state.enabled && renderMode !== "sprites",
 		behavior.state !== "idle" || interacting || Boolean(cue), cue?.id);
 	const [speech, setSpeech] = useState<Speech & { until: number }>();
  const thinkingEpisode = useRef<{key:string;said:Set<string>}>({key:"",said:new Set()});
@@ -576,6 +576,15 @@ export function DesktopCompanionSurface({
             {renderMode === "2d" ? <Capri2D
                 enabled={controls.state.enabled} visible={visible && !inControl}
                 reduced={reduced || !controls.state.motion}
+                intent={{
+                 question: activeQuestion ? JSON.stringify([activeQuestion.id,activeQuestion.paneId,activeQuestion.sessionId]) : attention ? "attention" : undefined,
+                 direction: activeQuestion ? (questionClip === "pointingLeft" ? -1 : 1) : motion?.direction || 1,
+                 outcome: behavior.state === "done" || behavior.state === "error" ? outcome : undefined,
+                 resting: choreography.absent || choreography.rest === "sleep" ? "sleep" : choreography.rest === "wake" || choreography.rest === "greet" ? "wake" : perched ? "sit" : "stand",
+                 travelling: controls.state.travelling,
+                 falling: motion?.mode === "fall",
+                 talking: Boolean(speech),
+                }}
                 onActive={on3DActive} onMask={on3DMask}
             /> : <Capri3D
 				enabled={controls.state.enabled}
@@ -615,7 +624,7 @@ export function DesktopCompanionSurface({
 		{active3D && visible && <CapriConversation
    question={activeQuestion ? {...activeQuestion,target:questionTarget} : undefined} enteredQuestions={enteredQuestions.current}
 			state={chatState} send={chatSend} open={chatOpen} close={() => setChatOpen(false)}
-			outcome={behavior.state === "done" || behavior.state === "error" ? outcome : undefined} reduced={reduced || !controls.state.motion} visible={visible && !inControl}
+			outcome={renderMode !== "2d" && (behavior.state === "done" || behavior.state === "error") ? outcome : undefined} reduced={reduced || !controls.state.motion} visible={visible && !inControl}
 			speech={speech} approval={approval} activity={attention ? undefined : workingSession?.activity} episodeKey={workingSession ? `${workingSession.paneId}:${workingSession.sessionId}` : undefined} onThinkingSpeech={thinkingSpeech} onLayout={layout} more={() => { if (cue?.kind === "question") void controls.openContext?.(); toggle(); }}
 			onGesture={name => setGesture({ name, at: Date.now() })}
 			answer={async action => {

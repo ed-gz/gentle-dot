@@ -148,6 +148,25 @@ fn valid_name(value: &str) -> bool {
 mod render_mode_tests {
     use super::*;
     #[test]
+    fn settings_render_mode_patch_round_trips_to_saved_file() {
+        // Exact controls.change payload, decoded as the desktop_companion_set argument.
+        let payload = serde_json::json!({"patch": {"renderMode": "2d"}});
+        let patch: Patch = serde_json::from_value(payload["patch"].clone()).unwrap();
+        let previous: Preferences = serde_json::from_str(r#"{"form3d":true,"pinned":true}"#).unwrap();
+        let next = previous.patched(patch).unwrap();
+        // Use the same write method as Controller::set; no window/compositor is needed.
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../packages/ui/src/capri2d/validation/desktop-companion.json");
+        next.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(value["renderMode"], "2d");
+        let restored: Preferences = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.render_mode(), RenderMode::TwoD);
+        assert!(restored.pinned);
+        assert_eq!(restored.form_3d, Some(true));
+    }
+    #[test]
     fn modes_persist_and_legacy_choice_migrates() {
         assert_eq!(Preferences::default().render_mode(), RenderMode::Sprites);
         for mode in [RenderMode::TwoD, RenderMode::ThreeD, RenderMode::Sprites] {
@@ -162,6 +181,12 @@ mod render_mode_tests {
     }
 }
 impl Preferences {
+    /// Shared by the command transaction and the on-disk regression: never project
+    /// a settings patch through the legacy form3d flag before writing it.
+    fn save(&self, path: &std::path::Path) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        crate::config::write_private(path, &json).map_err(|e| e.to_string())
+    }
     fn render_mode(&self) -> RenderMode {
         self.render_mode.unwrap_or_else(|| if self.form_3d == Some(true) { RenderMode::ThreeD } else { RenderMode::Sprites })
     }
@@ -1881,9 +1906,7 @@ impl Controller {
                 self.paint(allowed && !manual_hidden)?;
             }
         }
-        if let Err(e) =
-            crate::config::write_private(&self.path, &serde_json::to_string_pretty(&next).unwrap())
-        {
+        if let Err(e) = next.save(&self.path) {
             if next.enabled != previous.enabled {
                 let _ = if previous.enabled {
                     self.enable(&previous)

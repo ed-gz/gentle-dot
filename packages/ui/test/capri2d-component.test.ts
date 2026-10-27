@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), draw: vi.fn(), dispose: vi.fn() }));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), draw: vi.fn(), dispose: vi.fn(), fxCue:vi.fn(),fxDraw:vi.fn(),fxClear:vi.fn() }));
+vi.mock("../src/capri2d/fx.ts",()=>({RigFx:class{cutins={};cue=mocks.fxCue;draw=mocks.fxDraw;clear=mocks.fxClear;}}));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("../src/capri2d/engine.ts", async original => ({
  ...await original<typeof import("../src/capri2d/engine.ts")>(),
@@ -21,12 +22,13 @@ beforeEach(() => {
  vi.spyOn(URL,"revokeObjectURL").mockImplementation(() => {});
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
-it("loads only the local cutout and publishes/deduplicates its alpha; hides and disposes", async () => {
+it("loads local artwork and publishes/deduplicates its alpha; hides and disposes", async () => {
  const onActive=vi.fn(), onMask=vi.fn();
  const props={ enabled:true, visible:true, reduced:false, onActive, onMask };
  const view=render(createElement(Capri2D,props));
  await act(async () => {});
  expect(mocks.invoke).toHaveBeenCalledWith("capri2d_asset",{name:"capri-full.png"});
+ for(const name of ['cutin-grin.png','cutin-laugh.png','cutin-eyes.png']) expect(mocks.invoke).toHaveBeenCalledWith('capri2d_asset',{name});
  expect(onActive).toHaveBeenCalledWith(true);
  expect(onMask).toHaveBeenCalledTimes(1);
  act(()=>nextFrame(2000));
@@ -46,7 +48,32 @@ it("keeps reduced motion static", async () => {
  await act(async()=>{});
  act(()=>nextFrame(3000)); act(()=>nextFrame(4000));
  expect(mocks.draw).toHaveBeenCalledOnce();
+ expect(mocks.fxCue).not.toHaveBeenCalled();expect(mocks.fxDraw).not.toHaveBeenCalled();
  view.unmount();
+});
+it('dispatches crossed victory cues to the second canvas and consumes hidden episodes',async()=>{
+ vi.spyOn(performance,'now').mockReturnValue(0);
+ const props={enabled:true,visible:true,reduced:false,onActive:vi.fn(),onMask:vi.fn(),intent:{outcome:{kind:'done' as const,at:1}}};
+ const view=render(createElement(Capri2D,props));await act(async()=>{});
+ act(()=>nextFrame(300));
+ expect(mocks.fxCue.mock.calls.map(call=>call[0])).toEqual(['gather','launch','peak']);
+ view.rerender(createElement(Capri2D,{...props,visible:false}));
+ act(()=>nextFrame(400));const cleared=mocks.fxClear.mock.calls.length;
+ act(()=>nextFrame(500));expect(mocks.fxClear).toHaveBeenCalledTimes(cleared);
+ mocks.fxCue.mockClear();view.rerender(createElement(Capri2D,props));act(()=>nextFrame(600));
+ expect(mocks.fxCue).not.toHaveBeenCalled();view.unmount();
+});
+it('rebuilds GPU resources after context restoration without fetching the texture again',async()=>{
+ const log=vi.spyOn(console,'warn').mockImplementation(()=>{});
+ const props={enabled:true,visible:true,reduced:false,onActive:vi.fn(),onMask:vi.fn()};
+ const view=render(createElement(Capri2D,props));await act(async()=>{});
+ const canvas=view.container.querySelector('[data-capri2d]')!;
+ act(()=>canvas.dispatchEvent(new Event('webglcontextlost',{cancelable:true})));
+ expect(props.onActive).toHaveBeenLastCalledWith(false);
+ act(()=>canvas.dispatchEvent(new Event('webglcontextrestored')));
+ expect(props.onActive).toHaveBeenLastCalledWith(true);
+ expect(mocks.invoke.mock.calls.filter(call=>call[1]?.name==='capri-full.png')).toHaveLength(1);
+ view.unmount();expect(mocks.dispose).toHaveBeenCalledTimes(2);log.mockRestore();
 });
 it("missing local artwork falls back and logs once across remounts", async () => {
  mocks.invoke.mockRejectedValue(new Error("missing"));

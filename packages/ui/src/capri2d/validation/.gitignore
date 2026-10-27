@@ -1,0 +1,3 @@
+# Local validation logs and synthetic persistence-test output, never bundled.
+*
+!.gitignore

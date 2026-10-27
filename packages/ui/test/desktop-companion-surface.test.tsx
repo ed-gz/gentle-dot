@@ -20,7 +20,23 @@ it.each([new Error("boom /home/secret"), new TypeError("Failed to fetch"), new E
  expect(approvalAnswerError(error)).toEqual(new Error("No se pudo responder con la sesión. Volvé a intentarlo o abrí el panel."));
 });
 
-vi.mock("../src/capri2d/Capri2D.tsx", () => ({ Capri2D: () => <canvas data-testid="capri2d" /> }));
+vi.mock("../src/capri2d/Capri2D.tsx", async () => {
+ const { selectAct } = await import("../src/capri2d/director.ts");
+ return { Capri2D: ({intent = {}}: {intent?: import("../src/capri2d/director.ts").RigIntent}) => <canvas data-testid="capri2d" data-act={selectAct(intent)} /> };
+});
+it("drives the 2D acts from completion, failure and a sustained question", () => {
+ const value = controls({renderMode:"2d"});
+ const props = {controls:value,connected:true,toggle:vi.fn(),startDrag:vi.fn()};
+ const view=render(<DesktopCompanionSurface {...props} agentState="working" />);
+ view.rerender(<DesktopCompanionSurface {...props} agentState="idle" />);
+ expect(screen.getByTestId("capri2d")).toHaveAttribute("data-act","victory");
+ view.rerender(<DesktopCompanionSurface {...props} agentState="error" />);
+ expect(screen.getByTestId("capri2d")).toHaveAttribute("data-act","hurt");
+ view.rerender(<DesktopCompanionSurface {...props} controls={controls({renderMode:"2d",context:{musicPlaying:false,musicAvailable:false,notificationsAvailable:false,cue:{kind:"question",id:"q",paneId:"p",sessionId:"s",expiresAt:Date.now()+30000}}})} agentState="needs_you" />);
+ expect(screen.getByTestId("capri2d")).toHaveAttribute("data-act","point");
+ act(()=>vi.advanceTimersByTime(10000));
+ expect(screen.getByTestId("capri2d")).toHaveAttribute("data-act","point");
+});
 it.each(["2d", "sprites", "3d"] as const)("mounts Capri2D only for render mode %s", renderMode => {
  const view = render(<DesktopCompanionSurface controls={controls({ renderMode })} agentState="idle" connected toggle={vi.fn()} startDrag={vi.fn()} />);
  expect(view.queryByTestId("capri2d") !== null).toBe(renderMode === "2d");
