@@ -128,10 +128,28 @@ it("consumes hidden episodes and emits no reduced-motion cues or smears", () => 
  expect(still.cues).toEqual([]);
  expect(still.pose.smear).toEqual([0,0]);expect(still.pose.echo).toEqual([0,0]);
 });
+it.each([false,true])('grounds the seated silhouette with quiet legs, including reduced motion (%s)',reduced=>{
+ const rig=new RigDirector();rig.update({resting:'sit'},0);
+ for(const now of [0,100,250,1000,2000,3200]){
+  const pose=rig.sample(now,reduced).pose;
+  expect(pose.sit).toBe(1);
+  // The shortened thigh must not leave the feet floating ~40 CSS pixels above the cell bottom.
+  expect(pose.bob).toBeGreaterThan(90);
+  expect(pose.bob).toBeLessThan(115);
+  expect(Math.abs(pose.kickL??0)).toBeLessThanOrEqual(.08);
+  expect(Math.abs(pose.kickR??0)).toBeLessThanOrEqual(.08);
+ }
+});
+it('keeps a seated question actionable without resetting the reaching arm',()=>{
+ const rig=new RigDirector();rig.update({resting:'sit',question:'q',direction:-1},0);
+ const pose=resolvePose(rig.sample(5000).pose,0);
+ expect(pose.sit).toBe(1);expect(pose.bob).toBeGreaterThan(90);
+ expect(pose.armL).toBe(1);expect(pose.armR).toBe(-.4);
+});
 it("sits with clamped ledge bob, falls on ones, lands and wakes purposefully", () => {
  const rig=new RigDirector();rig.update({resting:'sit'},0);
  expect(rig.sample(0).pose.sit).toBe(1);
- expect(rig.sample(0).pose.bob).toBeLessThanOrEqual(2);
+ expect(rig.sample(0).pose.bob).toBeGreaterThan(90);
  rig.update({falling:true},1000);expect(rig.fps()).toBe(24);
  rig.update({},1100);expect(rig.sample(1100).act).toBe('land');
  rig.update({resting:'sleep'},3000);expect(rig.fps()).toBe(6);

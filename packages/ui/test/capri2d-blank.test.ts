@@ -35,6 +35,13 @@ describe('blank footprint perches',()=>{
   for(const [x,y] of points){expect(x).toBeGreaterThanOrEqual(528);expect(x+144).toBeLessThanOrEqual(816);expect(y).toBeGreaterThanOrEqual(192);expect(y+204).toBeLessThanOrEqual(504);}
   for(const guard of ['composer','question','approval','sleeping','paused','stale'] as const)expect(new RoamDirector().step(actual,0,{[guard]:true})).toBeUndefined();
  });
+ it('bottom-aligns center perches to the blank cell and always sits there',()=>{
+  const actual={...feed,height:80,blankGrid:{...grid,scores:Array(70).fill(0)}};
+  const points=perchCandidates(actual)!;
+  expect(points.some(([,y])=>y===320)).toBe(true);
+  const director=new RoamDirector();
+  for(let step=0;step<4;step++)expect(director.step(actual,step*18001,{})?.resting).toBe('sit');
+ });
  it('keeps laptop and band intersections; absent capture fails open to old circuit',()=>{
   const scores=Array(70).fill(0);
   for(const [x,y] of perchCandidates({...feed,blankGrid:{...grid,scores}})!) {expect(x).toBeGreaterThanOrEqual(500);expect(x+100).toBeLessThanOrEqual(1000);expect(y+100).toBeLessThanOrEqual(700);}

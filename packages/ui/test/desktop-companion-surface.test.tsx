@@ -162,7 +162,7 @@ it.each(["notification", "capture"] as const)("uses minimal screenshot text on t
   notification: { id: "shot", kind, summary: "Screenshot Saved", body: "File: Screenshot_2026.png\nFolder: /Pictures/Screenshots", source: { appName: "Screenshot" }, expiresAt: Date.now() + 8000 },
  } });
  const { button } = setup(value);
- expect(button).toHaveAccessibleName("Capri: Captura tomada y copiada. Abrir conversación");
+ expect(button).toHaveAccessibleName("Capri: 📁 Captura copiada. Abrir conversación");
  expect(button.getAttribute("aria-label")).not.toContain("Screenshot_2026");
  expect(screen.queryByText("Ver más")).not.toBeInTheDocument();
 });

@@ -16,6 +16,9 @@ type Key = [number, Drawing, string?];
 export interface Act { loop?: boolean; directional?: boolean; fps?: number; priority?: number; keys: Key[] }
 const rep = (n: number, keys: Key[]): Key[] => Array.from({length:n},()=>keys).flat();
 export const NEUTRAL = {head:0,mane:0,hair:0,tilt:0,bob:0,sx:1,sy:1,armL:0,armR:0,longL:1,longR:1,smear:[0,0] as Vec2,echo:[0,0] as Vec2,kickL:0,kickR:0};
+// Sit shortens the 73px thigh to 22%. Drop the hips to keep the feet at
+// y=468 (8px above the padded canvas bottom), rather than floating mid-cell.
+export const SEATED = {bob:107,tilt:-2,kickL:.04,kickR:.04,armL:-.4,armR:-.4};
 export const ACTS = {
  ...REPERTOIRE,
  stand: {loop:true, keys:[
@@ -23,10 +26,9 @@ export const ACTS = {
   [6,{bob:-4,hair:2.5,arms:-.05}], [4,{bob:-2,hair:0,arms:0}],
  ]},
  sit: {loop:true,keys:[
-  [5,{kickL:.24,kickR:-.03,hair:-1.5,arms:-.42}], [2,{kickL:.08,kickR:.08,arms:-.42}],
-  [5,{kickL:-.03,kickR:.24,hair:1.5,arms:-.42}], [2,{kickL:.08,kickR:.08,arms:-.42}],
-  [5,{kickL:.24,kickR:-.03,hair:-1.5,arms:-.42}], [2,{kickL:.08,kickR:.08,arms:-.42}],
-  [5,{kickL:-.03,kickR:.24,hair:1.5,arms:-.42}], [10,{kickL:.04,kickR:.04,head:.08,arms:-.4}],
+  [12,{...SEATED,bob:0,hair:-.6,kickL:.06,kickR:.02}],
+  [12,{...SEATED,bob:0,hair:.6,kickL:.02,kickR:.06}],
+  [14,{...SEATED,bob:0,head:.04}],
  ]},
  sleep: {loop:true,keys:[
   [18,{head:.1,mane:-.12,bob:2,arms:-.3}], [1,{head:.16,mane:-.13,bob:4,arms:-.34}],
@@ -89,8 +91,8 @@ export const ACTS = {
   [2,{sy:1.05,sx:.97,mane:.1,arms:.1}], [1,{}],
  ]},
  plop: {priority:3,fps:24,keys:[
-  [2,{sy:.85,sx:1.1,mane:-.12,kickL:.3,kickR:.3,arms:-.55}],
-  [2,{sy:1.05,sx:.97,kickL:.12,kickR:.12,arms:-.38}], [1,{}],
+  [2,{sy:.99,sx:1.02,mane:-.08,kickL:.08,kickR:.08,arms:-.44}],
+  [2,{sy:1,sx:1,kickL:.04,kickR:.04,arms:-.4}], [1,{}],
  ]},
  fall: {loop:true,fps:24,keys:[
   [2,{sy:1.12,sx:.92,mane:.36,head:.05,smear:[0,-16],armL:.8,armR:.55}],

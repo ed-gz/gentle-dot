@@ -26,10 +26,13 @@ export function perchCandidates(feed:RoamFeed):[number,number][]|undefined {
  const points:[number,number][]=[];
  const {columns,rows,scores}=grid;
  if(Number.isInteger(columns)&&Number.isInteger(rows)&&columns>0&&rows>0&&columns<=96&&rows<=64&&scores.length===columns*rows){
-  const locations=grid.perches?.slice(0,128)??Array.from({length:columns*rows},(_,i):[number,number]=>[Math.round(r.x+(i%columns+0.5)*r.width/columns-w/2),Math.round(r.y+(Math.floor(i/columns)+0.5)*r.height/rows-h/2)]);
+  const locations=grid.perches?.slice(0,128)??Array.from({length:columns*rows},(_,i):[number,number]=>[Math.round(r.x+(i%columns+0.5)*r.width/columns-w/2),Math.round(r.y+(Math.floor(i/columns)+1)*r.height/rows-h)]);
   for(const [rawX,rawY] of locations){
    if(!Number.isFinite(rawX)||!Number.isFinite(rawY))continue;
-   const [x,y]=place(rawX,rawY);
+   // Native shortlists and JS candidates share a lower-cell-edge ledge.
+   // Recheck the full footprint after snapping; never slide over untested text.
+   const ledgeY=r.y+Math.ceil((rawY+h-r.y)*rows/r.height)*r.height/rows-h;
+   const [x,y]=place(rawX,Math.round(ledgeY));
    if(!fits(x,y))continue;
    const c0=Math.floor((x-r.x)*columns/r.width),c1=Math.ceil((x+w-r.x)*columns/r.width);
    const r0=Math.floor((y-r.y)*rows/r.height),r1=Math.ceil((y+h-r.y)*rows/r.height);

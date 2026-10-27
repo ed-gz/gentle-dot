@@ -281,3 +281,5 @@ L104 Intro calibration round 2: the intro-*.webp frames are full-screen 1672x941
 L105 User: "puedes hacer que se vea mejor sentada?" (sitting pose reads awkward/floating over the input box) + "cuando toma screenshots, aparece justamente boton entendido y captura guardad, mejor, sin boton de ENTENDIDO y solo un emoji de carpeta o copiado algo asi simple, no un reboton exagerado"
 
 L106 User: "y en lo de una sesion termino es el recuadro de charla re gradne, optimiza los tamaños de mensajes por texto" (S48: comic cards must size to their text — short notices like "La sesión terminó" get a compact card; longer messages keep the readable cap). Queued after T57 (card lives in capri3d, outside T57 surfaces).
+
+L107 T57 shipped in source: successful screenshot notices = transient "📁 Captura copiada"/"📁 Captura guardada" chips without the Entendido button (errors unchanged); sitting pose grounded (+107 sprite-space, minimal bob, seated reactions, reduced-motion statics), thigh projection 30%->22%, blank perches align to lower cell edges, center perch prefers sitting. Focused 144/144, full UI 1277/1277, tsc 0; seated look needs-device.

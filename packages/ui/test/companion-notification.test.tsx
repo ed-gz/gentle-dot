@@ -28,18 +28,18 @@ const notification = (patch: Partial<DesktopCompanionCue> = {}): DesktopCompanio
 });
 
 it.each([
-	{ source: { appName: "Hyprshot" }, summary: "Screenshot copied to clipboard", expected: "Captura tomada y copiada" },
-	{ source: { appName: "grimblast" }, summary: "Copied", expected: "Captura tomada y copiada" },
-	{ source: { appName: "flameshot" }, summary: "Saved and copied", expected: "Captura tomada y copiada" },
-	{ source: { desktopEntry: "org.kde.spectacle" }, summary: "Image saved", expected: "Captura tomada y copiada" },
-	{ source: { appName: "gnome-screenshot" }, summary: "Saved", expected: "Captura tomada y copiada" },
-	{ summary: "Captura guardada", expected: "Captura tomada y copiada" },
-	{ summary: "Screenshot Saved", expected: "Captura tomada y copiada" },
-	{ kind: "capture" as const, source: { appName: "Screenshot" }, summary: "Screenshot Saved", expected: "Captura tomada y copiada" },
-	{ summary: "Captura guardada y copiada", expected: "Captura tomada y copiada" },
-])("minimizes screenshot presentation: $summary", ({ expected, ...patch }) => {
+	{ source: { appName: "Hyprshot" }, summary: "Screenshot copied to clipboard" },
+	{ source: { appName: "grimblast" }, summary: "Copied" },
+	{ source: { appName: "flameshot" }, summary: "Saved and copied" },
+	{ source: { desktopEntry: "org.kde.spectacle" }, summary: "Image saved" },
+	{ source: { appName: "gnome-screenshot" }, summary: "Saved" },
+	{ summary: "Captura guardada" },
+	{ summary: "Screenshot Saved" },
+	{ kind: "capture" as const, source: { appName: "Screenshot" }, summary: "Screenshot Saved" },
+	{ summary: "Captura guardada y copiada" },
+])("minimizes screenshot presentation: $summary", (patch) => {
 	expect(notificationPresentation(notification({ ...patch, body: "File: Screenshot_2026.png\nFolder: /Pictures/Screenshots" }))).toEqual({
-		summary: expected, body: undefined, quoted: false, showMore: false, confirmation: true,
+		summary: "📁 Captura copiada", body: undefined, quoted: false, showMore: false, confirmation: false,
 	});
 });
 
@@ -54,7 +54,7 @@ it.each([
 });
 
 it("does not claim copying when a screenshot was only saved", () => {
- expect(notificationPresentation(notification({ summary: "Screenshot saved, not copied", body: "Clipboard unavailable" })).summary).toBe("Captura guardada");
+ expect(notificationPresentation(notification({ summary: "Screenshot saved, not copied", body: "Clipboard unavailable" }))).toEqual({summary:"📁 Captura guardada",body:undefined,quoted:false,showMore:false,confirmation:false});
 });
 
 it("exposes only evidence-backed sender/channel/private metadata", () => {

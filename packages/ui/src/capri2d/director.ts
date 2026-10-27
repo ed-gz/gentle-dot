@@ -1,5 +1,5 @@
 // Ported from https://github.com/mochiiwuff/capri-desktop (MIT): Capri.animate semantics.
-import { ACTS, NEUTRAL, RigPlayer, cadence, resolvePose, type ActName, type Drawing } from './acting.ts';
+import { ACTS, NEUTRAL, SEATED, RigPlayer, cadence, resolvePose, type ActName, type Drawing } from './acting.ts';
 export interface RigIntent {
  question?: string; direction?: number; outcome?: {kind:'done'|'error';at:number};
  resting?: 'stand'|'sit'|'sleep'|'wake'; travelling?: boolean; falling?: boolean; talking?: boolean;
@@ -72,19 +72,22 @@ export class RigDirector {
  }
  fps(){return cadence(this.base.name,this.overlay?.name);}
  sample(now:number,reduced=false):{pose:Drawing;cues:string[];act:ActName}{
+  // The seated baseline also applies to reactions and reduced-motion statics.
+  // Pose bob is relative to that baseline; keep the ledge contact nearly still.
+  const ground=(pose:Drawing):Drawing=>this.seated?{...pose,bob:SEATED.bob+Math.max(-1,Math.min(1,pose.bob??0))}:pose;
   if(reduced){
    this.base.consume(now);this.overlay?.consume(now);this.pendingCues=[];
    const name=this.overlay?.name??this.base.name;
    const sheet=ACTS[name];
    const key=name==='victory'?sheet.keys.find(key=>key[2]==='peak')!:sheet.keys[0]!;
-   const pose=resolvePose(key[1],this.direction);
-   return {pose:{...NEUTRAL,...pose,sit:this.seated?1:0,smear:[0,0],echo:[0,0],glitch:0,split:0,silAmount:0,collapse:0,dissolve:0,alpha:1},cues:[],act:name};
+   const pose=resolvePose({...(this.seated?{...SEATED,bob:0}:{}),...key[1]},this.direction);
+   return {pose:{...NEUTRAL,...ground(pose),sit:this.seated?1:0,smear:[0,0],echo:[0,0],glitch:0,split:0,silAmount:0,collapse:0,dissolve:0,alpha:1},cues:[],act:name};
   }
   const under=this.base.advance(now);
   const over=this.overlay?.advance(now);
   const cues=[...this.pendingCues,...(over?.cues??under.cues)];this.pendingCues=[];
   if(over&&!over.pose)this.overlay=undefined;
-  const pose:Drawing={...NEUTRAL,...under.pose,...over?.pose,sit:this.seated?1:0};
+  const pose:Drawing={...NEUTRAL,...(this.seated?{...SEATED,bob:0}:{}),...under.pose,...over?.pose,sit:this.seated?1:0};
   if(cues.includes('peak'))this.flashAt=now;
   const flash=Math.floor((now-this.flashAt)*24/1000);
   if(flash>=0&&flash<3){pose.sil=flash===1?[.08,.06,.11]:[.21,1,.48];pose.silAmount=1;}
@@ -98,7 +101,6 @@ export class RigDirector {
    pose.alpha=.55;pose.sparkle=.35;pose.boil=.4;
    if(now-this.sleptAt>=20000){pose.mask=1;pose.alpha=0;}
   }
-  if(this.base.name==='sit')pose.bob=Math.max(-3,Math.min(2,pose.bob??0));
-  return {pose,cues,act:this.overlay?.name??this.base.name};
+  return {pose:ground(pose),cues,act:this.overlay?.name??this.base.name};
  }
 }

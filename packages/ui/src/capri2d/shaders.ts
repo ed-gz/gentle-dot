@@ -124,7 +124,8 @@ vec4 cel(vec2 s) {
 float legSep(float y) { return 117.0 + max(0.0, y - 300.0) * 0.15; }
 float legL(vec2 s) { return step(KNEE - 6.0, s.y) * (1.0 - step(legSep(s.y), s.x)); }
 float legR(vec2 s) { return step(KNEE - 6.0, s.y) * step(legSep(s.y), s.x); }
-float thighScale() { return mix(1.0, 0.3, uSit); }
+// Foreshorten the thighs into a ledge sit; keep the shins hanging below the knees.
+float thighScale() { return mix(1.0, 0.22, uSit); }
 vec2 unsit(vec2 q) {
  if (uSit <= 0.0 || q.y <= HIP) return q;
  float c = thighScale();

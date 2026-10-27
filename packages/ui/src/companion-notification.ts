@@ -29,8 +29,8 @@ function screenshotPresentation(cue: DesktopCompanionCue) {
 	// The local screenshot tool copies by default; only an explicit "not copied" notice says otherwise.
 	const notCopied = /\b(?:not copied|no copiad[ao]|sin copiar|only saved|solo guardad[ao])\b/i.test(status);
 	return {
-		summary: notCopied ? "Captura guardada" : "Captura tomada y copiada",
-		body: undefined, quoted: false, showMore: false, confirmation: true,
+		summary: notCopied ? "📁 Captura guardada" : "📁 Captura copiada",
+		body: undefined, quoted: false, showMore: false, confirmation: false,
 	};
 }
 
