@@ -8,6 +8,7 @@ import type { AgentApproval, OrchestrationAction } from "../orchestration.ts";
 import { speechDuration } from "./choreography.ts";
 import { gestures, type Gesture } from "./gestures.ts";
 import "./conversation.css";
+import { CapriNotificationCard, useNotificationAvatar } from "./CapriNotificationCard.tsx";
 
 export const BUBBLE_HEIGHT = 152;
 export const INPUT_HEIGHT = 88;
@@ -80,6 +81,7 @@ interface Props {
  onThinkingSpeech?(text: string): void;
 }
 export function CapriConversation({state,send,open,close,more,speech,approval,answer,onLayout,onGesture,activity,episodeKey,onThinkingSpeech,outcome,reduced=false,visible=true,question,enteredQuestions}:Props) {
+ const avatar=useNotificationAvatar();
  const localEntered=useRef(new Set<string>());
  const history=enteredQuestions ?? localEntered.current;
  const questionKey=question ? JSON.stringify([question.id,question.paneId,question.sessionId]) : undefined;
@@ -220,15 +222,14 @@ const ticker=validAction ? quiet>=15 ? `PIENSO… ${quiet}s` : `${SUPERVISOR_VER
    {fx.kind==="done" ? <><div className="capri3d-speed-lines"/><div className="capri3d-shockwave"/><div className="capri3d-celebratory-cut"/></> : impact && <div className="capri3d-impact"/>}
   </div>}
   {ticker && <div className="capri3d-action" data-thinking={quiet>=15} aria-live="off">{ticker}</div>}
-  {Boolean((shown && !delaySummary) || confirmation || receipt) && <div className="capri3d-speech" data-with-action={Boolean(ticker)} data-leaving={leaving && !confirmation && !receipt} role="status" aria-live="polite">
-   <div className="capri3d-speech-frame" aria-hidden="true"/>
+  {Boolean((shown && !delaySummary) || confirmation || receipt) && <CapriNotificationCard key={confirmation ? approvalKey : shown?.id ?? "receipt"} avatar={avatar} reduced={reduced} subtitle={confirmation ? "SISTEMA · PERMISO" : shown?.question ? "SISTEMA · PREGUNTA" : shown?.channel ? `AVISO · ${shown.channel}` : "SISTEMA · AVISO"} fresh={Boolean((shown || confirmation) && !receipt && !pending)} withAction={Boolean(ticker)} leaving={leaving && !confirmation && !receipt} onAcknowledge={!confirmation && !receipt && !shown?.question && shown?.showMore===false ? ()=>{setShown(undefined);setLeaving(false);} : undefined}>
    <span className="capri3d-speech-text">{receipt || (pending && confirmation ? "Enviando respuesta…" : confirmation ? excerpt(`${confirmation.title} ${confirmation.message}`) : shown?.sender ? <><strong>{shown.sender}</strong>{shown.privateMessage ? <span className="capri3d-muted"> (privado)</span> : shown.channel ? <> <span className="capri3d-muted">en </span><span className="capri3d-channel">{shown.channel}</span></> : null}:<br/>{excerpt(shown.body ?? "")}</> : excerpt(shown?.text ?? ""))}{!confirmation && !receipt && shown?.confirmation && <span className="capri3d-check" aria-hidden="true">✓</span>}</span>
    {confirmation ? <div className="capri3d-confirm">
     <button type="button" disabled={pending} onClick={()=>void respond(false)}>Rechazar</button>
     <button type="button" disabled={pending} onClick={()=>void respond(true)}>Aprobar</button>
    </div> : !receipt && !shown?.question && shown?.showMore !== false && <button type="button" className="capri3d-more" onClick={more}>Ver más</button>}
    {error && <span role="alert">{error}</span>}
-  </div>}
+  </CapriNotificationCard>}
   {open && <form className="capri3d-chat" onSubmit={event=>{
    event.preventDefault();const text=draft.trim();if(!text || pending)return;
    if(send({type:"send",text,requestId:newRequestId()})===false){setError("Sin conexión. Tu mensaje sigue aquí.");return;}

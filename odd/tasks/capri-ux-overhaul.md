@@ -253,3 +253,5 @@ L93 User: bug - Capri window has a large invisible box blocking clicks, must be 
 L94 T51 shipped in source: exact-pixel silhouette input (alpha runs above threshold 24, GTK/GDK shaping, fail-closed empty, FX click-through, context-restoration republish) so only Capri body is interactive; roamZone.xRatio default 0.5 (right band of herdr, left-30% exclusion under 700px, fail-closed small bands) persisted in desktop-companion.json; capture restore keeps silhouette. Focused 129/129, full UI 1237, cargo 542, tsc 0; Wayland click-through needs-device.
 
 L95 User: "vamos a implementar todo, el de intro completa me imagino solo estaria cuando arranco herdr o prendo la pc"
+
+L96 T52 shipped in source: comic notification cards (CapriNotificationCard.tsx + jagged css) inside the existing dot conversation surface; optional allowlisted avatar bust, fresh chip, acknowledgement dismissal, reduced-motion; approval identity/expiry/rejection preserved; legacy sprite-mode bubble unchanged. Focused 94/94, full UI 1244, tsc 0; visual parity with README unclaimed (image absent locally), card fit/hit regions needs-device.

@@ -1,0 +1,24 @@
+/* Comic presentation on the existing desktop notice surface; no new window or art. */
+.capri3d-speech.capri-comic-card { width: 280px; max-width: 280px; padding: 10px 12px 12px; font-size: 12px; height: 138px; display: flex; flex-direction: column; }
+.capri-comic-card .capri3d-speech-frame { border-radius: 0; clip-path: polygon(0 8%, 6% 10%, 4% 0, 35% 3%, 42% 0, 93% 3%, 100% 0, 97% 22%, 100% 32%, 98% 78%, 100% 97%, 76% 94%, 68% 100%, 9% 96%, 0 100%, 3% 72%, 0 60%); background: var(--capri-notice-channel, #bd8cff); }
+.capri-comic-card .capri3d-speech-frame::after { border-radius: 0; clip-path: inherit; inset: 1px; }
+.capri-comic-card::before { display: none; }
+.capri-comic-header { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-height: 28px; flex-shrink: 0; padding-bottom: 4px; font: 700 10px/1.2 ui-monospace, monospace; }
+.capri-comic-brand { padding: 2px 6px; background: var(--capri-notice-channel, #bd8cff); color: var(--capri-notice-accent-ink, #151c20); transform: rotate(-3deg); letter-spacing: 1px; }
+.capri-comic-fresh { padding: 2px 5px; border: 1px solid var(--capri-notice-accent, #c4f36b); color: var(--capri-notice-accent, #c4f36b); font: inherit; margin-left: auto; }
+.capri-comic-subtitle { flex-basis: 100%; color: var(--capri-notice-channel, #bd8cff); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; letter-spacing: .8px; animation: capri-comic-type 650ms steps(12, end) both; }
+@keyframes capri-comic-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0); } }
+.capri-comic-card[data-reduced-motion="true"] .capri-comic-subtitle { animation: none; }
+@media (prefers-reduced-motion: reduce) { .capri-comic-subtitle { animation: none; } }
+/* A bust crop of the full-body personal cutout, not a second renderer. */
+.capri-comic-avatar { position: absolute; top: 10px; left: 12px; width: 46px; height: 30px; object-fit: cover; object-position: center top; margin: 0 8px 2px 0; border-bottom: 1px solid var(--capri-notice-accent, #c4f36b); pointer-events: none; }
+.capri-comic-card:has(.capri-comic-avatar) .capri-comic-header { padding-left: 54px; }
+.capri-comic-content { flex: 1; min-height: 0; max-height: 82px; overflow-y: auto; scrollbar-width: thin; }
+.capri-comic-content .capri3d-speech-text { display: block; overflow-wrap: anywhere; }
+.capri-comic-card:has(.capri3d-confirm) .capri3d-speech-text { max-height: 30px; overflow-y: auto; }
+.capri-comic-card:has(.capri3d-confirm) .capri-comic-content { max-height: 90px; }
+.capri-comic-card .capri3d-confirm { margin-top: 4px; gap: 8px; }
+.capri3d-host .capri-comic-card .capri3d-confirm button { min-height: 44px; }
+.capri3d-host .capri-comic-card .capri-comic-ack { display: block; min-height: 44px; margin: 4px auto 0; border-color: var(--capri-notice-accent, #c4f36b); border-radius: 3px; text-transform: uppercase; letter-spacing: 1px; }
+.capri-comic-card[data-with-action="true"] { padding-top: 8px; padding-bottom: 8px; }
+.capri-comic-card[data-with-action="true"] .capri-comic-content { max-height: 52px; }

@@ -180,7 +180,10 @@ it.each(["Captura tomada y copiada", "Captura guardada"])("shows only the minima
  const speech={id:"screenshot",text,showMore:false,confirmation:true};
  render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} speech={speech} more={vi.fn()} onLayout={vi.fn()}/>);
  expect(screen.getByRole("status")).toHaveTextContent(text);
- expect(screen.getByRole("status").textContent).toBe(`${text}✓`);
+ expect(screen.getByRole("status").querySelector(".capri3d-speech-text")?.textContent).toBe(`${text}✓`);
+ expect(screen.getByText("CAPRI")).toBeTruthy();
+ fireEvent.click(screen.getByRole("button",{name:"Entendido"}));
+ expect(screen.queryByRole("status")).toBeNull();
  expect(screen.queryByRole("button",{name:"Ver más"})).toBeNull();
 });
 it("sends typed text via Dot send and calls the existing mic hook",()=>{

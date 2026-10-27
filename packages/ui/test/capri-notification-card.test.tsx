@@ -1,0 +1,57 @@
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { expect, it, vi } from "vitest";
+import { CapriNotificationCard, useNotificationAvatar } from "../src/capri3d/CapriNotificationCard.tsx";
+
+vi.mock("@tauri-apps/api/core",()=>({invoke:vi.fn()}));
+import { invoke } from "@tauri-apps/api/core";
+
+it("renders the comic identity and fresh chip without artwork", () => {
+ render(<CapriNotificationCard subtitle="SISTEMA" fresh>Mensaje recibido</CapriNotificationCard>);
+ expect(screen.getByText("CAPRI")).toBeTruthy();
+ expect(screen.getByText("SISTEMA")).toBeTruthy();
+ expect(screen.getByText("NUEVO")).toBeTruthy();
+ expect(screen.queryByRole("img")).toBeNull();
+ expect(screen.queryByRole("button", {name:"Entendido"})).toBeNull();
+});
+it("renders optional avatar and falls back on a broken image", () => {
+ render(<CapriNotificationCard avatar="blob:personal" subtitle="SISTEMA">Mensaje</CapriNotificationCard>);
+ fireEvent.error(screen.getByRole("img", {name:"Capri"}));
+ expect(screen.queryByRole("img")).toBeNull();
+ expect(screen.getByText("Mensaje")).toBeTruthy();
+});
+it("offers acknowledgement only when explicitly answerable", () => {
+ const acknowledge=vi.fn();
+ render(<CapriNotificationCard subtitle="SISTEMA" onAcknowledge={acknowledge}>Mensaje</CapriNotificationCard>);
+ fireEvent.click(screen.getByRole("button", {name:"Entendido"}));
+ expect(acknowledge).toHaveBeenCalledOnce();
+});
+it("does not render dismissed cards or old fresh chips", () => {
+ const {rerender}=render(<CapriNotificationCard subtitle="SISTEMA">Mensaje</CapriNotificationCard>);
+ expect(screen.queryByText("NUEVO")).toBeNull();
+ rerender(<CapriNotificationCard subtitle="SISTEMA" dismissed fresh>Mensaje</CapriNotificationCard>);
+ expect(screen.queryByText("Mensaje")).toBeNull();
+ expect(screen.queryByText("NUEVO")).toBeNull();
+});
+
+it("loads only allowlisted personal art and revokes its object URL on unmount", async()=>{
+ vi.mocked(invoke).mockResolvedValueOnce([1,2,3]);
+ const create=vi.spyOn(URL,"createObjectURL").mockReturnValue("blob:local-art");
+ const revoke=vi.spyOn(URL,"revokeObjectURL").mockImplementation(()=>{});
+ const {result,unmount}=renderHook(()=>useNotificationAvatar());
+ await waitFor(()=>expect(result.current).toBe("blob:local-art"));
+ expect(invoke).toHaveBeenLastCalledWith("capri2d_asset",{name:"capri-full.png"});
+ unmount();expect(revoke).toHaveBeenCalledWith("blob:local-art");
+ create.mockRestore();revoke.mockRestore();
+});
+it("missing art is graceful and late replies after unmount do not allocate URLs", async()=>{
+ vi.mocked(invoke).mockRejectedValueOnce(new Error("No personal art"));
+ const missing=renderHook(()=>useNotificationAvatar());
+ await act(async()=>{});
+ expect(missing.result.current).toBeUndefined();missing.unmount();
+ let resolve!:(bytes:number[])=>void;
+ vi.mocked(invoke).mockReturnValueOnce(new Promise<number[]>(done=>{resolve=done;}));
+ const create=vi.spyOn(URL,"createObjectURL");
+ const late=renderHook(()=>useNotificationAvatar());late.unmount();
+ await act(async()=>{resolve([1]);});
+ expect(create).not.toHaveBeenCalled();create.mockRestore();
+});
