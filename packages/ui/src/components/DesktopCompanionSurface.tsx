@@ -1,4 +1,4 @@
-// Action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+// Outcome and action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
 import { useWorkingSession } from "../companion-sessions.ts";
 import type { AgentState } from "@gentle-dot/protocol";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -255,10 +255,10 @@ export function DesktopCompanionSurface({
 		previousBusy.current = busy;
 	}, [agentState]);
 	useEffect(() => {
-		if (!outcome) return;
+		if (!outcome || !visible) return;
 		const timer = setTimeout(() => setOutcome(undefined), Math.max(0, outcome.at + CAPRI_OUTCOME_MS - Date.now()));
 		return () => clearTimeout(timer);
-	}, [outcome]);
+	}, [outcome, visible]);
 	const context = controls.state.context;
 	useEffect(() => {
 		if (!active3D || context?.cue?.kind !== "question" || !isTauri()) { setApproval(undefined); return; }
@@ -412,6 +412,9 @@ export function DesktopCompanionSurface({
 				: { model: "roja.glb", clip: "Flotar_en_reposo", motion: motion.mode, direction: motion.direction, duration: motion.duration };
 		}
 		if (motion?.mode === "land") return { model: "roja.glb", clip: null, procedural: "quieta", once: true, motion: "land", duration: 600 };
+		// Outcome poses must not be replaced by their own summary's talking clip.
+		if (behavior.state === "done") return { model: "roja.glb", clip: null, procedural: "celebrar", once: true };
+		if (behavior.state === "error") return clipForBehavior(behavior);
 		if (speech) return responseChoice("reply");
 		if (perched && (behavior.state === "idle" || behavior.state === "userTyping")) return { model: "roja.glb", clip: null, procedural: "sentada" };
 		if (behavior.state === "idle") return restChoice(choreography.rest);
@@ -592,6 +595,7 @@ export function DesktopCompanionSurface({
 		</button>
 		{active3D && visible && <CapriConversation
 			state={chatState} send={chatSend} open={chatOpen} close={() => setChatOpen(false)}
+			outcome={behavior.state === "done" || behavior.state === "error" ? outcome : undefined} reduced={reduced || !controls.state.motion} visible={visible && !inControl}
 			speech={speech} approval={approval} activity={attention ? undefined : workingSession?.activity} episodeKey={workingSession ? `${workingSession.paneId}:${workingSession.sessionId}` : undefined} onThinkingSpeech={thinkingSpeech} onLayout={layout} more={() => { if (cue?.kind === "question") void controls.openContext?.(); toggle(); }}
 			onGesture={name => setGesture({ name, at: Date.now() })}
 			answer={async action => {

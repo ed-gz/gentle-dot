@@ -1,4 +1,4 @@
-// Action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+// Outcome and action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
 import type { CompanionSessionSnapshot } from "../companion-sessions.ts";
 import { useEffect, useRef, useState } from "react";
 import type { DotState } from "../store.ts";
@@ -58,7 +58,11 @@ export interface Speech {
  id:string; text:string; showMore?:boolean; approvalKey?:string;
  question?:boolean; confirmation?:boolean; sender?:string; channel?:string; privateMessage?:boolean; body?:string;
 }
+export interface CapriOutcome { kind: "done" | "error"; at: number }
 interface Props {
+ outcome?: CapriOutcome;
+ reduced?: boolean;
+ visible?: boolean;
  state: DotState; send: Send; open: boolean; close(): void; more(): void;
  speech?: Speech;
  approval?: AgentApproval;
@@ -69,7 +73,30 @@ interface Props {
  episodeKey?: string;
  onThinkingSpeech?(text: string): void;
 }
-export function CapriConversation({state,send,open,close,more,speech,approval,answer,onLayout,onGesture,activity,episodeKey,onThinkingSpeech}:Props) {
+export function CapriConversation({state,send,open,close,more,speech,approval,answer,onLayout,onGesture,activity,episodeKey,onThinkingSpeech,outcome,reduced=false,visible=true}:Props) {
+ // One bounded exposure sheet, not a render loop. Hidden/occluded episodes are consumed,
+ // never replayed when the surface returns. Native visibility unmounts this component too.
+ const [fxKey,setFxKey]=useState<string>();
+ const [impact,setImpact]=useState(false);
+ const consumed=useRef<string | undefined>(undefined);
+ const outcomeKey=outcome ? `${outcome.kind}:${outcome.at}` : undefined;
+ useEffect(()=>{
+  setFxKey(undefined);setImpact(false);
+  if(!outcomeKey || !outcome)return;
+  if(!visible){consumed.current=outcomeKey;return;}
+  if(consumed.current===outcomeKey)return;
+  consumed.current=outcomeKey;
+  const elapsed=Math.max(0,Date.now()-outcome.at);
+  if(elapsed>=700)return;
+  setFxKey(outcomeKey);
+  if(reduced)return; // Instant static cue; no sweep, flash, knockback or FX timer.
+  setImpact(outcome.kind==="error" && elapsed<120);
+  const flash=outcome.kind==="error" && elapsed<120 ? setTimeout(()=>setImpact(false),120-elapsed) : undefined;
+  const end=setTimeout(()=>setFxKey(undefined),700-elapsed);
+  return()=>{clearTimeout(flash);clearTimeout(end);};
+ },[outcomeKey,visible,reduced]);
+ const fx=visible && fxKey===outcomeKey && outcome;
+ const delaySummary=fx && fx.kind==="done" && !reduced;
  const action=activity?.phase === "working" ? activity.lastAction : undefined;
  const validAction=action && action.verb.length<=16 && action.subject.length<=64 && Number.isFinite(Date.parse(action.at)) ? action : undefined;
  const actionKey=validAction ? JSON.stringify([episodeKey,validAction.verb,validAction.subject,validAction.at]) : undefined;
@@ -146,8 +173,11 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
   finally {sending.current=false;if(mounted.current)setPending(false);}
  };
  return <>
+  {fx && <div className="capri3d-outcome" key={outcomeKey} data-outcome={fx.kind} data-reduced-motion={reduced} aria-hidden="true" style={{pointerEvents:"none"}}>
+   {fx.kind==="done" ? <><div className="capri3d-speed-lines"/><div className="capri3d-shockwave"/><div className="capri3d-celebratory-cut"/></> : impact && <div className="capri3d-impact"/>}
+  </div>}
   {ticker && <div className="capri3d-action" data-thinking={quiet>=15} aria-live="off">{ticker}</div>}
-  {Boolean(shown || confirmation || receipt) && <div className="capri3d-speech" data-with-action={Boolean(ticker)} data-leaving={leaving && !confirmation && !receipt} role="status" aria-live="polite">
+  {Boolean((shown && !delaySummary) || confirmation || receipt) && <div className="capri3d-speech" data-with-action={Boolean(ticker)} data-leaving={leaving && !confirmation && !receipt} role="status" aria-live="polite">
    <div className="capri3d-speech-frame" aria-hidden="true"/>
    <span className="capri3d-speech-text">{receipt || (pending && confirmation ? "Enviando respuesta…" : confirmation ? excerpt(`${confirmation.title} ${confirmation.message}`) : shown?.sender ? <><strong>{shown.sender}</strong>{shown.privateMessage ? <span className="capri3d-muted"> (privado)</span> : shown.channel ? <> <span className="capri3d-muted">en </span><span className="capri3d-channel">{shown.channel}</span></> : null}:<br/>{excerpt(shown.body ?? "")}</> : excerpt(shown?.text ?? ""))}{!confirmation && !receipt && shown?.confirmation && <span className="capri3d-check" aria-hidden="true">✓</span>}</span>
    {confirmation ? <div className="capri3d-confirm">

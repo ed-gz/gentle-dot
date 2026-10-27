@@ -1,4 +1,4 @@
-/* Action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop */
+/* Outcome and action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop */
 .capri3d-action { position: absolute; box-sizing: border-box; top: 126px; left: 50%; transform: translateX(-50%); max-width: 280px; padding: 4px 9px; border: 1px solid var(--capri-notice-border, #44514d); border-radius: 6px; background: var(--capri-notice-surface, #151c20); color: var(--capri-notice-accent, #c4f36b); font: 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 .capri3d-action[data-thinking="true"] { color: #c9a3ff; border-color: #7955a6; }
 .capri3d-speech[data-with-action="true"] { max-height: 114px; padding-top: 12px; padding-bottom: 10px; overflow-y: auto; }
@@ -57,3 +57,28 @@
 @media (prefers-reduced-motion: reduce) { .capri3d-speech { animation: none; transition: none; } .capri3d-host .capri3d-chat button[data-recording="true"] { animation: none; } }
 
 .capri3d-host .capri3d-confirm button { flex: 1; min-width: 88px; min-height: 44px; }
+
+/* Body-local exposure sheet: never paint across speech/approval or composer regions.
+   No reference artwork, canvas readbacks, full-screen overlays or animation loops. */
+.capri3d-outcome { position: absolute; top: var(--capri-top, 0px); left: 50%; width: 144px; height: 204px; transform: translateX(-50%); overflow: hidden; contain: paint; pointer-events: none; }
+.capri3d-outcome * { pointer-events: none; }
+.capri3d-speed-lines { position: absolute; inset: -30%; background: repeating-conic-gradient(from 2deg, transparent 0deg 13deg, #c4f36b99 13deg 14deg, transparent 14deg 20deg); mask-image: radial-gradient(ellipse, transparent 28%, #000 75%); animation: capri3d-speed 700ms ease-out both; }
+.capri3d-shockwave { position: absolute; box-sizing: border-box; width: 100px; height: 100px; top: 42px; left: 22px; border: 3px solid #c4f36b; border-radius: 50%; animation: capri3d-wave 700ms ease-out both; }
+.capri3d-celebratory-cut { position: absolute; inset: 12px 0 auto; height: 3px; background: #c9a3ff; transform: rotate(-8deg); animation: capri3d-cut 700ms steps(1) both; }
+.capri3d-impact { position: absolute; inset: 0; background: #ff2152; animation: capri3d-impact 120ms linear both; }
+.capri3d-host:has(.capri3d-outcome[data-outcome="error"][data-reduced-motion="false"]) .capri3d-canvas { animation: capri3d-knockback 700ms ease-out both; }
+.capri3d-host:has(.capri3d-outcome[data-outcome="done"][data-reduced-motion="false"]) .capri3d-canvas { animation: capri3d-windup 700ms ease-out both; }
+@keyframes capri3d-speed { 0%, 20% { opacity: 0; transform: scale(.85); } 35% { opacity: .85; } 100% { opacity: 0; transform: scale(1.18); } }
+@keyframes capri3d-wave { 0%, 25% { opacity: 0; transform: scale(.25); } 30% { opacity: .9; } 100% { opacity: 0; transform: scale(2.3); } }
+@keyframes capri3d-cut { 0%, 65%, 100% { opacity: 0; } 66%, 85% { opacity: .85; } }
+@keyframes capri3d-impact { from { opacity: .45; } to { opacity: 0; } }
+/* Individual translate/scale preserve the renderer canvas's existing framing transform. */
+@keyframes capri3d-windup { 0% { translate: 0 0; scale: 1; } 20% { translate: 0 5px; scale: 1.03 .92; } 28% { translate: 0 -8px; scale: .96 1.08; } 45%, 70% { translate: 0 -5px; scale: 1; } 100% { translate: 0 0; scale: 1; } }
+@keyframes capri3d-knockback { 0% { translate: 0 0; } 18% { translate: 7px 4px; } 30% { translate: -3px 1px; } 36% { translate: 4px 2px; } 43% { translate: -2px 0; } 100% { translate: 0 0; } }
+.capri3d-outcome[data-reduced-motion="true"] * { animation: none; }
+.capri3d-outcome[data-reduced-motion="true"] .capri3d-speed-lines, .capri3d-outcome[data-reduced-motion="true"] .capri3d-celebratory-cut { display: none; }
+.capri3d-outcome[data-reduced-motion="true"] .capri3d-shockwave { opacity: .5; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+ .capri3d-outcome *, .capri3d-host:has(.capri3d-outcome) .capri3d-canvas { animation: none !important; }
+ .capri3d-speed-lines, .capri3d-impact, .capri3d-celebratory-cut { display: none; }
+}
