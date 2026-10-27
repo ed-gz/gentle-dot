@@ -143,7 +143,7 @@ it("shows working actions, counts quiet seconds and speaks once per thinking epi
  const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:layout,onThinkingSpeech:say};
  const activity={phase:"working" as const,lastAction:{verb:"EDITO",subject:"gigs.ts",at:new Date().toISOString()}};
  const view=render(<CapriConversation {...props} activity={activity} episodeKey="s1"/>);
- expect(screen.getByText("EDITO gigs.ts")).toBeVisible();expect(layout).toHaveBeenLastCalledWith(true,false);
+ expect(screen.getByText("SUPERVISO gigs.ts")).toBeVisible();expect(layout).toHaveBeenLastCalledWith(true,false);
  act(()=>vi.advanceTimersByTime(14_000));expect(screen.queryByText(/PIENSO/)).toBeNull();
  act(()=>vi.advanceTimersByTime(1000));expect(screen.getByText("PIENSO… 15s")).toHaveAttribute("data-thinking","true");
  act(()=>vi.advanceTimersByTime(24_000));expect(say).not.toHaveBeenCalled();
@@ -153,7 +153,7 @@ it("shows working actions, counts quiet seconds and speaks once per thinking epi
  act(()=>vi.advanceTimersByTime(120_000));expect(say).toHaveBeenCalledTimes(2);
  const next={...activity,lastAction:{verb:"EJECUTO",subject:"npm test",at:new Date().toISOString()}};
  view.rerender(<CapriConversation {...props} activity={next} episodeKey="s1"/>);
- expect(screen.getByText("EJECUTO npm test")).toBeVisible();expect(screen.queryByText(/PIENSO/)).toBeNull();
+ expect(screen.getByText("DIRIJO npm test")).toBeVisible();expect(screen.queryByText(/PIENSO/)).toBeNull();
  act(()=>vi.advanceTimersByTime(40_000));expect(say).toHaveBeenCalledTimes(3);
  view.rerender(<CapriConversation {...props} activity={{...next,phase:"waiting"}} episodeKey="s1"/>);
  expect(screen.queryByText(/PIENSO|EJECUTO/)).toBeNull();expect(layout).toHaveBeenLastCalledWith(false,false);
@@ -166,7 +166,7 @@ it("preserves legacy behavior without action metadata and hides nonworking chips
  act(()=>vi.advanceTimersByTime(150_000));expect(screen.queryByText(/PIENSO/)).toBeNull();expect(say).not.toHaveBeenCalled();
  for(const phase of ["idle","typing","submitted","waiting","unknown"] as const){
   view.rerender(<CapriConversation {...props} activity={{phase,lastAction:{verb:"LEO",subject:"gigs.ts",at:new Date().toISOString()}}}/>);
-  expect(screen.queryByText("LEO gigs.ts")).toBeNull();
+  expect(screen.queryByText("CONSULTO gigs.ts")).toBeNull();expect(screen.queryByText("LEO gigs.ts")).toBeNull();
  }
 });
 it("uses short excerpts, Ver más and timed speech",()=>{

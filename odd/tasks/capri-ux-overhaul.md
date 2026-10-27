@@ -236,3 +236,5 @@ L88 User: "literal el repo que te mande trabaja un chorro sus animaciones, se mo
 L89 User: "Osea pon que unicamente aparezca en la pantalla laptop no en el monitor"
 
 L90 T50 shipped in source: Hyprland feed (~2s) extracts HERDR region (class herdr, eDP-1 origin 1920,0 scale 1.25), laptop-only clamps with resize reconciliation, guarded movement via existing move command (Wayland-safe), roam.ts four-position teleport/perch circuit with sit/stand perches, 10min drag pause, reduced-motion static, composer/question/approval/sleep guards, bottom-band fallback, 3D corner-rest untouched. Focused 123/123, full UI 1232/1232, cargo 539, tsc 0; native teleport/perch/drag-on-device pending.
+
+L91 User: "quita lo de ejecuto comando, no entiendo por que esas interacciones si unicamente esta actualmente viendo inactiva". Cause: sessions with pre-T49 adapters still emit coder verbs; added SUPERVISOR_VERBS normalizer in conversation.tsx ticker (LEO->CONSULTO, BUSCO->EXAMINO, EDITO/ESCRIBO->SUPERVISO, EJECUTO->DIRIJO). Actions while idle-looking are real supervision of active pi sessions.
