@@ -28,43 +28,43 @@ it.each([
  ["¿Aprobar?", undefined, true, "full"],
  ["¿Cuál?", undefined, true, "full"],
 ] as const)("renders a text-proportional size for %s", (summary, body, prominent, size) => {
- render(<CapriNotificationCard subtitle="SISTEMA" summary={summary} body={body} prominent={prominent}>{summary}{body}</CapriNotificationCard>);
+ render(<CapriNotificationCard summary={summary} body={body} prominent={prominent}>{summary}{body}</CapriNotificationCard>);
  expect(screen.getByRole("status").getAttribute("data-size")).toBe(size);
 });
 
 it("keeps compact acknowledgement and reduced-motion semantics", () => {
- render(<CapriNotificationCard subtitle="SISTEMA" summary="La sesión terminó" reduced onAcknowledge={()=>{}}>La sesión terminó</CapriNotificationCard>);
+ render(<CapriNotificationCard summary="La sesión terminó" reduced onAcknowledge={()=>{}}>La sesión terminó</CapriNotificationCard>);
  expect(screen.getByRole("status").getAttribute("data-size")).toBe("compact");
  expect(screen.getByRole("status").getAttribute("data-reduced-motion")).toBe("true");
  expect(screen.getByRole("button", {name:"Entendido"})).toBeTruthy();
 });
 
-it("renders the comic identity and fresh chip without artwork", () => {
- render(<CapriNotificationCard subtitle="SISTEMA" summary="Mensaje recibido" fresh>Mensaje recibido</CapriNotificationCard>);
+it("renders the comic identity without artwork, subtitle or fresh chip", () => {
+ render(<CapriNotificationCard summary="Mensaje recibido">Mensaje recibido</CapriNotificationCard>);
  expect(screen.getByText("CAPRI")).toBeTruthy();
- expect(screen.getByText("SISTEMA")).toBeTruthy();
- expect(screen.getByText("NUEVO")).toBeTruthy();
+ expect(screen.queryByText("SISTEMA")).toBeNull();
+ expect(screen.queryByText('NUEVO')).toBeNull();
  expect(screen.queryByRole("img")).toBeNull();
  expect(screen.queryByRole("button", {name:"Entendido"})).toBeNull();
 });
 it("renders optional avatar and falls back on a broken image", () => {
- render(<CapriNotificationCard avatar="blob:personal" subtitle="SISTEMA" summary="Mensaje">Mensaje</CapriNotificationCard>);
+ render(<CapriNotificationCard avatar="blob:personal" summary="Mensaje">Mensaje</CapriNotificationCard>);
  fireEvent.error(screen.getByRole("img", {name:"Capri"}));
  expect(screen.queryByRole("img")).toBeNull();
  expect(screen.getByText("Mensaje")).toBeTruthy();
 });
 it("offers acknowledgement only when explicitly answerable", () => {
  const acknowledge=vi.fn();
- render(<CapriNotificationCard subtitle="SISTEMA" summary="Mensaje" onAcknowledge={acknowledge}>Mensaje</CapriNotificationCard>);
+ render(<CapriNotificationCard summary="Mensaje" onAcknowledge={acknowledge}>Mensaje</CapriNotificationCard>);
  fireEvent.click(screen.getByRole("button", {name:"Entendido"}));
  expect(acknowledge).toHaveBeenCalledOnce();
 });
 it("does not render dismissed cards or old fresh chips", () => {
- const {rerender}=render(<CapriNotificationCard subtitle="SISTEMA" summary="Mensaje">Mensaje</CapriNotificationCard>);
- expect(screen.queryByText("NUEVO")).toBeNull();
- rerender(<CapriNotificationCard subtitle="SISTEMA" summary="Mensaje" dismissed fresh>Mensaje</CapriNotificationCard>);
+ const {rerender}=render(<CapriNotificationCard summary="Mensaje">Mensaje</CapriNotificationCard>);
+ expect(screen.queryByText('NUEVO')).toBeNull();
+ rerender(<CapriNotificationCard summary="Mensaje" dismissed>Mensaje</CapriNotificationCard>);
  expect(screen.queryByText("Mensaje")).toBeNull();
- expect(screen.queryByText("NUEVO")).toBeNull();
+ expect(screen.queryByText('NUEVO')).toBeNull();
 });
 
 it("loads only allowlisted personal art and revokes its object URL on unmount", async()=>{

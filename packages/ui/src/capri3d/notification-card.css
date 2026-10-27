@@ -5,11 +5,7 @@
 .capri-comic-card::before { display: none; }
 .capri-comic-header { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; min-height: 28px; flex-shrink: 0; padding-bottom: 4px; font: 700 10px/1.2 ui-monospace, monospace; }
 .capri-comic-brand { padding: 2px 6px; background: var(--capri-notice-channel, #bd8cff); color: var(--capri-notice-accent-ink, #151c20); transform: rotate(-3deg); letter-spacing: 1px; }
-.capri-comic-fresh { padding: 2px 5px; border: 1px solid var(--capri-notice-accent, #c4f36b); color: var(--capri-notice-accent, #c4f36b); font: inherit; margin-left: auto; }
-.capri-comic-subtitle { flex-basis: 100%; color: var(--capri-notice-channel, #bd8cff); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; letter-spacing: .8px; animation: capri-comic-type 650ms steps(12, end) both; }
-@keyframes capri-comic-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0); } }
-.capri-comic-card[data-reduced-motion="true"] .capri-comic-subtitle { animation: none; }
-@media (prefers-reduced-motion: reduce) { .capri-comic-subtitle { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .capri-comic-brand { animation: none; } }
 /* A bust crop of the full-body personal cutout, not a second renderer. */
 .capri-comic-avatar { position: absolute; top: 10px; left: 12px; width: 46px; height: 30px; object-fit: cover; object-position: center top; margin: 0 8px 2px 0; border-bottom: 1px solid var(--capri-notice-accent, #c4f36b); pointer-events: none; }
 .capri-comic-card:has(.capri-comic-avatar) .capri-comic-header { padding-left: 54px; }
@@ -18,7 +14,11 @@
 .capri-comic-card:has(.capri3d-confirm) .capri3d-speech-text { max-height: 30px; overflow-y: auto; }
 .capri-comic-card:has(.capri3d-confirm) .capri-comic-content { max-height: 90px; }
 .capri-comic-card .capri3d-confirm { margin-top: 4px; gap: 8px; }
-.capri3d-host .capri-comic-card .capri3d-confirm button { min-height: 44px; }
+.capri3d-host .capri-comic-card .capri3d-confirm button { min-height: 40px; border-radius: 0; font: 700 12px/1 ui-monospace, monospace; text-transform: uppercase; letter-spacing: 1.5px; padding: 0 10px; clip-path: polygon(3% 0,100% 4%,97% 100%,0 96%); cursor: pointer; }
+.capri3d-host .capri-comic-card .capri3d-confirm .capri3d-approve { background: var(--capri-notice-accent, #c4f36b); color: #151c20; border: 1px solid var(--capri-notice-accent, #c4f36b); }
+.capri3d-host .capri-comic-card .capri3d-confirm .capri3d-approve:disabled { opacity: .55; }
+.capri3d-host .capri-comic-card .capri3d-confirm .capri3d-reject { background: transparent; color: #ff315d; border: 1px solid #ff315d; }
+.capri3d-host .capri-comic-card .capri3d-confirm .capri3d-reject:disabled { opacity: .55; }
 .capri3d-host .capri-comic-card .capri-comic-ack { display: block; min-height: 44px; margin: 4px auto 0; border-color: var(--capri-notice-accent, #c4f36b); border-radius: 3px; text-transform: uppercase; letter-spacing: 1px; }
 /* Medium/full retain the readable 280px frame and existing scroll caps. Only
    short, non-actionable notices surrender the fixed-height empty space. */

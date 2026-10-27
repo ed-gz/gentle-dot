@@ -213,20 +213,20 @@ const ticker=validAction && quiet<15 ? `${SUPERVISOR_VERBS.get(validAction.verb)
  const edge={x:72+dx*scale,y:102+dy*scale};
  return <>
   {pointing && <div ref={questionLayer} className="capri3d-question" data-entering={entering===questionKey} data-reduced-motion={reduced} aria-hidden="true" style={{pointerEvents:"none"}}>
-   {rect ? <><svg className="capri3d-pointing" viewBox="0 0 144 204" fill="none" stroke="currentColor" strokeWidth="1.5">
+   {rect && <><svg className="capri3d-pointing" viewBox="0 0 144 204" fill="none" stroke="currentColor" strokeWidth="1.5">
     <line x1={dx<0?36:108} y1="90" x2={edge.x} y2={edge.y} strokeDasharray="4 4"/>
     <path transform={`translate(${edge.x},${edge.y})`} d="M-7 -3v-4h4M3 -7h4v4M7 3v4h-4M-3 7h-4v-4"/>
-   </svg><span className="capri3d-point-label">{question.target!.label}</span></> : <span className="capri3d-point-label">SEÑALO</span>}
+   </svg><span className="capri3d-point-label">{question.target!.label}</span></>}
   </div>}
   {fx && <div className="capri3d-outcome" key={outcomeKey} data-outcome={fx.kind} data-reduced-motion={reduced} aria-hidden="true" style={{pointerEvents:"none"}}>
    {fx.kind==="done" ? <><div className="capri3d-speed-lines"/><div className="capri3d-shockwave"/><div className="capri3d-celebratory-cut"/></> : impact && <div className="capri3d-impact"/>}
   </div>}
   {ticker && <div className="capri3d-action" data-thinking={quiet>=15} aria-live="off">{ticker}</div>}
-  {Boolean((shown && !delaySummary) || confirmation || receipt) && <CapriNotificationCard key={confirmation ? approvalKey : shown?.id ?? "receipt"} avatar={avatar} reduced={reduced} summary={receipt ?? (confirmation ? `${confirmation.title} ${confirmation.message}` : shown?.sender ?? shown?.text ?? "")} body={receipt || confirmation ? undefined : shown?.body} prominent={Boolean(confirmation || (!receipt && shown?.question))} subtitle={confirmation ? "SISTEMA · PERMISO" : shown?.question ? "SISTEMA · PREGUNTA" : shown?.channel ? `AVISO · ${shown.channel}` : "SISTEMA · AVISO"} fresh={Boolean((shown || confirmation) && !receipt && !pending)} withAction={Boolean(ticker)} leaving={leaving && !confirmation && !receipt} onAcknowledge={!confirmation && !receipt && !shown?.question && shown?.showMore===false ? ()=>{setShown(undefined);setLeaving(false);} : undefined}>
+  {Boolean((shown && !delaySummary) || confirmation || receipt) && <CapriNotificationCard key={confirmation ? approvalKey : shown?.id ?? "receipt"} avatar={avatar} reduced={reduced} summary={receipt ?? (confirmation ? `${confirmation.title} ${confirmation.message}` : shown?.sender ?? shown?.text ?? "")} body={receipt || confirmation ? undefined : shown?.body} prominent={Boolean(confirmation || (!receipt && shown?.question))} withAction={Boolean(ticker)} leaving={leaving && !confirmation && !receipt} onAcknowledge={!confirmation && !receipt && !shown?.question && shown?.showMore===false ? ()=>{setShown(undefined);setLeaving(false);} : undefined}>
    <span className="capri3d-speech-text">{receipt || (pending && confirmation ? "Enviando respuesta…" : confirmation ? excerpt(`${confirmation.title} ${confirmation.message}`) : shown?.sender ? <><strong>{shown.sender}</strong>{shown.privateMessage ? <span className="capri3d-muted"> (privado)</span> : shown.channel ? <> <span className="capri3d-muted">en </span><span className="capri3d-channel">{shown.channel}</span></> : null}:<br/>{excerpt(shown.body ?? "")}</> : excerpt(shown?.text ?? ""))}{!confirmation && !receipt && shown?.confirmation && <span className="capri3d-check" aria-hidden="true">✓</span>}</span>
    {confirmation ? <div className="capri3d-confirm">
-    <button type="button" disabled={pending} onClick={()=>void respond(false)}>Rechazar</button>
-    <button type="button" disabled={pending} onClick={()=>void respond(true)}>Aprobar</button>
+    <button type="button" className="capri3d-reject" disabled={pending} onClick={()=>void respond(false)}>Rechazar</button>
+    <button type="button" className="capri3d-approve" disabled={pending} onClick={()=>void respond(true)}>Aprobar</button>
    </div> : !receipt && !shown?.question && shown?.showMore !== false && <button type="button" className="capri3d-more" onClick={more}>Ver más</button>}
    {error && <span role="alert">{error}</span>}
   </CapriNotificationCard>}

@@ -4,12 +4,10 @@ import "./notification-card.css";
 
 interface Props {
  children: ReactNode;
- subtitle: string;
  summary: string;
  body?: string;
  prominent?: boolean;
  avatar?: string;
- fresh?: boolean;
  dismissed?: boolean;
  leaving?: boolean;
  withAction?: boolean;
@@ -29,13 +27,13 @@ export function notificationCardSize(summary: string, body = "", prominent = fal
 }
 
 /** Pure presentation: an acknowledgement is never an approval or a session answer. */
-export function CapriNotificationCard({children,subtitle,summary,body,prominent=false,avatar,fresh=false,dismissed=false,leaving=false,withAction=false,reduced=false,onAcknowledge}:Props) {
+export function CapriNotificationCard({children,summary,body,prominent=false,avatar,dismissed=false,leaving=false,withAction=false,reduced=false,onAcknowledge}:Props) {
  const [failed,setFailed]=useState<string>();
  if(dismissed)return null;
  return <div className="capri3d-speech capri-comic-card" data-size={notificationCardSize(summary,body,prominent)} data-with-action={withAction} data-leaving={leaving} data-reduced-motion={reduced} role="status" aria-live="polite">
   <div className="capri3d-speech-frame" aria-hidden="true"/>
   {avatar && avatar!==failed && <img className="capri-comic-avatar" src={avatar} alt="Capri" onError={()=>setFailed(avatar)}/>}
-  <header className="capri-comic-header"><b className="capri-comic-brand">CAPRI</b>{fresh && <small className="capri-comic-fresh">NUEVO</small>}<span className="capri-comic-subtitle" title={subtitle}>{subtitle}</span></header>
+  <header className="capri-comic-header"><b className="capri-comic-brand">CAPRI</b></header>
   <div className="capri-comic-content">{children}</div>
   {onAcknowledge && <button className="capri-comic-ack" type="button" onClick={onAcknowledge}>Entendido</button>}
  </div>;

@@ -13,7 +13,7 @@ it("enters once per question, points only with a target and clears on withdrawal
  const question={id:"question:q",paneId:"p",sessionId:"s"};
  const view=render(<CapriConversation {...props} question={question}/>);
  expect(view.container.querySelector('.capri3d-question')).toHaveAttribute('data-entering','true');
- expect(screen.getByText('SEÑALO')).toBeVisible();
+ expect(screen.queryByText('SEÑALO')).toBeNull();
  expect(view.container.querySelector('.capri3d-pointing')).toBeNull();
  fireEvent.animationEnd(view.container.querySelector('.capri3d-question')!);
  const target={rect:{x:-500,y:100,width:300,height:400},label:'π - portal_b2b'};
@@ -126,6 +126,8 @@ it("uses instant reduced-motion states and leaves approval and composer hit area
  const ask={id:"fx",paneId:"p",sessionId:"s",title:"Permiso",message:"Ejecutar",action:"bash",kind:"confirm" as const,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
  const answer=vi.fn().mockResolvedValue(undefined);
  const view=render(<CapriConversation {...props} outcome={outcome} reduced approval={ask} answer={answer}/>);
+ expect(view.container.querySelector('.capri3d-confirm .capri3d-reject')).not.toBeNull();
+ expect(view.container.querySelector('.capri3d-confirm .capri3d-approve')).not.toBeNull();
  const fx=view.container.querySelector(".capri3d-outcome")!;
  expect(fx).toHaveAttribute("data-reduced-motion","true");
  expect(fx).toHaveStyle({pointerEvents:"none"});
