@@ -56,7 +56,7 @@ export async function startDragging(): Promise<void> {
  * assistant), so a window it refused can ask `connection_info` again (S35.2).
  */
 export async function onDesktopEvent(
-	name: "dot://new-conversation" | "dot://panel-shown" | "dot://assistant-ready" | "dot://capri-settings",
+	name: "dot://new-conversation" | "dot://panel-shown" | "dot://assistant-ready" | "dot://capri-settings" | "dot://capri-message",
 	handler: () => void,
 ) {
 	if (!inDesktop()) return () => {};

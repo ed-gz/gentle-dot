@@ -20,9 +20,52 @@ it.each([new Error("boom /home/secret"), new TypeError("Failed to fetch"), new E
  expect(approvalAnswerError(error)).toEqual(new Error("No se pudo responder con la sesión. Volvé a intentarlo o abrí el panel."));
 });
 
+const quickEntry = vi.hoisted(() => ({ active: false, handlers: new Map<string, () => void>() }));
+vi.mock("@tauri-apps/api/core", async importOriginal => ({
+ ...await importOriginal<typeof import("@tauri-apps/api/core")>(),
+ isTauri: () => quickEntry.active,
+ invoke: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (name: string, handler: () => void) => {
+ quickEntry.handlers.set(name, handler);
+ return () => { quickEntry.handlers.delete(name); };
+}) }));
+vi.mock("../src/capri3d/Capri3D.tsx", async () => {
+ const { useEffect } = await import("react");
+ return { Capri3D: ({onActive}: {onActive(active: boolean): void}) => {
+  useEffect(() => { if (quickEntry.active) onActive(true); }, [onActive]);
+  return null;
+ } };
+});
+
+it.each(["3d", "2d"] as const)("SUPER+C opens quick entry then history in %s mode; Escape only closes entry", async renderMode => {
+ quickEntry.active = true;
+ const toggle = vi.fn();
+ const view = render(<DesktopCompanionSurface controls={controls({renderMode})} agentState="idle" connected toggle={toggle} startDrag={vi.fn()} />);
+ await act(async () => {});
+ expect(screen.queryByRole("textbox", {name:"Mensaje para Dot"})).not.toBeInTheDocument();
+ expect(quickEntry.handlers.has("dot://capri-message")).toBe(true);
+ act(() => quickEntry.handlers.get("dot://capri-message")!());
+ expect(screen.getByRole("textbox", {name:"Mensaje para Dot"})).toHaveFocus();
+ expect(toggle).not.toHaveBeenCalled();
+ act(() => quickEntry.handlers.get("dot://capri-message")!());
+ expect(screen.queryByRole("textbox", {name:"Mensaje para Dot"})).not.toBeInTheDocument();
+ expect(toggle).toHaveBeenCalledOnce();
+ act(() => quickEntry.handlers.get("dot://capri-message")!());
+ fireEvent.keyDown(screen.getByRole("textbox", {name:"Mensaje para Dot"}), {key:"Escape"});
+ expect(screen.queryByRole("textbox", {name:"Mensaje para Dot"})).not.toBeInTheDocument();
+ expect(toggle).toHaveBeenCalledOnce();
+ view.unmount();
+ expect(quickEntry.handlers.has("dot://capri-message")).toBe(false);
+});
+
 vi.mock("../src/capri2d/Capri2D.tsx", async () => {
  const { selectAct } = await import("../src/capri2d/director.ts");
- return { Capri2D: ({intent = {}}: {intent?: import("../src/capri2d/director.ts").RigIntent}) => <canvas data-testid="capri2d" data-act={selectAct(intent)} /> };
+ const { useEffect } = await import("react");
+ return { Capri2D: ({intent = {}, onActive}: {intent?: import("../src/capri2d/director.ts").RigIntent; onActive(active: boolean): void}) => {
+  useEffect(() => { if (quickEntry.active) onActive(true); }, [onActive]);
+  return <canvas data-testid="capri2d" data-act={selectAct(intent)} />;
+ } };
 });
 it("drives the 2D acts from completion, failure and a sustained question", () => {
  const value = controls({renderMode:"2d"});
@@ -59,6 +102,8 @@ beforeEach(() => {
 	);
 });
 afterEach(() => {
+ quickEntry.active = false;
+ quickEntry.handlers.clear();
 	localStorage.clear();
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();

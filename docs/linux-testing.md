@@ -169,6 +169,17 @@ The first `gsettings` line replaces any custom shortcuts you already have. If yo
 
 The app's own `Alt + Space` shortcut works only on an X11 session. On Wayland, desktops do not let apps register global shortcuts, which is why you set one in your desktop settings instead. On GNOME, `Alt + Space` is also the window menu.
 
+#### Capri quick-message shortcut (SUPER+C)
+
+For a shortcut already bound to `/usr/bin/gentle-dot --capri-message`, check this separately from `--toggle` (which still toggles the full panel). No Hyprland configuration changes are needed for an existing binding.
+
+1. With Capri in **3D** mode and the panel closed, press **SUPER+C** from another app: only the quick composer near Capri should open, with its input focused.
+2. Press **SUPER+C** again: the quick composer closes and the existing panel opens to the conversation history.
+3. Close the panel, press **SUPER+C**, then **Escape** in the composer: only the composer closes; the history must not open.
+4. Repeat in **2D** mode. Also check a hidden/disabled companion and a fresh app launch: the shortcut should enable/show Capri through the existing native path before delivering the quick-message event.
+
+These are live-device checks: mocked event tests cover both rendering modes and Escape, but do not prove Hyprland key delivery, native visibility/focus timing, local-art readiness, or WebKit rendering.
+
 ### 10. Sign in with an API key
 
 In the panel, type `/login` and press Enter (or use the **Accounts** icon in the header). Choose **API key**, pick your provider, paste the key, and confirm.

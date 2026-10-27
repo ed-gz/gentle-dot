@@ -1058,6 +1058,23 @@ fn handle_launch(app: &AppHandle, args: &[String]) {
     let result = match platform::launch_request(args) {
         LaunchRequest::Toggle => toggle_panel(app.clone()),
         LaunchRequest::Show => show_panel(app),
+        LaunchRequest::CapriMessage => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let result = async {
+                    desktop_companion::desktop_companion_set(app.clone(), desktop_companion::Patch {
+                        enabled: Some(true),
+                        ..Default::default()
+                    }).await?;
+                    desktop_companion::desktop_companion_recall(app.clone()).await?;
+                    app.emit_to(DOT, "dot://capri-message", ()).map_err(|e| e.to_string())
+                }.await;
+                if let Err(error) = result {
+                    companion_error(&app, &error);
+                }
+            });
+            Ok(())
+        },
         LaunchRequest::StopComputer => {
             computer::stop(app, Reason::Panic);
             Ok(())

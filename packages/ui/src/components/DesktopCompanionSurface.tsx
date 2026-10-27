@@ -20,7 +20,7 @@ import { desktopFace } from "../capri3d/desktop-faces.ts";
 import { CapriConversation, createOverlayPublisher, pendingApproval, type Speech, BUBBLE_HEIGHT, INPUT_HEIGHT } from "../capri3d/conversation.tsx";
 import { useCompanionChat } from "../capri3d/replies.ts";
 import { gestureChoice, type Gesture } from "../capri3d/gestures.ts";
-import { connectionInfo } from "../desktop.ts";
+import { connectionInfo, onDesktopEvent } from "../desktop.ts";
 import { createOrchestrationClient, type AgentApproval, type OrchestrationClient } from "../orchestration.ts";
 import "../desktop-companion.css";
 
@@ -82,6 +82,21 @@ export function DesktopCompanionSurface({
 		void publish3DSurface(active).catch(() => { if (active) setFailed3D(true); });
 	}, []);
 	const [chatOpen, setChatOpen] = useState(false);
+	const quickMessage = useRef({ chatOpen, toggle });
+	quickMessage.current = { chatOpen, toggle };
+	useEffect(() => {
+		if (!controls.state.enabled) return;
+		let live = true, stop: (() => void) | undefined;
+		void onDesktopEvent("dot://capri-message", () => {
+			if (!live) return;
+			const current = quickMessage.current;
+			const wasOpen = current.chatOpen;
+			current.chatOpen = !wasOpen;
+			setChatOpen(!wasOpen);
+			if (wasOpen) current.toggle();
+		}).then(unlisten => { if (live) stop = unlisten; else unlisten(); }).catch(() => {});
+		return () => { live = false; stop?.(); };
+	}, [controls.state.enabled]);
 	const [gesture, setGesture] = useState<{ name: Gesture; at: number }>();
 	useEffect(() => {
 		if (!gesture) return;

@@ -87,12 +87,15 @@ pub enum LaunchRequest {
     Toggle,
     Show,
     StopComputer,
+    CapriMessage,
 }
 
 /// Reads the arguments of a launch, `args[0]` being the program.
 pub fn launch_request(args: &[String]) -> LaunchRequest {
     if args.iter().skip(1).any(|arg| arg == "--stop-computer") {
         LaunchRequest::StopComputer
+    } else if args.iter().skip(1).any(|arg| arg == "--capri-message") {
+        LaunchRequest::CapriMessage
     } else if args.iter().skip(1).any(|arg| arg == "--toggle") {
         LaunchRequest::Toggle
     } else {
@@ -228,6 +231,16 @@ mod tests {
         // The program path is never read as an argument.
         assert_eq!(launch_request(&args(&["--toggle"])), LaunchRequest::Show);
         assert_eq!(launch_request(&[]), LaunchRequest::Show);
+    }
+
+    #[test]
+    fn capri_message_opens_quick_entry_not_the_panel() {
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(launch_request(&args(&["gentle-dot", "--capri-message"])), LaunchRequest::CapriMessage);
+        assert_eq!(launch_request(&args(&["gentle-dot", "--toggle", "--capri-message"])), LaunchRequest::CapriMessage);
+        assert_eq!(launch_request(&args(&["gentle-dot", "--capri-message", "--stop-computer"])), LaunchRequest::StopComputer);
+        assert_eq!(launch_request(&args(&["--capri-message"])), LaunchRequest::Show);
+        assert_eq!(launch_request(&args(&["gentle-dot", "--capri-messages"])), LaunchRequest::Show);
     }
 
     #[test]
