@@ -2344,6 +2344,7 @@ pub fn init(app: &AppHandle, data: &std::path::Path) {
             lifecycle.consumed.insert(service);
         }
     }
+    app.manage(PossessionSession { lifecycle:Mutex::new(PossessionLifecycle::default()), frame:Mutex::new(None) });
     app.manage(IntroSession { clock: Instant::now(), lifecycle: Mutex::new(lifecycle), receipt, frame:Mutex::new(None) });
 }
 /// Service-owned latch: a WebView reload cannot reset this state. Blocked starts are consumed,
@@ -2398,9 +2399,75 @@ fn intro_area(values: &Value) -> Option<Area> {
 pub struct IntroHeartbeat { connected: bool, blocked: bool, reduced: bool, #[serde(default)] skip: bool }
 struct IntroSession { clock: Instant, lifecycle: Mutex<IntroLifecycle>, receipt: PathBuf, frame:Mutex<Option<Area>> }
 
+#[derive(Default)]
+struct PossessionLifecycle { active:Option<u64>, last:Option<u64>, pulse:u64, ready:bool }
+impl PossessionLifecycle {
+    fn start(&mut self, now:u64)->bool {
+        if self.active.is_some() || self.last.is_some_and(|last| now.saturating_sub(last)<600000) { return false; }
+        self.last=Some(now); self.active=Some(now); self.pulse=now; self.ready=false; true
+    }
+    fn expired(&self,now:u64)->bool { self.active.is_some_and(|at| now.saturating_sub(at)>=6000 || now.saturating_sub(self.pulse)>1500) }
+    fn close(&mut self) { self.active=None; self.ready=false; }
+}
+struct PossessionSession { lifecycle:Mutex<PossessionLifecycle>, frame:Mutex<Option<Area>> }
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct PossessionHeartbeat { start:bool, connected:bool, blocked:bool, reduced:bool }
+fn possession_heartbeat(app:&AppHandle,pulse:PossessionHeartbeat)->bool {
+    let c=app.state::<Arc<Controller>>();
+    let intro=app.state::<IntroSession>();
+    let session=app.state::<PossessionSession>();
+    let now=intro.clock.elapsed().as_millis() as u64;
+    let intro_busy={let l=intro.lifecycle.lock().unwrap();l.pending||l.shown.is_some()};
+    let blocked=pulse.blocked||pulse.reduced||!pulse.connected||!enabled(app)||controlled(app)||intro_busy||{
+        let i=c.inner.lock().unwrap();
+        i.context.cue.as_ref().is_some_and(|q|matches!(q.kind,Kind::Question|Kind::Attention)) || i.context.notification.as_ref().is_some_and(|q|matches!(q.kind,Kind::Question|Kind::Attention))
+    };
+    if blocked {
+        let mut l=session.lifecycle.lock().unwrap();let was=l.active.is_some();l.close();drop(l);
+        if was {crate::shell::close_intro(app);}return false;
+    }
+    let geometry=(||->Result<Area,String>{
+        let dot=resolve(crate::platform::DOT_TITLE)?;
+        let (l,r,herdr)=roam_region(&query("clients")?,&query("monitors")?,dot.width,dot.height).ok_or("Sin HERDR")?;
+        if !herdr || r.x<l.x || r.y<l.y || r.x+r.width>l.x+l.width || r.y+r.height>l.y+l.height {return Err("Fuera de eDP-1".into());}
+        Ok(r)
+    })();
+    let mut lifecycle=session.lifecycle.lock().unwrap();
+    if blocked || geometry.is_err() || lifecycle.expired(now) || (lifecycle.active.is_some() && *session.frame.lock().unwrap()!=geometry.as_ref().ok().copied()) {
+        let was=lifecycle.active.is_some();lifecycle.close();drop(lifecycle);
+        if was {crate::shell::close_intro(app);} return false;
+    }
+    if lifecycle.active.is_some(){lifecycle.pulse=now;return lifecycle.ready;}
+    if !pulse.start || !lifecycle.start(now){return false;}
+    let rect=geometry.unwrap();*session.frame.lock().unwrap()=Some(rect);drop(lifecycle);
+    if crate::shell::create_possession(app,(rect.x,rect.y,rect.width,rect.height)).is_err(){session.lifecycle.lock().unwrap().close();crate::shell::close_intro(app);return false;}
+    let app=app.clone();
+    std::thread::spawn(move||{
+        let result=(||->Result<(),String>{
+            let mut found=None;
+            for _ in 0..20 {if let Ok(w)=resolve(crate::shell::INTRO_TITLE){found=Some(w);break;}std::thread::sleep(Duration::from_millis(25));}
+            let w=found.ok_or("Posesión no disponible")?;
+            dispatch(crate::shell::INTRO_TITLE,&w.address,"float","action='on'")?;
+            dispatch(crate::shell::INTRO_TITLE,&w.address,"resize",&format!("x={},y={},relative=false",rect.width,rect.height))?;
+            dispatch(crate::shell::INTRO_TITLE,&w.address,"move",&format!("x={},y={},relative=false",rect.x,rect.y))?;
+            verify_rect(crate::shell::INTRO_TITLE,&w.address,rect.x,rect.y,(rect.width,rect.height),None)?;Ok(())
+        })();
+        let handle=app.clone();let _=app.run_on_main_thread(move||{
+            let s=handle.state::<PossessionSession>();let mut l=s.lifecycle.lock().unwrap();
+            let now=handle.state::<IntroSession>().clock.elapsed().as_millis() as u64;
+            if l.active.is_none(){return;} // cancelled placement cannot touch a later intro
+            if result.is_ok()&&!l.expired(now){l.ready=true;crate::shell::show_intro(&handle);}
+            else{l.close();crate::shell::close_intro(&handle);}
+        });
+    });false
+}
+
 /// Existing dot-only interaction permission carries a narrowly typed heartbeat, not arbitrary
 /// window operations, scripts, coordinates, or file names. The overlay itself has no IPC grants.
 fn intro_heartbeat(app: &AppHandle, pulse: IntroHeartbeat) {
+    // The input-transparent overlay slot has exactly one owner at a time.
+    if app.state::<PossessionSession>().lifecycle.lock().unwrap().active.is_some(){return;}
     let c = app.state::<Arc<Controller>>();
     let session = app.state::<IntroSession>();
     let now = session.clock.elapsed().as_millis() as u64;
@@ -2462,6 +2529,7 @@ fn intro_heartbeat(app: &AppHandle, pulse: IntroHeartbeat) {
                 let handle = app.clone();
                 let _ = app.run_on_main_thread(move || {
                     let session = handle.state::<IntroSession>();
+                    if !session.lifecycle.lock().unwrap().pending { return; }
                     if result.is_ok() && session.lifecycle.lock().unwrap().ready(session.clock.elapsed().as_millis() as u64) == IntroAction::Show {
                         crate::shell::show_intro(&handle);
                     } else { session.lifecycle.lock().unwrap().close(); crate::shell::close_intro(&handle); }
@@ -2475,6 +2543,21 @@ fn intro_heartbeat(app: &AppHandle, pulse: IntroHeartbeat) {
 #[cfg(test)]
 mod intro_tests {
     use super::*;
+    #[test]
+    fn possession_latch_placement_and_auto_close() {
+        let mut p = PossessionLifecycle::default();
+        assert!(p.start(0));
+        assert!(!p.start(1));
+        assert!(!p.expired(500));
+        assert!(p.expired(1501)); // missing heartbeat
+        p.close();
+        assert!(!p.start(2000));
+        assert!(p.start(600000));
+        p.pulse = 606000;
+        assert!(p.expired(606001)); // hard duration cap
+        let monitors=serde_json::json!([{"id":0,"name":"HDMI-A-1","x":0,"y":0,"width":1920,"height":1080,"scale":1},{"id":1,"name":"eDP-1","x":1920,"y":0,"width":1920,"height":1080,"scale":1.25}]);
+        assert_eq!(intro_area(&monitors),Some(Area{x:1920,y:0,width:1536,height:864}));
+    }
     #[test]
     fn intro_lifecycle_creates_shows_closes_and_never_replays_a_service() {
         let mut intro = IntroLifecycle::default();
@@ -2544,6 +2627,14 @@ pub fn start(app: &AppHandle) {
         let mut last_absence = Instant::now() - Duration::from_secs(30);
         while !c.stop.load(Ordering::SeqCst) {
             let session = c.app.state::<IntroSession>();
+            {
+                let possession=c.app.state::<PossessionSession>();
+                let mut l=possession.lifecycle.lock().unwrap();
+                if l.expired(session.clock.elapsed().as_millis() as u64) || (!c.state().enabled && l.active.is_some()) {
+                    l.close();let app=c.app.clone();let handle=app.clone();
+                    let _=app.run_on_main_thread(move||crate::shell::close_intro(&handle));
+                }
+            }
             // A daemon generation first observed while Capri is disabled is ineligible,
             // even if the user enables her much later in that same service lifetime.
             if !c.state().enabled {
@@ -3155,7 +3246,8 @@ pub async fn desktop_companion_set(app: AppHandle, patch: Patch) -> Result<State
 pub mod intro_bridge {
     use super::*;
     #[tauri::command]
-    pub fn desktop_companion_interaction(app: AppHandle, active: bool, released: Option<bool>, dragging: Option<bool>, intro: Option<IntroHeartbeat>) -> Value {
+    pub fn desktop_companion_interaction(app: AppHandle, active: bool, released: Option<bool>, dragging: Option<bool>, intro: Option<IntroHeartbeat>, possession: Option<PossessionHeartbeat>) -> Value {
+        if let Some(pulse)=possession {return serde_json::json!({"possessionActive":possession_heartbeat(&app,pulse)});}
         if let Some(pulse) = intro {
             intro_heartbeat(&app,pulse);
             let session = app.state::<IntroSession>();

@@ -1,0 +1,8 @@
+/* Procedural chip/sleep transitions, capri-desktop choreography (MIT), see LICENSE. */
+[data-capri-biochip="true"] { animation: capri-chip-enter 550ms ease-out both; }
+[data-capri-sleep-face="true"] { animation: capri-sleep-enter 850ms ease-out both; }
+@keyframes capri-chip-enter { from { opacity:0; transform:scale(.25) rotate(-12deg); } to { opacity:1; transform:scale(1) rotate(0); } }
+@keyframes capri-sleep-enter { from { opacity:0; transform:scale(.36) translateY(30px); } to { opacity:1; transform:scale(1) translateY(0); } }
+@media (prefers-reduced-motion:reduce) {
+ [data-capri-biochip], [data-capri-sleep-face] { animation:none; transition:none !important; }
+}

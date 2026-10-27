@@ -5,17 +5,20 @@ import { useEffect, useRef } from "react";
 import { createEngine, frameAt, type InputRectangle } from "./engine.ts";
 import { RigDirector, type RigIntent } from "./director.ts";
 import { RigFx } from "./fx.ts";
+import { CapriFaceSprite } from '../capri-faces/CapriFaceSprite.tsx';
+import './possession.css';
 let warned = false;
 export interface Capri2DProps {
  enabled: boolean; visible: boolean; reduced: boolean;
+ possessing?:boolean; sleepingPerched?:boolean;
  onActive(active: boolean): void; onMask(mask: number[], bodyRects?:InputRectangle[]): void;
  intent?: RigIntent;
 }
-export function Capri2D({ enabled, visible, reduced, onActive, onMask, intent = {} }: Capri2DProps) {
+export function Capri2D({ enabled, visible, reduced, possessing=false, sleepingPerched=false, onActive, onMask, intent = {} }: Capri2DProps) {
  const canvas = useRef<HTMLCanvasElement>(null);
  const fxCanvas = useRef<HTMLCanvasElement>(null);
- const current = useRef({ visible, reduced, onActive, onMask, intent });
- current.current = { visible, reduced, onActive, onMask, intent };
+ const current = useRef({ visible, reduced, onActive, onMask, intent, possessing, sleepingPerched });
+ current.current = { visible, reduced, onActive, onMask, intent, possessing, sleepingPerched };
  useEffect(() => {
   if (!enabled || !canvas.current) return;
   const element = canvas.current;
@@ -26,6 +29,7 @@ export function Capri2D({ enabled, visible, reduced, onActive, onMask, intent = 
   try { if (fxCanvas.current) fx = new RigFx(fxCanvas.current); } catch { /* Body still works without the optional FX context. */ }
   let engine: ReturnType<typeof createEngine> | undefined;
   let sourceImage: HTMLImageElement | undefined;
+  let wasPossessing=false;
   let last = -1, previousMask = "", previousIntent = "", wasHidden = false, fxSuppressed = false;
   const loadImage = async (name: string) => {
    const bytes = await invoke<ArrayBuffer | number[]>("capri2d_asset", { name });
@@ -46,19 +50,25 @@ export function Capri2D({ enabled, visible, reduced, onActive, onMask, intent = 
    if (!live || !engine) return;
    const state = current.current;
    const hidden = !state.visible || document.hidden;
+   if(state.possessing!==wasPossessing){
+    if(!hidden&&!state.reduced)fx?.burst(now,!state.possessing);
+    wasPossessing=state.possessing;
+   }
    director.update(state.intent, now, hidden);
    const suppressFx=hidden||state.reduced;
    if (suppressFx && !fxSuppressed) fx?.clear();
    fxSuppressed=suppressFx;
    if (!hidden) {
     const frame = state.reduced ? 0 : frameAt(now, director.fps());
-    const intentKey = JSON.stringify([state.intent,state.reduced]);
+    const intentKey = JSON.stringify([state.intent,state.reduced,state.possessing,state.sleepingPerched]);
     if (frame !== last || intentKey !== previousIntent || wasHidden) {
      last = frame; previousIntent = intentKey;
      const sample = director.sample(now,state.reduced);
      const mask = engine.draw(sample.pose, frame);
      if (!state.reduced) for (const cue of sample.cues) fx?.cue(cue,now,state.intent.direction);
-     const bodyRects=engine.inputRectangles();
+     // Visual-only proxies have no input: never retain the invisible body's silhouette
+     // or introduce rectangular hit areas over transparent face-atlas pixels.
+     const bodyRects:InputRectangle[]=state.possessing||state.sleepingPerched?[]:engine.inputRectangles();
      const key = JSON.stringify(bodyRects);
      if (key !== previousMask) { previousMask = key; state.onMask(mask,bodyRects); }
     }
@@ -103,7 +113,8 @@ export function Capri2D({ enabled, visible, reduced, onActive, onMask, intent = 
   };
  }, [enabled]);
  return <>
-  <canvas ref={canvas} className="capri3d-canvas" data-capri2d="true" aria-hidden="true" style={{ width: 144, height: 204, display: "block", pointerEvents: "none" }} />
+  {(possessing||sleepingPerched)&&<div data-capri-biochip={possessing?'true':undefined} data-capri-sleep-face={sleepingPerched?'true':undefined} style={{position:'absolute',left:possessing?54:22,top:possessing?104:40,width:possessing?36:100,height:possessing?36:100,pointerEvents:'none',filter:possessing?'sepia(1) saturate(3) hue-rotate(45deg)':undefined,transition:reduced?'none':'all 350ms'}}><CapriFaceSprite action={sleepingPerched?'sleep':'face'}/></div>}
+  <canvas ref={canvas} className="capri3d-canvas" data-capri2d="true" aria-hidden="true" style={{ width: 144, height: 204, display: "block", pointerEvents: "none",opacity:possessing||sleepingPerched?0:1,transition:reduced?'none':'opacity 350ms' }} />
   <canvas ref={fxCanvas} data-capri2d-fx="true" aria-hidden="true" style={{ position:"absolute",left:0,top:0,width:144,height:204,pointerEvents:"none" }} />
  </>;
 }

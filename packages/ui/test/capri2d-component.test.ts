@@ -1,8 +1,8 @@
 import { createElement } from "react";
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), draw: vi.fn(), inputRectangles:vi.fn(), dispose: vi.fn(), fxCue:vi.fn(),fxDraw:vi.fn(),fxClear:vi.fn() }));
-vi.mock("../src/capri2d/fx.ts",()=>({RigFx:class{cutins={};cue=mocks.fxCue;draw=mocks.fxDraw;clear=mocks.fxClear;}}));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), draw: vi.fn(), inputRectangles:vi.fn(), dispose: vi.fn(), fxBurst:vi.fn(),fxCue:vi.fn(),fxDraw:vi.fn(),fxClear:vi.fn() }));
+vi.mock("../src/capri2d/fx.ts",()=>({RigFx:class{cutins={};burst=mocks.fxBurst;cue=mocks.fxCue;draw=mocks.fxDraw;clear=mocks.fxClear;}}));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("../src/capri2d/engine.ts", async original => ({
  ...await original<typeof import("../src/capri2d/engine.ts")>(),
@@ -86,4 +86,20 @@ it("missing local artwork falls back and logs once across remounts", async () =>
  const second=render(createElement(Capri2D,props)); await act(async()=>{}); second.unmount();
  expect(log).toHaveBeenCalledOnce(); expect(props.onActive).not.toHaveBeenCalledWith(true);
  expect(mocks.draw).not.toHaveBeenCalled();
+});
+it('shatters into a green chip, replaces the input silhouette, restores body, and enlarges only a perched sleep face',async()=>{
+ const props={enabled:true,visible:true,reduced:false,onActive:vi.fn(),onMask:vi.fn()};
+ const view=render(createElement(Capri2D,props));await act(async()=>{});
+ expect(view.container.querySelector('[data-capri-biochip]')).toBeNull();
+ view.rerender(createElement(Capri2D,{...props,possessing:true}));act(()=>nextFrame(200));
+ expect(mocks.fxBurst).toHaveBeenLastCalledWith(200,false);
+ expect(props.onMask).toHaveBeenLastCalledWith(Array(816).fill(1),[]);
+ expect(view.container.querySelector('[data-capri-biochip]')).toHaveStyle({width:'36px',height:'36px'});
+ view.rerender(createElement(Capri2D,props));act(()=>nextFrame(400));
+ expect(mocks.fxBurst).toHaveBeenLastCalledWith(400,true);
+ expect(props.onMask).toHaveBeenLastCalledWith(Array(816).fill(1),[[10,20,1,1]]);
+ view.rerender(createElement(Capri2D,{...props,sleepingPerched:true}));act(()=>nextFrame(600));
+ expect(view.container.querySelector('[data-capri-sleep-face]')).toHaveStyle({width:'100px'});
+ expect(props.onMask).toHaveBeenLastCalledWith(Array(816).fill(1),[]);
+ view.unmount();
 });

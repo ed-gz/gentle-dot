@@ -62,8 +62,9 @@ fn create_transient(app:&AppHandle,rect:(i32,i32,i32,i32),target:(i32,i32,i32,i3
         .min_inner_size(rect.2 as f64,rect.3 as f64).max_inner_size(rect.2 as f64,rect.3 as f64)
         .transparent(true).decorations(false).shadow(false).always_on_top(true)
         .skip_taskbar(true).visible_on_all_workspaces(true).focused(false).visible(false).build().map_err(err)?;
-    // Set the empty input region BEFORE mapping, including the GTK native surface.
-    if let Err(error) = window.set_ignore_cursor_events(true) { let _ = window.close(); return Err(err(error)); }
+    // Input transparency comes from the GTK empty shape below. Do NOT call
+    // set_ignore_cursor_events here: tao queues a CursorIgnoreEvents request whose
+    // window().unwrap() panics (abort) if the window closes before it is processed.
     #[cfg(target_os="linux")]
     {
         use gtk::prelude::*;

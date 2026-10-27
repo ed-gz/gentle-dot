@@ -13,6 +13,7 @@ import { Capri3D } from "../capri3d/Capri3D.tsx";
 import { Capri2D } from "../capri2d/Capri2D.tsx";
 import { useRoaming } from "../capri2d/useRoaming.ts";
 import { useIntro } from "../capri2d/useIntro.ts";
+import { usePossession } from "../capri2d/usePossession.ts";
 import { publish3DSurface, readLocalAsset, usePreferred3D } from "../capri3d/native.ts";
 import { useChoreography } from "../capri3d/useChoreography.ts";
 import { restChoice, responseChoice, speechDuration } from "../capri3d/choreography.ts";
@@ -445,11 +446,20 @@ export function DesktopCompanionSurface({
 		return () => clearTimeout(timer);
 	}, [cue?.id, cue?.summary, cue?.body, cue?.kind, cue?.expiresAt, cue?.paneId, cue?.sessionId]);
  const introActive=useIntro(controls.state.enabled,connected,Boolean(activeQuestion)||Boolean(approval)||attention||inControl||chatOpen,reduced||!controls.state.motion);
+ const possessionBusy=useRef(false);
  const roaming=useRoaming(renderMode==='2d' && visible,{
   composer:chatOpen,question:Boolean(activeQuestion),approval:Boolean(approval)||attention,
   sleeping:choreography.absent||choreography.rest==='sleep',reduced:reduced||!controls.state.motion,
-  paused:introActive||inControl||interacting||controls.state.pinned||(controls.state.paused&&!reduced),
+  paused:possessionBusy.current||introActive||inControl||interacting||controls.state.pinned||(controls.state.paused&&!reduced),
  });
+ const possessionActive=usePossession(renderMode==='2d'&&visible,connected,{
+  perched:roaming.pose?.resting==='sit'&&!roaming.travelling,
+  composer:chatOpen,question:Boolean(activeQuestion),approval:Boolean(approval)||attention,
+  intro:introActive,reduced:reduced||!controls.state.motion,
+  sleeping:choreography.absent||choreography.rest==='sleep',
+  paused:inControl||interacting||controls.state.pinned||controls.state.paused,
+ },roaming.feedSource);
+ possessionBusy.current=possessionActive;
 	const motion = choreography.motion;
 	const perched = (cue?.kind === "input-ready" || cue?.kind === "typing") && cue.placement === "perch";
 	const baseChoice = useMemo<ClipChoice>(() => {
@@ -622,6 +632,8 @@ export function DesktopCompanionSurface({
 			}}
 		>
             {renderMode === "2d" ? <Capri2D
+                 possessing={possessionActive}
+                 sleepingPerched={(perched||roaming.pose?.resting==='sit')&&(choreography.absent||choreography.rest==='sleep')&&!reduced}
                 enabled={controls.state.enabled} visible={visible && !inControl}
                 reduced={reduced || !controls.state.motion}
                 intent={{

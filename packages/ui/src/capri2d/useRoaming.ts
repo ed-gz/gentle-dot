@@ -8,6 +8,7 @@ export function useRoaming(enabled:boolean,guards:RoamGuards){
  const [pose,setPose]=useState<RoamPosition>();
  const [travelling,setTravelling]=useState(false);
  const dragFlight=useRef(false);
+ const feedSource=useRef<{feed?:RoamFeed;received:number}>({received:0});
  useEffect(()=>{
   if(!enabled||!isTauri())return;
   let live=true,stop:(()=>void)|undefined,feed:RoamFeed|undefined,received=0,busy=false;
@@ -24,12 +25,12 @@ export function useRoaming(enabled:boolean,guards:RoamGuards){
   };
   void import('@tauri-apps/api/event').then(async({listen})=>{
    const unlisten=await listen<RoamFeed|null>('dot://roam-region',event=>{
-    feed=event.payload??undefined;received=Date.now();step();
+    feed=event.payload??undefined;received=Date.now();feedSource.current={feed,received};step();
    });
    if(live)stop=unlisten;else unlisten();
   }).catch(()=>{});
   const timer=setInterval(step,1000);
-  return()=>{live=false;stop?.();clearInterval(timer);if(arrive)clearTimeout(arrive);};
+  return()=>{live=false;feedSource.current={received:0};stop?.();clearInterval(timer);if(arrive)clearTimeout(arrive);};
  },[enabled]);
  const dragged=()=>{director.current.dragged(Date.now());setTravelling(false);};
  const dragBy=(dx:number,dy:number)=>{
@@ -38,5 +39,5 @@ export function useRoaming(enabled:boolean,guards:RoamGuards){
   dragFlight.current=true;
   void invoke('desktop_companion_move',{dx:Math.max(-512,Math.min(512,Math.round(dx))),dy:Math.max(-512,Math.min(512,Math.round(dy)))}).catch(()=>{}).finally(()=>{dragFlight.current=false;});
  };
- return {pose,travelling,dragged,dragBy};
+ return {pose,travelling,dragged,dragBy,feedSource};
 }

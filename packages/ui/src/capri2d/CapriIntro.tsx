@@ -5,7 +5,8 @@ import { CapriFaceSprite } from '../capri-faces/CapriFaceSprite.tsx';
 import { CapriSprite } from '../components/CapriCompanion.tsx';
 import { IntroDriver, INTRO_BEATS } from './intro.ts';
 import './intro.css';
-interface Configuration { ready:boolean; started?:number; target:{x:number;y:number;width:number;height:number} }
+import { CapriPossession } from './CapriPossession.tsx';
+interface Configuration { possession?:boolean; ready:boolean; started?:number; target:{x:number;y:number;width:number;height:number} }
 declare global { interface Window { __CAPRI_INTRO__?:Configuration } }
 const ease=(p:number)=>p*p*(3-2*p);
 export function CapriIntro() {
@@ -18,7 +19,7 @@ export function CapriIntro() {
   return()=>window.removeEventListener('capri-intro-ready',ready);
  },[]);
  useEffect(()=>{
-  if(!config?.ready)return;
+  if(!config?.ready||config.possession)return;
   const driver=new IntroDriver();
   const reduced=window.matchMedia('(prefers-reduced-motion: reduce)');
   driver.start('native-window',config.started??performance.now(),reduced.matches);
@@ -36,6 +37,7 @@ export function CapriIntro() {
   raf=requestAnimationFrame(tick);
   return()=>{cancelAnimationFrame(raf);driver.abort();reduced.removeEventListener('change',reduce);document.removeEventListener('visibilitychange',abort);};
  },[config?.ready,config?.started]);
+ if(config?.ready&&config.possession)return <CapriPossession started={config.started??performance.now()}/>;
  if(!config?.ready||frame.beat==='done')return null;
  const {beat,progress:p,elapsed:t}=frame;
  const w=window.innerWidth,h=window.innerHeight;
