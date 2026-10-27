@@ -51,7 +51,13 @@ public final class CompanionOverlayService extends Service {
     private WindowManager windows;
     private CompanionSpriteView sprite;
     private BroadcastReceiver debugReceiver;
-    private TextView speech;
+    private TextView speech, dismissButton;
+    private final OverlayGestures gestures=new OverlayGestures(ViewConfiguration.getLongPressTimeout());
+    private final Runnable dismissTimeout=this::hideDismiss;
+    private final Runnable longPress=()->{
+        if(this.attached&&!MainActivity.isFullAppVisible()
+            &&gestures.hold(ViewConfiguration.getLongPressTimeout())==OverlayGestures.Decision.LONG_PRESS)syncDismiss();
+    };
     private WindowManager.LayoutParams position, speechPosition;
     private volatile boolean attached, started;
     private boolean speechAttached;
@@ -141,7 +147,7 @@ public final class CompanionOverlayService extends Service {
         position=new WindowManager.LayoutParams(size,size,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT);
         position.gravity=Gravity.TOP|Gravity.LEFT;position.x=prefs(this).getInt("x",dp(12));position.y=prefs(this).getInt("y",dp(160));
-        sprite.setOnClickListener(v->openChat());
+        sprite.setOnClickListener(v->{if(dismissButton!=null)hideDismiss();else openChat();});
         sprite.setAccessibilityDelegate(new View.AccessibilityDelegate(){
             @Override public void onInitializeAccessibilityNodeInfo(View view,AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(view,info);
                 info.addAction(new AccessibilityNodeInfo.AccessibilityAction(PIN,prefs(CompanionOverlayService.this).getBoolean("pinned",false)?"Soltar posición":"Fijar posición"));
@@ -151,15 +157,29 @@ public final class CompanionOverlayService extends Service {
                 if(action==HIDE){stopEnabled();return true;}return super.performAccessibilityAction(view,action,args);}
         });
         sprite.setOnTouchListener(new View.OnTouchListener(){float x,y;int sx,sy;boolean moved;final int slop=ViewConfiguration.get(CompanionOverlayService.this).getScaledTouchSlop();
-            @SuppressLint("ClickableViewAccessibility") // Taps return false to View's native performClick handling; only actual drags are consumed.
             @Override public boolean onTouch(View view,MotionEvent event){
-                if(event.getActionMasked()==MotionEvent.ACTION_DOWN)sprite.play("greeting");
-                if(event.getActionMasked()==MotionEvent.ACTION_DOWN){x=event.getRawX();y=event.getRawY();sx=position.x;sy=position.y;moved=false;return false;}
+                if(event.getActionMasked()==MotionEvent.ACTION_DOWN){
+                    sprite.play("greeting");x=event.getRawX();y=event.getRawY();sx=position.x;sy=position.y;moved=false;
+                    gestures.down();view.setPressed(true);handler.removeCallbacks(longPress);
+                    handler.postDelayed(longPress,ViewConfiguration.getLongPressTimeout());return true;
+                }
                 // Dragging is an explicit move request: it releases a pin instead of being ignored.
-                if(event.getActionMasked()==MotionEvent.ACTION_MOVE){float dx=event.getRawX()-x,dy=event.getRawY()-y;if(!moved&&Math.abs(dx)+Math.abs(dy)>slop){moved=true;prefs(CompanionOverlayService.this).edit().putBoolean("pinned",false).apply();sprite.play("walk");}
-                    if(moved){view.cancelLongPress();hideSpeech();position.x=sx+(int)dx;position.y=sy+(int)dy;move();return true;}}
-                if(event.getActionMasked()==MotionEvent.ACTION_UP&&moved){view.setPressed(false);savePosition();sprite.play("greeting");moved=false;return true;}
-                if(event.getActionMasked()==MotionEvent.ACTION_CANCEL&&moved){view.setPressed(false);sprite.play("idle");moved=false;return true;}return false;
+                if(event.getActionMasked()==MotionEvent.ACTION_MOVE){float dx=event.getRawX()-x,dy=event.getRawY()-y;
+                    if(gestures.move(Math.abs(dx)+Math.abs(dy)>slop)==OverlayGestures.Decision.DRAG){
+                        handler.removeCallbacks(longPress);syncDismiss();
+                        if(!moved){moved=true;prefs(CompanionOverlayService.this).edit().putBoolean("pinned",false).apply();sprite.play("walk");}
+                        hideSpeech();position.x=sx+(int)dx;position.y=sy+(int)dy;move();
+                    }return true;
+                }
+                if(event.getActionMasked()==MotionEvent.ACTION_UP){
+                    handler.removeCallbacks(longPress);view.setPressed(false);
+                    OverlayGestures.Decision decision=gestures.up(event.getEventTime()-event.getDownTime());
+                    if(decision==OverlayGestures.Decision.TAP)view.performClick();
+                    else if(decision==OverlayGestures.Decision.DRAG){savePosition();sprite.play("greeting");}
+                    syncDismiss();moved=false;return true;
+                }
+                if(event.getActionMasked()==MotionEvent.ACTION_CANCEL){handler.removeCallbacks(longPress);gestures.cancel();view.setPressed(false);if(moved)sprite.play("idle");moved=false;return true;}
+                return true;
             }});
         IntentFilter filter=new IntentFilter();filter.addAction(Intent.ACTION_SCREEN_OFF);filter.addAction(Intent.ACTION_SCREEN_ON);filter.addAction(Intent.ACTION_USER_PRESENT);filter.addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);
         ContextCompat.registerReceiver(this,stateReceiver,filter,ContextCompat.RECEIVER_NOT_EXPORTED);
@@ -184,7 +204,7 @@ public final class CompanionOverlayService extends Service {
         PowerManager power=getSystemService(PowerManager.class);KeyguardManager keyguard=getSystemService(KeyguardManager.class);
         boolean visible=sprite.renderState().ready && CompanionPolicy.visible(prefs(this).getBoolean("enabled",false),permitted(this),power.isInteractive(),keyguard.isKeyguardLocked(),MainActivity.isFullAppVisible());
         if(visible&&!attached){try{clamp();windows.addView(sprite,position);attached=true;}catch(RuntimeException denied){scheduleRecovery();return;}}
-        if(!visible){hideSpeech();if(attached){try{windows.removeView(sprite);}catch(RuntimeException ignored){}attached=false;}}
+        if(!visible){hideDismiss();hideSpeech();if(attached){try{windows.removeView(sprite);}catch(RuntimeException ignored){}attached=false;}}
         boolean motion=CompanionPolicy.animate(visible,power.isPowerSaveMode(),Settings.Global.getFloat(getContentResolver(),Settings.Global.ANIMATOR_DURATION_SCALE,1f)==0f);
         sprite.active(motion);
     }
@@ -204,6 +224,25 @@ public final class CompanionOverlayService extends Service {
         speechPosition.gravity=Gravity.TOP|Gravity.LEFT;speechPosition.x=CompanionPolicy.bound(position.x,screen.x,width,dp(8));speechPosition.y=CompanionPolicy.bound(position.y-dp(110),screen.y,dp(110),dp(24));
         try{windows.addView(speech,speechPosition);speechAttached=true;handler.postDelayed(hideSpeechTask,6000);return true;}catch(RuntimeException ignored){speech=null;return false;}
     }
+    private void syncDismiss(){
+        handler.removeCallbacks(dismissTimeout);
+        if(!gestures.dismissVisible()){removeDismiss();return;}
+        if(!attached||MainActivity.isFullAppVisible()){hideDismiss();return;}
+        if(dismissButton==null){
+            TextView button=new TextView(this);button.setText("×");button.setTextSize(30);button.setTextColor(Color.WHITE);button.setGravity(Gravity.CENTER);
+            button.setContentDescription("Ocultar acompañante");button.setElevation(dp(6));
+            GradientDrawable background=new GradientDrawable();background.setShape(GradientDrawable.OVAL);background.setColor(Color.rgb(32,29,39));button.setBackground(background);
+            button.setOnClickListener(v->stopEnabled());
+            WindowManager.LayoutParams layout=new WindowManager.LayoutParams(dp(48),dp(48),WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT);
+            // Default overlay fitting excludes system bars; the margin is above the navigation bar.
+            layout.gravity=Gravity.BOTTOM|Gravity.CENTER_HORIZONTAL;layout.y=dp(24);
+            try{windows.addView(button,layout);dismissButton=button;}catch(RuntimeException denied){gestures.hide();return;}
+        }
+        handler.postDelayed(dismissTimeout,5000);
+    }
+    private void removeDismiss(){if(dismissButton!=null){try{windows.removeView(dismissButton);}catch(RuntimeException ignored){}dismissButton=null;}}
+    private void hideDismiss(){handler.removeCallbacks(longPress);handler.removeCallbacks(dismissTimeout);gestures.hide();removeDismiss();}
     private void openChat(){
         // Keep the current draft, focus and keyboard; a second tap is deliberately a no-op.
         if(MainActivity.isCompanionChatVisible())return;
@@ -219,8 +258,8 @@ public final class CompanionOverlayService extends Service {
     private void savePosition(){prefs(this).edit().putInt("x",position.x).putInt("y",position.y).apply();}
     private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
     private static String safe(String value,int length){return value==null?"":value.substring(0,Math.min(length,value.length()));}
-    private void stopEnabled(){prefs(this).edit().putBoolean("enabled",false).apply();stopSelf();}
-    @Override public void onConfigurationChanged(Configuration config){super.onConfigurationChanged(config);hideSpeech();move();}
-    @Override public void onDestroy(){if(debugReceiver!=null){unregisterReceiver(debugReceiver);debugReceiver=null;}started=false;handler.removeCallbacksAndMessages(null);hideSpeech();if(attached){try{windows.removeView(sprite);}catch(RuntimeException ignored){}attached=false;}if(sprite!=null){CompanionSpriteView.RenderState state=sprite.renderState();lastRenderState=new CompanionSpriteView.RenderState(null,false,state.error);sprite.release();unregisterReceiver(stateReceiver);getContentResolver().unregisterContentObserver(motionObserver);}if(current.get()==this)current.clear();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}
+    private void stopEnabled(){prefs(this).edit().putBoolean("enabled",false).apply();hideDismiss();updateVisibility();stopSelf();}
+    @Override public void onConfigurationChanged(Configuration config){super.onConfigurationChanged(config);hideDismiss();hideSpeech();move();}
+    @Override public void onDestroy(){if(debugReceiver!=null){unregisterReceiver(debugReceiver);debugReceiver=null;}started=false;handler.removeCallbacksAndMessages(null);hideDismiss();hideSpeech();if(attached){try{windows.removeView(sprite);}catch(RuntimeException ignored){}attached=false;}if(sprite!=null){CompanionSpriteView.RenderState state=sprite.renderState();lastRenderState=new CompanionSpriteView.RenderState(null,false,state.error);sprite.release();unregisterReceiver(stateReceiver);getContentResolver().unregisterContentObserver(motionObserver);}if(current.get()==this)current.clear();stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();}
     @Override public IBinder onBind(Intent intent){return null;}
 }
