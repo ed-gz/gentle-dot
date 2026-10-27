@@ -232,6 +232,8 @@ export function reduce(state: DotState, action: DotAction): DotState {
 }
 
 function reduceServer(state: DotState, message: ServerMessage): DotState {
+	// Additive daemon delivery metadata; older hosts omit it. Chat data still reduces normally.
+	const presenceSuppressed = (message as ServerMessage & {mobileNotificationSuppressed?: boolean}).mobileNotificationSuppressed === true;
 	switch (message.type) {
 		case "ready": {
 			const { pin: _pin, ...rest } = state;
@@ -291,7 +293,7 @@ function reduceServer(state: DotState, message: ServerMessage): DotState {
 				else if (message.stopped) done.note = { kind: "stopped", text: "Stopped." };
 				return done;
 			});
-			if (alreadyDone || message.stopped || message.intermediate || (!message.text.trim() && !message.error))
+			if (presenceSuppressed || alreadyDone || message.stopped || message.intermediate || (!message.text.trim() && !message.error))
 				return updated;
 			return addNotice(
 				updated,
@@ -453,6 +455,7 @@ function reduceServer(state: DotState, message: ServerMessage): DotState {
 				: updateFlow(state, message.flowId, finish);
 		}
 		case "toast":
+			if (presenceSuppressed && message.notificationEvent !== "permission" && message.notificationEvent !== "agentAttention") return state;
 			if (
 				message.code === "connectors_unchecked" ||
 				message.message.startsWith("Gentle Dot could not check your connectors")

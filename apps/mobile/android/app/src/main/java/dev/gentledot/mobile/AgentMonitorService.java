@@ -73,6 +73,10 @@ public class AgentMonitorService extends Service {
             editor.putBoolean(entry.getKey(), entry.getValue());
         }
         if (!editor.commit()) return false;
+        AgentMonitorService service = current;
+        MonitorSession monitor = service == null ? null : service.session;
+        if (values.containsKey("desktopPresence") && monitor != null && monitor.ownsMonitor() && monitor.dotSocket != null)
+            monitor.dotSocket.preferencesChanged();
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         NotificationPreferences preferences = preferences(context);
         for (StatusBarNotification active : manager.getActiveNotifications()) {
@@ -202,8 +206,26 @@ public class AgentMonitorService extends Service {
             drawn -> systemNotice(context, event, id, brandedTitle, body, paneId, sessionId, conversationId, drawn));
     }
 
+    static void notifyBatch(Context context, JSONObject batch) {
+        NotificationPreferences preferences = preferences(context);
+        java.util.List<String> lines = NotificationDelivery.batchLines(batch, preferences);
+        if (lines.isEmpty()) return;
+        String event = NotificationDelivery.batchEvent(batch, preferences);
+        String id = batch.optString("id");
+        if (id.isEmpty()) return;
+        String title = NotificationDelivery.persona(context), body = android.text.TextUtils.join("\n", lines);
+        NotificationDelivery.Route route = NotificationDelivery.route(preferences, event, MainActivity.isVisible(), true);
+        if (route == NotificationDelivery.Route.NONE) return;
+        if (route == NotificationDelivery.Route.FOREGROUND && GentleMobilePlugin.foregroundNotification(event, id, title, body, null, null)) return;
+        systemNotice(context, event, id, title, body, null, null, null, false, lines);
+    }
+
     private static void systemNotice(Context context, String event, String id, String title, String body,
             String paneId, String sessionId, String conversationId, boolean companionVisible) {
+        systemNotice(context, event, id, title, body, paneId, sessionId, conversationId, companionVisible, null);
+    }
+    private static void systemNotice(Context context, String event, String id, String title, String body,
+            String paneId, String sessionId, String conversationId, boolean companionVisible, java.util.List<String> batchLines) {
         NotificationPreferences preferences = preferences(context);
         if (!preferences.allows(event)) return;
         if (!companionVisible && MainActivity.isVisible() && preferences.get("inApp")
@@ -227,9 +249,15 @@ public class AgentMonitorService extends Service {
         Notification publicVersion = NotificationAppearance.builder(context, channel)
             .setContentTitle(NotificationDelivery.persona(context)).setContentText("Tienes una nueva alerta.").build();
         Bundle extras = new Bundle(); extras.putString("gentledot.event", event);
-        Notification notification = NotificationAppearance.builder(context, channel)
+        NotificationCompat.Builder builder = NotificationAppearance.builder(context, channel);
+        if (batchLines != null) {
+            NotificationCompat.InboxStyle inbox = new NotificationCompat.InboxStyle().setBigContentTitle(title + " · Mientras usabas la PC");
+            for (String line : batchLines) inbox.addLine(line);
+            builder.setStyle(inbox).setGroup("gentledot:presence").setGroupSummary(true);
+        } else builder.setStyle(new NotificationCompat.BigTextStyle().bigText(body));
+        Notification notification = builder
             .addExtras(extras).setContentTitle(title)
-            .setContentText(body).setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+            .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_HIGH).setOnlyAlertOnce(true)
             .setDefaults((preferences.get("sound") ? Notification.DEFAULT_SOUND : 0) | (preferences.get("vibration") ? Notification.DEFAULT_VIBRATE : 0))
             .setContentIntent(openConversation(context, id, title, body, paneId, sessionId, conversationId)).setAutoCancel(true).setOngoing(false)
@@ -317,6 +345,17 @@ public class AgentMonitorService extends Service {
         }
         void receiveNotice(JSONObject notice) {
             if (!ownsMonitor() || executor.isShutdown()) return;
+            JSONObject batch = notice.optJSONObject("notificationBatch");
+            if (batch != null) {
+                String id = batch.optString("id");
+                if (!id.isEmpty() && notices.live(id)) notifyBatch(AgentMonitorService.this, batch);
+                return;
+            }
+            if (notice.optBoolean("mobileNotificationSuppressed")
+                    && !"permission".equals(notice.optString("notificationEvent")) && !"agentAttention".equals(notice.optString("notificationEvent"))) {
+                notices.live(notice.optString("notificationId"));
+                return;
+            }
             String event = notice.optString("notificationEvent");
             String id = notice.optString("notificationId");
             if (id.isEmpty()) return;
@@ -370,6 +409,7 @@ public class AgentMonitorService extends Service {
                 connection.setConnectTimeout(8000);
                 connection.setReadTimeout(8000);
                 connection.setRequestProperty("Authorization", "Bearer " + token);
+                connection.setRequestProperty("X-Gentle-Presence", preferences(AgentMonitorService.this).get("desktopPresence") ? "on" : "off");
                 connection.setRequestProperty("Accept", "application/json");
                 int status = connection.getResponseCode();
                 hostReached = true;
@@ -391,6 +431,8 @@ public class AgentMonitorService extends Service {
                 JSONObject snapshot = new JSONObject(bytes.toString(StandardCharsets.UTF_8.name()));
                 if (!ownsMonitor()) return;
                 lastReached = System.currentTimeMillis();
+                JSONObject summary = snapshot.optJSONObject("mobileNotificationSummary");
+                if (summary != null) receiveNotice(summary);
                 if (snapshot.optBoolean("available")) process(snapshot);
                 failures = 0;
                 updateStatus(snapshot.optBoolean("available") ? "Alertas conectadas" : "Buscando sesiones…");
@@ -486,7 +528,7 @@ public class AgentMonitorService extends Service {
             if (events != null) for (int i = 0; i < events.length(); i++) {
                 JSONObject event = events.optJSONObject(i); if (event == null) continue;
                 String id = event.optString("id");
-                if (!notices.snapshot(id) || event.optBoolean("intentional")) continue;
+                if (!notices.snapshot(id) || event.optBoolean("intentional") || event.optBoolean("mobileNotificationSuppressed")) continue;
                 // A concrete permission already has its own notification above.
                 if (NotificationPreferences.hasSessionPermission(event.optString("requestId"), event.optString("approvalId"))) continue;
                 Object changed = event.opt("resultChanged");

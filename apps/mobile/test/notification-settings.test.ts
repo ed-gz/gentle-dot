@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NotificationSettings } from "../src/NotificationSettings.tsx";
-import { defaultNotificationPreferences } from "../src/notifications.ts";
+import { defaultNotificationPreferences, normalizeNotificationPreferences } from "../src/notifications.ts";
 
 const native = vi.hoisted(() => ({ read: vi.fn(), save: vi.fn(), android: vi.fn(), state: vi.fn() }));
 vi.mock("../src/native.ts", () => ({
@@ -65,6 +65,21 @@ afterEach(async () => {
 });
 
 describe("mobile alert settings", () => {
+	it("retains presence preferences through normalization and defaults old saves on", () => {
+		expect(normalizeNotificationPreferences({}).desktopPresence).toBe(true);
+		expect(normalizeNotificationPreferences({ desktopPresence: false }).desktopPresence).toBe(false);
+		expect(normalizeNotificationPreferences({ desktopPresence: "false" }).desktopPresence).toBe(true);
+	});
+	it("defaults desktop presence silencing on and retains the saved opt-out", async () => {
+		const label = "Silenciar en el celu mientras uso la PC";
+		expect(button(label).getAttribute("aria-checked")).toBe("true");
+		await act(async () => button(label).click());
+		expect(saved.desktopPresence).toBe(false);
+		await act(async () => root.unmount());
+		root = createRoot(host);
+		await render();
+		expect(button(label).getAttribute("aria-checked")).toBe("false");
+	});
 	it("explains when Android blocks alerts instead of reporting successful delivery", async () => {
 		native.state.mockResolvedValue({ active: true, connected: true, notificationsEnabled: false });
 		await act(async () => root.unmount());

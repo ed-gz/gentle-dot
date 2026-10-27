@@ -35,6 +35,7 @@ import {
 import { directAccess, type EngineAccess } from "./engine-access.ts";
 import { DRAFT_STATUS_KEY } from "./extensions/approval-guard.ts";
 import { MobileApprovals } from "./mobile-approvals.ts";
+import type { MobilePresence, PresenceSummary } from "./mobile-presence.ts";
 import { describeTool, textOf } from "./presentation.ts";
 import {
 	LiveModelSwitch,
@@ -55,10 +56,13 @@ import type { WorkflowStatus } from "./workflows.ts";
 import { isBlockedInput, presentText, shouldShowToast } from "./white-label.ts";
 
 export interface BridgeClient {
+	/** Set only after authenticating a paired phone, never by a client message. */
+	mobileKey?: string;
 	send(payload: ServerPayload): void;
 }
 
 export interface BridgeOptions {
+	mobilePresence?: MobilePresence;
 	dataDir: string;
 	log?: (line: string) => void;
 	auth?: AuthManager;
@@ -1538,12 +1542,39 @@ export class DotBridge {
 		return false;
 	}
 
+	/** A summary is also retained by the gate for polling/reconnect catch-up. */
+	releaseMobileSummary(key: string, summary: PresenceSummary): void {
+		const payload = this.mobileSummaryPayload(summary);
+		for (const client of this.clients) if (client.mobileKey === key) this.deliver(client, payload);
+	}
+
+	mobileSummaryPayload(summary: PresenceSummary): Extract<ServerPayload, {type: "toast"}> & { notificationBatch: PresenceSummary } {
+		return {type: "toast", level: "info", notificationId: summary.id, notificationEvent: "agentCompleted",
+			title: "Mientras usabas la PC", message: summary.summaries.join("\n") + (summary.dropped ? `\n+${summary.dropped} más` : ""), notificationBatch: summary};
+	}
+
 	private broadcast(payload: ServerPayload): void {
-		for (const client of this.clients) this.deliver(client, payload);
+		const gate = this.options.mobilePresence;
+		const held = new Set<string>();
+		if (gate) {
+			const notice = payload.type === "toast" && payload.notificationId && payload.notificationEvent
+				? {id: payload.notificationId, event: payload.notificationEvent, text: `${payload.title ?? "Sesión"}: ${payload.message}`}
+				: payload.type === "message_done" && !payload.intermediate && !payload.stopped && (payload.text.trim() || payload.error)
+					? {id: `dot:${JSON.stringify(this.conversationRef())}:${payload.messageId}`, event: payload.error ? "dotError" : "dotReply", text: payload.error ? "Dot necesita atención." : "Dot respondió. Abre la conversación para revisar el resultado."}
+					: undefined;
+			if (notice) for (const key of gate.keys()) if (gate.hold(key, notice.id, notice.event, notice.text)) held.add(key);
+		}
+		for (const client of this.clients) {
+			// Keep session/history data intact. Native monitor consumes only this delivery marker.
+			const outgoing = client.mobileKey && held.has(client.mobileKey) ? {...payload, mobileNotificationSuppressed: true} : payload;
+			this.deliver(client, outgoing);
+		}
 	}
 
 	private deliver(client: BridgeClient, payload: ServerPayload): void {
-		client.send(payload);
+		const outgoing = client.mobileKey && this.options.mobilePresence
+			? {...payload, mobilePresenceActive: this.options.mobilePresence.muted(client.mobileKey)} : payload;
+		client.send(outgoing);
 	}
 
 	/** Runs `fn` on the engine's files as the engine's user (server mode). */

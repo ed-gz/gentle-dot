@@ -65,7 +65,8 @@ final class DotMonitorSocket implements AutoCloseable {
     synchronized void start() {
         if (stopped || !ownerActive.getAsBoolean()) return;
         final long attempt = ++generation;
-        Request request = new Request.Builder().url(origin.replaceFirst("^https:", "wss:") + "/ws").build();
+        Request request = new Request.Builder().url(origin.replaceFirst("^https:", "wss:") + "/ws")
+            .header("X-Gentle-Presence", AgentMonitorService.preferences(context).get("desktopPresence") ? "on" : "off").build();
         socket = client.newWebSocket(request, new WebSocketListener() {
             @Override public void onOpen(WebSocket webSocket, Response response) {
                 synchronized (DotMonitorSocket.this) {
@@ -97,6 +98,14 @@ final class DotMonitorSocket implements AutoCloseable {
             @Override public void onClosed(WebSocket webSocket, int code, String reason) { reconnect(attempt); }
             @Override public void onFailure(WebSocket webSocket, Throwable error, Response response) { reconnect(attempt); }
         });
+    }
+
+    synchronized void preferencesChanged() {
+        if (stopped || !ownerActive.getAsBoolean()) return;
+        generation++;
+        connected = false;
+        if (socket != null) socket.cancel();
+        start();
     }
 
     synchronized boolean isConnected() { return connected && !stopped; }
@@ -158,7 +167,7 @@ final class DotMonitorSocket implements AutoCloseable {
                     break;
                 }
             }
-            if (catchup.history(message.optString("conversationId"), latest)) {
+            if (catchup.history(message.optString("conversationId"), latest) && !message.optBoolean("mobilePresenceActive")) {
                 CompanionOverlayService.react("dotReply");
                 AgentMonitorService.notifyUser(context, "dot-catchup", "Gentle Dot tiene respuestas nuevas", "La conexión volvió. Abre la conversación para revisar las respuestas recibidas mientras estabas sin red.");
             }
@@ -185,6 +194,7 @@ final class DotMonitorSocket implements AutoCloseable {
             // Empty tool-only turns are not a user-visible answer.
             if (message.optString("text").trim().isEmpty() && !message.has("error")) return;
             catchup.liveReply();
+            if (message.optBoolean("mobileNotificationSuppressed")) return;
             // Live ids restart when the daemon does; they are not history page ids.
             id = "dot-message:" + attempt + ":" + message.optString("messageId");
             event = message.has("error") ? "dotError" : "dotReply";

@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { type DotDaemon, startDaemon } from "../src/daemon.ts";
 import { Orchestrator } from "../src/orchestration/index.ts";
+import { MobilePresence, type Presence } from "../src/mobile-presence.ts";
 import { FAKE_AGENT, tempDir, waitFor } from "./helpers.ts";
 
 const daemons: DotDaemon[] = [];
@@ -212,4 +213,33 @@ it("rejects self-disconnection from an untrusted origin and rechecks authorizati
 	await api("/api/mobile/revoke", daemon.token, { deviceId: phone.deviceId });
 	complete();
 	expect(await result).toBe(401);
+});
+
+it("gates phone replies without removing content and releases one summary through polling and websocket", async () => {
+	let presence: Presence = "active";
+	const state = vi.spyOn(MobilePresence.prototype, "state").mockImplementation(() => presence);
+	const { daemon, api } = await setup();
+	const { code } = await (await api("/api/mobile/code", daemon.token, {})).json();
+	const device = await (await api("/api/mobile/pair", undefined, { code, deviceName: "Phone" })).json();
+	const ws = new WebSocket(`ws://127.0.0.1:${daemon.port}/ws`);
+	const messages: Array<{type: string; mobileNotificationSuppressed?: boolean; text?: string; notificationBatch?: {id: string}}> = [];
+	ws.on("message", data => messages.push(JSON.parse(String(data))));
+	try {
+		await new Promise<void>(resolve => ws.on("open", resolve));
+		ws.send(JSON.stringify({ type: "hello", token: device.token, protocol: 1 }));
+		await waitFor(() => messages.some(message => message.type === "ready"));
+		ws.send(JSON.stringify({type: "send", text: "Hello", requestId: "presence-test"}));
+		await waitFor(() => messages.some(message => message.type === "message_done"));
+		expect(messages.find(message => message.type === "message_done")).toMatchObject({mobileNotificationSuppressed: true});
+		expect(messages.find(message => message.type === "message_done")?.text).toBeTruthy();
+		presence = "inactive";
+		const snapshot = await (await api("/orchestration", device.token)).json();
+		expect(snapshot.mobileNotificationSummary.notificationBatch.summaries).toHaveLength(1);
+		await waitFor(() => messages.some(message => message.notificationBatch !== undefined));
+		expect(messages.find(message => message.notificationBatch)?.notificationBatch?.id).toBe(snapshot.mobileNotificationSummary.notificationId);
+		expect(await (await api("/orchestration", daemon.token)).json()).not.toHaveProperty("mobileNotificationSummary");
+	} finally {
+		ws.terminate();
+		state.mockRestore();
+	}
 });

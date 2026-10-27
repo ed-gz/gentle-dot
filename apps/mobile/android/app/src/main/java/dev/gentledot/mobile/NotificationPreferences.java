@@ -7,7 +7,7 @@ import java.util.Map;
 final class NotificationPreferences {
     static final String[] KEYS = {
         "dotReplies", "dotErrors", "agentCompleted", "agentAttention", "agentErrors",
-        "agentAvailable", "permissions", "inApp", "preview", "sound", "vibration"
+        "agentAvailable", "permissions", "inApp", "preview", "sound", "vibration", "desktopPresence"
     };
     private final Map<String, Boolean> values;
 
@@ -18,6 +18,7 @@ final class NotificationPreferences {
         values.put("dotReplies", dot); values.put("dotErrors", dot);
         values.put("agentCompleted", agents); values.put("agentAttention", agents); values.put("agentErrors", agents);
         values.put("agentAvailable", false); values.put("permissions", true); values.put("inApp", true);
+        values.put("desktopPresence", true);
         values.put("preview", false); values.put("sound", false); values.put("vibration", true);
         if (saved != null) for (String key : KEYS) {
             Object value = saved.get(key);

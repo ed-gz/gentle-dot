@@ -4,6 +4,7 @@ export type NotificationMode = "dot" | "agents" | "all";
 
 /** Keep these defaults aligned with Android NotificationPreferences. */
 export const defaultNotificationPreferences: NotificationPreferences = {
+	desktopPresence: true,
 	dotReplies: true,
 	dotErrors: true,
 	agentCompleted: true,

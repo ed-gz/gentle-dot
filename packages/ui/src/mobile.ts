@@ -11,6 +11,8 @@ export function isNotificationEvent(value: unknown): value is NotificationEvent 
 	return typeof value === "string" && ["dotReply", "dotError", "agentCompleted", "agentAttention", "agentError", "agentAvailable", "permission"].includes(value);
 }
 export interface NotificationPreferences {
+	/** Missing on older Android hosts; presence silencing defaults on. */
+	desktopPresence?: boolean;
 	dotReplies: boolean;
 	dotErrors: boolean;
 	agentCompleted: boolean;
@@ -24,6 +26,7 @@ export interface NotificationPreferences {
 	vibration: boolean;
 }
 export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+	desktopPresence: true,
 	dotReplies: true,
 	dotErrors: true,
 	agentCompleted: true,

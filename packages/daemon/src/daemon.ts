@@ -56,6 +56,7 @@ import {
 } from "./mcp-proxy.ts";
 import { allowApi, bearer, jsonResponse, MobileAccess, MobileAccessError, readJson } from "./mobile.ts";
 import { MobileApprovals } from "./mobile-approvals.ts";
+import { MobilePresence, readIdleHint } from "./mobile-presence.ts";
 import { ORCHESTRATOR_EXTENSION_PATH, OrchestrationError, Orchestrator } from "./orchestration/index.ts";
 import { writePrivateFile } from "./private-file.ts";
 import { defaultImportPath, ProfileStore } from "./profiles.ts";
@@ -554,7 +555,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 	});
 	orchestrator?.setUploadStore(uploads);
 	const historyPage = options.historyPage ?? Number(process.env.GENTLE_DOT_HISTORY_PAGE);
+	const mobilePresence = new MobilePresence(Date.now, (key, summary) => bridge.releaseMobileSummary(key, summary));
 	const bridge = new DotBridge(supervisor, {
+		mobilePresence,
 		dataDir: options.dataDir,
 		onCaptureInvalidated: () => computerCaptures.clear(),
 		log,
@@ -574,6 +577,26 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		rotation: options.rotation ?? rotationLimits(process.env),
 		...(Number.isInteger(historyPage) && historyPage > 0 ? { historyPage } : {}),
 	});
+
+	let presenceReading = false;
+	const samplePresence = async () => {
+		for (const key of mobilePresence.keys()) if (!mobile.accepts(key)) mobilePresence.forget(key);
+		if (presenceReading || mobilePresence.keys().next().done) return;
+		presenceReading = true;
+		try {
+			const idle = vps ? undefined : await readIdleHint();
+			const context = orchestrator?.companion();
+			// Reuse semantic editor activity; no global key/mouse logger. A stale feed fails open.
+			const signals = context?.sessions.filter(session => session.activity.source === "pi" && session.activity.capabilities.typing) ?? [];
+			const times = signals.map(session => Date.parse(session.activity.humanActivityAt ?? "")).filter(Number.isFinite);
+			mobilePresence.sample(idle, context?.stale ? undefined : times.length ? Math.max(...times) : undefined, signals.length > 0);
+		} catch {
+			mobilePresence.sample(undefined);
+		} finally { presenceReading = false; }
+	};
+	void samplePresence();
+	const presenceTimer = setInterval(() => { mobilePresence.tick(); void samplePresence(); }, 2000);
+	presenceTimer.unref();
 
 	// connectors.json as read at start is checked against its signature before anything rewrites it,
 	// watches it, or starts the engine (S25.6).
@@ -1096,6 +1119,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 					if (req.method === "GET") {
 						const snapshot = await orchestrator.snapshot();
 						if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+						if (mobile.accepts(key)) {
+							mobilePresence.configure(key, req.headers["x-gentle-presence"] === "off" ? false : req.headers["x-gentle-presence"] === "on" ? true : undefined);
+							const summary = mobilePresence.summary(key);
+							return jsonResponse(res, 200, {...snapshot,
+								events: snapshot.events.map(event => ({...event, mobileNotificationSuppressed: mobilePresence.suppressed(key, event.id)})),
+								mobileNotificationSummary: summary ? bridge.mobileSummaryPayload(summary) : undefined});
+						}
 						return jsonResponse(res, 200, snapshot);
 					}
 					if (req.method === "POST")
@@ -1188,6 +1218,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 				bridge,
 				(key) => clientKeys.set(ws, key),
 				() => {},
+				(key) => {
+					if (!mobile.accepts(key)) return undefined;
+					mobilePresence.configure(key, req.headers["x-gentle-presence"] === "off" ? false : req.headers["x-gentle-presence"] === "on" ? true : undefined);
+					return key;
+				},
 			),
 		);
 	});
@@ -1203,6 +1238,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		stopped = done;
 	});
 	const shutdown = async () => {
+		clearInterval(presenceTimer);
 		files.close();
 		browserRequests?.close();
 		// Not listening any more first, so an app relaunched meanwhile starts a daemon of its own.
@@ -1348,6 +1384,7 @@ function acceptClient(
 	bridge: DotBridge,
 	onAuth: (key: string) => void,
 	onDisconnect: () => void,
+	mobileKey: (key: string) => string | undefined,
 ): void {
 	let seq = 0;
 	let clientKey: string | undefined;
@@ -1376,6 +1413,7 @@ function acceptClient(
 				return;
 			}
 			clientKey = message.token;
+			client.mobileKey = mobileKey(message.token);
 			onAuth(message.token);
 			detach = bridge.attach(client);
 			return;

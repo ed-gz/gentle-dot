@@ -126,7 +126,7 @@ export function NotificationSettings({
 		setBusy(true);
 		setError(undefined);
 		try {
-			const saved = await saveNotificationPreferences({ ...preferences, [key]: !preferences[key] });
+			const saved = await saveNotificationPreferences({ ...preferences, [key]: !(preferences[key] ?? (key === "desktopPresence")) });
 			if (current === generation.current) setPreferences(saved);
 		} catch {
 			if (current === generation.current) setError("No se pudo guardar el cambio. Inténtalo de nuevo.");
@@ -163,7 +163,7 @@ export function NotificationSettings({
 			key={key}
 			title={title}
 			detail={detail}
-			checked={preferences?.[key] ?? false}
+			checked={preferences?.[key] ?? (key === "desktopPresence")}
 			disabled={busy || preferences === undefined}
 			onChange={() => void change(key)}
 		/>
@@ -188,6 +188,7 @@ export function NotificationSettings({
 									: "Reconectando avisos. Comprueba que Tailscale esté activo y el equipo encendido."
 								: "Avisos desactivados."}
 					</p>
+					{toggle("desktopPresence", "Silenciar en el celu mientras uso la PC", "Agrupa los avisos hasta que dejes de usar la PC (máximo 5 minutos). Preguntas y permisos llegan al instante; si no se puede detectar tu presencia, llegan normalmente.")}
 					{toggle("dotReplies", "Respuestas de Dot")}
 					{toggle("agentCompleted", "Nuevas respuestas")}
 					{toggle("permissions", "Solicitudes de permiso")}
