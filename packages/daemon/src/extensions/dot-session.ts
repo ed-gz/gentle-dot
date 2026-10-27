@@ -54,22 +54,25 @@ export function observeCompanionActions(pi: ExtensionAPI) {
  pi.on("tool_execution_start", event => {
   if (event.parentToolCallId) return;
   const args = record(event.args) ? event.args : {};
-  const file = () => {
-   if (typeof args.path !== "string") return "archivo";
-   const name = args.path.split(/[\\/]/).pop() ?? "";
-   if (!name || /env|secret|credential|token|password|private|\.pem$|\.key$/i.test(name)) return "archivo";
-   return name.replace(/[^a-zA-Z0-9._ -]/g,"_").slice(0,64);
-  };
-  let verb = "HAGO", subject = "tarea";
-  if (["read","edit","write"].includes(event.toolName)) {
-   verb = event.toolName === "read" ? "LEO" : event.toolName === "edit" ? "EDITO" : "ESCRIBO";
-   subject = file();
+  // Capri supervises the agents; labels never identify files or quote tool arguments.
+  let verb = "MONITOREO", subject = "las sesiones activas";
+  if (event.toolName === "read") {
+   verb = "CONSULTO"; subject = "el contexto de sesión";
   } else if (["grep","find","ls"].includes(event.toolName)) {
-   verb = "BUSCO"; subject = event.toolName === "grep" ? "coincidencias" : "archivos";
+   verb = "EXAMINO"; subject = "el estado de las sesiones";
+  } else if (["edit","write"].includes(event.toolName)) {
+   verb = "SUPERVISO"; subject = "el avance de los agentes";
   } else if (event.toolName === "bash") {
-   verb = "EJECUTO"; subject = "comando";
-   // Exact safe labels, not prefixes: flags, assignments and shell expansions stay private.
-   if (typeof args.command === "string" && /^(npm test|pnpm test|npm run build|pnpm build|git status|git diff)$/.test(args.command.trim())) subject = args.command.trim();
+   verb = "DIRIJO"; subject = "la operación en curso";
+   // Exact allowlist, not prefixes: flags, assignments and shell expansions stay private.
+   switch (typeof args.command === "string" ? args.command.trim() : "") {
+    case "npm test": case "pnpm test":
+     verb = "VERIFICO"; subject = "las pruebas del equipo"; break;
+    case "npm run build": case "pnpm build":
+     verb = "VALIDO"; subject = "la compilación"; break;
+    case "git status": case "git diff":
+     verb = "REVISOPROGRESO"; subject = "de los entregables"; break;
+   }
   }
   const at = new Date(Math.max(Date.now(), Date.parse(lastAction?.at ?? "") + 1 || 0)).toISOString();
   lastAction = {verb,subject,at};

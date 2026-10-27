@@ -67,23 +67,77 @@ it("projects actual tool events as bounded action metadata without arguments or 
  const context = new CompanionContext();
  context.update(snapshot,herdr,new Map([["p1",activity]]));
  const action = context.read().sessions[0]?.activity.lastAction;
- expect(action).toMatchObject({verb:"EDITO",at:expect.any(String)});
+ expect(action).toMatchObject({verb:"SUPERVISO",subject:"el avance de los agentes",at:expect.any(String)});
  expect(action!.subject.length).toBeLessThanOrEqual(64);
  expect(JSON.stringify(action)).not.toMatch(/private|project|SECRET|PRIVATE/);
  handlers.get("tool_execution_start")?.({toolName:"bash",args:{command:"TOKEN=secret npm test --password=secret",env:{SECRET:"value"}}});
- expect(actions.snapshot()).toMatchObject({verb:"EJECUTO",subject:"comando"});
+ expect(actions.snapshot()).toMatchObject({verb:"DIRIJO",subject:"la operación en curso"});
  handlers.get("tool_execution_start")?.({toolName:"bash",args:{command:"npm test"}});
- expect(actions.snapshot()).toMatchObject({verb:"EJECUTO",subject:"npm test"});
+ expect(actions.snapshot()).toMatchObject({verb:"VERIFICO",subject:"las pruebas del equipo"});
  handlers.get("tool_execution_start")?.({toolName:"read",args:{path:"/private/.env"}});
- expect(actions.snapshot()?.subject).toBe("archivo");
+ expect(actions.snapshot()?.subject).toBe("el contexto de sesión");
  const before=actions.snapshot();
  handlers.get("tool_execution_start")?.({toolName:"read",parentToolCallId:"nested",args:{path:"hidden.ts"}});
  expect(actions.snapshot()).toEqual(before);
  handlers.get("tool_execution_start")?.({toolName:"grep",args:{pattern:"SECRET QUERY",path:"/private/project"}});
- expect(actions.snapshot()).toMatchObject({verb:"BUSCO",subject:"coincidencias"});
+ expect(actions.snapshot()).toMatchObject({verb:"EXAMINO",subject:"el estado de las sesiones"});
  handlers.get("tool_execution_start")?.({toolName:"unknown-secret-tool",args:{content:"PRIVATE BODY"}});
- expect(actions.snapshot()).toMatchObject({verb:"HAGO",subject:"tarea"});
+ expect(actions.snapshot()).toMatchObject({verb:"MONITOREO",subject:"las sesiones activas"});
  actions.reset(); expect(actions.snapshot()).toBeUndefined();
+});
+
+describe("supervisor action vocabulary", () => {
+ const cases = [
+  ["read", undefined, "CONSULTO", "el contexto de sesión"],
+  ...["grep", "find", "ls"].map(tool => [tool, undefined, "EXAMINO", "el estado de las sesiones"]),
+  ...["edit", "write"].map(tool => [tool, undefined, "SUPERVISO", "el avance de los agentes"]),
+  ...["npm test", "pnpm test"].map(command => ["bash", command, "VERIFICO", "las pruebas del equipo"]),
+  ...["npm run build", "pnpm build"].map(command => ["bash", command, "VALIDO", "la compilación"]),
+  ...["git status", "git diff"].map(command => ["bash", command, "REVISOPROGRESO", "de los entregables"]),
+  ["bash", "echo PRIVATE_BODY", "DIRIJO", "la operación en curso"],
+  ["unknown-private-tool", undefined, "MONITOREO", "las sesiones activas"],
+ ];
+ it.each(cases)("narrates %s (%s) without exposing arguments", (toolName, command, verb, subject) => {
+  const handlers = new Map<string, (event: unknown) => void>();
+  const pi = {on: (name: string, handler: (event: unknown) => void) => handlers.set(name, handler)} as unknown as ExtensionAPI;
+  const actions = observeCompanionActions(pi);
+  expect(actions.snapshot()).toBeUndefined();
+  handlers.get("tool_execution_start")!({toolName, args: {
+   command, path: "/private/project/ordinary-file.ts", pattern: "PRIVATE_QUERY",
+   oldText: "PRIVATE_OLD", newText: "PRIVATE_NEW", env: {TOKEN: "PRIVATE_TOKEN"},
+  }});
+  const action = actions.snapshot()!;
+  expect(action).toEqual({verb, subject, at: expect.any(String)});
+  expect(action.verb.length).toBeLessThanOrEqual(16);
+  expect(action.subject.length).toBeLessThanOrEqual(64);
+  expect(JSON.stringify(action)).not.toMatch(/private|project|ordinary-file|PRIVATE|TOKEN/);
+ });
+ it.each([
+  "npm test --password=PRIVATE_TOKEN", "pnpm test /private/project",
+  "npm run build && echo PRIVATE_TOKEN", "pnpm build; echo PRIVATE_TOKEN",
+  "git status --short", "git diff /private/project",
+  "TOKEN=PRIVATE_TOKEN npm test", "npm test $(echo PRIVATE_TOKEN)",
+  "npm test\necho PRIVATE_TOKEN", "echo npm test", "npm test | tee /private/output",
+ ])("keeps non-allowlisted shell text private: %s", command => {
+  const handlers = new Map<string, (event: unknown) => void>();
+  const actions = observeCompanionActions({on: (name: string, handler: (event: unknown) => void) => handlers.set(name, handler)} as unknown as ExtensionAPI);
+  handlers.get("tool_execution_start")!({toolName: "bash", args: {command}});
+  expect(actions.snapshot()).toEqual({verb: "DIRIJO", subject: "la operación en curso", at: expect.any(String)});
+ });
+ it("ignores missing arguments, preserves snapshot isolation and advances timestamps", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(time);
+  const handlers = new Map<string, (event: unknown) => void>();
+  const actions = observeCompanionActions({on: (name: string, handler: (event: unknown) => void) => handlers.set(name, handler)} as unknown as ExtensionAPI);
+  const emit = handlers.get("tool_execution_start")!;
+  emit({toolName: "read"});
+  const first = actions.snapshot()!;
+  first.subject = "changed";
+  expect(actions.snapshot()?.subject).toBe("el contexto de sesión");
+  emit({toolName: "bash", args: {command: 42}});
+  expect(actions.snapshot()).toMatchObject({verb: "DIRIJO", subject: "la operación en curso"});
+  expect(Date.parse(actions.snapshot()!.at)).toBeGreaterThan(Date.parse(first.at));
+ });
 });
 
 it("validates optional action fields on both polling paths and binds live updates to the exact session",()=>{

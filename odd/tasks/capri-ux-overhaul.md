@@ -223,3 +223,5 @@ L83 T48/S40 shipped in source: --capri-message parses to CapriMessage (stop-comp
 
 L84 User: "veo que capri esta poniendo directamente los textos como ejecutar comando, escribir tal, pero, esta capri es diferente, no escribe codigo ella, visualiza las sesiones activas, es diferente, como un jarvis que controla otras ias"
 L85 User: "necesito que si resuelvas ese tema de las sesiones aunque ya no es tan importante realmente, lo que si es importante es que asegures que esta Capri se mueva, literal la que te comparti tiene muchas animaciones que no has implementado e integrado. Btw, el super + c, al picarle una vez si aparece el texto, y quiero que al picarle otra vez, se cierre, no aparezca el historial, el historial solo se abre cuando le doy manualmente con el raton al boton de historial"
+
+L86 T49 shipped: observeCompanionActions supervisor vocabulary (CONSULTO/EXAMINO/SUPERVISO/VERIFICO/VALIDO/REVISOPROGRESO/DIRIJO/MONITOREO with exact subjects), privacy rules preserved, PIENSO fallback intact; focused 38 + full daemon 1440 green.
