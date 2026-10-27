@@ -58,5 +58,7 @@ it("binds the entire reference shader rig including smear, echo, grading and bod
  expect(calls.uniform4f).toHaveBeenCalledWith('uBody',-16,8*Math.PI/180,.94,1.1);
  expect(calls.readPixels).toHaveBeenCalledOnce();
  expect(canvas).toMatchObject({width:144,height:204});
+ engine.draw({mask:1,alpha:0},120);
+ expect(calls.uniform1f).toHaveBeenCalledWith('uMask',1);
  engine.dispose();expect(calls.deleteTexture).toHaveBeenCalledOnce();expect(calls.deleteShader).toHaveBeenCalledTimes(2);
 });

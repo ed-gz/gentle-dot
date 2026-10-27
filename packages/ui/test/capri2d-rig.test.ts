@@ -1,7 +1,78 @@
 import { expect, it } from "vitest";
 import { ACTS, RigPlayer, cadence, resolvePose } from "../src/capri2d/acting.ts";
-import { RigDirector } from "../src/capri2d/director.ts";
+import { RigDirector, selectAct, type RigIntent } from "../src/capri2d/director.ts";
 
+it.each(['peek','look','gaze','uplink','zap','fold','dive','split','alarm','turn','spin','hop'] as const)('ports the reference %s exposure sheet',name=>{
+ const player=new RigPlayer(name,0);
+ expect(player.sample(0)).not.toBeNull();
+ expect(player.total).toBeGreaterThan(0);
+});
+it.each([
+ [{pointer:1}, 'curious'], [{dragging:true}, 'flinch'],
+ [{watching:true}, 'peek'], [{working:true}, 'look'],
+ [{gesture:{name:'salto',at:1}}, 'hop'], [{gesture:{name:'voltereta',at:1}}, 'spin'],
+ [{gesture:{name:'transformarse',at:1}}, 'split'],
+ [{gesture:{name:'bailar',at:1}}, 'spin'], [{gesture:{name:'saludar',at:1}}, 'hop'],
+] as const)('selects an event-driven reference act for %j', (intent, expected) => {
+ expect(selectAct(intent as RigIntent)).toBe(expected);
+});
+it('lets human questions interrupt victory immediately, including retraction',()=>{
+ const rig=new RigDirector();rig.update({outcome:{kind:'done',at:1}},0);
+ rig.update({question:'q'},300);expect(rig.sample(300).act).toBe('point');
+ rig.update({},400);expect(rig.sample(400).act).toBe('unpoint');
+});
+it('repeats talking for the whole speech, but never replays a one-shot pointer episode',()=>{
+ const rig=new RigDirector();rig.update({talking:true},0);
+ rig.sample(2000);rig.update({talking:true},2100);
+ expect(rig.sample(2100).act).toBe('talk');
+ rig.update({pointer:1},3000);rig.sample(6000);rig.update({pointer:1},6100);
+ expect(rig.sample(6100).act).toBe('stand');
+ rig.update({pointer:2},6200);expect(rig.sample(6200).act).toBe('curious');
+});
+it('does not lose terminal cues when the browser misses the end of an act',()=>{
+ const rig=new RigDirector();rig.update({outcome:{kind:'done',at:1}},0);
+ expect(rig.sample(10000).cues).toEqual(['gather','launch','peak','laugh','speak']);
+ expect(rig.sample(10001).cues).toEqual([]);
+});
+it('sleep mask follows twenty seconds of sleep and wakes on pointer activity',()=>{
+ const rig=new RigDirector();rig.update({resting:'sleep'},0);
+ expect(rig.sample(20001).pose.mask).toBe(1);
+ rig.update({resting:'sleep',pointer:1},20100);
+ expect(rig.sample(20100).act).toBe('wake');
+ expect(rig.sample(20100,true).pose.mask ?? 0).toBe(0);
+});
+
+it('reacts to new agent action timestamps, not repeated snapshots or text',()=>{
+ const rig=new RigDirector();rig.update({working:true,workBeat:'1'},0);
+ expect(rig.sample(0).cues).toContain('work');rig.sample(3000);
+ rig.update({working:true,workBeat:'1'},3100);expect(rig.sample(3100).act).toBe('stand');
+ rig.update({working:true,workBeat:'2'},3200);
+ expect(rig.sample(3200).act).toBe('look');expect(rig.sample(3200).cues).toEqual([]);
+});
+it('uses gaze for thinking and alarm only for non-question attention',()=>{
+ expect(selectAct({working:true,thinking:true})).toBe('gaze');
+ expect(selectAct({alert:true})).toBe('alarm');
+ expect(selectAct({question:'q',alert:true,working:true,thinking:true})).toBe('point');
+});
+it('consumes reduced-motion cues instead of bursting on preference changes',()=>{
+ const rig=new RigDirector();rig.update({outcome:{kind:'done',at:1}},0);
+ expect(rig.sample(500,true).cues).toEqual([]);
+ expect(rig.sample(501).cues).toEqual([]);
+});
+it('preserves seated sleep and wakes into a seated stance',()=>{
+ const rig=new RigDirector();rig.update({resting:'sit'},0);rig.sample(1000);
+ rig.update({resting:'sleep',seated:true},2000);
+ expect(rig.sample(2100).pose.sit).toBe(1);
+ rig.update({resting:'sit'},2200);
+ expect(rig.sample(2200).act).toBe('wake');
+ expect(rig.sample(2200).pose.sit).toBe(1);
+});
+it('replays an explicit gesture only for a new request identity',()=>{
+ const rig=new RigDirector();rig.update({gesture:{name:'salto',at:1}},0);
+ expect(rig.sample(0).act).toBe('hop');rig.sample(2000);
+ rig.update({gesture:{name:'salto',at:1}},2100);expect(rig.sample(2100).act).toBe('stand');
+ rig.update({gesture:{name:'salto',at:2}},2200);expect(rig.sample(2200).act).toBe('hop');
+});
 it("keeps the reference victory exposure counts and cues at 24fps", () => {
  const player = new RigPlayer("victory", 0);
  expect(cadence("stand", "victory")).toBe(24);

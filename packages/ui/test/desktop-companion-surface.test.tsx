@@ -77,6 +77,28 @@ it("drives the 2D acts from completion, failure and a sustained question", () =>
  act(()=>vi.advanceTimersByTime(10000));
  expect(screen.getByTestId("capri2d")).toHaveAttribute("data-act","point");
 });
+it('wires 2D idle checkpoints to sitting and sleep instead of standing forever',()=>{
+ render(<DesktopCompanionSurface controls={controls({renderMode:'2d'})} agentState='idle' connected toggle={vi.fn()} startDrag={vi.fn()} />);
+ act(()=>vi.advanceTimersByTime(120000));
+ expect(screen.getByTestId('capri2d')).toHaveAttribute('data-act','sit');
+ act(()=>vi.advanceTimersByTime(480000));
+ expect(screen.getByTestId('capri2d')).toHaveAttribute('data-act','sleep');
+});
+it('wires 2D pointer, drag, working and typing-watch to real events', () => {
+ const value=controls({renderMode:'2d'});
+ const props={controls:value,connected:true,toggle:vi.fn(),startDrag:vi.fn()};
+ const view=render(<DesktopCompanionSurface {...props} agentState='idle' />);
+ const body=screen.getByRole('button',{name:/Abrir conversación/});
+ fireEvent.mouseEnter(body);
+ expect(screen.getByTestId('capri2d')).toHaveAttribute('data-act','curious');
+ fireEvent.pointerDown(body,{pointerId:1,button:0,clientX:10,clientY:10});
+ expect(screen.getByTestId('capri2d')).toHaveAttribute('data-act','flinch');
+ fireEvent.pointerUp(body,{pointerId:1});fireEvent.mouseLeave(body);
+ view.rerender(<DesktopCompanionSurface {...props} agentState='working' />);
+ expect(screen.getByTestId('capri2d')).toHaveAttribute('data-act','look');
+ view.rerender(<DesktopCompanionSurface {...props} controls={controls({renderMode:'2d',context:{musicPlaying:false,musicAvailable:false,notificationsAvailable:false,cue:{kind:'typing',id:'typing',expiresAt:Date.now()+10000}}})} agentState='working' />);
+ expect(screen.getByTestId('capri2d')).toHaveAttribute('data-act','peek');
+});
 it.each(["2d", "sprites", "3d"] as const)("mounts Capri2D only for render mode %s", renderMode => {
  const view = render(<DesktopCompanionSurface controls={controls({ renderMode })} agentState="idle" connected toggle={vi.fn()} startDrag={vi.fn()} />);
  expect(view.queryByTestId("capri2d") !== null).toBe(renderMode === "2d");

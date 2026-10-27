@@ -1,5 +1,6 @@
 // Ported from https://github.com/mochiiwuff/capri-desktop (MIT).
 // Exposure drawings are not tweened. Teleport/hurt adapt capri.js timelines to sheets.
+import { REPERTOIRE } from './repertoire.ts';
 export type Vec2 = [number, number];
 export interface Drawing {
  head?: number; mane?: number; hair?: number; tilt?: number; bob?: number; sx?: number; sy?: number;
@@ -8,12 +9,15 @@ export interface Drawing {
  glitch?: number; split?: number; collapse?: number; dissolve?: number; alpha?: number;
  boil?: number; sparkle?: number; grade?: number;
  silAmount?: number; sil?: [number,number,number];
+ /** Sleep mask rendered procedurally, never external artwork. */
+ mask?: number;
 }
 type Key = [number, Drawing, string?];
 export interface Act { loop?: boolean; directional?: boolean; fps?: number; priority?: number; keys: Key[] }
 const rep = (n: number, keys: Key[]): Key[] => Array.from({length:n},()=>keys).flat();
 export const NEUTRAL = {head:0,mane:0,hair:0,tilt:0,bob:0,sx:1,sy:1,armL:0,armR:0,longL:1,longR:1,smear:[0,0] as Vec2,echo:[0,0] as Vec2,kickL:0,kickR:0};
 export const ACTS = {
+ ...REPERTOIRE,
  stand: {loop:true, keys:[
   [6,{bob:0,hair:-2.5,arms:.04}], [4,{bob:-2,hair:0,arms:0}],
   [6,{bob:-4,hair:2.5,arms:-.05}], [4,{bob:-2,hair:0,arms:0}],
@@ -80,7 +84,7 @@ export const ACTS = {
   [1,{head:.09,tilt:1.5,bob:2,arms:-.08}],
  ]},
  land: {priority:3,fps:24,keys:[
-  [2,{sy:.72,sx:1.22,bob:6,mane:-.22,arms:-.4}],
+  [2,{sy:.72,sx:1.22,bob:6,mane:-.22,arms:-.4},'land'],
   [2,{sy:.88,sx:1.08,bob:3,mane:-.1,arms:-.15}],
   [2,{sy:1.05,sx:.97,mane:.1,arms:.1}], [1,{}],
  ]},

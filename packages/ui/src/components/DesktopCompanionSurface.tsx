@@ -137,6 +137,7 @@ export function DesktopCompanionSurface({
 	const [awake, setAwake] = useState(() => !document.hidden);
 	const [interacting, setInteracting] = useState(false);
 	const [holding, setHolding] = useState(false);
+ const [pointerEpisode, setPointerEpisode] = useState(0);
 	const [outcome, setOutcome] = useState<{ kind: "done" | "error"; at: number }>();
 	const [reduced, setReduced] = useState(
 		() => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches,
@@ -492,7 +493,7 @@ export function DesktopCompanionSurface({
 			aria-label={`${duo ? "Capri y Rebecca" : "Capri"}: ${message}${yolo ? ". Modo directo activo" : ""}. Abrir conversación`}
 			tabIndex={visible ? 0 : -1}
 			aria-hidden={!visible}
-			onMouseEnter={() => hold("hover", true)}
+			onMouseEnter={() => { setPointerEpisode(n => n + 1); hold("hover", true); }}
 			onMouseLeave={() => hold("hover", false)}
 			onFocus={() => hold("focus", true)}
 			onBlur={() => hold("focus", false)}
@@ -591,10 +592,19 @@ export function DesktopCompanionSurface({
                 enabled={controls.state.enabled} visible={visible && !inControl}
                 reduced={reduced || !controls.state.motion}
                 intent={{
-                 question: activeQuestion ? JSON.stringify([activeQuestion.id,activeQuestion.paneId,activeQuestion.sessionId]) : attention ? "attention" : undefined,
+                 question: activeQuestion ? JSON.stringify([activeQuestion.id,activeQuestion.paneId,activeQuestion.sessionId]) : undefined,
+                 alert: attention && !activeQuestion,
                  direction: activeQuestion ? (questionClip === "pointingLeft" ? -1 : 1) : motion?.direction || 1,
                  outcome: behavior.state === "done" || behavior.state === "error" ? outcome : undefined,
-                 resting: choreography.absent || choreography.rest === "sleep" ? "sleep" : choreography.rest === "wake" || choreography.rest === "greet" ? "wake" : perched ? "sit" : "stand",
+                 resting: choreography.absent || choreography.rest === "sleep" ? "sleep" : choreography.rest === "wake" || choreography.rest === "greet" ? "wake" : perched || choreography.rest === "sit" ? "sit" : "stand",
+                 pointer: interacting && !holding ? pointerEpisode : undefined,
+                 dragging: holding && !controls.state.pinned,
+                 watching: behavior.state === "userTyping" && !perched,
+                 seated: perched || choreography.rest === "sit",
+                 working: behavior.state === "agentWorking",
+                 thinking: agentState === "thinking" || actionKind === "thinking",
+                 workBeat: workingSession?.activity.lastAction?.at,
+                 gesture,
                  travelling: controls.state.travelling,
                  falling: motion?.mode === "fall",
                  talking: Boolean(speech),

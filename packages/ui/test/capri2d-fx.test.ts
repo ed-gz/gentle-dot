@@ -27,4 +27,9 @@ it('draws point bolt/reticle/eyes and clears once expired without an independent
  fx.draw(3000);expect(calls.clearRect).toHaveBeenCalledTimes(cleared);
  fx.clear();expect(calls.clearRect).toHaveBeenLastCalledWith(0,0,352,532);
 });
+it.each(['work','spot','impact','land','zap','snap','stare','glint','stars','align','charge','surge','break','twinkle','glimmer','home'])('fires a bounded visible effect for %s',cue=>{
+ const {fx,calls}=setup();fx.cutins.eyes={}as HTMLImageElement;
+ fx.cue(cue,100);fx.draw(100);
+ expect((calls.fill?.mock.calls.length??0)+(calls.stroke?.mock.calls.length??0)+(calls.fillRect?.mock.calls.length??0)+(calls.drawImage?.mock.calls.length??0)).toBeGreaterThan(0);
+});
 function canvasShape(canvas:HTMLCanvasElement){return[canvas.width,canvas.height];}

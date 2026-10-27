@@ -3,7 +3,7 @@
 const C={red:'#ff2152',green:'#36ff7a',ink:'#14101c',violet:'#7b3dff',paper:'#fff4f6'};
 const rand=(a:number,b:number)=>a+Math.random()*(b-a);
 const pick=<T,>(xs:T[])=>xs[Math.floor(Math.random()*xs.length)]!;
-type Kind='shard'|'slice'|'lines'|'ring'|'bolt'|'cutin'|'reticle';
+type Kind='shard'|'slice'|'lines'|'ring'|'bolt'|'cutin'|'reticle'|'sky'|'impact';
 interface Item {kind:Kind;born:number;life:number;x:number;y:number;vx?:number;vy?:number;rot?:number;vr?:number;len?:number;wid?:number;color?:string;inward?:boolean;image?:HTMLImageElement;strokes?:{a:number;w:number;r0:number;color:string}[];drawn?:number}
 export class RigFx {
  private readonly ctx: CanvasRenderingContext2D;
@@ -27,6 +27,30 @@ export class RigFx {
   }
  }
  cue(cue:string,now:number,dir=1){
+  // Native-sized adaptations: effects never request a full-screen surface or input mask.
+  if(cue==='spot'||cue==='glint'||cue==='glimmer'||cue==='twinkle'||cue==='starlight')this.add('ring',now,280,dir>0?298:54,86);
+  if(cue==='work'){
+   this.add('bolt',now,160,dir>0?268:84,228);
+   this.burst(now,false,{count:4,power:.2,spread:20});
+  }
+  if(cue==='impact'){this.add('impact',now,125);this.burst(now,false,{count:12,power:.6,spread:55});}
+  if(cue==='land')this.burst(now,false,{count:12,power:.6,spread:60});
+  if(cue==='zap'||cue==='surge'){
+   this.add('bolt',now,260,dir>0?268:84,228);this.add('ring',now,280,dir>0?316:36,182);
+   this.burst(now,false,{count:8,power:.35,spread:16});
+  }
+  if(cue==='notice'||cue==='minds'||cue==='snap'){
+   this.burst(now,false,{count:6,power:.3,spread:35});
+  }
+  if(cue==='stare')this.cutin('eyes',now);
+  if(cue==='grin')this.cutin('grin',now);
+  if(cue==='stars')this.add('sky',now,6000,174,100);
+  if(cue==='align'){this.add('sky',now,1500,174,100);this.add('bolt',now,260,dir>0?268:84,228);}
+  if(cue==='charge'){this.burst(now,true,{count:14,power:.5,spread:90});this.cutin('eyes',now);}
+  if(cue==='break'||cue==='home'){
+   this.items=this.items.filter(item=>item.kind!=='sky');
+   this.burst(now,cue==='home',{count:12,power:.35,spread:110});
+  }
   if(cue==='gather')this.burst(now,true,{count:18,power:.7,spread:170});
   if(cue==='launch'||cue==='vanish'){
    for(let i=0;i<5;i++)this.add('slice',now,rand(96,160),104+rand(-51,51),148+rand(0,300),{len:rand(51,187),wid:rand(2,7),vx:rand(-60,60),color:pick([C.red,C.green,C.violet,C.paper])});
@@ -57,6 +81,17 @@ export class RigFx {
    const t=(now-it.born)/it.life,frame=Math.floor((now-it.born)*24/1000);
    g.save();g.lineJoin='miter';
    switch(it.kind){
+    case 'impact':{
+     g.strokeStyle=C.red;g.lineWidth=5;g.strokeRect(3,3,346,526);break;
+    }
+    case 'sky':{
+     g.globalAlpha=1-t;
+     for(let i=0;i<12;i++){
+      const a=i*Math.PI*2/12,x=it.x+Math.cos(a)*70,y=it.y+Math.sin(a)*40;
+      g.fillStyle=i%2?C.paper:C.green;g.fillRect(x-2,y-2,4,4);
+      this.stroke([[it.x,it.y],[x,y]],C.violet,1);
+     }break;
+    }
     case 'shard':{
      it.x+=it.vx!*dt;it.y+=it.vy!*dt;it.vx!*=.86;it.vy!*=.86;it.rot!+=it.vr!*dt;
      const k=t<.7?1:1-(t-.7)/.3,len=it.len!*k,wid=it.wid!*k;

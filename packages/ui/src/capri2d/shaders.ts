@@ -32,7 +32,26 @@ uniform float uGlitch, uGlitchSeed, uSplit, uCollapse, uDissolve, uSparkle, uGra
 uniform vec4 uSil;
 uniform vec2 uMisreg;
 uniform vec3 uRim;
-uniform float uAlpha, uPx;
+uniform float uAlpha, uPx, uMask;
+// Procedural sleep face adapted from fx.js drawMask, in sprite coordinates.
+// Kept in the body pass so native hit-test alpha matches the visible small form.
+float cross2(vec2 a, vec2 b) { return a.x*b.y-a.y*b.x; }
+bool triangle(vec2 p, vec2 a, vec2 b, vec2 c) {
+ float x=cross2(b-a,p-a), y=cross2(c-b,p-b), z=cross2(a-c,p-c);
+ return (x>=0.0&&y>=0.0&&z>=0.0)||(x<=0.0&&y<=0.0&&z<=0.0);
+}
+vec4 sleepMask(vec2 q) {
+ vec2 p=q-vec2(124.0,132.0);
+ bool face=triangle(p,vec2(-48,-20),vec2(48,-26),vec2(46,20))||triangle(p,vec2(-48,-20),vec2(46,20),vec2(-45,23));
+ bool spike=triangle(p,vec2(-32,-20),vec2(-37,-50),vec2(30,-48))||triangle(p,vec2(-37,-50),vec2(24,-75),vec2(30,-48))||triangle(p,vec2(24,-75),vec2(34,-99),vec2(49,-90))||triangle(p,vec2(24,-75),vec2(49,-90),vec2(30,-48));
+ bool fang=triangle(p,vec2(-6,22),vec2(22,21),vec2(8,52));
+ if(!face&&!spike&&!fang)return vec4(0.0);
+ vec3 col=fang?vec3(1.0,.95,.97):vec3(.21,1.0,.48);
+ // Two sleeping chevrons; no synthetic random winks or unnecessary eye polling.
+ float ex=min(abs(p.x+23.0),abs(p.x-22.0));
+ if(face&&ex<15.0&&abs(p.y-(5.0-ex*.6))<2.5)col=vec3(.08,.06,.11);
+ return vec4(col,1.0);
+}
 const vec2 NECK = vec2(118.0, 152.0);
 const vec2 SHOULDER_L = vec2(98.0, 168.0);
 const float MIRROR = 234.0;
@@ -190,6 +209,7 @@ vec2 settle(vec2 p) {
 }
 void main() {
  vec2 p = vPx;
+ if(uMask>0.5){gl_FragColor=sleepMask(p);return;}
  if (uDissolve > 0.0) {
   vec2 g = rot(p, vec2(110.0, 210.0), 0.55);
   vec2 cell = floor(g / vec2(16.0, 9.0));
@@ -227,4 +247,4 @@ void main() {
  a += rim;
  gl_FragColor = vec4(col, a) * uAlpha;
 }`;
-export const UNIFORMS = ['uBody','uView','uPad','uTex','uSize','uSeed','uBoil','uHair','uHead','uMane','uArmL','uArmR','uLongL','uLongR','uSit','uKickL','uKickR','uSmear','uEcho','uGlitch','uGlitchSeed','uSplit','uCollapse','uDissolve','uSparkle','uGrade','uSil','uMisreg','uRim','uAlpha','uPx'] as const;
+export const UNIFORMS = ['uMask','uBody','uView','uPad','uTex','uSize','uSeed','uBoil','uHair','uHead','uMane','uArmL','uArmR','uLongL','uLongR','uSit','uKickL','uKickR','uSmear','uEcho','uGlitch','uGlitchSeed','uSplit','uCollapse','uDissolve','uSparkle','uGrade','uSil','uMisreg','uRim','uAlpha','uPx'] as const;

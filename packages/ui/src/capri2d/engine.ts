@@ -27,7 +27,7 @@ export function samplePose(base: Sheet, frame: number, act?: Sheet, actFrame=0):
  return {...pose,...sampleSheet(act,actFrame).pose};
 }
 export const DEFAULT_RIG = {
- ...NEUTRAL,seed:0,boil:.9,sit:0,glitch:0,glitchSeed:0,split:0,collapse:0,dissolve:0,
+ ...NEUTRAL,mask:0,seed:0,boil:.9,sit:0,glitch:0,glitchSeed:0,split:0,collapse:0,dissolve:0,
  sparkle:1,grade:1,sil:[.08,.06,.11] as [number,number,number],silAmount:0,
  misreg:[-2.6,2.2] as [number,number],alpha:1,
 };
@@ -67,7 +67,7 @@ export function createEngine(canvas: HTMLCanvasElement, image: HTMLImageElement)
   draw(pose: Pose, frame: number) {
    const s={...DEFAULT_RIG,...resolvePose(pose,0),seed:frame,glitchSeed:frame};
    gl.useProgram(program);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
-   const scalars=['seed','boil','hair','head','mane','armL','armR','longL','longR','sit','kickL','kickR','glitch','glitchSeed','split','collapse','dissolve','sparkle','grade','alpha'] as const;
+   const scalars=['mask','seed','boil','hair','head','mane','armL','armR','longL','longR','sit','kickL','kickR','glitch','glitchSeed','split','collapse','dissolve','sparkle','grade','alpha'] as const;
    for (const name of scalars) gl.uniform1f(u[`u${name[0]!.toUpperCase()}${name.slice(1)}`]!,s[name]);
    gl.uniform2f(u.uSmear!,...s.smear);gl.uniform2f(u.uEcho!,...s.echo);gl.uniform2f(u.uMisreg!,...s.misreg);
    gl.uniform4f(u.uSil!,...s.sil,s.silAmount);
