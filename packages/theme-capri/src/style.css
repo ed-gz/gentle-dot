@@ -669,13 +669,21 @@
 	color: var(--text);
 }
 .chat-mobile[data-companion="capri"] .mobile-top-nav {
+	box-sizing: border-box;
+	height: 68px;
+	max-height: 80px;
+	flex: none;
+	grid-template-rows: minmax(0, 1fr);
 	gap: 4px;
 	padding: 6px 10px;
 	background: var(--capri-mobile-surface);
 	border-bottom: 1px solid var(--capri-mobile-line);
 }
 .chat-mobile[data-companion="capri"] .mobile-top-nav > button {
-	min-height: 52px;
+	min-width: 0;
+	min-height: 44px;
+	padding: 4px;
+	flex-direction: row;
 	border: 0;
 	border-radius: 18px;
 	color: var(--capri-mobile-muted);
@@ -688,10 +696,38 @@
 	background: color-mix(in srgb, var(--capri-mobile-lime) 9%, var(--capri-mobile-surface));
 	color: var(--capri-mobile-lime);
 }
-.chat-mobile[data-companion="capri"] .capri-header-sprite {
-	width: 30px;
-	height: 30px;
-	flex-shrink: 0;
+/* Face sprites use inline 100% dimensions: size their parent, not the sprite. */
+.chat-mobile[data-companion="capri"] .capri-mobile-avatar {
+	display: block;
+	width: 36px;
+	height: 36px;
+	flex: 0 0 36px;
+	border-radius: 50%;
+	overflow: hidden;
+}
+.chat-mobile[data-companion="capri"] .capri-mobile-avatar svg {
+	width: 100%;
+	height: 100%;
+	display: block;
+}
+/* A real layout row separates the portal sprite from both bubbles and composer. */
+.chat-mobile[data-companion="capri"] .capri-mobile-dock {
+	height: 136px;
+	flex: 0 0 136px;
+}
+.chat-mobile[data-companion="capri"] .capri-mobile-dock[hidden] { display: none; }
+body:has(.chat-mobile[data-companion="capri"]) .capri-overlay .capri-float {
+	/* Override the shared desktop/drag geometry, not its click handlers. */
+	width: 120px !important;
+	height: 120px !important;
+	transform: none !important;
+	top: auto;
+	left: auto;
+	right: calc(12px + var(--safe-area-inset-right, env(safe-area-inset-right, 0px)));
+	bottom: var(--capri-mobile-dock-bottom, calc(100px + env(safe-area-inset-bottom, 0px)));
+}
+body:has(.chat-mobile[data-companion="capri"][data-capri-docked="false"]) .capri-overlay {
+	display: none;
 }
 .chat-mobile[data-companion="capri"] .capri-connection-strip {
 	display: flex;

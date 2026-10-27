@@ -1,6 +1,6 @@
 import { useMobileDraft } from "../useMobileDraft.ts";
 import type { ClientMessage } from "@gentle-dot/protocol";
-import { type DragEvent, lazy, type ReactNode, Suspense, useEffect, useId, useRef, useState } from "react";
+import { type DragEvent, lazy, type ReactNode, Suspense, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { CompanionClient } from "../companion.ts";
 import { useCompanionResponse } from "../companion-activity.ts";
 import { openUrl as openExternal } from "../desktop.ts";
@@ -377,6 +377,31 @@ function ChatSurfaceView({
 	const conversations = state.features.conversations;
 	const chatVisible =
 		!covered && !settingsShown && !agentsShown && !(mobile && showTools) && !(!mobile && showUsage);
+	const capriDock = useRef<HTMLDivElement>(null);
+	useLayoutEffect(() => {
+		const dock = capriDock.current;
+		if (!mobile || !capri || !chatVisible || !dock) return;
+		// The portal lives outside chat. Measure the reserved row rather than guessing
+		// composer height (multiline drafts, voice controls and keyboard all change it).
+		const style = document.documentElement.style;
+		const previous = style.getPropertyValue("--capri-mobile-dock-bottom");
+		const measure = () => style.setProperty("--capri-mobile-dock-bottom",
+			`${Math.max(0, window.innerHeight - dock.getBoundingClientRect().bottom) + 8}px`);
+		measure();
+		const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(measure);
+		observer?.observe(dock);
+		const composer = dock.parentElement?.querySelector(".chat-composer");
+		if (composer) observer?.observe(composer);
+		window.addEventListener("resize", measure);
+		window.visualViewport?.addEventListener("resize", measure);
+		return () => {
+			observer?.disconnect();
+			window.removeEventListener("resize", measure);
+			window.visualViewport?.removeEventListener("resize", measure);
+			if (previous) style.setProperty("--capri-mobile-dock-bottom", previous);
+			else style.removeProperty("--capri-mobile-dock-bottom");
+		};
+	}, [mobile, capri, chatVisible]);
 	useCompanionResponse(state.messages.findLast(message => message.role === "assistant")?.id, state.conversationId, chatVisible, ".message-assistant");
 	// A late Dot dictation must not land after entering an agent session.
 	useEffect(() => {
@@ -502,6 +527,7 @@ function ChatSurfaceView({
 			className={`chat chat-${variant}${mobile ? " chat-mobile" : ""}${panelWindow?.fullscreen ? " chat-fullscreen" : ""}${dropping ? " chat-dropping" : ""}`}
 			data-state={state.agentState}
 			data-companion={companion.settings.mode}
+			data-capri-docked={mobile && capri ? chatVisible : undefined}
 			data-ambience={companion.settings.ambience}
 			{...(mobile
 				? {
@@ -557,7 +583,7 @@ function ChatSurfaceView({
 						<span>Ajustes</span>
 					</button>
 					<button type="button" className="mobile-dot-tab" aria-pressed={chatVisible} onClick={closeOptions}>
-						<>{capri ? <CapriSprite pose="face" className="capri-header-sprite" /> : <RoseGlyph />}</>
+						<>{capri ? <span className="capri-mobile-avatar" aria-hidden="true"><CapriSprite pose="face" /></span> : <RoseGlyph />}</>
 						<span>{capri || capriPersona ? "Capri" : "Dot"}</span>
 					</button>
 					{orchestration ? (
@@ -939,6 +965,7 @@ function ChatSurfaceView({
 					))}
 				</div>
 			</main>
+			{mobile && capri ? <div ref={capriDock} className="capri-mobile-dock" hidden={!chatVisible} aria-hidden="true" /> : null}
 			{chatVisible && (chatScroll.canJump || historyWindow.hasNewer) ? (
 				<div className="chat-scroll-controls">
 					<button type="button" className="chat-scroll-latest" onClick={jumpToLatest}>

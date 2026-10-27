@@ -12,7 +12,65 @@ import type { AgentWork, OrchestrationSnapshot, OrchestrationClient } from "../s
 import type { VoiceControls } from "../src/useVoice.ts";
 import type { AttachmentControls } from "../src/useAttachments.ts";
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import capriCss from "../../theme-capri/src/style.css?raw";
+// Vitest disables CSS processing in this project (including ?raw); inspect the
+// same shipped source in that runner, without changing the production config.
+const themeCss = capriCss || readFileSync(resolve(__dirname, "../../theme-capri/src/style.css"), "utf8");
+
 afterEach(() => localStorage.clear());
+it("bounds the phone avatar independently of face sprite inline sizing and reserves a corner outside messages", () => {
+ const view = phone(true);
+ const root = view.container.querySelector('.chat-mobile[data-companion="capri"]')!;
+ const nav = screen.getByRole("navigation", { name: "Navegación principal" });
+ const avatar = nav.querySelector(".capri-mobile-avatar")!;
+ expect(avatar).not.toBeNull();
+ expect(avatar.querySelector(".capri-sprite svg")).not.toBeNull();
+ expect(root.querySelector(".chat-header")).toBeNull();
+ const dock = root.querySelector(".capri-mobile-dock")!;
+ expect(dock).not.toBeNull();
+ expect(dock.previousElementSibling).toHaveClass("chat-transcript");
+ expect(root.querySelector(".chat-composer")).not.toBeNull();
+ fireEvent.click(within(nav).getByRole("button", { name: "Ajustes" }));
+ expect(root.querySelector(".capri-mobile-dock")).toHaveAttribute("hidden");
+});
+it("pins compact Capri nav and avatar dimensions in the shipped theme stylesheet", () => {
+ const rule = (selector: string) => {
+  expect(themeCss).toContain(selector);
+  return themeCss.slice(themeCss.indexOf(selector)).split("}")[0];
+ };
+ expect(rule('.chat-mobile[data-companion="capri"] .mobile-top-nav {')).toMatch(/max-height:\s*80px/);
+ const avatar = rule('.chat-mobile[data-companion="capri"] .capri-mobile-avatar {');
+ expect(avatar).toMatch(/width:\s*36px/); expect(avatar).toMatch(/height:\s*36px/);
+ expect(rule('.chat-mobile[data-companion="capri"] .capri-mobile-avatar svg {')).toMatch(/width:\s*100%;\s*height:\s*100%/);
+ const float = rule('body:has(.chat-mobile[data-companion="capri"]) .capri-overlay .capri-float {');
+ expect(float).toMatch(/width:\s*120px\s*!important/);
+ expect(float).toMatch(/height:\s*120px\s*!important/);
+ expect(float).toMatch(/transform:\s*none\s*!important/);
+ expect(float).toContain("--capri-mobile-dock-bottom");
+ expect(float).toContain("safe-area-inset-right");
+});
+it("tracks the dock above a changing composer and clears portal geometry when leaving chat", () => {
+ const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
+ let bottom = 600;
+ rect.mockImplementation(function (this: HTMLElement) {
+  return { top: 464, bottom: this.classList.contains("capri-mobile-dock") ? bottom : 0, left: 0, right: 360, width: 360, height: 136, x: 0, y: 464, toJSON: () => ({}) };
+ });
+ try {
+  phone(true);
+  expect(document.documentElement.style.getPropertyValue("--capri-mobile-dock-bottom")).toBe(`${window.innerHeight - 600 + 8}px`);
+  bottom = 450;
+  fireEvent(window, new Event("resize"));
+  expect(document.documentElement.style.getPropertyValue("--capri-mobile-dock-bottom")).toBe(`${window.innerHeight - 450 + 8}px`);
+  fireEvent.click(screen.getByRole("button", { name: "Ajustes" }));
+  expect(document.documentElement.style.getPropertyValue("--capri-mobile-dock-bottom")).toBe("");
+ } finally { rect.mockRestore(); }
+});
+it("does not add the Capri size or dock contracts to the default phone header", () => {
+ const view = phone(false);
+ expect(view.container.querySelector(".capri-mobile-avatar, .capri-mobile-dock")).toBeNull();
+});
 const snapshot: OrchestrationSnapshot = { available: true, approvals: [], policies: [], events: [], sessions: [
  { paneId: "p1", sessionId: "s1", terminalId: "t1", workspaceId: "w1", label: "Release", state: "working", connected: true, managed: true, cwd: "/work/repo" },
  { paneId: "p2", sessionId: "s2", terminalId: "t1", workspaceId: "w1", label: "Review", state: "idle", connected: true, managed: true },
