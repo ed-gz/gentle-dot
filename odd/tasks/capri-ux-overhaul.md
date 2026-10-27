@@ -234,3 +234,5 @@ L87 T45b PARTIAL in source: audited capri-desktop acts/cues/loops/FX/window/audi
 
 L88 User: "literal el repo que te mande trabaja un chorro sus animaciones, se movia por la pantalla interactuava de cierta manera, no puedes hacer que sea igual? practciaemntente de forma permanetne tendria a esta Capri dentro de HERDR vista, donde deberia estarse moviendo"
 L89 User: "Osea pon que unicamente aparezca en la pantalla laptop no en el monitor"
+
+L90 T50 shipped in source: Hyprland feed (~2s) extracts HERDR region (class herdr, eDP-1 origin 1920,0 scale 1.25), laptop-only clamps with resize reconciliation, guarded movement via existing move command (Wayland-safe), roam.ts four-position teleport/perch circuit with sit/stand perches, 10min drag pause, reduced-motion static, composer/question/approval/sleep guards, bottom-band fallback, 3D corner-rest untouched. Focused 123/123, full UI 1232/1232, cargo 539, tsc 0; native teleport/perch/drag-on-device pending.

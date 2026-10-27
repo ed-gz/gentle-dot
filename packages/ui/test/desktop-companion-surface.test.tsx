@@ -64,6 +64,22 @@ vi.mock("../src/capri2d/Capri2D.tsx", async () => {
   return <canvas data-testid="capri2d" data-act={selectAct(intent)} />;
  } };
 });
+it('receives a laptop feed, moves only in 2D, and holds while quick composer is open', async () => {
+ quickEntry.active=true;
+ const {invoke}=await import('@tauri-apps/api/core');
+ const view=render(<DesktopCompanionSurface controls={controls({renderMode:'2d'})} agentState='idle' connected toggle={vi.fn()} startDrag={vi.fn()} />);
+ await act(async()=>{});
+ const handler=quickEntry.handlers.get('dot://roam-region') as ((event:unknown)=>void)|undefined;
+ expect(handler).toBeTypeOf('function');
+ const payload={laptop:{x:1920,y:37,width:1536,height:827},region:{x:1920,y:37,width:1536,height:827},herdr:true,x:0,y:0,width:144,height:204};
+ await act(async()=>{handler!({payload});});
+ expect(invoke).toHaveBeenCalledWith('desktop_companion_move',expect.objectContaining({roamTo:expect.any(Array)}));
+ vi.mocked(invoke).mockClear();
+ act(()=>quickEntry.handlers.get('dot://capri-message')!());
+ await act(async()=>{vi.advanceTimersByTime(20000);handler!({payload});});
+ expect(vi.mocked(invoke).mock.calls.filter(([name])=>name==='desktop_companion_move')).toHaveLength(0);
+ view.unmount();expect(quickEntry.handlers.has('dot://roam-region')).toBe(false);
+});
 it("drives the 2D acts from completion, failure and a sustained question", () => {
  const value = controls({renderMode:"2d"});
  const props = {controls:value,connected:true,toggle:vi.fn(),startDrag:vi.fn()};

@@ -269,7 +269,7 @@ struct Client {
     monitor: i64,
     pinned: bool,
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 struct Area {
     x: i32,
     y: i32,
@@ -294,6 +294,82 @@ impl Area {
                 self.y + (self.height - height - margin).max(margin),
             ),
         )
+    }
+}
+// Window ledge intent adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+// Hyprland at/size coordinates are already logical; only monitor dimensions need scaling.
+fn roam_region(clients: &Value, values: &Value, width: i32, height: i32) -> Option<(Area, Area, bool)> {
+    let id = values.as_array()?.iter().find(|m| m["name"] == "eDP-1" && m["disabled"] != true)?["id"].as_i64()?;
+    let laptop = area(values, id).ok()?;
+    if width <= 0 || height <= 0 || laptop.width < width || laptop.height < height { return None; }
+    let monitor = values.as_array()?.iter().find(|m| m["id"].as_i64() == Some(id))?;
+    let workspace = monitor["activeWorkspace"]["id"].as_i64();
+    let region = clients.as_array()?.iter().filter(|c| {
+        c["class"].as_str().is_some_and(|s| s.eq_ignore_ascii_case("herdr"))
+            && c["mapped"] == true && c["hidden"] != true
+            && c["workspace"]["id"].as_i64().is_none_or(|id| id >= 0 && workspace.is_none_or(|active| active == id))
+    }).filter_map(|c| {
+        let n = |key: &str, index: usize| i32::try_from(c[key][index].as_i64()?).ok();
+        let x = n("at", 0)?; let y = n("at", 1)?;
+        let right = x.checked_add(n("size", 0)?)?.min(laptop.x + laptop.width);
+        let bottom = y.checked_add(n("size", 1)?)?.min(laptop.y + laptop.height);
+        let x = x.max(laptop.x); let y = y.max(laptop.y);
+        (right-x >= width && bottom-y >= height).then_some(Area {x,y,width:right-x,height:bottom-y})
+    }).max_by_key(|r| i64::from(r.width)*i64::from(r.height));
+    let band_height = height.max(laptop.height/3).min(laptop.height);
+    let band = Area {y:laptop.y+laptop.height-band_height,height:band_height,..laptop};
+    Some((laptop,region.unwrap_or(band),region.is_some()))
+}
+#[cfg(test)]
+mod roam_tests {
+    use super::*;
+    #[test]
+    fn herdr_region_is_laptop_only_and_scaled() {
+        let ms = serde_json::json!([
+            {"id":0,"name":"eDP-1","x":0,"y":0,"width":1920,"height":1080,"scale":1.25,"reserved":[0,30,0,0]},
+            {"id":1,"name":"HDMI-A-1","x":1536,"y":0,"width":1920,"height":1080,"scale":1.0}
+        ]);
+        let clients=serde_json::json!([{"class":"herdr","mapped":true,"hidden":false,"at":[100,80],"size":[1700,700],"workspace":{"id":1}}]);
+        let (laptop, region, herdr)=roam_region(&clients,&ms,144,204).unwrap();
+        assert_eq!(laptop.width,1536); assert_eq!(laptop.y,30);
+        assert!(herdr); assert_eq!(region,Area{x:100,y:80,width:1436,height:700});
+        let p=region.clamp_rect(i32::MAX,i32::MAX,144,204);
+        assert!(p.0+144<=1536 && p.1+204<=864);
+    }
+    #[test]
+    fn two_d_destinations_ignore_external_pins_and_corners_but_other_modes_keep_them() {
+        let values=serde_json::json!([
+            {"id":0,"name":"eDP-1","x":1920,"y":0,"width":1920,"height":1080,"scale":1.25},
+            {"id":1,"name":"HDMI-A-1","x":0,"y":0,"width":1920,"height":1080,"scale":1.0}
+        ]);
+        let ms=monitors(&values);
+        let mut prefs=Preferences {render_mode:Some(RenderMode::TwoD),..Preferences::default()};
+        let dot=Client{address:"0xabc".into(),x:10,y:100,width:144,height:204,monitor:1,pinned:false};
+        let (name,zone,x,y)=destination(&prefs,&ms,&dot,false).unwrap();
+        assert_eq!(name,"eDP-1"); assert!(x>=1920 && x+dot.width<=3456 && y+dot.height<=864);
+        assert_eq!(safe_corner(&prefs,&ms,&dot),None);
+        assert!(zone.width>=dot.width);
+        prefs.render_mode=Some(RenderMode::ThreeD);
+        assert_eq!(destination(&prefs,&ms,&dot,false).unwrap().0,"HDMI-A-1");
+        assert!(safe_corner(&prefs,&ms,&dot).is_some());
+    }
+    #[test]
+    fn invisible_workspace_and_wrong_class_do_not_become_herdr() {
+        let ms=serde_json::json!([{"id":0,"name":"eDP-1","x":1920,"y":0,"width":1920,"height":1080,"scale":1.25,"activeWorkspace":{"id":1}}]);
+        for c in [serde_json::json!({"class":"not-herdr","workspace":{"id":1}}),serde_json::json!({"class":"herdr","workspace":{"id":2}})] {
+            let mut c=c;c["mapped"]=true.into();c["at"]=serde_json::json!([1920,37]);c["size"]=serde_json::json!([1536,827]);
+            assert!(!roam_region(&serde_json::json!([c]),&ms,144,204).unwrap().2);
+        }
+        assert!(roam_region(&serde_json::json!([]),&ms,3000,3000).is_none());
+    }
+    #[test]
+    fn absent_hidden_or_external_herdr_uses_bottom_band_and_missing_laptop_fails_closed() {
+        let ms=serde_json::json!([{"id":0,"name":"eDP-1","x":0,"y":0,"width":1920,"height":1080,"scale":1.25}]);
+        for clients in [serde_json::json!([]),serde_json::json!([{"class":"herdr","mapped":true,"hidden":true,"at":[0,0],"size":[1000,800]}]),serde_json::json!([{"class":"herdr","mapped":true,"at":[1600,0],"size":[1000,800]}])] {
+            let (laptop,band,herdr)=roam_region(&clients,&ms,144,204).unwrap();
+            assert!(!herdr); assert_eq!(band.y+band.height,laptop.y+laptop.height); assert!(band.height>=204);
+        }
+        assert!(roam_region(&serde_json::json!([]),&serde_json::json!([]),144,204).is_none());
     }
 }
 fn own_client(clients: &Value, pid: u32, title: &str) -> Result<Client, String> {
@@ -396,6 +472,7 @@ fn allowed_areas(prefs: &Preferences, monitors: &[Monitor]) -> Vec<(String, Area
     monitors
         .iter()
         .filter_map(|m| {
+            if prefs.render_mode() == RenderMode::TwoD && m.name != "eDP-1" { return None; }
             let rect = if prefs.areas.is_empty() {
                 NormalizedRect::default()
             } else {
@@ -458,7 +535,7 @@ fn destination(
 }
 // Stay in an allowed screen corner instead of covering the active conversation.
 fn safe_corner(prefs: &Preferences, monitors: &[Monitor], dot: &Client) -> Option<(i32, i32)> {
-    if prefs.pinned || !prefs.motion { return None; }
+    if prefs.pinned || !prefs.motion || prefs.render_mode() == RenderMode::TwoD { return None; }
     let (_, area, _, _) = destination(prefs, monitors, dot, false)?;
     Some(area.clamp_rect(i32::MAX, i32::MAX, dot.width, dot.height))
 }
@@ -1393,6 +1470,7 @@ impl Controller {
     }
     fn advance_path(&self) -> Result<(), String> {
         let state = self.state();
+        if state.render_mode == RenderMode::TwoD { self.cancel_travel(); return Ok(()); }
         if !state.enabled || !state.visible || state.pinned || state.paused || !state.motion {
             self.cancel_travel();
             return Ok(());
@@ -1902,7 +1980,7 @@ impl Controller {
             let was_unavailable = self.inner.lock().unwrap().zone_unavailable;
             let allowed = self.apply_bounds(&next, next.pinned)?;
             let manual_hidden = self.inner.lock().unwrap().manual_hidden;
-            if next.pinned || !next.appearances || allowed && was_unavailable {
+            if next.pinned || !next.appearances || allowed && was_unavailable || next.render_mode() == RenderMode::TwoD {
                 self.paint(allowed && !manual_hidden)?;
             }
         }
@@ -1945,8 +2023,31 @@ impl Controller {
         self.emit();
         Ok(self.state())
     }
+    fn roam_to(&self, x: i32, y: i32) -> Result<(), String> {
+        let state = self.state();
+        if !state.enabled || !state.visible || state.render_mode != RenderMode::TwoD || state.pinned || self.control.active() { return Ok(()); }
+        if self.app.state::<crate::capri3d::Surface>().inner.lock().unwrap().input
+            || self.inner.lock().unwrap().context.cue.as_ref().is_some_and(|cue| matches!(cue.kind, Kind::Question | Kind::Attention)) { return Ok(()); }
+        let dot = resolve(crate::platform::DOT_TITLE)?;
+        let Some((laptop, region, _)) = roam_region(&query("clients")?, &query("monitors")?, dot.width, dot.height) else {
+            self.paint(false)?; return Ok(());
+        };
+        let (x,y) = region.clamp_rect(x,y,dot.width,dot.height);
+        let (x,y) = laptop.clamp_rect(x,y,dot.width,dot.height);
+        if (x,y) == (dot.x,dot.y) { return Ok(()); }
+        self.cancel_travel();
+        self.programmatic_position(x,y);
+        // Use the existing verified Hyprland dispatch: GTK/Wayland set_position alone is ignored.
+        dispatch(crate::platform::DOT_TITLE,&dot.address,"move",&format!("x={x},y={y},relative=false"))?;
+        self.sync_bubble()?;
+        Ok(())
+    }
     fn move_by(&self, dx: i32, dy: i32) -> Result<(), String> {
         if self.state().pinned { return Ok(()); }
+        if self.state().render_mode == RenderMode::TwoD && (
+            self.app.state::<crate::capri3d::Surface>().inner.lock().unwrap().input
+            || self.inner.lock().unwrap().context.cue.as_ref().is_some_and(|cue| matches!(cue.kind, Kind::Question | Kind::Attention))
+        ) { return Ok(()); }
         self.cancel_travel();
         if !self.state().enabled || self.control.active() {
             return Err("Capri no está disponible para moverse ahora".into());
@@ -2032,7 +2133,7 @@ impl Controller {
         let finished = self.inner.lock().unwrap().travel.finish(Instant::now()) || expired;
         if finished { let _ = self.app.emit("dot://capri3d-motion", serde_json::json!({ "mode": if landed { "land" } else { "rest" }, "duration": 600, "direction": 0 })); }
         let topology_due =
-            self.inner.lock().unwrap().last_topology.elapsed() >= Duration::from_secs(5);
+            self.inner.lock().unwrap().last_topology.elapsed() >= Duration::from_secs(2);
         let mut changed = false;
         if topology_due && self.available && self.state().enabled && !self.control.active() {
             self.refresh_monitors()?;
@@ -2041,6 +2142,15 @@ impl Controller {
             changed = self.topology_dirty.swap(false, Ordering::SeqCst);
         }
         let topology_changed = changed;
+        if topology_due && self.state().enabled && self.state().render_mode == RenderMode::TwoD {
+            // Publish no window titles/content. Re-query clients so minimization/workspace changes expire the region.
+            let feed = (|| -> Result<Value, String> {
+                let dot = resolve(crate::platform::DOT_TITLE)?;
+                let (laptop, region, herdr) = roam_region(&query("clients")?, &query("monitors")?, dot.width, dot.height).ok_or("eDP-1 no disponible")?;
+                Ok(serde_json::json!({"laptop":laptop,"region":region,"herdr":herdr,"x":dot.x,"y":dot.y,"width":dot.width,"height":dot.height}))
+            })().ok();
+            let _ = self.app.emit("dot://roam-region", feed);
+        }
         if self.state().enabled
             && !self.control.active()
             && (topology_due || self.settle_position.load(Ordering::SeqCst))
@@ -2073,7 +2183,7 @@ impl Controller {
                 self.save_pinned_position()?;
                 // A manual release is the only source of gravity; never fall on a clock phase.
                 let pending = self.inner.lock().unwrap().drop_pending;
-                if pending && !prefs.pinned && prefs.motion && self.state().visible && !self.state().paused {
+                if pending && prefs.render_mode() != RenderMode::TwoD && !prefs.pinned && prefs.motion && self.state().visible && !self.state().paused {
                     self.inner.lock().unwrap().drop_pending = false;
                     let dot = resolve(crate::platform::DOT_TITLE)?;
                     let zone = { let i = self.inner.lock().unwrap(); destination(&prefs, &i.monitors, &dot, false).map(|(_, zone, _, _)| zone) };
@@ -2109,7 +2219,7 @@ impl Controller {
                     .as_ref()
                     .is_some_and(|cue| cue.placement.is_some())
         };
-        if appearance && !contextual {
+        if appearance && !contextual && s.render_mode != RenderMode::TwoD {
             self.paint(!s.visible)?;
             return Ok(true);
         }
@@ -2264,7 +2374,14 @@ pub(crate) fn reconcile_3d_bounds(app: &AppHandle, shift: (i32, i32)) {
             }
             if shift != (0, 0) {
                 if let Ok(dot) = resolve(crate::platform::DOT_TITLE) {
-                    let (x, y) = (dot.x + shift.0, dot.y + shift.1);
+                    let (mut x, mut y) = (dot.x + shift.0, dot.y + shift.1);
+                    if prefs.render_mode() == RenderMode::TwoD {
+                        let ms = c.inner.lock().unwrap().monitors.clone();
+                        let Some((_, zone, _, _)) = destination(&prefs, &ms, &dot, false) else {
+                            let _ = c.paint(false); return;
+                        };
+                        (x,y) = zone.clamp_rect(x,y,dot.width,dot.height);
+                    }
                     c.cancel_travel();
                     c.programmatic_position(x, y);
                     let _ = dispatch(crate::platform::DOT_TITLE, &dot.address, "move", &format!("x={x},y={y},relative=false"));
@@ -2913,14 +3030,14 @@ fn handle_context_action(app: &AppHandle, id: &str) {
     });
 }
 #[tauri::command]
-pub async fn desktop_companion_move(app: AppHandle, dx: i32, dy: i32) -> Result<State, String> {
+pub async fn desktop_companion_move(app: AppHandle, dx: i32, dy: i32, roam_to: Option<(i32, i32)>) -> Result<State, String> {
     if dx.abs_diff(0) > 512 || dy.abs_diff(0) > 512 {
         return Err("El desplazamiento debe ser de hasta 512 puntos".into());
     }
     let c = app.state::<Arc<Controller>>().inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _serial = c.operations.lock().unwrap();
-        c.move_by(dx, dy)?;
+        if let Some((x,y)) = roam_to { c.roam_to(x,y)?; } else { c.move_by(dx, dy)?; }
         Ok(c.state())
     })
     .await

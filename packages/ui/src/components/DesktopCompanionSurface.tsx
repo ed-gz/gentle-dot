@@ -11,6 +11,7 @@ import type { DesktopCompanionControls } from "../desktop-companion.ts";
 import { CapriSprite } from "./CapriCompanion.tsx";
 import { Capri3D } from "../capri3d/Capri3D.tsx";
 import { Capri2D } from "../capri2d/Capri2D.tsx";
+import { useRoaming } from "../capri2d/useRoaming.ts";
 import { publish3DSurface, readLocalAsset, usePreferred3D } from "../capri3d/native.ts";
 import { useChoreography } from "../capri3d/useChoreography.ts";
 import { restChoice, responseChoice, speechDuration } from "../capri3d/choreography.ts";
@@ -426,6 +427,11 @@ export function DesktopCompanionSurface({
 		const timer = setTimeout(() => setSpeech(undefined), duration);
 		return () => clearTimeout(timer);
 	}, [cue?.id, cue?.summary, cue?.body, cue?.kind, cue?.expiresAt, cue?.paneId, cue?.sessionId]);
+ const roaming=useRoaming(renderMode==='2d' && visible,{
+  composer:chatOpen,question:Boolean(activeQuestion),approval:Boolean(approval)||attention,
+  sleeping:choreography.absent||choreography.rest==='sleep',reduced:reduced||!controls.state.motion,
+  paused:inControl||interacting||controls.state.pinned||(controls.state.paused&&!reduced),
+ });
 	const motion = choreography.motion;
 	const perched = (cue?.kind === "input-ready" || cue?.kind === "typing") && cue.placement === "perch";
 	const baseChoice = useMemo<ClipChoice>(() => {
@@ -502,8 +508,8 @@ export function DesktopCompanionSurface({
 				suppressClick.current = false;
 				press.current = {
 					id: event.pointerId,
-					x: event.clientX,
-					y: event.clientY,
+					x: renderMode === '2d' ? event.screenX : event.clientX,
+					y: renderMode === '2d' ? event.screenY : event.clientY,
 					dragging: false,
 					target: event.currentTarget,
 				};
@@ -516,6 +522,15 @@ export function DesktopCompanionSurface({
 			}}
 			onPointerMove={(event) => {
 				const current = press.current;
+                if(renderMode==='2d' && current && current.id===event.pointerId){
+                 if(controls.state.pinned||chatOpen||activeQuestion||approval||attention)return;
+                 const dx=event.screenX-current.x,dy=event.screenY-current.y;
+                 if(Math.hypot(dx,dy)<6)return;
+                 current.x=event.screenX;current.y=event.screenY;current.dragging=true;
+                 suppressClick.current=true;event.preventDefault();
+                 roaming.dragBy(dx,dy);
+                 return;
+                }
 				if (
 					!current ||
 					controls.state.pinned ||
@@ -594,18 +609,18 @@ export function DesktopCompanionSurface({
                 intent={{
                  question: activeQuestion ? JSON.stringify([activeQuestion.id,activeQuestion.paneId,activeQuestion.sessionId]) : undefined,
                  alert: attention && !activeQuestion,
-                 direction: activeQuestion ? (questionClip === "pointingLeft" ? -1 : 1) : motion?.direction || 1,
+                 direction: activeQuestion ? (questionClip === "pointingLeft" ? -1 : 1) : roaming.pose?.direction ?? motion?.direction ?? 1,
                  outcome: behavior.state === "done" || behavior.state === "error" ? outcome : undefined,
-                 resting: choreography.absent || choreography.rest === "sleep" ? "sleep" : choreography.rest === "wake" || choreography.rest === "greet" ? "wake" : perched || choreography.rest === "sit" ? "sit" : "stand",
+                 resting: choreography.absent || choreography.rest === "sleep" ? "sleep" : choreography.rest === "wake" || choreography.rest === "greet" ? "wake" : perched || roaming.pose?.resting === 'sit' || choreography.rest === "sit" ? "sit" : "stand",
                  pointer: interacting && !holding ? pointerEpisode : undefined,
                  dragging: holding && !controls.state.pinned,
                  watching: behavior.state === "userTyping" && !perched,
-                 seated: perched || choreography.rest === "sit",
+                 seated: perched || roaming.pose?.resting === 'sit' || choreography.rest === "sit",
                  working: behavior.state === "agentWorking",
                  thinking: agentState === "thinking" || actionKind === "thinking",
                  workBeat: workingSession?.activity.lastAction?.at,
                  gesture,
-                 travelling: controls.state.travelling,
+                 travelling: roaming.travelling || controls.state.travelling,
                  falling: motion?.mode === "fall",
                  talking: Boolean(speech),
                 }}
