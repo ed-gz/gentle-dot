@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager};
+mod blank;
 
 pub const BUBBLE: &str = "companion-bubble";
 pub const BUBBLE_TITLE: &str = "Gentle Dot Context";
@@ -2203,7 +2204,9 @@ impl Controller {
             let feed = (|| -> Result<Value, String> {
                 let dot = resolve(crate::platform::DOT_TITLE)?;
                 let (laptop, region, herdr) = roam_region(&query("clients")?, &query("monitors")?, dot.width, dot.height).ok_or("eDP-1 no disponible")?;
-                Ok(serde_json::json!({"laptop":laptop,"region":region,"herdr":herdr,"roamZone":self.inner.lock().unwrap().prefs.roam_zone,"x":dot.x,"y":dot.y,"width":dot.width,"height":dot.height}))
+                // A missing/failed capture deliberately preserves the previous zone behavior.
+                let blank_grid = if herdr { blank::sample(region, dot.width, dot.height) } else { None };
+                Ok(serde_json::json!({"laptop":laptop,"region":region,"herdr":herdr,"blankGrid":blank_grid,"roamZone":self.inner.lock().unwrap().prefs.roam_zone,"x":dot.x,"y":dot.y,"width":dot.width,"height":dot.height}))
             })().ok();
             let _ = self.app.emit("dot://roam-region", feed);
         }
