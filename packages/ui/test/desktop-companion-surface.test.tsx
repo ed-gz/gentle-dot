@@ -20,6 +20,12 @@ it.each([new Error("boom /home/secret"), new TypeError("Failed to fetch"), new E
  expect(approvalAnswerError(error)).toEqual(new Error("No se pudo responder con la sesión. Volvé a intentarlo o abrí el panel."));
 });
 
+vi.mock("../src/capri2d/Capri2D.tsx", () => ({ Capri2D: () => <canvas data-testid="capri2d" /> }));
+it.each(["2d", "sprites", "3d"] as const)("mounts Capri2D only for render mode %s", renderMode => {
+ const view = render(<DesktopCompanionSurface controls={controls({ renderMode })} agentState="idle" connected toggle={vi.fn()} startDrag={vi.fn()} />);
+ expect(view.queryByTestId("capri2d") !== null).toBe(renderMode === "2d");
+});
+
 beforeEach(() => {
 	vi.useFakeTimers();
 	vi.spyOn(document, "hidden", "get").mockReturnValue(false);

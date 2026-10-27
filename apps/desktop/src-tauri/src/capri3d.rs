@@ -8,6 +8,16 @@ pub const ASSETS: [&str; 10] = [
     "roja_sentada.glb", "roja_transformacion.glb",
 ];
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
+mod art2d_tests {
+    #[test]
+    fn exact_png_allowlist() {
+        assert!(super::allowed_2d_asset("capri-full.png"));
+        for name in ["../capri-full.png", "/tmp/capri-full.png", "other/capri-full.png", "capri-full.jpg", "roja.glb", "unknown.png", "CAPRI-FULL.PNG"] {
+            assert!(!super::allowed_2d_asset(name), "{name}");
+        }
+    }
+}
 pub fn allowed_asset(name: &str) -> bool { ASSETS.contains(&name) }
 fn asset_dir() -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME").ok_or("No se encontró la carpeta personal")?;
@@ -18,9 +28,12 @@ pub fn installed() -> bool {
 }
 fn read_asset(root: &Path, name: &str) -> Result<Vec<u8>, String> {
     if !allowed_asset(name) { return Err("Modelo de Capri no permitido".into()); }
+    read_local_asset(root, name, MAX_BYTES)
+}
+fn read_local_asset(root: &Path, name: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
     let path = root.join(name);
     let meta = std::fs::symlink_metadata(&path).map_err(|_| "Instala los modelos locales de Capri 3D")?;
-    if !meta.is_file() || meta.len() > MAX_BYTES { return Err("Modelo local inválido".into()); }
+    if !meta.is_file() || meta.len() > max_bytes { return Err("Modelo local inválido".into()); }
     let root = root.canonicalize().map_err(|e| e.to_string())?;
     let path = path.canonicalize().map_err(|e| e.to_string())?;
     if path.parent() != Some(root.as_path()) { return Err("Modelo fuera de la carpeta local".into()); }
@@ -33,10 +46,10 @@ fn read_asset(root: &Path, name: &str) -> Result<Vec<u8>, String> {
     }
     let file = options.open(path).map_err(|e| e.to_string())?;
     let stat = file.metadata().map_err(|e| e.to_string())?;
-    if !stat.is_file() || stat.len() > MAX_BYTES { return Err("Modelo local inválido".into()); }
+    if !stat.is_file() || stat.len() > max_bytes { return Err("Modelo local inválido".into()); }
     let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_BYTES { return Err("Modelo demasiado grande".into()); }
+    file.take(max_bytes + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > max_bytes { return Err("Modelo demasiado grande".into()); }
     Ok(bytes)
 }
 #[tauri::command]
@@ -44,6 +57,18 @@ pub async fn capri3d_asset(window: tauri::WebviewWindow, name: String) -> Result
     if window.label() != "dot" || !allowed_asset(&name) { return Err("Modelo no permitido".into()); }
     tauri::async_runtime::spawn_blocking(move || read_asset(&asset_dir()?, &name).map(tauri::ipc::Response::new))
         .await.map_err(|e| e.to_string())?
+}
+/// Ported choreography/engine from https://github.com/mochiiwuff/capri-desktop (MIT); artwork not included — personal-use assets loaded locally.
+const ART_2D: [&str; 1] = ["capri-full.png"];
+pub fn allowed_2d_asset(name: &str) -> bool { ART_2D.contains(&name) }
+#[tauri::command]
+pub async fn capri2d_asset(window: tauri::WebviewWindow, name: String) -> Result<tauri::ipc::Response, String> {
+    if window.label() != "dot" || !allowed_2d_asset(&name) { return Err("Imagen de Capri no permitida".into()); }
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = std::env::var_os("HOME").ok_or("No se encontró la carpeta personal")?;
+        let root = PathBuf::from(home).join(".local/share/dev.gentleman.gentle-dot/capri-desktop-art");
+        read_local_asset(&root, &name, 8 * 1024 * 1024).map(tauri::ipc::Response::new)
+    }).await.map_err(|e| e.to_string())?
 }
 #[derive(Default)]
 pub struct Surface {
@@ -122,7 +147,7 @@ pub fn capri3d_surface(app: tauri::AppHandle, window: tauri::WebviewWindow, acti
     let preferred = crate::desktop_companion::preferred_3d(&app);
     if let Some(mask) = &mask { mask_rectangles(mask, BODY_WIDTH, BODY_HEIGHT)?; }
     if let Some(wanted) = active {
-        let wanted = wanted && preferred && crate::desktop_companion::enabled(&app);
+        let wanted = wanted && crate::desktop_companion::preferred_canvas(&app) && crate::desktop_companion::enabled(&app);
         let (changed, shift) = {
             let s = app.state::<Surface>();
             let mut state = s.inner.lock().unwrap();

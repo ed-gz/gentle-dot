@@ -62,7 +62,9 @@ export interface DesktopCompanionContextRequest {
 	target?: DesktopCompanionRect;
 	placement?: "perch" | "aside";
 }
+export type DesktopRenderMode = "sprites" | "3d" | "2d";
 export interface DesktopCompanionState {
+ renderMode?: DesktopRenderMode;
 	context?: DesktopCompanionContext;
 	enabled: boolean;
 	motion: boolean;
@@ -79,7 +81,7 @@ export interface DesktopCompanionState {
 	reason?: string;
 }
 export type DesktopCompanionPatch = Partial<
-	Pick<DesktopCompanionState, "enabled" | "motion" | "appearances" | "pinned" | "areas">
+	Pick<DesktopCompanionState, "enabled" | "motion" | "appearances" | "pinned" | "areas" | "renderMode">
 >;
 export interface DesktopCompanionControls {
 	state: DesktopCompanionState;
@@ -219,6 +221,7 @@ export function parseDesktopCompanion(value: unknown): DesktopCompanionState {
 	return {
 		enabled: data.enabled as boolean,
 		...(parseContext(data.context) ? { context: parseContext(data.context) } : {}),
+        ...(data.renderMode === "2d" || data.renderMode === "3d" || data.renderMode === "sprites" ? { renderMode: data.renderMode } : {}),
 		motion: data.motion as boolean,
 		appearances: data.appearances as boolean,
 		pinned: data.pinned === true,

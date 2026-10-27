@@ -139,6 +139,16 @@ export function DesktopCompanionSettings({ controls }: { controls: DesktopCompan
 				<p>Tu compañera sobre las ventanas de este equipo. Estos ajustes se guardan aquí.</p>
 			) : (
 				<>
+                    <div className="capri-preferences-block">
+                        <label>Vista de Capri
+                            <select aria-label="Vista de Capri" disabled={pending} value={state.renderMode ?? "sprites"}
+                                onChange={event => void controls.change({ renderMode: event.target.value as "sprites" | "3d" | "2d" })}>
+                                <option value="sprites">Sprites</option>
+                                <option value="3d">Capri 3D</option>
+                                <option value="2d">Capri 2D (beta)</option>
+                            </select>
+                        </label>
+                    </div>
 					<div className="capri-preferences-block">
 						<fieldset className="capri-preferences-mode" aria-label="Cómo se mueve Capri">
 							<button

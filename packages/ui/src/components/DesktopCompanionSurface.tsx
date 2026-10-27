@@ -10,6 +10,7 @@ import { isVisualNotification, notificationPresentation } from "../companion-not
 import type { DesktopCompanionControls } from "../desktop-companion.ts";
 import { CapriSprite } from "./CapriCompanion.tsx";
 import { Capri3D } from "../capri3d/Capri3D.tsx";
+import { Capri2D } from "../capri2d/Capri2D.tsx";
 import { publish3DSurface, readLocalAsset, usePreferred3D } from "../capri3d/native.ts";
 import { useChoreography } from "../capri3d/useChoreography.ts";
 import { restChoice, responseChoice, speechDuration } from "../capri3d/choreography.ts";
@@ -70,7 +71,9 @@ export function DesktopCompanionSurface({
 	toggle,
 	startDrag,
 }: Props) {
-	const preferred3D = usePreferred3D(controls.state.enabled);
+	const legacyPreferred3D = usePreferred3D(controls.state.enabled);
+ const renderMode = controls.state.renderMode ?? (legacyPreferred3D ? "3d" : "sprites");
+ const preferred3D = renderMode === "3d";
 	const [active3D, setActive3D] = useState(false);
 	const [failed3D, setFailed3D] = useState(false);
 	useEffect(() => { setFailed3D(false); }, [preferred3D, controls.state.enabled]);
@@ -461,6 +464,7 @@ export function DesktopCompanionSurface({
 			type="button"
 			className="desktop-companion-surface"
 			data-form={active3D ? "3d" : "2d"}
+            data-render-mode={renderMode}
 			data-pose={pose}
 			data-duo={duo}
 			data-motion={moving}
@@ -569,7 +573,11 @@ export function DesktopCompanionSurface({
 				void controls.menu().catch(() => {});
 			}}
 		>
-			<Capri3D
+            {renderMode === "2d" ? <Capri2D
+                enabled={controls.state.enabled} visible={visible && !inControl}
+                reduced={reduced || !controls.state.motion}
+                onActive={on3DActive} onMask={on3DMask}
+            /> : <Capri3D
 				enabled={controls.state.enabled}
 				preferred={preferred3D && !failed3D}
 				visible={visible && !inControl}
@@ -579,7 +587,7 @@ export function DesktopCompanionSurface({
 				read={readLocalAsset}
 				onActive={on3DActive}
 				onMask={on3DMask}
-			/>
+			/>}
 			{!active3D && <CapriSprite
 				key={notificationId ?? "companion"}
 				pose={pose}

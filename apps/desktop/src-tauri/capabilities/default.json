@@ -86,6 +86,7 @@
 			"description": "Only the traveler can pause its own motion and request bounded movement.",
 			"windows": ["dot"],
 			"permissions": [
+				"allow-capri2d-asset",
 				"allow-capri3d-asset",
 				"allow-capri3d-surface",
 				"allow-desktop-companion-interaction",

@@ -1108,6 +1108,7 @@ pub fn run() {
             shortcut_get,
             shortcut_set,
             connector_command,
+            crate::capri3d::capri2d_asset,
             crate::capri3d::capri3d_asset,
             crate::capri3d::capri3d_surface,
             desktop_companion::desktop_companion_get,
@@ -1391,6 +1392,18 @@ mod tests {
         assert_eq!(panel_placement(false, false, true), Placement::Keep);
     }
 
+    #[test]
+    fn capri2d_asset_permission_is_generated_and_granted_only_to_dot() {
+        let build = include_str!("../build.rs");
+        assert!(build.contains("\"capri2d_asset\","));
+        let capabilities: serde_json::Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let grants: Vec<_> = capabilities["capabilities"].as_array().unwrap().iter()
+            .filter(|cap| cap["permissions"].as_array().unwrap().iter().any(|p| p == "allow-capri2d-asset"))
+            .collect();
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0]["identifier"], "desktop-companion-motion");
+        assert_eq!(grants[0]["windows"], serde_json::json!(["dot"]));
+    }
     #[test]
     fn the_shortcut_and_connector_commands_are_registered_and_granted_to_the_panel_only() {
         let build = include_str!("../build.rs");

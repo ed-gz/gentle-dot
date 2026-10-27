@@ -5,6 +5,7 @@ mod build_contract;
 /// Commands the UI may invoke; each one gets an `allow-<command>` permission.
 const COMMANDS: &[&str] = &[
     "connection_info",
+    "capri2d_asset",
     "capri3d_asset",
     "capri3d_surface",
     "desktop_companion_get",

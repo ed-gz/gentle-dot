@@ -41,6 +41,12 @@ const HIDDEN_FOR: Duration = Duration::from_secs(10);
 // A short signal around the compositor's existing move animation, not frame-rate IPC.
 const TRAVEL_FOR: Duration = Duration::from_millis(600);
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+pub enum RenderMode {
+    #[serde(rename = "sprites")] Sprites,
+    #[serde(rename = "3d")] ThreeD,
+    #[serde(rename = "2d")] TwoD,
+}
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct Preferences {
@@ -52,6 +58,8 @@ pub struct Preferences {
     /// None selects 3D when the personal assets have been installed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form_3d: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub render_mode: Option<RenderMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pin_position: Option<PinPosition>,
 }
@@ -65,6 +73,7 @@ impl Default for Preferences {
             areas: Vec::new(),
             pin_position: None,
             form_3d: None,
+            render_mode: None,
         }
     }
 }
@@ -77,6 +86,8 @@ pub struct Patch {
     pub pinned: Option<bool>,
     pub areas: Option<Vec<AllowedArea>>,
     pub form_3d: Option<bool>,
+    #[serde(rename = "renderMode")]
+    pub render_mode: Option<RenderMode>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -133,7 +144,27 @@ impl Monitor {
 fn valid_name(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 128 && !value.contains('\0')
 }
+#[cfg(test)]
+mod render_mode_tests {
+    use super::*;
+    #[test]
+    fn modes_persist_and_legacy_choice_migrates() {
+        assert_eq!(Preferences::default().render_mode(), RenderMode::Sprites);
+        for mode in [RenderMode::TwoD, RenderMode::ThreeD, RenderMode::Sprites] {
+            let patch: Patch = serde_json::from_value(serde_json::json!({"renderMode": mode})).unwrap();
+            let prefs = Preferences::default().patched(patch).unwrap();
+            let restored: Preferences = serde_json::from_str(&serde_json::to_string(&prefs).unwrap()).unwrap();
+            assert_eq!(restored.render_mode(), mode);
+        }
+        assert!(serde_json::from_str::<Patch>(r#"{"renderMode":"unknown"}"#).is_err());
+        let old: Preferences = serde_json::from_str(r#"{"form3d":true}"#).unwrap();
+        assert_eq!(old.render_mode(), RenderMode::ThreeD);
+    }
+}
 impl Preferences {
+    fn render_mode(&self) -> RenderMode {
+        self.render_mode.unwrap_or_else(|| if self.form_3d == Some(true) { RenderMode::ThreeD } else { RenderMode::Sprites })
+    }
     fn patched(&self, patch: Patch) -> Result<Self, String> {
         let mut next = Self {
             enabled: patch.enabled.unwrap_or(self.enabled),
@@ -143,6 +174,7 @@ impl Preferences {
             areas: patch.areas.unwrap_or_else(|| self.areas.clone()),
             pin_position: self.pin_position.clone(),
             form_3d: patch.form_3d.or(self.form_3d),
+            render_mode: patch.render_mode.or_else(|| patch.form_3d.map(|v| if v { RenderMode::ThreeD } else { RenderMode::Sprites })).or(self.render_mode),
         };
         next.validate()?;
         Ok(next)
@@ -186,6 +218,8 @@ impl Preferences {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct State {
+    #[serde(rename = "renderMode")]
+    pub render_mode: RenderMode,
     pub context: Context,
     pub enabled: bool,
     pub motion: bool,
@@ -1466,6 +1500,7 @@ impl Controller {
             || i.zone_unavailable
             || self.settle_position.load(Ordering::SeqCst);
         State {
+            render_mode: i.prefs.render_mode(),
             context:i.context.clone(),
             enabled: i.prefs.enabled,
             motion: i.prefs.motion,
@@ -2186,8 +2221,10 @@ pub fn stop(app: &AppHandle) {
     }
 }
 pub(crate) fn preferred_3d(app: &AppHandle) -> bool {
-    app.state::<Arc<Controller>>().inner.lock().unwrap().prefs.form_3d
-        .unwrap_or_else(crate::capri3d::installed)
+    app.state::<Arc<Controller>>().inner.lock().unwrap().prefs.render_mode() == RenderMode::ThreeD
+}
+pub(crate) fn preferred_canvas(app: &AppHandle) -> bool {
+    app.state::<Arc<Controller>>().inner.lock().unwrap().prefs.render_mode() != RenderMode::Sprites
 }
 pub(crate) fn reconcile_3d_bounds(app: &AppHandle, shift: (i32, i32)) {
     let c = app.state::<Arc<Controller>>().inner().clone();
