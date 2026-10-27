@@ -122,6 +122,14 @@ S42. Screen roaming + laptop-only: user verbatim: "literal el repo que te mande 
 
 T50 | S42 | IN PROGRESS | worker | port windows.js roaming feed (Hyprland IPC equivalent), roam/perch director inside herdr region on eDP-1 only.
 
+S44. Comic notification cards (desktop), user: "este de notificaciones esta god!!" (capri-desktop README image): comic-style speech-bubble cards with Capri avatar, CAPRI tag, typed name, message, COMPRIS-style button, NON IGNORE chip.
+S45. Full-screen spawn intro (capri-desktop "When she starts": edges crackle red, hands slam, hauls up, face hits glass, white/ink flash, shake, looks around, hi tag + typed name, wave, dive, body unfolds) — ONLY at session start: PC boot or daemon/herdr startup, never per event.
+S46. Window possession per README image 2: jagged pink cracked border around a window, eyes/mouth drawn over it, shard-dissolve to a small green face (biochip) and big sleeping face transitions.
+
+T52 | S44 | IN PROGRESS | worker | comic notification cards on desktop.
+T53 | S45 | PENDING | worker | spawn intro at session start only (after T52; shares shell.rs).
+T54 | S46 | PENDING | worker | window possession overlay (after T53).
+
 ## Log
 L1 user request verbatim: "Necesito que me ayudes a hacer mas chido el branch que andamos trabajando con lo de gentle dot en respecto a sus funcionalidades, mejorar UX/UI a por mil por que actualmente es una mierda, hacerlo eficiente util y sobre todo mejorar nuestro tema de Capri! Capri me encanta, quiero integrarlo a mil pero hay bugs importantes de vistas, ademas de loq ue encuentres, hay una soibreingeneria tremenda que hay que matar [screenshot] De lo mas sencillo, en la PC se ve ese recuadro fantasma cuando capri esta activa como sprite y no debe exsitir, cuando se oculta capri ahi si aparece en u siti sin molestar Ya dentro de este todas las funcionalidade smoviles pues esta snecilito y creo que podria aprovecharse y mejorarse AHora movil! la belleza real Tengo conectado el cel por si quieres hacer pruebas instalar updates etc Ene ste Comenzando con lo que es Capri en la pantalla como asistente activa permanente no funciona correctmaente, sus diferentes sprites no reaccionan, cuando se bloquea el celular desaparece totalmente al desbloquearlo sus notificaciones dentro del celular no sirven, toda la visual del movil es una basura tanto en manejo de sesiones como otras funciones, su configuracion y organizacion es horrible por lo tecnica y desglozada mal que eesta Analiza y emjoralo"
 L2 user: "la idea es volver todo junto en uno por que realmente seria la msima logica"; then "mer evolvi, es que honestamente hay mucho desorden, quiero la version mas trabajada como prioridad". Decision: work in /home/egarza/gentle-dot-capri. Evidence: it already contains mobile-approvals.ts and workflow-authorization.ts; orchestration-only files are obsolete Capri v1 assets plus 5 odd docs.
@@ -243,3 +251,5 @@ L92 User: "quita lio de dirijo la operacion en curso tambien, osea no es aventar
 L93 User: bug - Capri window has a large invisible box blocking clicks, must be sprite-sized only; roaming must avoid herdr agents area, allowed in status right slide and spaces.
 
 L94 T51 shipped in source: exact-pixel silhouette input (alpha runs above threshold 24, GTK/GDK shaping, fail-closed empty, FX click-through, context-restoration republish) so only Capri body is interactive; roamZone.xRatio default 0.5 (right band of herdr, left-30% exclusion under 700px, fail-closed small bands) persisted in desktop-companion.json; capture restore keeps silhouette. Focused 129/129, full UI 1237, cargo 542, tsc 0; Wayland click-through needs-device.
+
+L95 User: "vamos a implementar todo, el de intro completa me imagino solo estaria cuando arranco herdr o prendo la pc"
