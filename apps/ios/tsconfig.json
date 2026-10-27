@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": [],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "paths": {
+      "@gentle-dot/ui/*": ["../../packages/ui/*"],
+      "@gentle-dot/protocol": ["../../packages/protocol/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>Capri</title>
+</head>
+<body>
+  <main>
+    <header><h1>Capri</h1><p id="status" role="status">Sin conexión</p></header>
+    <section id="stage" aria-label="Capri 2D">
+      <div class="rig"><canvas id="capri" aria-hidden="true"></canvas><canvas id="fx" aria-hidden="true"></canvas></div>
+      <p id="art-status" role="status">Carga tu recorte local para activar Capri.</p>
+    </section>
+    <details open>
+      <summary>Conectar y cargar arte</summary>
+      <label>Recorte personal capri-full.png (240 × 420)<input id="art" type="file" accept="image/png" /></label>
+      <form id="connection">
+        <label>WebSocket seguro del daemon<input id="url" type="url" placeholder="wss://tu-daemon/ws" required /></label>
+        <label>Token del dispositivo<input id="token" type="password" autocomplete="off" required /></label>
+        <button>Conectar</button><button id="disconnect" type="button">Desconectar</button>
+      </form>
+    </details>
+    <section id="cards" aria-label="Viñetas recientes" aria-live="polite"></section>
+  </main>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

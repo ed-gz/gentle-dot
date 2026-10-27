@@ -1,0 +1,19 @@
+{
+  "name": "@gentle-dot/ios",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@gentle-dot/ui": "workspace:*",
+    "@gentle-dot/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^8.3.3"
+  }
+}

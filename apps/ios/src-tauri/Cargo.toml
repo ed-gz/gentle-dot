@@ -1,0 +1,19 @@
+[package]
+name = "capri-ios"
+version = "0.1.0"
+description = "Capri iOS shell"
+edition = "2021"
+publish = false
+
+[lib]
+name = "capri_ios_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

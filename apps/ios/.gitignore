@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+src-tauri/target/
+src-tauri/derived/
+src-tauri/gen/
+src-tauri/icons/*.png
+src-tauri/icons/*.ico
+src-tauri/icons/*.icns
+src-tauri/icons/ios/
+src-tauri/icons/android/
