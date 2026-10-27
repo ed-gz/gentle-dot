@@ -16,7 +16,11 @@ it('loads local intro drawings per beat and never a legacy atlas',async()=>{
  let elapsed=0;
  for(const [time,name] of [[1100,'intro-grab.webp'],[1800,'intro-smear.webp'],[2150,'intro-happy.webp'],[2600,'face-calm.png'],[2800,'intro-mouth1.webp'],[3100,'intro-mouth2.webp'],[3400,'intro-mouth3.webp'],[3600,'intro-wave1.webp'],[3900,'intro-wave2.webp'],[4200,'intro-wave3.webp'],[4400,'intro-grab.webp'],[4800,'intro-happy.webp'],[6200,'intro-smear.webp']] as const){
   await act(async()=>{vi.advanceTimersByTime(time-elapsed);});elapsed=time;
-  expect(view.container.querySelector('.capri-intro-head img')).toHaveAttribute('src',`data:image/${name.endsWith('webp')?'webp':'png'};base64,${btoa(name)}`);
+  const scene=name.startsWith('intro-');
+  const img=view.container.querySelector(scene?'img.capri-intro-scene':'.capri-intro-head img');
+  expect(img).not.toBeNull();
+  expect(img).toHaveAttribute('src',`data:image/${name.endsWith('webp')?'webp':'png'};base64,${btoa(name)}`);
+  expect(view.container.querySelectorAll('.capri-intro-scene')).toHaveLength(scene?1:0);
  }
  expect(view.container.querySelector('svg image')).toBeNull();view.unmount();
 });

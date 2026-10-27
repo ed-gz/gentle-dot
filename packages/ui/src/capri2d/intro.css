@@ -1,6 +1,7 @@
 /* Spawn choreography adapted from capri-desktop (MIT); see ./LICENSE. */
 html[data-surface="capri-intro"],html[data-surface="capri-intro"] body,html[data-surface="capri-intro"] #root{margin:0;width:100%;height:100%;overflow:hidden;background:transparent!important;pointer-events:none}
 .capri-intro{position:fixed;inset:0;overflow:hidden;pointer-events:none;color:#ff315d;font-family:monospace}
+.capri-intro-scene{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .capri-intro *{pointer-events:none!important;box-sizing:border-box}
 .capri-intro-limbs{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}
 .capri-intro-edge{fill:none;stroke:#ff315d;stroke-width:6;filter:drop-shadow(0 0 6px #ff315d);animation:capri-edge-crackle 240ms steps(2,end) infinite}

@@ -10,7 +10,7 @@ vi.mock('../src/capri-faces/CapriFaceSprite.tsx',()=>({CapriFaceSprite:({action}
 const native=vi.mocked(invoke);
 beforeEach(()=>{
  vi.useFakeTimers();
- native.mockReset();native.mockResolvedValue({introActive:true});
+ native.mockReset();native.mockImplementation(((command:string,args?:unknown)=> command==='capri2d_asset'&&!!args&&typeof (args as {name?:string}).name==='string' ? Promise.resolve([...new TextEncoder().encode((args as {name:string}).name)]) : Promise.resolve({introActive:true})) as typeof native);
  vi.stubGlobal('matchMedia',()=>({matches:false,addEventListener:vi.fn(),removeEventListener:vi.fn()}));
 });
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();delete window.__CAPRI_INTRO__;delete document.documentElement.dataset.capriIntro;});
@@ -25,14 +25,14 @@ describe('temporary intro surface',()=>{
   expect(container.querySelector('[data-beat="crackle"]')).not.toBeNull();
   expect(container.querySelector('button,a,input')).toBeNull();
  });
- it('types her name, waves, shatters and unfolds at the supplied laptop-local spot',()=>{
+ it('types her name, waves, shows full-screen scenes and unfolds at the supplied laptop-local spot',async()=>{
   window.__CAPRI_INTRO__={ready:true,started:performance.now(),target:{x:900,y:500,width:144,height:204}};
   const {container}=render(<CapriIntro/>);
-  act(()=>vi.advanceTimersByTime(3300));expect(container.querySelector('.capri-intro-tag span')).toHaveTextContent('CAPRI');
-  act(()=>vi.advanceTimersByTime(450));expect(container.querySelector('[data-beat="wave"]')).not.toBeNull();
-  act(()=>vi.advanceTimersByTime(1500));expect(container.querySelectorAll('.capri-intro-shard')).toHaveLength(24);
-  act(()=>vi.advanceTimersByTime(2100));expect(container.querySelector('.capri-intro-unfold')).toBeNull();
-  act(()=>vi.advanceTimersByTime(800));expect(container).toBeEmptyDOMElement();
+  await act(async()=>{vi.advanceTimersByTime(3300);});expect(container.querySelector('.capri-intro-tag span')).toHaveTextContent('CAPRI');
+  await act(async()=>{vi.advanceTimersByTime(450);});expect(container.querySelector('[data-beat="wave"]')).not.toBeNull();
+  await act(async()=>{vi.advanceTimersByTime(1500);});expect(container.querySelector('img.capri-intro-scene')).not.toBeNull();expect(container.querySelectorAll('.capri-intro-shard')).toHaveLength(0);
+  await act(async()=>{vi.advanceTimersByTime(2100);});expect(container.querySelector('.capri-intro-unfold')).toBeNull();
+  await act(async()=>{vi.advanceTimersByTime(800);});expect(container).toBeEmptyDOMElement();
  });
  it('reduced motion and document occlusion never leave a flashing surface',()=>{
   vi.stubGlobal('matchMedia',()=>({matches:true,addEventListener:vi.fn(),removeEventListener:vi.fn()}));

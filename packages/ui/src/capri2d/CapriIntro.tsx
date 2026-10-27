@@ -54,8 +54,10 @@ export function CapriIntro() {
  const headLift=beat==='haul'?(1-ease(p))*h*.6:0;
  const cel=Math.min(3,1+Math.floor(p*3));
  const faceName=beat==='blink'?'face-calm.png':beat==='hi'?`intro-mouth${cel}.webp`:beat==='wave'?`intro-wave${cel}.webp`:beat==='haul'||beat==='regrab'?'intro-grab.webp':beat==='look'||beat==='glance'||beat==='shatter'?'intro-happy.webp':'intro-smear.webp';
- const faceSource=art[faceName]??(beat==='hi'?art['face-smug.png']:undefined);
- const arms=stage>=1&&stage<14;
+ const sceneName=faceName.startsWith('intro-')?faceName:undefined;
+ const sceneSource=sceneName?art[sceneName]:undefined;
+ const faceSource=!sceneSource?(art[faceName]??(beat==='hi'?art['face-smug.png']:undefined)):undefined;
+ const arms=stage>=1&&stage<14&&!sceneSource;
  const right=stage>=2;
  const wave=beat==='wave';
  const armEndY=h*.4;
@@ -77,15 +79,16 @@ export function CapriIntro() {
     </g>;
    })}
   </svg>}
-  {beat==='shatter'&&Array.from({length:24},(_,i)=>{
+  {!sceneSource&&beat==='shatter'&&Array.from({length:24},(_,i)=>{
    const right=i%2===0;
    const inward=Math.floor(i/2)/12;
    const q=Math.max(0,(p-inward*.55)/.45);
    return <i key={i} className="capri-intro-shard" style={{left:`${(right?1-inward*.45:inward*.45)*100}%`,top:`${40+q*30}%`,opacity:q>0?1-q:0,transform:`translate(${(right?1:-1)*q*60}px,${q*70}px) rotate(${i*27+q*180}deg)`}}/>;
   })}
-  {stage>=3&&<div className={`capri-intro-head ${beat==='split'?'capri-intro-split':''}`} style={{left:x,top:y+headLift,width:headSize,height:headSize,transform:`translate(-50%,-50%) scaleY(${beat==='crouch'?1-p*.4:beat==='unfold'?1-p:1}) rotate(${beat==='look'?Math.sin(p*Math.PI*2)*8:beat==='glance'?12:0}deg)`}}>
+  {!sceneSource&&stage>=3&&<div className={`capri-intro-head ${beat==='split'?'capri-intro-split':''}`} style={{left:x,top:y+headLift,width:headSize,height:headSize,transform:`translate(-50%,-50%) scaleY(${beat==='crouch'?1-p*.4:beat==='unfold'?1-p:1}) rotate(${beat==='look'?Math.sin(p*Math.PI*2)*8:beat==='glance'?12:0}deg)`}}>
    {faceSource&&<img src={faceSource} alt="" style={{width:'100%',height:'100%',objectFit:'contain'}}/>}
   </div>}
+  {sceneSource&&<img className="capri-intro-scene" src={sceneSource} alt=""/>}
   {stage>=9&&stage<=12&&<div className="capri-intro-tag" style={{left:w*.5+size*.35,top:h*.3}}><b>hi</b><span>{'CAPRI'.slice(0,Math.min(5,Math.floor((t-2750)/95)))}</span></div>}
   {(beat==='impact-white'||beat==='impact-ink')&&<div className="capri-intro-flash" style={{background:beat==='impact-white'?'#fff9e5':'#08080d'}}/>}
   <small className="capri-intro-skip" style={{left:target.x,top:Math.min(h-24,target.y+target.height)}}>Clic en Capri pequeña para omitir</small>
