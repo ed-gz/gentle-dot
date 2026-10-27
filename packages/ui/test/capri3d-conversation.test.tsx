@@ -144,8 +144,7 @@ it("shows working actions, counts quiet seconds and speaks once per thinking epi
  const activity={phase:"working" as const,lastAction:{verb:"EDITO",subject:"gigs.ts",at:new Date().toISOString()}};
  const view=render(<CapriConversation {...props} activity={activity} episodeKey="s1"/>);
  expect(screen.getByText("SUPERVISO gigs.ts")).toBeVisible();expect(layout).toHaveBeenLastCalledWith(true,false);
- act(()=>vi.advanceTimersByTime(14_000));expect(screen.queryByText(/PIENSO/)).toBeNull();
- act(()=>vi.advanceTimersByTime(1000));expect(screen.getByText("PIENSO… 15s")).toHaveAttribute("data-thinking","true");
+ act(()=>vi.advanceTimersByTime(15_000));expect(screen.queryByText(/PIENSO/)).toBeNull();
  act(()=>vi.advanceTimersByTime(24_000));expect(say).not.toHaveBeenCalled();
  act(()=>vi.advanceTimersByTime(1000));expect(say).toHaveBeenCalledExactlyOnceWith("Lo estoy pensando con calma.");
  view.rerender(<CapriConversation {...props} activity={{...activity}} episodeKey="s1"/>);

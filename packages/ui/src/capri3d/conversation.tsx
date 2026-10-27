@@ -148,7 +148,7 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
  },[actionKey]);
 // Sessions with older adapters still report coder verbs; the ticker shows them as supervisor narration.
 const SUPERVISOR_VERBS=new Map(["LEO,CONSULTO","BUSCO,EXAMINO","EDITO,SUPERVISO","ESCRIBO,SUPERVISO","EJECUTO,DIRIJO"].map(pair=>pair.split(",") as [string,string]));
-const ticker=validAction ? quiet>=15 ? `PIENSO… ${quiet}s` : `${SUPERVISOR_VERBS.get(validAction.verb) ?? validAction.verb} ${validAction.subject}` : undefined;
+const ticker=validAction && quiet<15 ? `${SUPERVISOR_VERBS.get(validAction.verb) ?? validAction.verb} ${validAction.subject}` : undefined;
  const voice=useVoice(state,send,{inputOnly:true,enabled:open});
  const [draft,setDraft]=useState(""),[error,setError]=useState<string>(),[pending,setPending]=useState(false);
  const [shown,setShown]=useState(speech);
