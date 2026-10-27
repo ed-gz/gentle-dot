@@ -117,12 +117,19 @@ impl ShellWindows {
 
     #[cfg(target_os = "linux")]
     fn restore_dot_content(&self) -> Result<(), String> {
+        use gtk::prelude::*;
         crate::computer::LinuxDesktop::set_hidden_rose(None);
         let mut saved = self.dot_opacity.lock().unwrap();
         let Some(opacity) = *saved else { return Ok(()) };
         let dot = self.get(Part::Dot).ok_or("the rose window is missing")?;
         let native: gtk::Window = dot.gtk_window().map_err(err)?.into();
         unmask_dot_content(&native, opacity)?;
+        if desktop_companion::enabled(&self.app) {
+            desktop_companion::restore_shape(&self.app);
+        } else {
+            // The ordinary rose has no companion silhouette to restore.
+            native.input_shape_combine_region(None);
+        }
         *saved = None;
         Ok(())
     }
@@ -254,7 +261,8 @@ fn mask_dot_content(native: &gtk::Window) -> Result<f64, String> {
 fn unmask_dot_content(native: &gtk::Window, opacity: f64) -> Result<(), String> {
     use gtk::prelude::*;
     let content = native.child().ok_or("the rose content is missing")?;
-    native.input_shape_combine_region(None);
+    // Keep the empty capture mask until the caller restores the actual silhouette.
+    // Resetting to None briefly makes the entire transparent window swallow clicks.
     content.set_opacity(opacity);
     native.queue_draw();
     native.display().flush();

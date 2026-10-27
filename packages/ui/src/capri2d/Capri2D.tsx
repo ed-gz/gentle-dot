@@ -2,13 +2,13 @@
 // Artwork is not included; personal-use assets are loaded locally.
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
-import { createEngine, frameAt } from "./engine.ts";
+import { createEngine, frameAt, type InputRectangle } from "./engine.ts";
 import { RigDirector, type RigIntent } from "./director.ts";
 import { RigFx } from "./fx.ts";
 let warned = false;
 export interface Capri2DProps {
  enabled: boolean; visible: boolean; reduced: boolean;
- onActive(active: boolean): void; onMask(mask: number[]): void;
+ onActive(active: boolean): void; onMask(mask: number[], bodyRects?:InputRectangle[]): void;
  intent?: RigIntent;
 }
 export function Capri2D({ enabled, visible, reduced, onActive, onMask, intent = {} }: Capri2DProps) {
@@ -58,8 +58,9 @@ export function Capri2D({ enabled, visible, reduced, onActive, onMask, intent = 
      const sample = director.sample(now,state.reduced);
      const mask = engine.draw(sample.pose, frame);
      if (!state.reduced) for (const cue of sample.cues) fx?.cue(cue,now,state.intent.direction);
-     const key = mask.join("");
-     if (key !== previousMask) { previousMask = key; state.onMask(mask); }
+     const bodyRects=engine.inputRectangles();
+     const key = JSON.stringify(bodyRects);
+     if (key !== previousMask) { previousMask = key; state.onMask(mask,bodyRects); }
     }
     if (!state.reduced) fx?.draw(now);
    }
@@ -70,7 +71,7 @@ export function Capri2D({ enabled, visible, reduced, onActive, onMask, intent = 
   const restored = () => {
    if (!live || !sourceImage) return;
    try {
-    engine = createEngine(element,sourceImage); last=-1;
+    engine = createEngine(element,sourceImage); last=-1; previousMask="";
     current.current.onActive(true); tick(performance.now());
    } catch { fail(); }
   };

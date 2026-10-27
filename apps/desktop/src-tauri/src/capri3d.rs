@@ -81,7 +81,7 @@ pub struct Surface {
     pub(crate) dragging: std::sync::atomic::AtomicBool,
 }
 #[derive(Default)]
-pub(crate) struct SurfaceState { pub active: bool, pub mask: Vec<u8>, pub bubble: bool, pub input: bool }
+pub(crate) struct SurfaceState { pub active: bool, pub mask: Vec<u8>, pub bubble: bool, pub input: bool, pub body_rects: Option<Vec<(i32,i32,i32,i32)>> }
 /// Compact laptop-friendly body; the renderer draws 240x340 internally and the canvas scales down.
 pub(crate) const BODY_WIDTH: i32 = 144;
 pub(crate) const BODY_HEIGHT: i32 = 204;
@@ -133,24 +133,53 @@ pub fn mask_region(mask: &[u8], width: i32, height: i32) -> Result<gtk::cairo::R
     }
     Ok(region)
 }
+/// None means legacy sprite input; Some(empty) means canvas not yet drawn and
+/// must pass through, never fall back to a large circle/rectangle.
+fn validate_body_rects(rects: &[(i32,i32,i32,i32)]) -> Result<(),String> {
+    if rects.len() > (BODY_WIDTH * BODY_HEIGHT) as usize || rects.iter().any(|&(x,y,w,h)| {
+        x < 0 || y < 0 || w <= 0 || h <= 0 || x.checked_add(w).is_none_or(|r| r > BODY_WIDTH) || y.checked_add(h).is_none_or(|b| b > BODY_HEIGHT)
+    }) { return Err("Silueta de Capri inválida".into()); }
+    Ok(())
+}
+fn surface_input_rectangles(state: &SurfaceState) -> Result<Option<Vec<(i32,i32,i32,i32)>>, String> {
+    if !state.active { return Ok(None); }
+    if let Some(body) = &state.body_rects {
+        validate_body_rects(body)?;
+        let (width,_) = surface_dimensions(state.bubble,state.input);
+        let left=(width-BODY_WIDTH)/2;
+        let top=if state.bubble { BUBBLE_HEIGHT } else { 0 };
+        let mut rects:Vec<_>=body.iter().map(|&(x,y,w,h)|(x+left,y+top,w,h)).collect();
+        if state.bubble { rects.push((0,0,width,BUBBLE_HEIGHT)); }
+        if state.input { rects.push((0,top+BODY_HEIGHT,width,INPUT_HEIGHT)); }
+        return Ok(Some(rects));
+    }
+    if state.mask.is_empty() { return Ok(Some(vec![])); }
+    let (width,height)=surface_dimensions(state.bubble,state.input);
+    mask_rectangles(&state.mask,width,height).map(Some)
+}
 #[cfg(target_os = "linux")]
 pub(crate) fn input_shape(app: &tauri::AppHandle, native: &gtk::Window) -> Result<bool, String> {
     use gtk::prelude::*;
     let s = app.state::<Surface>();
     let state = s.inner.lock().unwrap();
-    if !state.active { return Ok(false); }
-    // Use the requested logical size, not GTK's previous allocation during an asynchronous resize.
-    let (width, height) = surface_dimensions(state.bubble, state.input);
-    let region = mask_region(&state.mask, width, height)?;
+    let Some(rects) = surface_input_rectangles(&state)? else { return Ok(false); };
+    // Requested logical size, not GTK's previous allocation during asynchronous resize.
+    let region = gtk::cairo::Region::create();
+    for (x,y,w,h) in rects {
+        region.union_rectangle(&gtk::cairo::RectangleInt::new(x,y,w,h)).map_err(|e| e.to_string())?;
+    }
     native.input_shape_combine_region(Some(&region));
+    // Apply to the realized Wayland surface too; GTK's widget shape can lag a resize.
+    if let Some(window) = native.window() { window.input_shape_combine_region(&region,0,0); }
     Ok(true)
 }
 /// Query preferred form or publish a rendered silhouette. Only the companion can publish geometry.
 #[tauri::command]
-pub fn capri3d_surface(app: tauri::AppHandle, window: tauri::WebviewWindow, active: Option<bool>, mask: Option<Vec<u8>>, bubble: Option<bool>, input: Option<bool>) -> Result<bool, String> {
+pub fn capri3d_surface(app: tauri::AppHandle, window: tauri::WebviewWindow, active: Option<bool>, mask: Option<Vec<u8>>, bubble: Option<bool>, input: Option<bool>, body_rects: Option<Vec<(i32,i32,i32,i32)>>) -> Result<bool, String> {
     if window.label() != "dot" { return Err("Esta superficie pertenece a Capri".into()); }
     let preferred = crate::desktop_companion::preferred_3d(&app);
     if let Some(mask) = &mask { mask_rectangles(mask, BODY_WIDTH, BODY_HEIGHT)?; }
+    if let Some(rects) = &body_rects { validate_body_rects(rects)?; }
     if let Some(wanted) = active {
         let wanted = wanted && crate::desktop_companion::preferred_canvas(&app) && crate::desktop_companion::enabled(&app);
         let (changed, shift) = {
@@ -163,6 +192,9 @@ pub fn capri3d_surface(app: tauri::AppHandle, window: tauri::WebviewWindow, acti
             let input = wanted && input.unwrap_or(false);
             let changed = state.active != wanted || state.bubble != bubble || state.input != input;
             state.active = wanted;
+            // Every publication carries its mode's representation; no stale 2D
+            // pixel shape may survive a switch back to the coarse 3D renderer.
+            state.body_rects = if wanted { body_rects } else { None };
             state.bubble = bubble;
             state.input = input;
             if let Some(mask) = mask { state.mask = mask; }
@@ -313,6 +345,27 @@ mod tests {
         assert!(mask_rectangles(&mask, 240, 340).is_err());
     }
     #[cfg(target_os = "linux")]
+    #[test]
+    fn precise_body_region_keeps_transparent_pixels_outside_and_offsets_overlays() {
+        let mut state=SurfaceState{active:true,body_rects:Some(vec![(1,2,1,1)]),..Default::default()};
+        assert_eq!(surface_input_rectangles(&state).unwrap(),Some(vec![(1,2,1,1)]));
+        state.bubble=true; state.input=true;
+        let rects=surface_input_rectangles(&state).unwrap().unwrap();
+        assert!(rects.contains(&(89,154,1,1)));
+        assert!(rects.contains(&(0,0,320,152)));
+        assert!(rects.contains(&(0,356,320,88)));
+        assert!(validate_body_rects(&[(144,0,1,1)]).is_err());
+        assert!(validate_body_rects(&[(0,0,-1,1)]).is_err());
+    }
+    #[test]
+    fn inactive_input_region_is_not_a_full_window_and_missing_mask_fails_closed() {
+        assert_eq!(surface_input_rectangles(&SurfaceState::default()).unwrap(), None);
+        let state=SurfaceState{active:true,..Default::default()};
+        assert_eq!(surface_input_rectangles(&state).unwrap(),Some(vec![]));
+        let mut mask=vec![0;816]; mask[25]=1;
+        let rects=surface_input_rectangles(&SurfaceState{active:true,mask,..Default::default()}).unwrap().unwrap();
+        assert_eq!(rects,vec![(6,6,6,6)]);
+    }
     #[test]
     fn input_region_contains_only_mask_cells() {
         let mut mask = vec![0; 24 * 34];

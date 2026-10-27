@@ -61,6 +61,17 @@ interface Press {
 	target: HTMLButtonElement;
 }
 
+// Serialize precise 2D shapes with activation/deactivation too: a delayed draw
+// must not re-enable input after fallback or unmount.
+let surfacePublications=Promise.resolve();
+function publishCanvasSurface(active:boolean,mask?:number[],layout?:{bubble:boolean;input:boolean},bodyRects?:[number,number,number,number][]){
+ const publication=surfacePublications.then(async()=>{
+  if(bodyRects&&isTauri()) await invoke('capri3d_surface',{active,mask:mask??null,bubble:layout?.bubble??false,input:layout?.input??false,bodyRects});
+  else await publish3DSurface(active,mask,layout);
+ });
+ surfacePublications=publication.catch(()=>{});
+ return publication;
+}
 /** The native companion has its own preferences and window; web/mobile appearance is never read here. */
 export function DesktopCompanionSurface({
 	controls,
@@ -79,8 +90,9 @@ export function DesktopCompanionSurface({
 	const [failed3D, setFailed3D] = useState(false);
 	useEffect(() => { setFailed3D(false); }, [preferred3D, controls.state.enabled]);
 	const on3DActive = useCallback((active: boolean) => {
+  bodyInput.current=undefined;
 		setActive3D(active);
-		void publish3DSurface(active).catch(() => { if (active) setFailed3D(true); });
+		void publishCanvasSurface(active).catch(() => { if (active) setFailed3D(true); });
 	}, []);
 	const [chatOpen, setChatOpen] = useState(false);
 	const quickMessage = useRef({ chatOpen, toggle });
@@ -107,6 +119,7 @@ export function DesktopCompanionSurface({
 	}, [gesture]);
 	const [overlays, setOverlays] = useState({ bubble: false, input: false });
 	const maskState = useRef({ mask: Array<number>(816).fill(0), bubble: false, input: false });
+ const bodyInput=useRef<[number,number,number,number][]|undefined>(undefined);
 	const { state: chatState, send: chatSend } = useCompanionChat();
 	const [approval, setApproval] = useState<AgentApproval>();
  const [answeredQuestion,setAnsweredQuestion]=useState<string>();
@@ -122,17 +135,20 @@ export function DesktopCompanionSurface({
 		setOverlays(previous => previous.bubble === bubble && previous.input === input ? previous : { bubble, input });
 	}, []);
 	const publishMask = useMemo(() => createOverlayPublisher((mask, layout) => {
-		void publish3DSurface(true, mask, layout).catch(() => setFailed3D(true));
+		void publishCanvasSurface(true, mask, layout).catch(() => setFailed3D(true));
 	}), [active3D]);
-	const on3DMask = useCallback((mask: number[]) => {
+	const on3DMask = useCallback((mask: number[],bodyRects?:[number,number,number,number][]) => {
 		const current = maskState.current;
 		current.mask = mask;
-		publishMask(mask, current.bubble, current.input);
+  bodyInput.current=bodyRects;
+  if(bodyRects) void publishCanvasSurface(true,mask,current,bodyRects).catch(()=>setFailed3D(true));
+		else publishMask(mask, current.bubble, current.input);
 	}, [publishMask]);
 	useEffect(() => {
 		if (!active3D) return;
 		const current = maskState.current;
-		publishMask(current.mask, overlays.bubble, overlays.input);
+  if(bodyInput.current) void publishCanvasSurface(true,current.mask,overlays,bodyInput.current).catch(()=>setFailed3D(true));
+		else publishMask(current.mask, overlays.bubble, overlays.input);
 	}, [active3D, overlays, publishMask]);
 	const latest = useRef({ controls, inControl, reduced: false });
 	const [awake, setAwake] = useState(() => !document.hidden);

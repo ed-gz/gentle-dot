@@ -241,3 +241,5 @@ L91 User: "quita lo de ejecuto comando, no entiendo por que esas interacciones s
 
 L92 User: "quita lio de dirijo la operacion en curso tambien, osea no es aventarse comentarios genericos". Shipped: observeCompanionActions narrates ONLY concrete allowlisted work (VERIFICO tests, VALIDO build, REVISOPROGRESO git) — read/grep/edit/unknown/non-allowlisted bash record nothing; legacy generic verbs suppressed display-side too.
 L93 User: bug - Capri window has a large invisible box blocking clicks, must be sprite-sized only; roaming must avoid herdr agents area, allowed in status right slide and spaces.
+
+L94 T51 shipped in source: exact-pixel silhouette input (alpha runs above threshold 24, GTK/GDK shaping, fail-closed empty, FX click-through, context-restoration republish) so only Capri body is interactive; roamZone.xRatio default 0.5 (right band of herdr, left-30% exclusion under 700px, fail-closed small bands) persisted in desktop-companion.json; capture restore keeps silhouette. Focused 129/129, full UI 1237, cargo 542, tsc 0; Wayland click-through needs-device.

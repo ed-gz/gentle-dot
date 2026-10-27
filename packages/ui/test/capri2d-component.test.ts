@@ -1,12 +1,12 @@
 import { createElement } from "react";
 import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), draw: vi.fn(), dispose: vi.fn(), fxCue:vi.fn(),fxDraw:vi.fn(),fxClear:vi.fn() }));
+const mocks = vi.hoisted(() => ({ invoke: vi.fn(), draw: vi.fn(), inputRectangles:vi.fn(), dispose: vi.fn(), fxCue:vi.fn(),fxDraw:vi.fn(),fxClear:vi.fn() }));
 vi.mock("../src/capri2d/fx.ts",()=>({RigFx:class{cutins={};cue=mocks.fxCue;draw=mocks.fxDraw;clear=mocks.fxClear;}}));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("../src/capri2d/engine.ts", async original => ({
  ...await original<typeof import("../src/capri2d/engine.ts")>(),
- createEngine: () => ({ draw: mocks.draw, dispose: mocks.dispose }),
+ createEngine: () => ({ draw: mocks.draw, inputRectangles:mocks.inputRectangles, dispose: mocks.dispose }),
 }));
 import { Capri2D } from "../src/capri2d/Capri2D.tsx";
 let nextFrame: FrameRequestCallback;
@@ -14,6 +14,7 @@ beforeEach(() => {
  vi.clearAllMocks();
  mocks.invoke.mockResolvedValue(new ArrayBuffer(4));
  mocks.draw.mockReturnValue(Array(816).fill(1));
+ mocks.inputRectangles.mockReturnValue([[10,20,1,1]]);
  vi.stubGlobal("Image", class { naturalWidth=240; naturalHeight=420; src=""; decode=vi.fn().mockResolvedValue(undefined); });
  vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => { nextFrame=callback; return 7; }));
  vi.stubGlobal("cancelAnimationFrame", vi.fn());
@@ -31,6 +32,7 @@ it("loads local artwork and publishes/deduplicates its alpha; hides and disposes
  for(const name of ['cutin-grin.png','cutin-laugh.png','cutin-eyes.png']) expect(mocks.invoke).toHaveBeenCalledWith('capri2d_asset',{name});
  expect(onActive).toHaveBeenCalledWith(true);
  expect(onMask).toHaveBeenCalledTimes(1);
+ expect(onMask).toHaveBeenLastCalledWith(Array(816).fill(1),[[10,20,1,1]]);
  act(()=>nextFrame(2000));
  expect(onMask).toHaveBeenCalledTimes(1);
  view.rerender(createElement(Capri2D,{...props,visible:false}));
@@ -72,6 +74,7 @@ it('rebuilds GPU resources after context restoration without fetching the textur
  expect(props.onActive).toHaveBeenLastCalledWith(false);
  act(()=>canvas.dispatchEvent(new Event('webglcontextrestored')));
  expect(props.onActive).toHaveBeenLastCalledWith(true);
+ expect(props.onMask).toHaveBeenCalledTimes(2); // unchanged body must republish after input deactivation
  expect(mocks.invoke.mock.calls.filter(call=>call[1]?.name==='capri-full.png')).toHaveLength(1);
  view.unmount();expect(mocks.dispose).toHaveBeenCalledTimes(2);log.mockRestore();
 });

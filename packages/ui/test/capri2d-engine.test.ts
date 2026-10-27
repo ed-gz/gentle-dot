@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { UNIFORMS } from "../src/capri2d/shaders.ts";
-import { alphaMask, createEngine, frameAt, samplePose, sampleSheet, STAND } from "../src/capri2d/engine.ts";
+import { alphaInputRectangles, alphaMask, createEngine, frameAt, samplePose, sampleSheet, STAND } from "../src/capri2d/engine.ts";
 it("projects alpha bottom-up into the native 24x34 grid, ignoring transparent pixels", () => {
  const pixels = new Uint8Array(144*204*4);
  expect(alphaMask(pixels,144,204).every(cell => cell === 0)).toBe(true);
@@ -8,6 +8,12 @@ it("projects alpha bottom-up into the native 24x34 grid, ignoring transparent pi
  const mask = alphaMask(pixels,144,204);
  expect(mask).toHaveLength(816); expect(mask[33*24]).toBe(1); expect(mask[23]).toBe(1);
  expect(mask.reduce((a,b)=>a+b,0)).toBe(2);
+});
+it("shapes input to individual visible pixels, not the coarse grid cell", () => {
+ const pixels=new Uint8Array(144*204*4);
+ pixels[3]=255; pixels[7]=255; pixels[(143*4)+3]=255;
+ expect(alphaInputRectangles(pixels,144,204)).toEqual([[0,203,2,1],[143,203,1,1]]);
+ expect(alphaInputRectangles(new Uint8Array(144*204*4),144,204)).toEqual([]);
 });
 it("maps elapsed milliseconds to drawings on twos", () => {
  expect(frameAt(0)).toBe(0); expect(frameAt(83)).toBe(0);

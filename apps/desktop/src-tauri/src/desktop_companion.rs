@@ -47,6 +47,11 @@ pub enum RenderMode {
     #[serde(rename = "3d")] ThreeD,
     #[serde(rename = "2d")] TwoD,
 }
+/// Left exclusion within HERDR; narrower windows use the 30% fallback.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub struct RoamZone { pub x_ratio: f64 }
+impl Default for RoamZone { fn default() -> Self { Self { x_ratio: 0.5 } } }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct Preferences {
@@ -55,6 +60,7 @@ pub struct Preferences {
     pub appearances: bool,
     pub pinned: bool,
     pub areas: Vec<AllowedArea>,
+    pub roam_zone: RoamZone,
     /// None selects 3D when the personal assets have been installed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form_3d: Option<bool>,
@@ -71,6 +77,7 @@ impl Default for Preferences {
             appearances: true,
             pinned: false,
             areas: Vec::new(),
+            roam_zone: RoamZone::default(),
             pin_position: None,
             form_3d: None,
             render_mode: None,
@@ -85,6 +92,8 @@ pub struct Patch {
     pub appearances: Option<bool>,
     pub pinned: Option<bool>,
     pub areas: Option<Vec<AllowedArea>>,
+    #[serde(rename = "roamZone")]
+    pub roam_zone: Option<RoamZone>,
     pub form_3d: Option<bool>,
     #[serde(rename = "renderMode")]
     pub render_mode: Option<RenderMode>,
@@ -197,6 +206,7 @@ impl Preferences {
             appearances: patch.appearances.unwrap_or(self.appearances),
             pinned: patch.pinned.unwrap_or(self.pinned),
             areas: patch.areas.unwrap_or_else(|| self.areas.clone()),
+            roam_zone: patch.roam_zone.unwrap_or(self.roam_zone),
             pin_position: self.pin_position.clone(),
             form_3d: patch.form_3d.or(self.form_3d),
             render_mode: patch.render_mode.or_else(|| patch.form_3d.map(|v| if v { RenderMode::ThreeD } else { RenderMode::Sprites })).or(self.render_mode),
@@ -205,6 +215,9 @@ impl Preferences {
         Ok(next)
     }
     fn validate(&mut self) -> Result<(), String> {
+        if !self.roam_zone.x_ratio.is_finite() || !(0. ..1.).contains(&self.roam_zone.x_ratio) {
+            return Err("La banda de Capri debe empezar entre 0 y 1".into());
+        }
         if self.areas.len() > 64 {
             return Err("Capri admite hasta 64 zonas de pantalla".into());
         }
@@ -296,6 +309,14 @@ impl Area {
         )
     }
 }
+/// Fail closed rather than widening into the agents area when the body cannot fit.
+fn roam_zone(rect: Area, zone: RoamZone, width: i32, height: i32) -> Option<Area> {
+    if !zone.x_ratio.is_finite() || !(0. ..1.).contains(&zone.x_ratio) { return None; }
+    let ratio = if rect.width < 700 { 0.3 } else { zone.x_ratio };
+    let excluded = (f64::from(rect.width) * ratio).ceil() as i32;
+    let band = Area { x: rect.x.checked_add(excluded)?, width: rect.width - excluded, ..rect };
+    (width > 0 && height > 0 && band.width >= width && band.height >= height).then_some(band)
+}
 // Window ledge intent adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
 // Hyprland at/size coordinates are already logical; only monitor dimensions need scaling.
 fn roam_region(clients: &Value, values: &Value, width: i32, height: i32) -> Option<(Area, Area, bool)> {
@@ -323,6 +344,24 @@ fn roam_region(clients: &Value, values: &Value, width: i32, height: i32) -> Opti
 #[cfg(test)]
 mod roam_tests {
     use super::*;
+    #[test]
+    fn right_band_excludes_agents_and_narrow_fallback() {
+        let rect = Area { x:100, y:50, width:1000, height:700 };
+        assert_eq!(roam_zone(rect, RoamZone::default(), 144, 204), Some(Area{x:600,width:500,..rect}));
+        let narrow = Area {width:600,..rect};
+        assert_eq!(roam_zone(narrow, RoamZone::default(),144,204),Some(Area{x:280,width:420,..narrow}));
+        assert_eq!(roam_zone(rect,RoamZone{x_ratio:0.7},144,204),Some(Area{x:800,width:300,..rect}));
+        assert!(roam_zone(Area{width:180,..rect},RoamZone::default(),144,204).is_none());
+        let mut prefs = Preferences::default();
+        prefs.roam_zone = RoamZone{x_ratio:f64::NAN};
+        assert!(prefs.validate().is_err());
+        let saved: Preferences = serde_json::from_str(r#"{"roamZone":{"xRatio":0.65}}"#).unwrap();
+        assert_eq!(serde_json::to_value(&saved).unwrap()["roamZone"]["xRatio"],0.65);
+        let changed=saved.patched(Patch{motion:Some(false),..Default::default()}).unwrap();
+        assert_eq!(changed.roam_zone.x_ratio,0.65);
+        assert!(changed.patched(Patch{roam_zone:Some(RoamZone{x_ratio:1.}),..Default::default()}).is_err());
+        assert_eq!(roam_zone(Area{width:700,..rect},RoamZone{x_ratio:0.6},144,204).unwrap().x,520);
+    }
     #[test]
     fn herdr_region_is_laptop_only_and_scaled() {
         let ms = serde_json::json!([
@@ -2029,9 +2068,14 @@ impl Controller {
         if self.app.state::<crate::capri3d::Surface>().inner.lock().unwrap().input
             || self.inner.lock().unwrap().context.cue.as_ref().is_some_and(|cue| matches!(cue.kind, Kind::Question | Kind::Attention)) { return Ok(()); }
         let dot = resolve(crate::platform::DOT_TITLE)?;
-        let Some((laptop, region, _)) = roam_region(&query("clients")?, &query("monitors")?, dot.width, dot.height) else {
+        let Some((laptop, region, herdr)) = roam_region(&query("clients")?, &query("monitors")?, dot.width, dot.height) else {
             self.paint(false)?; return Ok(());
         };
+        let region = if herdr {
+            let zone = self.inner.lock().unwrap().prefs.roam_zone;
+            let Some(region) = roam_zone(region, zone, dot.width, dot.height) else { return Ok(()); };
+            region
+        } else { region };
         let (x,y) = region.clamp_rect(x,y,dot.width,dot.height);
         let (x,y) = laptop.clamp_rect(x,y,dot.width,dot.height);
         if (x,y) == (dot.x,dot.y) { return Ok(()); }
@@ -2147,7 +2191,7 @@ impl Controller {
             let feed = (|| -> Result<Value, String> {
                 let dot = resolve(crate::platform::DOT_TITLE)?;
                 let (laptop, region, herdr) = roam_region(&query("clients")?, &query("monitors")?, dot.width, dot.height).ok_or("eDP-1 no disponible")?;
-                Ok(serde_json::json!({"laptop":laptop,"region":region,"herdr":herdr,"x":dot.x,"y":dot.y,"width":dot.width,"height":dot.height}))
+                Ok(serde_json::json!({"laptop":laptop,"region":region,"herdr":herdr,"roamZone":self.inner.lock().unwrap().prefs.roam_zone,"x":dot.x,"y":dot.y,"width":dot.width,"height":dot.height}))
             })().ok();
             let _ = self.app.emit("dot://roam-region", feed);
         }
@@ -3204,7 +3248,7 @@ mod tests {
     #[test]
     fn travel_signal_is_transient_and_cannot_enter_saved_preferences() {
         let value = serde_json::to_value(Preferences::default()).unwrap();
-        assert_eq!(value.as_object().unwrap().len(), 5);
+        assert_eq!(value.as_object().unwrap().len(), 6); // includes persisted roamZone
         assert!(value.get("travelling").is_none());
         let now = Instant::now();
         let mut travel = TravelPulse::default();

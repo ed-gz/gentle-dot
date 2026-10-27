@@ -75,8 +75,25 @@ export function createEngine(canvas: HTMLCanvasElement, image: HTMLImageElement)
    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
    gl.readPixels(0,0,144,204,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
    return alphaMask(pixels,144,204);
-  },dispose,
+  },
+  inputRectangles:()=>alphaInputRectangles(pixels,144,204),
+  dispose,
  };
+}
+export type InputRectangle = [number,number,number,number];
+/** Exact logical-pixel runs from the same readback as the visible body.
+ * No extra GPU readback and no hit area for the decorative FX canvas. */
+export function alphaInputRectangles(pixels:Uint8Array,width:number,height:number):InputRectangle[] {
+ const rects:InputRectangle[]=[];
+ for(let y=height-1;y>=0;y--){
+  let start=-1;
+  for(let x=0;x<=width;x++){
+   const hit=x<width&&pixels[(y*width+x)*4+3]!>24;
+   if(hit&&start<0)start=x;
+   if(!hit&&start>=0){rects.push([start,height-1-y,x-start,1]);start=-1;}
+  }
+ }
+ return rects;
 }
 /** Bottom-up WebGL alpha -> existing top-down 24x34 native silhouette. */
 export function alphaMask(pixels: Uint8Array,width: number,height: number): number[] {

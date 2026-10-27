@@ -59,10 +59,23 @@ it.each(["3d", "2d"] as const)("SUPER+C toggles quick entry closed in %s mode; h
 vi.mock("../src/capri2d/Capri2D.tsx", async () => {
  const { selectAct } = await import("../src/capri2d/director.ts");
  const { useEffect } = await import("react");
- return { Capri2D: ({intent = {}, onActive}: {intent?: import("../src/capri2d/director.ts").RigIntent; onActive(active: boolean): void}) => {
-  useEffect(() => { if (quickEntry.active) onActive(true); }, [onActive]);
+ return { Capri2D: ({intent = {}, onActive, onMask}: {intent?: import("../src/capri2d/director.ts").RigIntent; onActive(active: boolean): void; onMask(mask:number[],rects?:[number,number,number,number][]):void}) => {
+  useEffect(() => { if (quickEntry.active) onActive(true); return ()=>onActive(false); }, [onActive]);
+  useEffect(() => { if(quickEntry.active) onMask(Array(816).fill(0),[[10,20,1,1]]); },[onMask]);
   return <canvas data-testid="capri2d" data-act={selectAct(intent)} />;
  } };
+});
+it('publishes exact 2D body pixels through native input and retains them across composer resize',async()=>{
+ quickEntry.active=true;
+ const {invoke}=await import('@tauri-apps/api/core');
+ const view=render(<DesktopCompanionSurface controls={controls({renderMode:'2d'})} agentState='idle' connected toggle={vi.fn()} startDrag={vi.fn()} />);
+ await act(async()=>{});
+ expect(invoke).toHaveBeenCalledWith('capri3d_surface',expect.objectContaining({active:true,bodyRects:[[10,20,1,1]],input:false}));
+ act(()=>quickEntry.handlers.get('dot://capri-message')!());
+ await act(async()=>{});
+ expect(invoke).toHaveBeenLastCalledWith('capri3d_surface',expect.objectContaining({active:true,bodyRects:[[10,20,1,1]],input:true}));
+ view.unmount();await act(async()=>{});
+ expect(invoke).toHaveBeenLastCalledWith('capri3d_surface',expect.objectContaining({active:false}));
 });
 it('receives a laptop feed, moves only in 2D, and holds while quick composer is open', async () => {
  quickEntry.active=true;
