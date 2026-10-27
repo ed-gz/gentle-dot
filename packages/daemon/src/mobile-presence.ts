@@ -45,10 +45,13 @@ export class MobilePresence {
 	private humanSignal = false;
 	private readonly phones = new Map<string, Phone>();
 
-	constructor(
-		private readonly now: () => number = Date.now,
-		private readonly onRelease?: (key: string, summary: PresenceSummary) => void,
-	) {}
+	private now: () => number;
+	private readonly onRelease?: (key: string, summary: PresenceSummary) => void;
+
+	constructor(now: () => number = Date.now, onRelease?: (key: string, summary: PresenceSummary) => void) {
+		this.now = now;
+		this.onRelease = onRelease;
+	}
 
 	sample(idle: boolean | undefined, humanAt?: number, humanSignal = false): void {
 		const now = this.now();
