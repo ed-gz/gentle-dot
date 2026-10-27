@@ -1,4 +1,4 @@
-// Action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+// Question and action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
 import { useEffect, useRef, useState } from "react";
 import type { ConnectionInfo } from "./client.ts";
 import type {
@@ -121,8 +121,20 @@ export async function focusCompanionSession(
 }
 
 type WorkingSession = CompanionSessionSnapshot["sessions"][number];
+/** Reuse supplied desktop rectangles only; stale editor observations are not targets. */
+export function questionPointingTarget(session: WorkingSession | undefined, now = Date.now()) {
+ if (!session?.pendingQuestion) return;
+ const geometry=session.activity.geometry;
+ const age=now-Date.parse(geometry?.observedAt ?? "");
+ const rect=session.targets.sidebar ?? freshEditorTarget(session.targets.composer,now) ??
+  (geometry?.version===1 && Number.isFinite(age) && age>=-1000 && age<=2500 ? geometry.rect : undefined);
+ if (!rect || ![rect.x,rect.y,rect.width,rect.height].every(Number.isFinite) || rect.width<=0 || rect.height<=0)return;
+ // Labels are transport metadata, never inferred from the question text.
+ const label=session.label.replace(/[\r\n\t]/g," ").trim().slice(0,64) || session.paneId.slice(0,64);
+ return {rect,label};
+}
 /** Native context cues intentionally omit action metadata. Read the same small cache in the 3D WebView. */
-export function useWorkingSession(info: ConnectionInfo | undefined, enabled: boolean) {
+export function useWorkingSession(info: ConnectionInfo | undefined, enabled: boolean, question?: { id: string; paneId?: string; sessionId?: string }) {
  const [session,setSession] = useState<WorkingSession>();
  useEffect(() => {
   setSession(undefined);
@@ -142,15 +154,17 @@ export function useWorkingSession(info: ConnectionInfo | undefined, enabled: boo
     const age = Date.now() - Date.parse(snapshot.observedAt ?? "");
     const current = snapshot.version === 1 && !snapshot.stale && Number.isFinite(age) && age >= -1000 && age <= 12_000 &&
      Array.isArray(snapshot.sessions) && snapshot.sessions.length <= 512
-     ? snapshot.sessions.find(s => s.focused === true && s.activity?.phase === "working" && !s.pendingQuestion) : undefined;
+     ? snapshot.sessions.find(s => question
+      ? `question:${s.pendingQuestion?.id}` === question.id && s.paneId === question.paneId && s.sessionId === question.sessionId
+      : s.focused === true && s.activity?.phase === "working" && !s.pendingQuestion) : undefined;
     if (live) setSession(current);
    } catch { if (live) setSession(undefined); }
    finally { if (live) timer = setTimeout(update,1000); }
   };
   void update();
   return () => { live = false; abort?.abort(); clearTimeout(timer); };
- },[info,enabled]);
- return enabled ? session : undefined;
+ },[info,enabled,question?.id,question?.paneId,question?.sessionId]);
+ return enabled && (!question || (session && `question:${session.pendingQuestion?.id}`===question.id && session.paneId===question.paneId && session.sessionId===question.sessionId)) ? session : undefined;
 }
 
 /** Only the roaming native surface polls this small cached endpoint; no transcripts or screen captures. */

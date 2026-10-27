@@ -1,4 +1,17 @@
-/* Outcome and action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop */
+/* Question, outcome and action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop */
+/* Body-local proxy reticle: the target is outside this native corner surface. */
+.capri3d-question { position: absolute; top: var(--capri-top, 0px); left: 50%; width: 144px; height: 204px; transform: translateX(-50%); overflow: hidden; contain: paint; color: #c4f36b; pointer-events: none; }
+.capri3d-question * { pointer-events: none; }
+.capri3d-pointing { position: absolute; inset: 0; width: 100%; height: 100%; }
+.capri3d-point-label { position: absolute; left: 6px; right: 6px; bottom: 8px; padding: 3px 5px; border: 1px solid #7955a6; border-radius: 4px; background: #151c20; color: #c9a3ff; font: 10px/1.2 ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+.capri3d-question[data-entering="true"] { animation: capri3d-question-in 300ms steps(1, end); }
+.capri3d-question[data-entering="true"]::before { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(transparent 0 5px, #c9a3ff88 5px 6px); }
+.capri3d-host:has(.capri3d-question[data-entering="true"]) .capri3d-canvas { animation: capri3d-question-body 300ms steps(1, end); }
+@keyframes capri3d-question-in { 0% { opacity: 0; } 20% { opacity: 1; transform: translateX(calc(-50% + 5px)); } 40% { opacity: .3; } 65% { opacity: 1; transform: translateX(calc(-50% - 3px)); } 100% { transform: translateX(-50%); } }
+@keyframes capri3d-question-body { 0% { opacity: 0; transform: translateX(6px) scaleX(.8); } 20% { opacity: .8; transform: translateX(-4px) scaleX(1.08); } 40% { opacity: .2; } 65% { opacity: 1; transform: translateX(3px); } 100% { opacity: 1; transform: none; } }
+.capri3d-question[data-reduced-motion="true"] { animation: none; }
+.capri3d-question[data-reduced-motion="true"]::before { display: none; }
+@media (prefers-reduced-motion: reduce) { .capri3d-question, .capri3d-host:has(.capri3d-question) .capri3d-canvas { animation: none; } .capri3d-question::before { display: none; } }
 .capri3d-action { position: absolute; box-sizing: border-box; top: 126px; left: 50%; transform: translateX(-50%); max-width: 280px; padding: 4px 9px; border: 1px solid var(--capri-notice-border, #44514d); border-radius: 6px; background: var(--capri-notice-surface, #151c20); color: var(--capri-notice-accent, #c4f36b); font: 11px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 .capri3d-action[data-thinking="true"] { color: #c9a3ff; border-color: #7955a6; }
 .capri3d-speech[data-with-action="true"] { max-height: 114px; padding-top: 12px; padding-bottom: 10px; overflow-y: auto; }

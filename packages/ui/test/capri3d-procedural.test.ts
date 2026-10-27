@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 import { injectLegs } from "../src/capri3d/rig.ts";
-import { clips, samplePose, createPosePlayer } from "../src/capri3d/procedural.ts";
+import { clips, samplePose, createPosePlayer, pointingClip } from "../src/capri3d/procedural.ts";
 import { FrameScheduler } from "../src/capri3d/scheduler.ts";
 import { speechDuration, RestProgression, restChoice, responseChoice } from "../src/capri3d/choreography.ts";
 import { clipForBehavior } from "../src/capri3d/mapping.ts";
@@ -9,6 +9,29 @@ import { capriBehavior } from "@gentle-dot/theme-capri/behavior";
 import { gestureChoice } from "../src/capri3d/gestures.ts";
 
 describe("reference-compatible procedural rig", () => {
+ it("holds the pointing arm on the target side through arbitrarily long waits, with head/mane follow and bounded sway",()=>{
+  expect(pointingClip(-500,100)).toBe('pointingLeft');
+  expect(pointingClip(500,100)).toBe('pointingRight');
+  expect(pointingClip(undefined,100)).toBe('pointingLeft');
+  for(const [name,arm,sign] of [['pointingLeft','Brazo_izquierdo',-1],['pointingRight','Brazo_derecho',1]] as const){
+   expect(clips[name].loop).toBe(true);
+   for(const t of [0,1,3,60,600]){
+    const pose=samplePose(name,t);
+    expect(pose[arm]![2]*sign).toBeGreaterThan(75);
+    expect(Math.abs(pose.Cabeza![1])).toBeGreaterThan(8);
+    expect(Object.values(pose).flat().every(Number.isFinite)).toBe(true);
+   }
+   expect(samplePose(name,0)).not.toEqual(samplePose(name,1));
+   expect(samplePose(name,0)).toEqual(samplePose(name,clips[name].duration));
+  }
+ });
+ it('releases the extended arm on return to rest using the existing blend',()=>{
+  const scene=new THREE.Group(),arm=new THREE.Bone();arm.name='Brazo_derecho';scene.add(arm);
+  const player=createPosePlayer(scene);player.play('pointingRight');player.update(1);
+  expect(Math.abs(arm.rotation.z)).toBeGreaterThan(1);
+  player.play('quieta');player.update(1);
+  expect(Math.abs(arm.rotation.z)).toBeLessThan(.3);
+ });
  it("adds thigh/shin joints, preserves bind pose and normalizes vertex weights, idempotently", () => {
   const root = new THREE.Group(), bone = new THREE.Bone(); bone.name = "Raiz"; root.add(bone);
   const geometry = new THREE.BufferGeometry();

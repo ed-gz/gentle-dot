@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { type CompanionSessionSnapshot, useDesktopSessionContext, useWorkingSession } from "../src/companion-sessions.ts";
+import { type CompanionSessionSnapshot, useDesktopSessionContext, useWorkingSession, questionPointingTarget } from "../src/companion-sessions.ts";
 import { DEFAULT_DESKTOP_COMPANION, type DesktopCompanionControls } from "../src/desktop-companion.ts";
 import { CapriConversation } from "../src/capri3d/conversation.tsx";
 import { initialState } from "../src/store.ts";
@@ -34,6 +34,38 @@ function setup(read: () => CompanionSessionSnapshot = snapshot) {
 async function advance(ms: number) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
 const question = { kind: "question", id: "question:permission-a", paneId: "pane-a", sessionId: "session-a" };
 
+it('uses only supplied usable target rectangles, preserving the pane label',()=>{
+ const session=snapshot().sessions[0]!;
+ expect(questionPointingTarget(session)).toBeUndefined();
+ session.label='π - portal_b2b';
+ session.activity.geometry={version:1,columns:80,rows:24,rect:{x:-500,y:100,width:400,height:300},observedAt:new Date().toISOString()};
+ expect(questionPointingTarget(session)).toEqual({rect:session.activity.geometry.rect,label:'π - portal_b2b'});
+ session.activity.geometry.observedAt=new Date(Date.now()-3000).toISOString();
+ expect(questionPointingTarget(session)).toBeUndefined();
+ session.targets.sidebar={x:40,y:50,width:300,height:500};
+ expect(questionPointingTarget(session)?.rect).toEqual(session.targets.sidebar);
+ session.targets.sidebar.width=NaN;expect(questionPointingTarget(session)).toBeUndefined();
+ delete session.pendingQuestion;expect(questionPointingTarget(session)).toBeUndefined();
+});
+it('never lends the previous question geometry to a replacement identity',async()=>{
+ const data=snapshot();vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>data})));
+ const info={url:'ws://localhost:4317/ws',token:'fixture'};
+ const view=renderHook(({cue})=>useWorkingSession(info,true,cue),{initialProps:{cue:question}});
+ await advance(1);expect(view.result.current).toBeDefined();
+ view.rerender({cue:{...question,sessionId:'replacement'}});
+ expect(view.result.current).toBeUndefined();
+ await advance(1000);expect(view.result.current).toBeUndefined();
+});
+it("reads exact pending-question geometry from the existing cache and clears on answer",async()=>{
+ const data=snapshot();data.sessions[0]!.focused=false;
+ data.sessions[0]!.activity.geometry={version:1,columns:80,rows:24,rect:{x:40,y:50,width:600,height:400},observedAt:new Date().toISOString()};
+ vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>data})));
+ const info={url:'ws://localhost:4317/ws',token:'fixture'};
+ const view=renderHook(()=>useWorkingSession(info,true,question));await advance(1);
+ expect(view.result.current?.activity.geometry?.rect.x).toBe(40);
+ delete data.sessions[0]!.pendingQuestion;await advance(1000);
+ expect(view.result.current).toBeUndefined();
+});
 it("reads working metadata only for the fresh focused session and clears on failure",async()=>{
  let data=snapshot();delete data.sessions[0]!.pendingQuestion;
  data.sessions[0]!.activity={phase:"working",lastAction:{verb:"EDITO",subject:"gigs.ts",at:new Date().toISOString()}};

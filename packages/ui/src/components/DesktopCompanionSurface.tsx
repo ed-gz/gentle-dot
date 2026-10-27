@@ -1,5 +1,5 @@
-// Outcome and action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
-import { useWorkingSession } from "../companion-sessions.ts";
+// Question, outcome and action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+import { questionPointingTarget, useWorkingSession } from "../companion-sessions.ts";
 import type { AgentState } from "@gentle-dot/protocol";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,6 +14,7 @@ import { publish3DSurface, readLocalAsset, usePreferred3D } from "../capri3d/nat
 import { useChoreography } from "../capri3d/useChoreography.ts";
 import { restChoice, responseChoice, speechDuration } from "../capri3d/choreography.ts";
 import { clipForBehavior, type ClipChoice } from "../capri3d/mapping.ts";
+import { pointingClip } from "../capri3d/procedural.ts";
 import { desktopFace } from "../capri3d/desktop-faces.ts";
 import { CapriConversation, createOverlayPublisher, pendingApproval, type Speech, BUBBLE_HEIGHT, INPUT_HEIGHT } from "../capri3d/conversation.tsx";
 import { useCompanionChat } from "../capri3d/replies.ts";
@@ -90,6 +91,7 @@ export function DesktopCompanionSurface({
 	const maskState = useRef({ mask: Array<number>(816).fill(0), bubble: false, input: false });
 	const { state: chatState, send: chatSend } = useCompanionChat();
 	const [approval, setApproval] = useState<AgentApproval>();
+ const [answeredQuestion,setAnsweredQuestion]=useState<string>();
 	const [denied, setDenied] = useState(false);
 	useEffect(() => {
 		if (!denied) return;
@@ -136,7 +138,13 @@ export function DesktopCompanionSurface({
   void connectionInfo().then(info => { if (live) setActivityInfo(info); }).catch(() => {});
   return () => { live = false; };
  },[active3D,visible]);
- const workingSession = useWorkingSession(activityInfo,active3D && visible);
+ const questionCue=controls.state.context?.cue;
+ const liveQuestion=questionCue?.kind==="question" && questionCue.expiresAt>Date.now() ? questionCue : undefined;
+ const enteredQuestions=useRef(new Set<string>());
+ useEffect(()=>{
+  if(!visible && liveQuestion)enteredQuestions.current.add(JSON.stringify([liveQuestion.id,liveQuestion.paneId,liveQuestion.sessionId]));
+ },[visible,liveQuestion?.id,liveQuestion?.paneId,liveQuestion?.sessionId]);
+ const workingSession = useWorkingSession(activityInfo,active3D && visible,liveQuestion);
 	const animated = visible && !reduced;
 	const actionAtlas = useRef<HTMLImageElement | undefined>(undefined);
 	useEffect(() => {
@@ -305,12 +313,14 @@ export function DesktopCompanionSurface({
 		return () => clearTimeout(timer);
 	});
 	const activeQuestion =
-		context?.cue?.kind === "question" && context.cue.expiresAt > Date.now() ? context.cue : undefined;
+		context?.cue?.kind === "question" && context.cue.expiresAt > Date.now() && JSON.stringify([context.cue.id,context.cue.paneId,context.cue.sessionId])!==answeredQuestion ? context.cue : undefined;
+ const questionTarget=activeQuestion ? questionPointingTarget(workingSession) : undefined;
+ const questionClip=pointingClip(questionTarget ? questionTarget.rect.x+questionTarget.rect.width/2 : undefined,window.screenX+window.innerWidth/2);
 	const cue =
-		isVisualNotification(context?.notification) && activeQuestion
+		activeQuestion
 			? activeQuestion
 			: (context?.notification && context.notification.expiresAt > Date.now() ? context.notification
-				: context?.cue && context.cue.expiresAt > Date.now() ? context.cue : undefined);
+				: context?.cue && context.cue.kind !== "question" && context.cue.expiresAt > Date.now() ? context.cue : undefined);
 	const previousSession = useRef<{ pane?: string; working: boolean }>({ working: false });
 	useEffect(() => {
 		const before = previousSession.current;
@@ -323,7 +333,7 @@ export function DesktopCompanionSurface({
 	const contextReady = controls.contextReady;
 	const visualExpiresAt = visualNotification?.expiresAt;
 	const lastVisualReceipt = useRef<string | undefined>(undefined);
-	const attention = agentState === "needs_you" || cue?.kind === "question";
+	const attention = Boolean(activeQuestion) || (agentState === "needs_you" && context?.cue?.kind !== "question");
 	const visualReady = useCallback(
 		(action: CapriAction) => {
 			if (
@@ -401,10 +411,11 @@ export function DesktopCompanionSurface({
 	const motion = choreography.motion;
 	const perched = (cue?.kind === "input-ready" || cue?.kind === "typing") && cue.placement === "perch";
 	const baseChoice = useMemo<ClipChoice>(() => {
+		if (activeQuestion) return { model: "roja.glb", clip: null, procedural: questionClip };
+		if (attention) return responseChoice("attention");
 		if (choreography.absent) return restChoice("sleep");
 		if (holding && !controls.state.pinned) return { model: "roja.glb", clip: null, procedural: "colgando" };
 		if (choreography.rest === "wake" || choreography.rest === "greet") return restChoice(choreography.rest);
-		if (attention) return responseChoice("attention");
 		if (gesture) return gestureChoice(gesture.name);
 		if (controls.state.travelling && motion && motion.mode !== "rest") {
 			return motion.mode === "teleport"
@@ -419,7 +430,7 @@ export function DesktopCompanionSurface({
 		if (perched && (behavior.state === "idle" || behavior.state === "userTyping")) return { model: "roja.glb", clip: null, procedural: "sentada" };
 		if (behavior.state === "idle") return restChoice(choreography.rest);
 		return clipForBehavior(behavior);
-	}, [choreography.absent, attention, gesture, holding, controls.state.pinned, controls.state.travelling, motion, speech, behavior.state, behavior.animation, behavior.target, choreography.rest, perched]);
+	}, [choreography.absent, attention, activeQuestion?.id, questionClip, gesture, holding, controls.state.pinned, controls.state.travelling, motion, speech, behavior.state, behavior.animation, behavior.target, choreography.rest, perched]);
 	const faceEvent = attention ? "question" : denied ? "denied" : behavior.state === "error" ? "error"
 		: behavior.state === "done" ? "done" : behavior.state === "userTyping" ? "typing"
 		: behavior.state === "agentWorking" ? "working"
@@ -594,6 +605,7 @@ export function DesktopCompanionSurface({
 			) : null}
 		</button>
 		{active3D && visible && <CapriConversation
+   question={activeQuestion ? {...activeQuestion,target:questionTarget} : undefined} enteredQuestions={enteredQuestions.current}
 			state={chatState} send={chatSend} open={chatOpen} close={() => setChatOpen(false)}
 			outcome={behavior.state === "done" || behavior.state === "error" ? outcome : undefined} reduced={reduced || !controls.state.motion} visible={visible && !inControl}
 			speech={speech} approval={approval} activity={attention ? undefined : workingSession?.activity} episodeKey={workingSession ? `${workingSession.paneId}:${workingSession.sessionId}` : undefined} onThinkingSpeech={thinkingSpeech} onLayout={layout} more={() => { if (cue?.kind === "question") void controls.openContext?.(); toggle(); }}
@@ -605,6 +617,7 @@ export function DesktopCompanionSurface({
 					const snapshot = await orchestration.current.snapshot();
 					if (action.action !== "answer" || !pendingApproval(snapshot.approvals, { id: `question:${action.requestId}`, paneId: action.paneId, sessionId: action.sessionId })) throw new Error("La pregunta cambió");
 					await orchestration.current.act(action);
+     setAnsweredQuestion(JSON.stringify([`question:${action.requestId}`,action.paneId,action.sessionId]));
 					if ("approved" in action && !action.approved) setDenied(true);
 				} catch (error) {
 					throw approvalAnswerError(error);

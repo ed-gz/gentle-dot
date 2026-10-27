@@ -1,3 +1,5 @@
+// Held pointing choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+// Uses our existing GLB rig, not the reference's artwork or sprite renderer.
 import * as THREE from "three";
 
 export type Pose = Record<string, [number, number, number]>;
@@ -25,8 +27,22 @@ function flying(t: number): Pose {
  const w=tau*t/1.1;
  return { "Raiz.position":[0,0.35+0.06*sin(w),0], Raiz:[-6,0,3*sin(w)], Brazo_izquierdo:[0,0,-30+8*sin(w)], Brazo_derecho:[0,0,52-8*sin(w)], Antebrazo_izquierdo:[0,0,-20], Antebrazo_derecho:[0,0,20], Muslo_izquierdo:[8*sin(w),0,2], Muslo_derecho:[-8*sin(w),0,-2], Pierna_izquierda:[25+10*sin(w+1),0,0], Pierna_derecha:[25-10*sin(w+1),0,0], Cabeza:[-10,0,0] };
 }
+export function pointingClip(targetX: number | undefined, originX: number): "pointingLeft" | "pointingRight" {
+ return targetX !== undefined && targetX >= originX ? "pointingRight" : "pointingLeft";
+}
+function pointing(t: number, side: -1 | 1): Pose {
+ const sway=sin(tau*t/4);
+ // The mane is skinned to Cabeza in our rig: head yaw/lean carries it with the gaze.
+ // Hold an extended arm, never a one-shot greeting that falls back during a long question.
+ return { Raiz:[0,0,side*(2+0.5*sway)], "Raiz.position":[0,0.012*sway,0],
+  Cabeza:[-4,side*(14+sway),side*4],
+  ...(side<0 ? {Brazo_izquierdo:[0,0,-86+sway],Antebrazo_izquierdo:[0,0,-5],Mano_izquierda:[0,0,-4]} :
+   {Brazo_derecho:[0,0,86+sway],Antebrazo_derecho:[0,0,5],Mano_derecha:[0,0,4]}) };
+}
 interface Clip { duration: number; loop?: boolean; pose(t: number): Pose }
 export const clips = {
+ pointingLeft:{duration:4,loop:true,pose:(t:number)=>pointing(t,-1)},
+ pointingRight:{duration:4,loop:true,pose:(t:number)=>pointing(t,1)},
  quieta: { duration:6, loop:true, pose:(t:number):Pose => { const w=tau*t/6; return {"Raiz.position":[0,0.035*sin(w),0],Raiz:[1.5*sin(w),0,1.8*sin(w/2)],Cabeza:[2*sin(w),4*sin(w/2),1.5*sin(w+1)],Brazo_izquierdo:[0,0,40+2*sin(w)],Brazo_derecho:[0,0,-11-2*sin(w)]}; } },
  caminar: {duration:1.6,loop:true,pose:(t:number):Pose=>{const w=tau*t/1.6;return {"Raiz.position":[0,0.05+0.05*sin(2*w),0],Raiz:[9,0,2*sin(w)],Brazo_izquierdo:[0,0,58+6*sin(w)],Brazo_derecho:[0,0,-33-6*sin(w)],Antebrazo_izquierdo:[0,0,-8*sin(w-0.8)],Antebrazo_derecho:[0,0,8*sin(w-0.8)],Muslo_izquierdo:[22*sin(w),0,0],Muslo_derecho:[-22*sin(w),0,0],Pierna_izquierda:[26*Math.max(0,-sin(w)),0,0],Pierna_derecha:[26*Math.max(0,sin(w)),0,0],Cabeza:[-4,0,3*sin(w-1)]};}},
  volar:{duration:1.1,loop:true,pose:flying}, sentarse:{duration:1,pose:(t:number)=>blend(rest,seated(0),ease(t))}, sentada:{duration:12,loop:true,pose:seated}, pararse:{duration:0.9,pose:(t:number)=>blend(seated(0),rest,ease(t/0.9))},

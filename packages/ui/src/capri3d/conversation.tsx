@@ -1,4 +1,4 @@
-// Outcome and action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
+// Question, outcome and action-ticker choreography adapted from capri-desktop (MIT): https://github.com/mochiiwuff/capri-desktop
 import type { CompanionSessionSnapshot } from "../companion-sessions.ts";
 import { useEffect, useRef, useState } from "react";
 import type { DotState } from "../store.ts";
@@ -59,7 +59,13 @@ export interface Speech {
  question?:boolean; confirmation?:boolean; sender?:string; channel?:string; privateMessage?:boolean; body?:string;
 }
 export interface CapriOutcome { kind: "done" | "error"; at: number }
+export interface CapriQuestion {
+ id: string; paneId?: string; sessionId?: string;
+ target?: { rect: { x:number; y:number; width:number; height:number }; label:string };
+}
 interface Props {
+ question?: CapriQuestion;
+ enteredQuestions?: Set<string>;
  outcome?: CapriOutcome;
  reduced?: boolean;
  visible?: boolean;
@@ -73,7 +79,29 @@ interface Props {
  episodeKey?: string;
  onThinkingSpeech?(text: string): void;
 }
-export function CapriConversation({state,send,open,close,more,speech,approval,answer,onLayout,onGesture,activity,episodeKey,onThinkingSpeech,outcome,reduced=false,visible=true}:Props) {
+export function CapriConversation({state,send,open,close,more,speech,approval,answer,onLayout,onGesture,activity,episodeKey,onThinkingSpeech,outcome,reduced=false,visible=true,question,enteredQuestions}:Props) {
+ const localEntered=useRef(new Set<string>());
+ const history=enteredQuestions ?? localEntered.current;
+ const questionKey=question ? JSON.stringify([question.id,question.paneId,question.sessionId]) : undefined;
+ const [entering,setEntering]=useState<string>();
+ const questionLayer=useRef<HTMLDivElement>(null);
+ // Native animationend avoids synthetic vendor-prefix detection in older WebKit/jsdom.
+ // Completion is driven by CSS, with no hidden-surface timer or replay on target refresh.
+ useEffect(()=>{
+  const node=questionLayer.current;
+  if(!node)return;
+  const end=(event:Event)=>{if(event.target===node)setEntering(undefined);};
+  node.addEventListener("animationend",end);
+  return()=>node.removeEventListener("animationend",end);
+ },[questionKey,visible]);
+ useEffect(()=>{
+  setEntering(undefined);
+  if(!questionKey)return;
+  const seen=history.has(questionKey);
+  history.add(questionKey);
+  if(history.size>64)history.delete(history.values().next().value!);
+  if(visible && !reduced && !seen)setEntering(questionKey);
+ },[questionKey,visible,reduced,history]);
  // One bounded exposure sheet, not a render loop. Hidden/occluded episodes are consumed,
  // never replayed when the surface returns. Native visibility unmounts this component too.
  const [fxKey,setFxKey]=useState<string>();
@@ -172,7 +200,20 @@ export function CapriConversation({state,send,open,close,more,speech,approval,an
   catch (error) {if(mounted.current && currentKey.current===key)setError(error instanceof Error && error.message ? (error.message.startsWith("No se pudo responder") ? error.message : `No se pudo responder: ${error.message}`) : "No se pudo responder. Volvé a intentarlo o abrí el panel.");}
   finally {sending.current=false;if(mounted.current)setPending(false);}
  };
+ const pointing=visible && question && !(question.id===`question:${approval?.id}` && answered===approvalKey);
+ // Global logical target -> body-local edge. Never move the native corner window.
+ const rect=question?.target?.rect;
+ const dx=rect ? rect.x+rect.width/2-(window.screenX+window.innerWidth/2) : 0;
+ const dy=rect ? rect.y+rect.height/2-(window.screenY+(bubble?BUBBLE_HEIGHT:0)+BODY_HEIGHT/2) : 0;
+ const scale=Math.min(62/Math.max(1,Math.abs(dx)),90/Math.max(1,Math.abs(dy)));
+ const edge={x:72+dx*scale,y:102+dy*scale};
  return <>
+  {pointing && <div ref={questionLayer} className="capri3d-question" data-entering={entering===questionKey} data-reduced-motion={reduced} aria-hidden="true" style={{pointerEvents:"none"}}>
+   {rect ? <><svg className="capri3d-pointing" viewBox="0 0 144 204" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <line x1={dx<0?36:108} y1="90" x2={edge.x} y2={edge.y} strokeDasharray="4 4"/>
+    <path transform={`translate(${edge.x},${edge.y})`} d="M-7 -3v-4h4M3 -7h4v4M7 3v4h-4M-3 7h-4v-4"/>
+   </svg><span className="capri3d-point-label">{question.target!.label}</span></> : <span className="capri3d-point-label">SEÑALO</span>}
+  </div>}
   {fx && <div className="capri3d-outcome" key={outcomeKey} data-outcome={fx.kind} data-reduced-motion={reduced} aria-hidden="true" style={{pointerEvents:"none"}}>
    {fx.kind==="done" ? <><div className="capri3d-speed-lines"/><div className="capri3d-shockwave"/><div className="capri3d-celebratory-cut"/></> : impact && <div className="capri3d-impact"/>}
   </div>}
