@@ -481,3 +481,48 @@ html[data-companion-chat="true"] .mobile-shell > .chat-mobile { flex: 1; min-hei
 .mobile-companion-permission-actions button:disabled { opacity: 0.5; cursor: default; }
 .mobile-companion-permission-help { border: 0; background: transparent; font-size: 13px; text-align: start; }
 .mobile-companion-permission .mobile-setting-hint { margin-bottom: 0; }
+
+/* T47: phone-only Capri polish. Keep T40 colors and user text-size preferences.
+   Physical 1080px phones use CSS dp; no device-resolution breakpoint is needed. */
+.mobile-shell .chat-mobile[data-companion="capri"] .capri-connection-strip {
+	padding: 12px 16px;
+	line-height: 1.5;
+}
+.mobile-shell .chat-mobile[data-companion="capri"] .capri-session-group > summary {
+	box-sizing: border-box;
+}
+.mobile-shell .chat-mobile[data-companion="capri"] .agent-session-row {
+	padding-block: 16px;
+	gap: 12px;
+}
+.mobile-shell .chat-mobile[data-companion="capri"] :is(.capri-session-project, .agent-preview) {
+	margin-block: 4px 0;
+	line-height: 1.5;
+	overflow-wrap: anywhere;
+}
+.mobile-shell .chat-mobile[data-companion="capri"] :is(.message, .agent-message) {
+	box-sizing: border-box;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+/* The session detail's generic .agent-message rule otherwise removes the
+   Capri bubble padding. Leave the alternate reading layout untouched. */
+.mobile-shell .chat-mobile[data-companion="capri"]:not([data-chat-layout="reading"])
+	.agent-detail .agent-message {
+	padding: 12px 16px;
+}
+.mobile-shell .chat-mobile[data-companion="capri"] .chat-composer {
+	/* .chat-mobile already owns the bottom safe area; don't count it twice. */
+	padding: 8px 12px 12px;
+}
+.mobile-shell .chat-mobile[data-companion="capri"] .composer {
+	/* Shared desktop margins compound the phone composer's outer gutters. */
+	margin: 0;
+}
+.mobile-shell .chat-mobile[data-companion="capri"] .composer textarea::placeholder {
+	color: var(--capri-mobile-muted);
+	opacity: 1;
+}
+.mobile-shell .chat-mobile[data-companion="capri"] .composer textarea {
+	line-height: var(--chat-line-height, 1.5);
+}
