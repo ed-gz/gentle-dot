@@ -168,6 +168,21 @@ it("preserves legacy behavior without action metadata and hides nonworking chips
   expect(screen.queryByText("CONSULTO gigs.ts")).toBeNull();expect(screen.queryByText("LEO gigs.ts")).toBeNull();
  }
 });
+it.each([
+ {id:"end",text:"La sesión terminó"},
+ {id:"body",text:"Aviso",sender:"Sesión",body:"Detalle largo ".repeat(30)},
+ {id:"question",text:"¿Cuál?",question:true},
+])("sizes the actual conversation card for $id",speech=>{
+ const props={state:initialState,send:vi.fn(),open:false,close:vi.fn(),more:vi.fn(),onLayout:vi.fn()};
+ render(<CapriConversation {...props} speech={speech}/>);
+ expect(screen.getByRole("status")).toHaveAttribute("data-size",speech.id==="end" ? "compact" : "full");
+});
+it("never compacts an actionable permission with a short title",()=>{
+ const approval={id:"size",paneId:"p",sessionId:"s",title:"Permiso",message:"¿Sí?",action:"bash",kind:"confirm" as const,createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
+ render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} more={vi.fn()} onLayout={vi.fn()} approval={approval}/>);
+ expect(screen.getByRole("status")).toHaveAttribute("data-size","full");
+ expect(screen.getByRole("button",{name:"Aprobar"})).toBeVisible();
+});
 it("uses short excerpts, Ver más and timed speech",()=>{
  vi.useFakeTimers();const more=vi.fn(),layout=vi.fn();
  render(<CapriConversation state={initialState} send={vi.fn()} open={false} close={vi.fn()} speech={{id:"r",text:"A".repeat(300)}} more={more} onLayout={layout}/>);

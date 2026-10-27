@@ -20,5 +20,13 @@
 .capri-comic-card .capri3d-confirm { margin-top: 4px; gap: 8px; }
 .capri3d-host .capri-comic-card .capri3d-confirm button { min-height: 44px; }
 .capri3d-host .capri-comic-card .capri-comic-ack { display: block; min-height: 44px; margin: 4px auto 0; border-color: var(--capri-notice-accent, #c4f36b); border-radius: 3px; text-transform: uppercase; letter-spacing: 1px; }
+/* Medium/full retain the readable 280px frame and existing scroll caps. Only
+   short, non-actionable notices surrender the fixed-height empty space. */
+.capri3d-speech.capri-comic-card[data-size="compact"] { width: max-content; min-width: 160px; max-width: 240px; height: auto; min-height: 56px; padding: 8px 10px; }
+.capri-comic-card[data-size="compact"] .capri-comic-header { min-height: 20px; padding-bottom: 4px; }
+.capri-comic-card[data-size="compact"] .capri-comic-subtitle { display: none; }
+.capri-comic-card[data-size="compact"] .capri-comic-avatar { top: 8px; left: 10px; width: 28px; height: 20px; }
+.capri-comic-card[data-size="compact"]:has(.capri-comic-avatar) .capri-comic-header { padding-left: 34px; }
+.capri-comic-card[data-size="compact"] .capri-comic-content { flex: 0 1 auto; }
 .capri-comic-card[data-with-action="true"] { padding-top: 8px; padding-bottom: 8px; }
 .capri-comic-card[data-with-action="true"] .capri-comic-content { max-height: 52px; }

@@ -1,12 +1,46 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import { CapriNotificationCard, useNotificationAvatar } from "../src/capri3d/CapriNotificationCard.tsx";
+import { CapriNotificationCard, notificationCardSize, useNotificationAvatar } from "../src/capri3d/CapriNotificationCard.tsx";
 
 vi.mock("@tauri-apps/api/core",()=>({invoke:vi.fn()}));
 import { invoke } from "@tauri-apps/api/core";
 
+it.each([
+ ["", undefined, false, "compact"],
+ ["x".repeat(40), undefined, false, "compact"],
+ ["x".repeat(41), undefined, false, "medium"],
+ ["  La sesión terminó  ", "  ", false, "compact"],
+ ["Aviso", "x", false, "medium"],
+ ["x".repeat(160), undefined, false, "medium"],
+ ["x".repeat(161), undefined, false, "full"],
+ ["Aviso", "x".repeat(155), false, "medium"],
+ ["Aviso", "x".repeat(156), false, "full"],
+ ["OK", undefined, true, "full"],
+ ["OK", "x".repeat(200), true, "full"],
+] as const)("sizes summary/body at the tier boundaries (%s, %s, %s)", (summary, body, prominent, size) => {
+ expect(notificationCardSize(summary, body, prominent)).toBe(size);
+});
+
+it.each([
+ ["La sesión terminó", undefined, false, "compact"],
+ ["La sesión terminó con cambios listos para revisar", undefined, false, "medium"],
+ ["Aviso", "Detalle largo ".repeat(30), false, "full"],
+ ["¿Aprobar?", undefined, true, "full"],
+ ["¿Cuál?", undefined, true, "full"],
+] as const)("renders a text-proportional size for %s", (summary, body, prominent, size) => {
+ render(<CapriNotificationCard subtitle="SISTEMA" summary={summary} body={body} prominent={prominent}>{summary}{body}</CapriNotificationCard>);
+ expect(screen.getByRole("status").getAttribute("data-size")).toBe(size);
+});
+
+it("keeps compact acknowledgement and reduced-motion semantics", () => {
+ render(<CapriNotificationCard subtitle="SISTEMA" summary="La sesión terminó" reduced onAcknowledge={()=>{}}>La sesión terminó</CapriNotificationCard>);
+ expect(screen.getByRole("status").getAttribute("data-size")).toBe("compact");
+ expect(screen.getByRole("status").getAttribute("data-reduced-motion")).toBe("true");
+ expect(screen.getByRole("button", {name:"Entendido"})).toBeTruthy();
+});
+
 it("renders the comic identity and fresh chip without artwork", () => {
- render(<CapriNotificationCard subtitle="SISTEMA" fresh>Mensaje recibido</CapriNotificationCard>);
+ render(<CapriNotificationCard subtitle="SISTEMA" summary="Mensaje recibido" fresh>Mensaje recibido</CapriNotificationCard>);
  expect(screen.getByText("CAPRI")).toBeTruthy();
  expect(screen.getByText("SISTEMA")).toBeTruthy();
  expect(screen.getByText("NUEVO")).toBeTruthy();
@@ -14,21 +48,21 @@ it("renders the comic identity and fresh chip without artwork", () => {
  expect(screen.queryByRole("button", {name:"Entendido"})).toBeNull();
 });
 it("renders optional avatar and falls back on a broken image", () => {
- render(<CapriNotificationCard avatar="blob:personal" subtitle="SISTEMA">Mensaje</CapriNotificationCard>);
+ render(<CapriNotificationCard avatar="blob:personal" subtitle="SISTEMA" summary="Mensaje">Mensaje</CapriNotificationCard>);
  fireEvent.error(screen.getByRole("img", {name:"Capri"}));
  expect(screen.queryByRole("img")).toBeNull();
  expect(screen.getByText("Mensaje")).toBeTruthy();
 });
 it("offers acknowledgement only when explicitly answerable", () => {
  const acknowledge=vi.fn();
- render(<CapriNotificationCard subtitle="SISTEMA" onAcknowledge={acknowledge}>Mensaje</CapriNotificationCard>);
+ render(<CapriNotificationCard subtitle="SISTEMA" summary="Mensaje" onAcknowledge={acknowledge}>Mensaje</CapriNotificationCard>);
  fireEvent.click(screen.getByRole("button", {name:"Entendido"}));
  expect(acknowledge).toHaveBeenCalledOnce();
 });
 it("does not render dismissed cards or old fresh chips", () => {
- const {rerender}=render(<CapriNotificationCard subtitle="SISTEMA">Mensaje</CapriNotificationCard>);
+ const {rerender}=render(<CapriNotificationCard subtitle="SISTEMA" summary="Mensaje">Mensaje</CapriNotificationCard>);
  expect(screen.queryByText("NUEVO")).toBeNull();
- rerender(<CapriNotificationCard subtitle="SISTEMA" dismissed fresh>Mensaje</CapriNotificationCard>);
+ rerender(<CapriNotificationCard subtitle="SISTEMA" summary="Mensaje" dismissed fresh>Mensaje</CapriNotificationCard>);
  expect(screen.queryByText("Mensaje")).toBeNull();
  expect(screen.queryByText("NUEVO")).toBeNull();
 });

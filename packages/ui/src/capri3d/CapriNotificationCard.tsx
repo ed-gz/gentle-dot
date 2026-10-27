@@ -5,6 +5,9 @@ import "./notification-card.css";
 interface Props {
  children: ReactNode;
  subtitle: string;
+ summary: string;
+ body?: string;
+ prominent?: boolean;
  avatar?: string;
  fresh?: boolean;
  dismissed?: boolean;
@@ -14,11 +17,22 @@ interface Props {
  onAcknowledge?(): void;
 }
 
+export type NotificationCardSize = "compact" | "medium" | "full";
+
+/** Text only: do not measure DOM nodes or infer actionable requests from their labels. */
+export function notificationCardSize(summary: string, body = "", prominent = false): NotificationCardSize {
+ if (prominent) return "full";
+ const titleLength = summary.trim().length;
+ const bodyLength = body.trim().length;
+ if (titleLength <= 40 && bodyLength === 0) return "compact";
+ return titleLength + bodyLength <= 160 ? "medium" : "full";
+}
+
 /** Pure presentation: an acknowledgement is never an approval or a session answer. */
-export function CapriNotificationCard({children,subtitle,avatar,fresh=false,dismissed=false,leaving=false,withAction=false,reduced=false,onAcknowledge}:Props) {
+export function CapriNotificationCard({children,subtitle,summary,body,prominent=false,avatar,fresh=false,dismissed=false,leaving=false,withAction=false,reduced=false,onAcknowledge}:Props) {
  const [failed,setFailed]=useState<string>();
  if(dismissed)return null;
- return <div className="capri3d-speech capri-comic-card" data-with-action={withAction} data-leaving={leaving} data-reduced-motion={reduced} role="status" aria-live="polite">
+ return <div className="capri3d-speech capri-comic-card" data-size={notificationCardSize(summary,body,prominent)} data-with-action={withAction} data-leaving={leaving} data-reduced-motion={reduced} role="status" aria-live="polite">
   <div className="capri3d-speech-frame" aria-hidden="true"/>
   {avatar && avatar!==failed && <img className="capri-comic-avatar" src={avatar} alt="Capri" onError={()=>setFailed(avatar)}/>}
   <header className="capri-comic-header"><b className="capri-comic-brand">CAPRI</b>{fresh && <small className="capri-comic-fresh">NUEVO</small>}<span className="capri-comic-subtitle" title={subtitle}>{subtitle}</span></header>
