@@ -126,6 +126,9 @@ path = pathlib.Path('src-tauri/gen/apple/build/arm64/Capri.ipa')
 path.parent.mkdir(parents=True, exist_ok=True)
 info = {'CFBundleIdentifier': 'wrong.app' if mode == 'identity' else 'dev.gentledot.capri',
         'DTPlatformName': 'iphoneos', 'CFBundleExecutable': 'Capri', 'NSMicrophoneUsageDescription': 'Dictado local', 'CapriAppGroup': 'group.dev.gentledot.capri'}
+if mode != 'background_missing':
+    info['UIBackgroundModes'] = ['processing']
+    info['BGTaskSchedulerPermittedIdentifiers'] = ['dev.gentledot.capri.capri-inference.*']
 if os.environ['CAPRI_LIVE_ACTIVITY'] == '1': info['NSSupportsLiveActivities'] = True
 with zipfile.ZipFile(path, 'w') as archive:
     archive.writestr('Payload/Capri.app/Info.plist', plistlib.dumps(info))
@@ -193,11 +196,17 @@ else: raise SystemExit('Unexpected codesign command')
   command('ditto', String.raw`
     [[ "$CAPRI_BUILD_FIXTURE" != zip_failure ]] || exit 75
     python3 - "$@" <<'PY'
-import pathlib, sys, zipfile
+import os, pathlib, plistlib, sys, zipfile
 source, output = pathlib.Path(sys.argv[-2]), pathlib.Path(sys.argv[-1])
 with zipfile.ZipFile(output,'w') as archive:
     for path in source.rglob('*'):
-        if path.is_file(): archive.write(path, path.relative_to(source.parent))
+        if path.is_file():
+            relative = path.relative_to(source.parent)
+            if os.environ['CAPRI_BUILD_FIXTURE'] == 'background_sealed_missing' and relative.as_posix() == 'Payload/Capri.app/Info.plist':
+                info = plistlib.loads(path.read_bytes())
+                info.pop('BGTaskSchedulerPermittedIdentifiers', None)
+                archive.writestr(relative.as_posix(), plistlib.dumps(info))
+            else: archive.write(path, relative)
 PY`);
   try {
     const result = spawnSync('bash', [join(dir, 'scripts/build-unsigned.sh')], {
@@ -207,7 +216,7 @@ PY`);
       env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, CAPRI_BUILD_FIXTURE: mode, CAPRI_APP_GROUP: 'group.dev.gentledot.capri', CAPRI_PERSONAL_ART_SHA256: '', CAPRI_LIVE_ACTIVITY: live ? '1' : '0' },
     });
     const published = existsSync(join(dir, 'out/Capri-unsigned.ipa'));
-    const verified = published ? spawnSync('python3', [join(dir, 'scripts/verify-ipa.py'), join(dir, 'out/Capri-unsigned.ipa'), '--sealed', ...(live ? ['--live-activity'] : [])], { encoding: 'utf8' }) : undefined;
+    const verified = published ? spawnSync('python3', [join(dir, 'scripts/verify-ipa.py'), join(dir, 'out/Capri-unsigned.ipa'), '--sealed', '--continued-inference', ...(live ? ['--live-activity'] : [])], { encoding: 'utf8' }) : undefined;
     return { ...result, published, verified,
       signing: existsSync(join(dir, 'sign-calls.jsonl')) ? readFileSync(join(dir, 'sign-calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [],
       calls: existsSync(join(dir, 'build-calls.txt')) ? readFileSync(join(dir, 'build-calls.txt'), 'utf8').trim().split('\n') : [] };
@@ -226,6 +235,15 @@ test('unsigned packaging rejects stale artifacts even when the build returns suc
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Expected one new unsigned IPA/);
   assert.equal(result.published, false);
+});
+
+test('both packaging checks reject a missing continued-inference identifier', () => {
+  for (const mode of ['background_missing', 'background_sealed_missing']) {
+    const result = unsignedBuildFixture(mode);
+    assert.notEqual(result.status, 0, mode);
+    assert.match(result.stderr, /background processing configuration|continued-inference identifier/, mode);
+    assert.equal(result.published, false, mode);
+  }
 });
 
 test('unsigned packaging publishes a newly built device IPA after inspecting it', () => {

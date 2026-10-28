@@ -15,7 +15,7 @@ rm -f out/Capri-unsigned.ipa
 group=${CAPRI_APP_GROUP:-group.dev.gentledot.capri}
 # macOS ships Bash 3.2: expanding an empty array under nounset fails there.
 # The verifier always has a group, so this array is never empty in either mode.
-verification_args=(--group "$group")
+verification_args=(--group "$group" --continued-inference)
 case "${CAPRI_LIVE_ACTIVITY:-0}" in
   0) ;;
   1) verification_args+=(--live-activity) ;;
