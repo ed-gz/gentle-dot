@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, copyFileSync, chmodSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, copyFileSync, chmodSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -105,7 +105,7 @@ test('private downloader refuses public repositories and mismatched release dige
   } finally { process.env.PATH = previousPath; rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('Xcode personal resource configuration is idempotent and only extends the app target', () => {
+test('Xcode personal resource configuration resolves symlink aliases, is idempotent, and only extends the app target', () => {
   const directory = mkdtempSync(join(tmpdir(), 'capri-art-xcode-'));
   try {
     mkdirSync(join(directory, 'scripts')); mkdirSync(join(directory, 'gen'));
@@ -113,8 +113,11 @@ test('Xcode personal resource configuration is idempotent and only extends the a
     stagePersonalArtwork(original, fingerprint, join(directory, 'public/personal-art'));
     const spec = join(directory, 'gen/project.yml');
     writeFileSync(spec, 'targets:\n  Capri:\n    type: application\n    platform: iOS\n    sources:\n      - path: Existing.swift\n  CapriShare:\n    type: app-extension\n    platform: iOS\n    sources: []\n');
-    for (let iteration = 0; iteration < 2; iteration++) {
-      const result = spawnSync('ruby', [join(directory, 'scripts/configure-personal-art.rb'), spec, '--spec-only'], { encoding: 'utf8' });
+    // Reproduce /var versus /private/var on every platform. The first invocation
+    // resolves the script physically but receives an aliased project path.
+    const alias = join(directory, 'alias'); symlinkSync(directory, alias, 'dir');
+    for (const path of [join(alias, 'gen/project.yml'), spec, join(alias, 'gen/project.yml')]) {
+      const result = spawnSync('ruby', [join(alias, 'scripts/configure-personal-art.rb'), path, '--spec-only'], { encoding: 'utf8' });
       assert.equal(result.status, 0, result.stderr);
     }
     const result = spawnSync('ruby', ['-ryaml', '-rjson', '-e', 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), aliases: true))', spec], { encoding: 'utf8' });

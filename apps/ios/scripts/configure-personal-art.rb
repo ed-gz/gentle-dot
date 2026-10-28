@@ -3,12 +3,15 @@
 # in the app resources as well; both copies are checked before/after packaging.
 require 'yaml'
 require 'pathname'
-ios = File.expand_path('..', __dir__)
-spec_path = File.expand_path(ARGV.find { |value| !value.start_with?('--') } || 'src-tauri/gen/apple/project.yml', ios)
+# macOS exposes its temporary root as /var and /private/var. Ruby resolves
+# __dir__ physically, while callers may supply the alias. Compare real paths
+# on both sides or the resource reference can escape needlessly through /.
+ios = File.realpath('..', __dir__)
+spec_path = File.realpath(File.expand_path(ARGV.find { |value| !value.start_with?('--') } || 'src-tauri/gen/apple/project.yml', ios))
 spec = YAML.safe_load(File.read(spec_path), permitted_classes: [], permitted_symbols: [], aliases: true)
 apps = spec.fetch('targets').select { |_name, target| target['type'] == 'application' && target['platform'] == 'iOS' }
 raise 'Expected one iOS application target.' unless apps.length == 1
-art = File.join(ios, 'public/personal-art')
+art = File.realpath(File.join(ios, 'public/personal-art'))
 raise 'Missing verified personal artwork.' unless File.file?(File.join(art, 'capri-full.png')) && File.file?(File.join(art, 'manifest.json'))
 relative = Pathname.new(art).relative_path_from(Pathname.new(File.dirname(spec_path))).to_s
 sources = apps.values.first['sources'] ||= []
