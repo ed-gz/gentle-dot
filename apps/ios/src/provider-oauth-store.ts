@@ -38,11 +38,20 @@ function assertProviderTarget(connection: Pick<ExternalConnection, 'provider' | 
 export function createProviderOAuthStore(overrides: Partial<ProviderOAuthStoreDependencies> = {}) {
   const dependencies = { ...defaults, ...overrides };
   const pending = new Map<string, Promise<{ connection: ExternalConnection; accessToken: string }>>();
+  async function assertCurrent(expected: ExternalConnection) {
+    const current = await dependencies.getConnection(expected.id);
+    if (!current || !current.enabled || current.revision !== expected.revision || current.credentialAccount !== expected.credentialAccount
+      || current.kind !== expected.kind || current.provider !== expected.provider || current.endpoint !== expected.endpoint
+      || current.apiMode !== expected.apiMode || current.database !== expected.database || current.uid !== expected.uid) {
+      throw new Error('La conexión cambió mientras se recuperaba el acceso. Vuelve a revisar su configuración.');
+    }
+  }
   async function resolveAccess(connectionId: string) {
     const connection = await dependencies.getConnection(connectionId);
     if (!connection || !connection.enabled || !connection.credentialAccount) throw new Error('La conexión no tiene una credencial activa.');
     assertProviderTarget(connection);
     const bundle = parseSecret(await dependencies.readSecret(connection.credentialAccount));
+    await assertCurrent(connection);
     assertProviderTarget(connection, bundle.provider);
     if (bundle.refreshState && bundle.refreshState !== 'ready') throw new Error('La renovación anterior quedó sin confirmar. Autoriza de nuevo esta cuenta; no se repetirá el refresh.');
     if (bundle.expiresAt === undefined || bundle.expiresAt > dependencies.now() + 60000) return { connection, accessToken: bundle.accessToken };
@@ -89,6 +98,10 @@ export function createProviderOAuthStore(overrides: Partial<ProviderOAuthStoreDe
         void operation.finally(() => { if (pending.get(connectionId) === operation) pending.delete(connectionId); }).catch(() => {});
       }
       const access = await operation;
+      signal?.throwIfAborted();
+      // Coalesced callers also re-check after awaiting the shared resolution.
+      // The adapter checks once more immediately before sending its request.
+      await assertCurrent(access.connection);
       signal?.throwIfAborted();
       return access;
     },

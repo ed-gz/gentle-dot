@@ -72,8 +72,8 @@ export async function createProviderTools(connectionId: string, overrides: Parti
   const prefix = `api_${configured.id.replace(/-/g, '')}_`;
   async function access(): Promise<Access> {
     const value = await service.access(connectionId);
-    if (!value.connection.enabled || value.connection.kind !== 'https-api' || value.connection.provider !== provider || !value.accessToken) throw new Error('La conexión del proveedor cambió o está deshabilitada.');
-    endpoint(value.connection); return value;
+    if (value.connection.id !== connectionId || !value.connection.enabled || value.connection.kind !== 'https-api' || value.connection.provider !== provider || !value.accessToken) throw new Error('La conexión del proveedor cambió o está deshabilitada.');
+    endpoint(value.connection); await same(value.connection); return value;
   }
   async function same(connection: ExternalConnection): Promise<void> {
     if (canonicalJSON(await service.getConnection(connectionId)) !== canonicalJSON(connection)) throw new Error('La conexión cambió después de revisarla. Vuelve a aprobar.');
@@ -106,7 +106,7 @@ export async function createProviderTools(connectionId: string, overrides: Parti
   function read<A>(name: string, description: string, schema: Record<string, unknown>, validate: (value: unknown) => A,
     run: (value: A, access: Access) => Promise<unknown>): Tool {
     return { definition: { name: prefix + name, description: `${configured!.label}: ${description}`, parameters: schema }, validate,
-      async execute(value, context) { const safe = validate(value); context.signal.throwIfAborted(); const credentials = await access(); context.signal.throwIfAborted(); const result = await run(safe, credentials); return { data: result, untrustedContent: true }; } };
+      async execute(value, context) { const safe = validate(value); context.signal.throwIfAborted(); const credentials = await access(); context.signal.throwIfAborted(); const result = await run(safe, credentials); context.signal.throwIfAborted(); return { data: result, untrustedContent: true }; } };
   }
   async function attachmentBytes(ref: AttachmentRef): Promise<Uint8Array> {
     const bytes = await service.attachment(ref);
@@ -114,12 +114,15 @@ export async function createProviderTools(connectionId: string, overrides: Parti
     return bytes;
   }
   function write(name: string, description: string, kind: Operation['kind'], schema: Record<string, unknown>): Tool {
-    const validate = (value: unknown): Operation => { const safe = args(value, Object.keys((schema.properties ?? {}) as object));
+    const operationFor = (value: unknown): Operation => { const safe = args(value, Object.keys((schema.properties ?? {}) as object));
       if (kind === 'odoo.task.update') args(safe.changes, ['name', 'description', 'stageId', 'assigneeIds', 'deadline']);
       return validateOperation({ ...safe, kind }); };
     const definition: ToolDefinition = { name: prefix + name, description: `${configured!.label}: ${description} Requiere revisión exacta antes de enviar.`, parameters: schema };
-    return { definition, validate, async execute(value, context: ToolContext) {
-      const operation = validate(value); context.signal.throwIfAborted();
+    return { definition, validate(value) {
+      // Keep validated arguments inside the public schema: callers may validate again.
+      const { kind: _kind, ...parameters } = operationFor(value); return parameters;
+    }, async execute(value, context: ToolContext) {
+      const operation = operationFor(value); context.signal.throwIfAborted();
       const credentials = await access(); const connection = credentials.connection;
       const files: MailAttachment[] = [];
       let sender: string | undefined;
@@ -184,17 +187,17 @@ export async function createProviderTools(connectionId: string, overrides: Parti
     write('create_issue', 'Crear issue de GitHub', 'github.issue', parameters({ repository: textSchema(200), title: textSchema(256), text: textSchema(30000), labels: { type: 'array', items: textSchema(100), maxItems: 20 } }, ['repository', 'title', 'text', 'labels'])),
   ];
   if (provider === 'slack') return [
-    read('conversations', 'Lista canales y conversaciones accesibles con los scopes de tu token.', parameters({ cursor: textSchema(2048) }), value => { const a = args(value, ['cursor']); return { cursor: a.cursor === undefined ? '' : text(a.cursor, 2048) }; }, async (a, access) => { const result = json(await service.request(request(access, `conversations.list?limit=50&types=public_channel,private_channel,im,mpim&cursor=${encodeURIComponent(a.cursor)}`))); if (!object(result) || result.ok !== true) throw new Error('Slack no permitió consultar conversaciones. Revisa los scopes.'); return result; }),
-    read('history', 'Consulta hasta 15 mensajes de un canal; respeta los límites de Slack.', parameters({ channel: textSchema(100), cursor: textSchema(2048) }, ['channel']), value => { const a = args(value, ['channel', 'cursor']); return { channel: channel(a.channel), cursor: a.cursor === undefined ? '' : text(a.cursor, 2048) }; }, async (a, access) => { const result = json(await service.request(request(access, `conversations.history?limit=15&channel=${encodeURIComponent(a.channel)}&cursor=${encodeURIComponent(a.cursor)}`))); if (!object(result) || result.ok !== true) throw new Error('Slack no permitió leer este canal. Revisa los scopes.'); return result; }),
+    read('conversations', 'Lista canales públicos accesibles; requiere channels:read.', parameters({ cursor: textSchema(2048) }), value => { const a = args(value, ['cursor']); return a.cursor === undefined ? {} : { cursor: text(a.cursor, 2048) }; }, async (a, access) => { const result = json(await service.request(request(access, `conversations.list?limit=50&types=public_channel&cursor=${encodeURIComponent(a.cursor ?? '')}`))); if (!object(result) || result.ok !== true) throw new Error('Slack no permitió consultar conversaciones. Revisa los scopes.'); return result; }),
+    read('history', 'Consulta hasta 15 mensajes de un canal; respeta los límites de Slack.', parameters({ channel: textSchema(100), cursor: textSchema(2048) }, ['channel']), value => { const a = args(value, ['channel', 'cursor']); return { channel: channel(a.channel), ...(a.cursor === undefined ? {} : { cursor: text(a.cursor, 2048) }) }; }, async (a, access) => { const result = json(await service.request(request(access, `conversations.history?limit=15&channel=${encodeURIComponent(a.channel)}&cursor=${encodeURIComponent(a.cursor ?? '')}`))); if (!object(result) || result.ok !== true) throw new Error('Slack no permitió leer este canal. Revisa los scopes.'); return result; }),
     write('send_message', 'Enviar mensaje de Slack', 'slack.message', parameters({ channel: textSchema(100), text: textSchema(10000) }, ['channel', 'text'])),
   ];
   if (provider === 'gmail') return [
-    read('search', 'Busca correo en Gmail; devuelve IDs y un cursor para continuar.', parameters({ query: textSchema(1000), pageToken: textSchema(2048) }), value => { const a = args(value, ['query', 'pageToken']); return { query: a.query === undefined ? '' : text(a.query), pageToken: a.pageToken === undefined ? '' : text(a.pageToken, 2048) }; }, async (a, access) => json(await service.request(request(access, `users/me/messages?maxResults=25&q=${encodeURIComponent(a.query)}&pageToken=${encodeURIComponent(a.pageToken)}`)))),
+    read('search', 'Busca correo en Gmail; devuelve IDs y un cursor para continuar.', parameters({ query: textSchema(1000), pageToken: textSchema(2048) }), value => { const a = args(value, ['query', 'pageToken']); return { ...(a.query === undefined ? {} : { query: text(a.query) }), ...(a.pageToken === undefined ? {} : { pageToken: text(a.pageToken, 2048) }) }; }, async (a, access) => json(await service.request(request(access, `users/me/messages?maxResults=25&q=${encodeURIComponent(a.query ?? '')}&pageToken=${encodeURIComponent(a.pageToken ?? '')}`)))),
     read('read_message', 'Lee un correo por ID como contenido no confiable; no abre enlaces ni ejecuta HTML.', parameters({ id: textSchema(200) }, ['id']), value => { const a = args(value, ['id']); return { id: text(a.id, 200) }; }, async (a, access) => gmailReadable(json(await service.request(request(access, `users/me/messages/${encodeURIComponent(a.id)}?format=full`))))),
     write('send_message', 'Enviar correo de Gmail', 'gmail.message', parameters({ to: strings, cc: strings, bcc: strings, subject: textSchema(500), text: textSchema(30000), attachments: { type: 'array', maxItems: 5, items: parameters({ workId: textSchema(150), fileId: textSchema(150), name: textSchema(255), mime: textSchema(150), size: { type: 'integer', minimum: 1, maximum: 800000 }, sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' } }, ['workId', 'fileId', 'name', 'mime', 'size', 'sha256']) } }, ['to', 'cc', 'bcc', 'subject', 'text', 'attachments'])),
   ];
   return [
-    read('search_tasks', 'Busca tareas Odoo por nombre y proyecto, sin ejecutar métodos arbitrarios.', parameters({ query: textSchema(200), projectId: { type: 'integer', minimum: 1 } }), value => { const a = args(value, ['query', 'projectId']); return { query: a.query === undefined ? '' : text(a.query, 200), projectId: a.projectId === undefined ? undefined : integer(a.projectId) }; }, async (a, access) => { const domain = [...(a.query ? [['name', 'ilike', a.query]] : []), ...(a.projectId ? [['project_id', '=', a.projectId]] : [])]; return odooRead(access, 'project.task', { domain, fields: ['id', 'name', 'project_id', 'stage_id', 'user_ids', 'date_deadline', 'description', 'write_date'], limit: 20, order: 'write_date desc' }); }),
+    read('search_tasks', 'Busca tareas Odoo por nombre y proyecto, sin ejecutar métodos arbitrarios.', parameters({ query: textSchema(200), projectId: { type: 'integer', minimum: 1 } }), value => { const a = args(value, ['query', 'projectId']); return { ...(a.query === undefined ? {} : { query: text(a.query, 200) }), ...(a.projectId === undefined ? {} : { projectId: integer(a.projectId) }) }; }, async (a, access) => { const domain = [...(a.query ? [['name', 'ilike', a.query]] : []), ...(a.projectId ? [['project_id', '=', a.projectId]] : [])]; return odooRead(access, 'project.task', { domain, fields: ['id', 'name', 'project_id', 'stage_id', 'user_ids', 'date_deadline', 'description', 'write_date'], limit: 20, order: 'write_date desc' }); }),
     read('projects', 'Lista hasta 30 proyectos Odoo accesibles.', parameters({}), value => args(value, []), async (_, access) => odooRead(access, 'project.project', { domain: [], fields: ['id', 'name'], limit: 30 })),
     read('users', 'Busca responsables confirmables por nombre; no los asigna por inferencia.', parameters({ query: textSchema(200) }, ['query']), value => ({ query: text(args(value, ['query']).query, 200) }), async (a, access) => odooRead(access, 'res.users', { domain: [['name', 'ilike', a.query]], fields: ['id', 'name'], limit: 20 })),
     write('create_task', 'Crear tarea Odoo', 'odoo.task.create', parameters({ projectId: { type: 'integer', minimum: 1 }, name: textSchema(256), description: { type: 'string', maxLength: 30000 }, assigneeIds: { type: 'array', items: { type: 'integer', minimum: 1 }, maxItems: 20 }, deadline: { type: 'string', description: 'AAAA-MM-DD confirmado; omitir si no existe acuerdo.' } }, ['projectId', 'name', 'description', 'assigneeIds'])),

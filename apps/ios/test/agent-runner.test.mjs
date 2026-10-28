@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createAgentRunner } from '../src/agent-runner.ts';
+import { createLocalTools } from '../src/agent-tools.ts';
+import { createMemoryTools } from '../src/conversation-memory-tools.ts';
+import { createConnectionTools } from '../src/connection-tools.ts';
+import { createDesktopTools } from '../src/desktop-tools.ts';
+import { createWorkTools } from '../src/work-tools.ts';
 
 const answer = text => ({ ok: true, decision: { kind: 'answer', text, toolName: '', argumentsJSON: '{}' } });
 const call = (name, args = {}) => ({ ok: true, decision: { kind: 'tool', text: '', toolName: name, argumentsJSON: typeof args === 'string' ? args : JSON.stringify(args) } });
@@ -130,6 +135,24 @@ test('large tool observations and prior context stay within the native prompt bu
   await f.runner.run({ ...run(), instruction: 'x'.repeat(2400), context: '🦊'.repeat(10_000) });
   for (const prompt of f.prompts) assert.ok(Array.from(prompt).length <= 8000, 'Prompt length ' + Array.from(prompt).length);
   assert.match(f.prompts.at(-1), /Contenido parcial/);
+});
+
+test('the complete app catalog fits a maximum instruction and preserves each requested schema', async () => {
+  const tools = [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(),
+    ...createDesktopTools({ getConnection: () => undefined }),
+    ...createWorkTools({ getHost: () => undefined, getDispatcher: () => undefined }).filter(tool =>
+      ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))];
+  assert.ok(tools.length >= 24);
+  const instruction = '🦊'.repeat(2400);
+  for (const current of tools) {
+    const f = sequence([call('tool_describe', { name: current.definition.name }), prompt => {
+      assert.ok(prompt.includes(instruction), 'Current instruction must remain intact');
+      assert.ok(prompt.includes(JSON.stringify(current.definition)), current.definition.name + ' schema was truncated');
+      return answer('Lista para continuar.');
+    }], { tools });
+    await f.runner.run({ ...run(), instruction, context: 'contexto '.repeat(2000) });
+    assert.ok(f.prompts.every(prompt => Array.from(prompt).length <= 8000));
+  }
 });
 
 test('one runner excludes overlapping turns and becomes usable after cancellation', async () => {

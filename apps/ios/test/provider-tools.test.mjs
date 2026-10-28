@@ -126,3 +126,38 @@ test('provider adapters refuse an arbitrary credential destination', async () =>
   await assert.rejects(createProviderTools(id, f.services), /endpoint oficial/);
   assert.equal(f.calls.length, 0);
 });
+test('provider arguments survive the connection wrapper validation before execution', async () => {
+  const cases = [
+    ['github', {}, 'create_issue', { repository: 'org/repo', title: 'Title', text: 'Text', labels: [] }],
+    ['slack', {}, 'send_message', { channel: 'C123', text: 'Text' }],
+    ['gmail', {}, 'send_message', { to: ['ana@example.com'], cc: [], bcc: [], subject: 'Subject', text: 'Text', attachments: [] }],
+    ['odoo', { apiMode: 'json2' }, 'create_task', { projectId: 4, name: 'Task', description: '', assigneeIds: [] }],
+    ['odoo', { apiMode: 'legacy', database: 'operations', uid: 7 }, 'update_task', { taskId: 4, changes: { name: 'New name' } }],
+  ];
+  for (const [provider, metadata, name, input] of cases) {
+    const f = fixture(provider, metadata); const tool = find(await createProviderTools(id, f.services), name);
+    const validated = tool.validate(input);
+    assert.deepEqual(tool.validate(validated), validated);
+    const result = await tool.execute(validated, ctx(async () => true));
+    assert.equal(result.result.accepted, true);
+  }
+  for (const [provider, metadata, name, input] of [
+    ['slack', {}, 'conversations', {}], ['slack', {}, 'history', { channel: 'C123' }],
+    ['gmail', {}, 'search', {}], ['odoo', { apiMode: 'json2' }, 'search_tasks', {}],
+  ]) {
+    const f = fixture(provider, metadata); const tool = find(await createProviderTools(id, f.services), name);
+    const validated = tool.validate(input);
+    assert.deepEqual(tool.validate(validated), validated);
+    await tool.execute(validated, ctx());
+    assert.equal(f.calls.length, 1);
+    if (name === 'conversations') assert.equal(new URL(f.calls[0].url).searchParams.get('types'), 'public_channel');
+  }
+});
+test('credential retrieval cannot revive a connection changed during Keychain access', async () => {
+  const f = fixture('github'); const original = f.services.access;
+  f.services.access = async () => { const access = await original(); f.change(); return access; };
+  const tools = await createProviderTools(id, f.services);
+  await assert.rejects(find(tools, 'repositories').execute({}, ctx()), /cambió/);
+  await assert.rejects(find(tools, 'create_issue').execute({ repository: 'org/repo', title: 'Title', text: 'Text', labels: [] }, ctx(async () => { throw new Error('must not ask'); })), /cambió/);
+  assert.equal(f.calls.length, 0); assert.equal(f.journal.length, 0);
+});

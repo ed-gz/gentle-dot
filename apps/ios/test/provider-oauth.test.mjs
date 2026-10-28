@@ -220,3 +220,28 @@ test('authorization persists tokens in Keychain and only returns public connecti
   assert.equal(f.records.get(result.credentialAccount).accessToken, 'signed-in');
   await assert.rejects(f.store().authorizeAndSave({ ...result, endpoint: 'https://evil.example/' }, slack, signal(), undefined, 2), /endpoint oficial/);
 });
+
+test('Keychain read cannot return a token after connection disablement, removal or rotation', async () => {
+  for (const change of ['disabled', 'removed', 'rotated']) {
+    const f = vaultFixture(); f.records.get('account-1').expiresAt = 900000;
+    const read = f.deps.readSecret, get = f.deps.getConnection; let removed = false;
+    f.deps.getConnection = async id => removed ? null : get(id);
+    f.deps.readSecret = async account => {
+      const raw = await read(account);
+      if (change === 'disabled') f.connection().enabled = false;
+      if (change === 'removed') removed = true;
+      if (change === 'rotated') { f.connection().revision++; f.connection().credentialAccount = 'new-account'; }
+      return raw;
+    };
+    await assert.rejects(f.store().getValidProviderAccess('connection-1'), /conexión cambió/);
+    assert.equal(f.refreshes(), 0);
+  }
+});
+
+test('a completed shared access promise is revalidated before delivering its token', async () => {
+  const f = vaultFixture(); f.records.get('account-1').expiresAt = 900000;
+  const get = f.deps.getConnection; let reads = 0;
+  f.deps.getConnection = async id => { reads++; return reads >= 3 ? null : get(id); };
+  await assert.rejects(f.store().getValidProviderAccess('connection-1'), /conexión cambió/);
+  assert.equal(f.refreshes(), 0);
+});
