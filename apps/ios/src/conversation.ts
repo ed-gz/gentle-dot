@@ -1,6 +1,8 @@
+import type { Activity } from '@gentle-dot/protocol';
 export type Engine = 'iphone' | 'gentle';
-export type ChatEntry = { id: string; role: 'user' | 'assistant' | 'notice'; text: string; transportText?: string; engine: Engine; state: 'complete' | 'pending' | 'interrupted'; at: number };
-export type Conversation = { entries: ChatEntry[]; draft: string };
+export type ChatActivity = Activity & { detail?: string };
+export type ChatEntry = { id: string; role: 'user' | 'assistant' | 'notice'; text: string; transportText?: string; engine: Engine; state: 'complete' | 'pending' | 'interrupted'; at: number; activities?: ChatActivity[] };
+export type Conversation = { entries: ChatEntry[]; draft: string; attachedWork?: string };
 const MAX_ENTRIES = 120;
 const MAX_TEXT = 32000;
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -9,8 +11,9 @@ function cleanEntry(value: unknown, restoring = false): ChatEntry | undefined {
     || !['user', 'assistant', 'notice'].includes(value.role as string) || !['iphone', 'gentle'].includes(value.engine as string)
     || !['complete', 'pending', 'interrupted'].includes(value.state as string)
     || typeof value.at !== 'number' || !Number.isFinite(value.at) || value.at < 0) return;
+  const activities = Array.isArray(value.activities) ? value.activities.filter((item): item is Activity => record(item) && typeof item.id === 'string' && item.id.length <= 512 && typeof item.title === 'string' && item.title.length <= 1000 && ['read', 'edit', 'run', 'search', 'memory', 'delegate', 'other'].includes(item.kind as string) && ['running', 'done', 'failed'].includes(item.status as string)).slice(-80).map(item => ({ id: item.id, title: item.title, kind: item.kind, status: restoring && item.status === 'running' ? 'failed' as const : item.status, ...(typeof (item as ChatActivity).detail === 'string' ? { detail: (item as ChatActivity).detail!.slice(0, 4000) } : {}) })) : [];
   // Explicit fields only: persisted data must never acquire tokens or native payloads.
-  return { id: value.id, role: value.role as ChatEntry['role'], text: value.text.slice(0, MAX_TEXT),
+  return { ...(activities.length ? { activities } : {}), id: value.id, role: value.role as ChatEntry['role'], text: value.text.slice(0, MAX_TEXT),
     ...(typeof value.transportText === 'string' ? { transportText: value.transportText.slice(0, MAX_TEXT) } : {}),
     engine: value.engine as Engine, state: restoring && value.state === 'pending' ? 'interrupted' : value.state as ChatEntry['state'], at: value.at };
 }
@@ -26,7 +29,7 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
   if (index < 0) next.push(safe); else next[index] = safe;
   return next.slice(-MAX_ENTRIES);
 }
-type HostHistoryEntry = { id: string; role: 'user' | 'assistant'; text: string };
+type HostHistoryEntry = { id: string; role: 'user' | 'assistant'; text: string; activities?: ChatActivity[] };
 /** Reconcile the host's durable snapshot IDs with its separate live-event IDs. */
 export function reconcileHostHistory(entries: ChatEntry[], prefix: string, history: HostHistoryEntry[], at = Date.now()): ChatEntry[] {
   const remote = entries.map((entry, index) => ({ entry, index })).filter(({ entry }) =>
@@ -62,7 +65,7 @@ export function reconcileHostHistory(entries: ChatEntry[], prefix: string, histo
     }
     const prior = matches[0];
     const entry: ChatEntry = {
-      id, role: item.role, text: prior?.entry.transportText ? prior.entry.text : item.text,
+      id, role: item.role, activities: item.activities ?? matches.flatMap(match => match.entry.activities ?? []), text: prior?.entry.transportText ? prior.entry.text : item.text,
       ...(prior?.entry.transportText ? { transportText: prior.entry.transportText } : {}),
       engine: 'gentle',
       // History contains text, not the terminal outcome. Keep a known interrupted
@@ -174,11 +177,13 @@ export async function loadConversation(): Promise<Conversation> {
   if (!record(saved)) return { entries: [], draft: '' };
   return {
     entries: cleanEntries(saved.entries, true),
+    ...(typeof saved.attachedWork === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(saved.attachedWork) ? { attachedWork: saved.attachedWork } : {}),
     draft: typeof saved.draft === 'string' ? saved.draft.slice(0, 8000) : '',
   };
 }
 export async function saveConversation(value: Conversation): Promise<void> {
   await access('readwrite', store => store.put({
+    ...(typeof value.attachedWork === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value.attachedWork) ? { attachedWork: value.attachedWork } : {}),
     entries: cleanEntries(value.entries), draft: typeof value.draft === 'string' ? value.draft.slice(0, 8000) : '',
   }, 'current'));
 }

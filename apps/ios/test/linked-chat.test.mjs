@@ -171,3 +171,69 @@ test('rejects unsafe endpoints and blank tokens without opening a socket', () =>
   assert.throws(() => chat.connect('wss://example.ts.net/ws', '   '));
   assert.equal(FakeSocket.all.length, 0);
 });
+
+test('human answers bind to the current ask and cannot bypass app or PIN channels', () => {
+  const { chat, socket } = fixture(); ready(socket);
+  assert.equal(chat.answer('missing', { confirmed: true }), false);
+  socket.receive({ type: 'ask', ask: { requestId: 'confirm', method: 'confirm', title: 'Revisar contenido' } });
+  assert.equal(chat.answer('confirm', { value: 'true' }), false);
+  assert.equal(chat.answer('confirm', { confirmed: true }), true);
+  assert.deepEqual(socket.sent.at(-1), { type: 'ui_response', requestId: 'confirm', confirmed: true });
+  socket.receive({ type: 'ask_resolved', requestId: 'confirm' });
+  assert.equal(chat.answer('confirm', { confirmed: true }), false);
+  for (const method of ['app', 'pin']) {
+    socket.receive({ type: 'ask', ask: { requestId: method, method, title: 'Sensitive' } });
+    assert.equal(chat.answer(method, { confirmed: true }), false);
+  }
+  socket.receive({ type: 'ask', ask: { requestId: 'select', method: 'select', title: 'Choose', options: ['A', 'B'] } });
+  assert.equal(chat.answer('select', { value: 'C' }), false);
+  assert.equal(chat.answer('select', { value: 'A' }), true);
+  socket.drop();
+  assert.equal(chat.answer('select', { value: 'A' }), false);
+});
+
+test('an unchanged request ID cannot authorize content that changed after human review', () => {
+  const { chat, socket } = fixture(); ready(socket);
+  const shown = { requestId: 'same-id', method: 'confirm', title: 'Enviar borrador', message: 'Destino: Ana. Texto: versión A.' };
+  socket.receive({ type: 'ask', ask: shown });
+  const changed = { ...shown, message: 'Destino: Carlos. Texto: versión B.' };
+  socket.receive({ type: 'ask', ask: changed });
+  const before = socket.sent.length;
+  assert.equal(chat.answer(shown.requestId, { confirmed: true }, shown), false);
+  assert.equal(socket.sent.length, before);
+  assert.equal(chat.answer(changed.requestId, { confirmed: true }, { message: changed.message, title: changed.title, method: changed.method, requestId: changed.requestId }), true);
+  assert.deepEqual(socket.sent.at(-1), { type: 'ui_response', requestId: changed.requestId, confirmed: true });
+});
+
+test('option and expiry changes invalidate the reviewed ask snapshot', () => {
+  const { chat, socket } = fixture(); ready(socket);
+  const shown = { requestId: 'choice-id', method: 'select', title: 'Selecciona alcance', options: ['Privado','Equipo'], expiresAt: '2099-01-01T00:00:00.000Z' };
+  socket.receive({ type: 'ask', ask: shown });
+  socket.receive({ type: 'ask', ask: { ...shown, options: ['Privado','Internet'] } });
+  assert.equal(chat.answer(shown.requestId, { value: 'Privado' }, shown), false);
+  socket.receive({ type: 'ask', ask: { ...shown, expiresAt: '2099-01-02T00:00:00.000Z' } });
+  assert.equal(chat.answer(shown.requestId, { value: 'Privado' }, shown), false);
+});
+
+test('work RPC requires matching request and transfer IDs and does not replay after disconnect', async () => {
+  const { chat, socket } = fixture(); ready(socket);
+  const request = { type: 'work_sync', operation: 'status', requestId: 'request-1', transferId: 'transfer-1' };
+  let settled = false;
+  const response = chat.exchange(request).then(value => { settled = true; return value; });
+  socket.receive({ type: 'work_sync_reply', state: 'missing', requestId: 'request-1', transferId: 'wrong' });
+  await Promise.resolve(); assert.equal(settled, false);
+  socket.receive({ type: 'work_sync_reply', state: 'missing', requestId: 'request-1', transferId: 'transfer-1' });
+  assert.equal((await response).state, 'missing');
+  const lost = chat.exchange({ ...request, requestId: 'request-2' });
+  const rejected = assert.rejects(lost, /interrumpió/); socket.drop(); await rejected;
+  mock.timers.tick(500); const next = FakeSocket.all.at(-1); ready(next);
+  assert.equal(next.sent.some(message => message.type === 'work_sync'), false);
+});
+
+test('a missing durable reply times out without inventing receipt or resending', async () => {
+  const { chat, socket } = fixture(); ready(socket);
+  const response = chat.exchange({ type: 'work_sync', operation: 'status', requestId: 'status-1', transferId: 'transfer-1' });
+  const rejected = assert.rejects(response, /no confirmó/);
+  mock.timers.tick(30000); await rejected;
+  assert.equal(socket.sent.filter(message => message.type === 'work_sync').length, 1);
+});

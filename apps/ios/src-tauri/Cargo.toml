@@ -18,3 +18,5 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-local-intelligence = { path = "../plugin-local-intelligence" }
+tauri-plugin-perception = { path = "../plugin-perception" }
+tauri-plugin-device-bridge = { path = "../plugin-device-bridge" }

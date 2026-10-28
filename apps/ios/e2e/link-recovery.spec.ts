@@ -25,8 +25,9 @@ async function fixture(page: Page, onRequest: (message: WireMessage, send: (mess
     const state = globalThis as any;
     state.isTauri = true;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
+      if (command.endsWith('share_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
-      if (command.endsWith('respond')) return { ok: true, text: 'Respuesta del fixture local' };
+      if (command.endsWith('agent_step')) return { ok: true, decision: { kind: 'answer', text: 'Respuesta del fixture local', toolName: '', argumentsJSON: '{}' } };
       return { ok: true };
     } };
   });
@@ -41,11 +42,13 @@ async function fixture(page: Page, onRequest: (message: WireMessage, send: (mess
 
 async function connect(page: Page) {
   await page.locator('[data-panel="settings"]').click();
+  await page.getByText('Conexión manual', { exact: true }).click();
   await page.locator('#url').fill(endpoint);
   await page.locator('#token').fill('fixture-only');
   await page.locator('#connection button[type="submit"]').click();
   await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
   await page.locator('[data-panel="chat"]').click();
+  await page.locator('.engine-details summary').click();
   await page.locator('#engine').selectOption('gentle');
 }
 

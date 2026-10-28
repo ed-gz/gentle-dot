@@ -1,12 +1,27 @@
+import { localIdentifier } from './local-identifiers.ts';
 import { createEngine, frameAt } from '@gentle-dot/ui/src/capri2d/engine.ts';
 import { RigDirector, type RigIntent } from '@gentle-dot/ui/src/capri2d/director.ts';
 import { RigFx } from '@gentle-dot/ui/src/capri2d/fx.ts';
 import type { ServerMessage } from '@gentle-dot/protocol';
 import { readSettings, saveSettings, loadArtwork, saveArtwork, deleteArtwork, validateArtwork, validDaemonUrl } from './local-state.ts';
 import { createLinkedChat, type LinkedStatus } from './linked-chat.ts';
-import { checkLocalIntelligence, availabilityMessage, askLocal, cancelLocal, resetLocal, type Availability } from './local-intelligence.ts';
+import { checkLocalIntelligence, availabilityMessage, agentStep, cancelLocal, resetLocal, type Availability } from './local-intelligence.ts';
 import { loadConversation, saveConversation, updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
+import { createAgentRunner } from './agent-runner.ts';
+import { listConnections, saveConnection, removeConnection } from './external-connections.ts';
+import { createConnectionTools } from './connection-tools.ts';
+import { createWorkTools } from './work-tools.ts';
+import { createWorkDispatcher } from './work-sync.ts';
+import { createDesktopTools } from './desktop-tools.ts';
+import { createLocalTools } from './agent-tools.ts';
+import { createTrustedApprovals } from './trusted-approvals.ts';
+import { createConversationRequests } from './conversation-requests.ts';
+import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice } from './perception.ts';
+import { isTauri } from '@tauri-apps/api/core';
+import { secretGet, secretSet, secretDelete, listSharedImports, importSharedItem } from './device-bridge.ts';
+import { parseInvitation, pairDevice, restorePairing } from './device-pairing.ts';
+import { createWork, createImportedWork } from './work-inbox.ts';
 import './style.css';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -25,7 +40,7 @@ let intent: RigIntent = {};
 let revision = 0;
 let lastRevision = -1;
 let assetRevision = 0;
-let panel = 'companion';
+let panel = 'chat';
 let absent = false;
 let roaming = false;
 let position = { x: 0, y: 0 };
@@ -44,7 +59,7 @@ function place(x: number, y: number) {
 }
 function animate(now: number) {
   if (!engine || document.hidden || !['companion', 'chat'].includes(panel) || absent) return;
-  if (roaming && panel === 'companion' && !isReduced()) {
+  if (roaming && panel === 'chat' && !isReduced()) {
     if (now >= nextRoam) {
       destination = { x: (Math.random() - .5) * Math.max(0, stage.clientWidth - 224), y: (Math.random() - .5) * Math.max(0, stage.clientHeight - 314) };
       nextRoam = now + 6000;
@@ -150,9 +165,6 @@ window.addEventListener('resize', () => place(position.x, position.y));
 
 function showPanel(next: string) {
   panel = next;
-  if (next === 'chat') element('chat-companion').append(stage);
-  else element('panel-companion').insertBefore(stage, element('art-status'));
-  stage.classList.toggle('compact', next === 'chat');
   place(0, 0);
   for (const section of document.querySelectorAll<HTMLElement>('.panel')) section.hidden = section.id !== `panel-${next}`;
   for (const button of document.querySelectorAll<HTMLElement>('[data-panel]')) {
@@ -162,13 +174,19 @@ function showPanel(next: string) {
   if (next === 'inbox') void inbox.refresh();
 }
 for (const button of document.querySelectorAll<HTMLElement>('[data-panel]')) button.addEventListener('click', () => showPanel(button.dataset.panel!));
-element('open-chat').addEventListener('click', () => { showPanel('chat'); element('prompt').focus(); });
 function errorText(error: unknown) { return error instanceof Error ? error.message : 'No se pudo completar la operación.'; }
 
 // The UI owns one durable conversation; each transport has an explicit trust boundary.
 const prompt = element<HTMLTextAreaElement>('prompt');
 let entries: ChatEntry[] = [];
 let selected: Engine = 'iphone';
+let preference: Engine | 'auto' = 'auto';
+let localController: AbortController | undefined;
+let attachedWork: string | undefined;
+let connectionEpoch = 0;
+let manualToSave: { url: string; token: string } | undefined;
+let runtimeConnection: { url: string; token: string } | undefined;
+const reviews = createConversationRequests(element('requests'));
 let availability: Availability = { available: false, status: 'checking', supportsSpanish: false };
 let linkedStatus: LinkedStatus = 'offline';
 let linkedBusy = false;
@@ -185,13 +203,14 @@ let saveChain = Promise.resolve();
 function persist() {
   if (!conversationReady) return;
   clearTimeout(saveTimer);
-  const snapshot = { entries: structuredClone(entries), draft: prompt.value };
+  const snapshot = { entries: structuredClone(entries), draft: prompt.value, attachedWork };
   saveChain = saveChain.then(() => saveConversation(snapshot)).catch(() => {
     element('chat-notice').textContent = 'No se pudo guardar la conversación. No cierres Capri hasta conservar el texto.';
   });
 }
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 250); }
 function renderChat() {
+  element('empty-conversation').hidden = entries.length > 0;
   const container = element('cards');
   const nodes = new Map(Array.from(container.children).map(child => [(child as HTMLElement).dataset.id, child as HTMLElement]));
   for (const entry of entries) {
@@ -200,29 +219,39 @@ function renderChat() {
       node = document.createElement('article'); node.className = 'chat-card'; node.dataset.id = entry.id;
       const label = document.createElement('div'); label.className = 'chat-label';
       const text = document.createElement('p'); text.className = 'chat-text';
-      const state = document.createElement('small'); node.append(label, text, state);
+      const state = document.createElement('small'); const trace = document.createElement('details'); trace.className = 'tool-trace'; node.append(label, text, state, trace);
     }
     node.dataset.role = entry.role;
     node.children[0]!.textContent = `${entry.role === 'user' ? 'TÚ' : entry.role === 'notice' ? 'AVISO' : 'CAPRI'} / ${entry.engine === 'iphone' ? 'IPHONE' : 'GENTLE DOT'}`;
     node.children[1]!.textContent = entry.text;
     node.children[2]!.textContent = entry.state === 'pending' ? (entry.role === 'user' ? 'Esperando confirmación del host…' : 'Preparando respuesta…') : entry.state === 'interrupted' ? 'Interrumpido o sin confirmar. No se reenvía automáticamente.' : '';
+    const trace = node.children[3] as HTMLDetailsElement;
+    const activities = entry.activities ?? [];
+    trace.hidden = activities.length === 0;
+    const summary = document.createElement('summary');
+    summary.textContent = `${activities.length} acciones · ${activities.filter(item => item.status === 'running').length} en curso`;
+    const list = document.createElement('ul');
+    for (const activity of activities) { const item = document.createElement('li'); item.textContent = `${activity.status === 'running' ? 'En curso' : activity.status === 'done' ? 'Completado' : 'Interrumpido o fallido'} · ${activity.title}`; if (activity.detail) { const details = document.createElement('details'); const label = document.createElement('summary'); label.textContent = 'Ver resultado'; const output = document.createElement('pre'); output.textContent = activity.detail; details.append(label, output); item.append(details); } list.append(item); }
+    trace.replaceChildren(summary, list);
     container.append(node);
     nodes.delete(entry.id);
   }
   for (const node of nodes.values()) node.remove();
 }
-function add(entry: ChatEntry) { entries = updateEntry(entries, entry); renderChat(); scheduleSave(); }
-function notice(text: string, target: Engine = selected, id: string = crypto.randomUUID()) { add({ id, role: 'notice', text, engine: target, state: 'complete', at: Date.now() }); }
+function add(entry: ChatEntry) { if (!entry.activities) entry.activities = entries.find(prior => prior.id === entry.id)?.activities; entries = updateEntry(entries, entry); renderChat(); scheduleSave(); }
+function notice(text: string, target: Engine = selected, id: string = localIdentifier()) { add({ id, role: 'notice', text, engine: target, state: 'complete', at: Date.now() }); }
 function remoteId(id: string) { return `host:${host}|${remoteConversation}|${id}`; }
 function updateControls() {
+  if (!localBusy && !pendingRemote) selected = preference === 'auto' ? (availability.available && availability.supportsSpanish ? 'iphone' : linkedStatus === 'ready' ? 'gentle' : 'iphone') : preference;
   const ready = selected === 'iphone' ? availability.available && availability.supportsSpanish : linkedStatus === 'ready';
-  const busy = localBusy || (selected === 'gentle' && (linkedBusy || !!pendingRemote));
+  const busy = localBusy || !!pendingRemote;
   element<HTMLButtonElement>('send').disabled = !conversationReady || !ready || busy;
   element<HTMLSelectElement>('engine').disabled = localBusy || !!pendingRemote;
   element('stop').hidden = !(localBusy || (selected === 'gentle' && linkedBusy));
+  element<HTMLButtonElement>('send').textContent = selected === 'gentle' && linkedBusy ? 'Añadir instrucción' : 'Enviar';
   prompt.maxLength = selected === 'iphone' ? 2400 : 8000;
   element('engine-badge').textContent = selected === 'iphone' ? 'EN ESTE IPHONE' : 'EN TU LAPTOP';
-  element('engine-status').textContent = selected === 'iphone' ? availabilityMessage(availability) : linkedStatus === 'ready' ? 'Vinculado. Se enviarán tu mensaje y hasta cuatro turnos locales recientes a la laptop.' : 'Conecta Gentle Dot en Ajustes. Puedes guardar el trabajo mientras tanto.';
+  element('engine-status').textContent = selected === 'iphone' ? availabilityMessage(availability) : linkedStatus === 'ready' ? 'Vinculado. Se enviarán tu mensaje y hasta cuatro turnos locales recientes a la laptop.' : 'Gentle Dot no está conectado. Capri conserva la conversación y los archivos en este iPhone.';
 }
 function unconfirmedRemote() {
   if (!pendingRemote) return;
@@ -238,7 +267,7 @@ function handleMessage(message: ServerMessage) {
   if (message.type === 'ready') { remoteConversation = message.conversationId ?? 'default'; linkedBusy = ['thinking', 'working', 'needs_you'].includes(message.agentState); }
   if (message.type === 'agent_state') {
     linkedBusy = ['thinking', 'working', 'needs_you'].includes(message.state);
-    if (selected === 'gentle') setIntent({ working: linkedBusy, thinking: message.state === 'thinking', alert: message.state === 'needs_you' });
+    if (selected === 'gentle') { setIntent({ working: linkedBusy, thinking: message.state === 'thinking', alert: message.state === 'needs_you' }); element('scene-status').textContent = ({ thinking: 'Pensando contigo…', working: 'Estoy trabajando.', needs_you: 'Necesito tu respuesta.', idle: 'Aquí contigo.', starting: 'Iniciando…', restarting: 'Recuperando el hilo…', error: 'Algo necesita atención.' })[message.state]; }
   }
   if (message.type === 'history') {
     remoteConversation = message.conversationId ?? remoteConversation;
@@ -272,22 +301,43 @@ function handleMessage(message: ServerMessage) {
       if (selected === 'gentle') setIntent(message.stopped ? {} : { outcome: { kind: message.error ? 'error' : 'done', at: performance.now() } });
     }
   }
+  if (message.type === 'activity') {
+    const id = remoteId(message.messageId); const prior = entries.find(item => item.id === id);
+    const activities = [...prior?.activities ?? []]; const at = activities.findIndex(item => item.id === message.activity.id);
+    if (at < 0) activities.push(message.activity); else activities[at] = message.activity;
+    add({ id, role: 'assistant', text: prior?.text ?? '', engine: 'gentle', state: prior?.state ?? 'pending', at: prior?.at ?? Date.now(), activities });
+    element('active-tool').textContent = message.activity.status === 'running' ? message.activity.title : '';
+    if (selected === 'gentle') setIntent({ working: message.activity.status === 'running', workBeat: message.activity.status === 'running' ? 'typing' : undefined });
+  }
+  if (message.type === 'queue') element('chat-notice').textContent = message.steering.length ? `${message.steering.length} instrucción(es) recibidas para orientar el trabajo en curso.` : '';
   if (message.type === 'toast' || message.type === 'error') notice(message.message, 'gentle');
   if (message.type === 'error') unconfirmedRemote();
-  if (message.type === 'ask') notice(`${message.ask.title}\n${message.ask.message ?? ''}\nRevisa esta autorización en la laptop. Capri no la aprobará automáticamente.`, 'gentle', remoteId(`ask:${message.ask.requestId}`));
-  if (message.type === 'ask_resolved') {
-    const entry = entries.find(item => item.id === remoteId(`ask:${message.requestId}`));
-    if (entry) add({ ...entry, text: `${entry.text}\nResuelta en el host.` });
+  if (message.type === 'ask') {
+    const ask = message.ask;
+    if (ask.method === 'app' && isTauri() && runtimeConnection) {
+      const client = createTrustedApprovals({ getConnection: () => runtimeConnection ?? null });
+      void client.list().then(approvals => {
+        const snapshot = approvals.find(item => item.requestId === ask.requestId);
+        if (!snapshot) throw new Error('La autorización ya no está vigente.');
+        reviews.host({ ...ask, title: snapshot.title, message: snapshot.body, expiresAt: snapshot.expiresAt }, fields => client.answer(snapshot, fields.confirmed === true), true);
+      }).catch(() => reviews.host(ask, () => false));
+    } else reviews.host(ask, fields => linked.answer(ask.requestId, fields, ask));
   }
+  if (message.type === 'ask_resolved') reviews.resolved(message.requestId);
   updateControls();
 }
 const linked = createLinkedChat({
   onStatus(value) {
-    linkedStatus = value;
+    if (value === 'ready' && manualToSave && isTauri()) {
+      const credential = manualToSave; manualToSave = undefined;
+      void secretSet('daemon-manual', new URL(credential.url.replace('wss:', 'https:')).origin, credential.token).catch(() => notice('Conectado; no se pudo conservar el acceso en Keychain.'));
+    }
+    if (value === 'rejected') { connectionEpoch++; manualToSave = undefined; runtimeConnection = undefined; }
+    linkedStatus = value; reviews.connection(value === 'ready');
     element('status').textContent = { offline: 'Sin conexión', connecting: 'Conectando…', ready: 'Vinculado a Gentle Dot', rejected: 'Acceso rechazado. Revisa token y versión.' }[value];
     element('connection-badge').textContent = value === 'ready' ? 'VINCULADO' : 'LOCAL';
     if (value !== 'ready') {
-      linkedBusy = false;
+      linkedBusy = false; if (!localBusy) element('active-tool').textContent = '';
       entries = entries.map(entry => entry.engine === 'gentle' && entry.id.startsWith(`host:${host}|`) && entry.state === 'pending' ? { ...entry, state: 'interrupted' } : entry);
       unconfirmedRemote();
       renderChat(); scheduleSave();
@@ -295,12 +345,13 @@ const linked = createLinkedChat({
     updateControls();
   }, onMessage: handleMessage,
 });
-element<HTMLSelectElement>('engine').addEventListener('change', () => { selected = element<HTMLSelectElement>('engine').value as Engine; updateControls(); });
+element<HTMLSelectElement>('engine').addEventListener('change', () => { preference = element<HTMLSelectElement>('engine').value as Engine | 'auto'; updateControls(); });
 prompt.addEventListener('input', () => { draftEdited = true; scheduleSave(); });
 element<HTMLFormElement>('composer').addEventListener('submit', async event => {
   event.preventDefault();
   const text = prompt.value.trim();
-  if (!text || localBusy || (selected === 'gentle' && linkedBusy) || pendingRemote || !conversationReady) return;
+  const promptText = text;
+  if (!text || localBusy || pendingRemote || !conversationReady) return;
   element('chat-notice').textContent = '';
   if (selected === 'iphone') {
     if (!availability.available || !availability.supportsSpanish) { updateControls(); return; }
@@ -308,25 +359,39 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
     const request = localPrompt(entries, text);
     if (Array.from(request).length > 4000) { element('chat-notice').textContent = 'Reduce el mensaje para dejar espacio al contexto local.'; return; }
     const generation = ++localGeneration;
-    const id = crypto.randomUUID(); localBusy = true;
-    add({ id: crypto.randomUUID(), role: 'user', text, engine: 'iphone', state: 'complete', at: Date.now() });
+    const id = localIdentifier(); localBusy = true;
+    localController = new AbortController();
+    const context = (attachedWork ? `Archivo adjunto: trabajo ${attachedWork}. Usa work_read y file_read/file_ocr para consultarlo.\n` : '') + JSON.stringify({
+      operations: entries.filter(entry => entry.activities?.length).slice(-1).map(entry => ({ state: entry.state, activities: entry.activities?.slice(-1).map(activity => ({ id: activity.id, status: activity.status, title: activity.title.slice(0, 50), result: activity.detail?.slice(0, 180) })) })),
+      turns: entries.filter(entry => entry.state === 'complete' && entry.role !== 'notice').slice(-2).reverse().map(entry => ({ role: entry.role, text: entry.text.slice(-100) })),
+    });
+    add({ id: localIdentifier(), role: 'user', text, engine: 'iphone', state: 'complete', at: Date.now() });
     add({ id, role: 'assistant', text: '', engine: 'iphone', state: 'pending', at: Date.now() });
-    prompt.value = ''; persist(); updateControls(); setIntent({ working: true, thinking: true });
+    prompt.value = ''; persist(); updateControls(); setIntent({ working: true, thinking: true }); element('scene-status').textContent = 'Pensando contigo…';
     try {
       // Rebuild a bounded context from the visible timeline, also after app restarts.
       await resetLocal();
       if (generation !== localGeneration) return;
-      const response = await askLocal(request);
+      const runner = createAgentRunner({ tools: [...createLocalTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: () => linked.ready() ? createWorkDispatcher(linked.exchange, host) : undefined }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))], step: agentStep, onTrace(trace) {
+        const entry = entries.find(item => item.id === id); if (!entry) return;
+        const activities = [...entry.activities ?? []]; const at = activities.findIndex(item => item.id === trace.id);
+        const activity = { id: trace.id, kind: 'other' as const, title: trace.label, status: trace.status, detail: trace.detail };
+        if (at < 0) activities.push(activity); else activities[at] = activity;
+        add({ ...entry, activities }); element('active-tool').textContent = trace.status === 'running' ? trace.label : '';
+        setIntent({ working: trace.status === 'running', thinking: trace.status !== 'running' });
+      } });
+      const text = await runner.run({ instruction: promptText, context, signal: localController.signal, askApproval: request => reviews.approve(request, localController!.signal) });
       if (generation !== localGeneration) return;
-      add({ id, role: 'assistant', text: response.ok ? response.text ?? '' : response.message ?? 'No se pudo generar la respuesta.', engine: 'iphone', state: response.ok ? 'complete' : 'interrupted', at: Date.now() });
-      setIntent({ outcome: { kind: response.ok ? 'done' : 'error', at: performance.now() } });
+      add({ id, role: 'assistant', text, engine: 'iphone', state: 'complete', at: Date.now() });
+      setIntent({ outcome: { kind: 'done', at: performance.now() } });
     } catch (error) {
       if (generation === localGeneration) add({ id, role: 'notice', text: errorText(error), engine: 'iphone', state: 'interrupted', at: Date.now() });
-    } finally { if (generation === localGeneration) { localBusy = false; updateControls(); persist(); } }
+    } finally { if (generation === localGeneration) { localBusy = false; element('active-tool').textContent = ''; element('scene-status').textContent = 'Aquí contigo.'; updateControls(); persist(); } }
   } else {
     if (!linked.ready()) { element('chat-notice').textContent = 'La laptop está desconectada. Guarda el trabajo para conservarlo.'; return; }
-    const id = remoteId(`pending:${crypto.randomUUID()}`);
-    const request = linkedPrompt(entries, text);
+    const id = remoteId(`pending:${localIdentifier()}`);
+    let request: string;
+    try { request = linkedPrompt(entries, attachedWork ? `${text}\n\nTengo material guardado sólo en el iPhone como trabajo ${attachedWork}. No tienes sus bytes hasta que se confirme una transferencia; no afirmes haberlo leído.` : text); } catch (error) { element('chat-notice').textContent = errorText(error); return; }
     if (linked.send(request)) {
       pendingRemote = { id, text: request, displayText: text };
       pendingTimer = setTimeout(unconfirmedRemote, 15000);
@@ -335,36 +400,46 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
     } else element('chat-notice').textContent = 'No se envió. Tu mensaje sigue aquí.';
   }
 });
-async function stopLocal() {
-  ++localGeneration;
-  try { await cancelLocal(); } catch { /* Native lifecycle also cancels active generation. */ }
-  localBusy = false;
-  entries = entries.map(entry => entry.engine === 'iphone' && entry.state === 'pending' ? { ...entry, state: 'interrupted', text: entry.text || 'Respuesta interrumpida.' } : entry);
-  renderChat(); persist(); setIntent({}); updateControls();
+let stoppingLocal: Promise<void> | undefined;
+function stopLocal(): Promise<void> {
+  if (stoppingLocal) return stoppingLocal;
+  const generation = ++localGeneration; localController?.abort();
+  stoppingLocal = (async () => {
+    try { await cancelLocal(); } catch { /* Native lifecycle also cancels active generation. */ }
+    if (generation !== localGeneration) return;
+    localBusy = false;
+    entries = entries.map(entry => entry.engine === 'iphone' && entry.state === 'pending' ? { ...entry, state: 'interrupted', text: entry.text || 'Respuesta interrumpida.' } : entry);
+    element('active-tool').textContent = ''; element('scene-status').textContent = 'Aquí contigo.';
+    renderChat(); persist(); setIntent({}); updateControls();
+  })().finally(() => { stoppingLocal = undefined; });
+  return stoppingLocal;
 }
 element('stop').addEventListener('click', () => {
   if (localBusy) void stopLocal();
   else if (linked.abort()) element('chat-notice').textContent = 'Se pidió detener la respuesta de Gentle Dot; esperando al host.';
 });
-element<HTMLFormElement>('connection').addEventListener('submit', event => {
+element<HTMLFormElement>('connection').addEventListener('submit', async event => {
   event.preventDefault();
   try {
     const nextHost = validDaemonUrl(element<HTMLInputElement>('url').value);
-    linked.connect(nextHost, element<HTMLInputElement>('token').value);
+    const token = element<HTMLInputElement>('token').value;
+    connectionEpoch++;
+    linked.connect(nextHost, token); runtimeConnection = { url: nextHost, token };
+    manualToSave = { url: nextHost, token };
     host = nextHost;
     element<HTMLInputElement>('token').value = '';
     settings.url = host; saveSettings(settings);
   } catch (error) { element('status').textContent = errorText(error); }
 });
-element('disconnect').addEventListener('click', () => { linked.disconnect(); element<HTMLInputElement>('token').value = ''; });
+element('disconnect').addEventListener('click', () => { connectionEpoch++; manualToSave = undefined; linked.disconnect(); runtimeConnection = undefined; element<HTMLInputElement>('token').value = ''; if (isTauri() && host) void secretDelete('daemon-manual', new URL(host.replace('wss:', 'https:')).origin).catch(() => {}); });
 element('check-local').addEventListener('click', () => void checkModel());
 element<HTMLInputElement>('url').value = settings.url;
 const inbox = mountInbox(text => { draftEdited = true; prompt.value = text; scheduleSave(); showPanel('chat'); prompt.focus(); });
 
 document.addEventListener('visibilitychange', () => {
   cancelAnimationFrame(frame); fx?.clear(); persist();
-  if (document.hidden) { director.update(intent, performance.now(), true); linked.suspend(); if (localBusy) void stopLocal(); }
-  else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); }
+  if (document.hidden) { void cancelDictation(); director.update(intent, performance.now(), true); linked.suspend(); if (localBusy) void stopLocal(); }
+  else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); }
 });
 window.addEventListener('pagehide', () => { cancelAnimationFrame(frame); linked.suspend(); persist(); if (localBusy) void stopLocal(); });
 window.addEventListener('pageshow', event => { if (event.persisted) { redraw(); linked.resume(); } });
@@ -378,7 +453,8 @@ async function restoreConversation() {
   try {
     const saved = await loadConversation();
     entries = entries.reduce((history, entry) => updateEntry(history, entry), saved.entries);
-    if (!draftEdited) prompt.value = saved.draft;
+    if (!draftEdited) { prompt.value = saved.draft; if (!attachedWork) attachedWork = saved.attachedWork; }
+    if (attachedWork) element('attachment-context').textContent = `Material local adjunto · trabajo ${attachedWork}`;
     conversationReady = true;
     retry.hidden = true;
     if (element('chat-notice').textContent === recoveryMessage) element('chat-notice').textContent = '';
@@ -400,7 +476,140 @@ async function initialize() {
   const artworkReady = loadArtwork().then(async art => {
     if (art && assetRevision === initialArtworkRevision) await useArtwork(art, false);
   }).catch(error => { element('settings-status').textContent = errorText(error); });
-  const servicesReady = Promise.all([checkModel(), inbox.refresh()]);
+  const servicesReady = Promise.all([checkModel(), inbox.refresh(), restoreDeviceConnection(), importSharedFiles(), refreshConnections()]);
   await Promise.all([artworkReady, servicesReady, restoreConversation()]);
 }
-void initialize();
+queueMicrotask(() => void initialize());
+
+let voiceSession: string | undefined;
+let voiceStarting = false;
+let voiceController: AbortController | undefined;
+let voiceGeneration = 0;
+let voiceTimer: ReturnType<typeof setTimeout> | undefined;
+async function cancelDictation() {
+  voiceGeneration++; voiceController?.abort(); voiceSession = undefined; clearTimeout(voiceTimer);
+  if (isTauri()) await cancelVoice().catch(() => {});
+  element('dictate').setAttribute('aria-pressed', 'false');
+  element('dictate').textContent = 'Dictar';
+}
+element('dictate').addEventListener('click', async () => {
+  if (voiceStarting) return;
+  const current = ++voiceGeneration;
+  voiceStarting = true;
+  const control = element<HTMLButtonElement>('dictate'); control.disabled = true;
+  try {
+    if (voiceSession) {
+      const id = voiceSession; voiceSession = undefined; clearTimeout(voiceTimer);
+      element('voice-status').textContent = 'Transcribiendo en este iPhone…';
+      const transcript = await stopVoice(id);
+      if (current !== voiceGeneration) return;
+      // Voice edits the same draft; nothing is sent without the person's submit.
+      prompt.value = `${prompt.value}${prompt.value.trim() ? '\n' : ''}${transcript.text}`;
+      draftEdited = true; scheduleSave(); prompt.focus();
+      element('voice-status').textContent = 'Transcripción añadida. Puedes corregirla antes de enviar.';
+      setIntent({});
+    } else {
+      voiceController = new AbortController();
+      const availability = await checkVoice();
+      if (availability.status === 'assets_required') {
+        const approved = await reviews.approve({ title: 'Preparar dictado local', details: 'Apple necesita descargar los recursos de voz en español para transcribir en este iPhone. La descarga requiere internet y espacio; después podrás dictar sin conexión.', operation: 'prepare-local-voice' }, voiceController.signal);
+        if (!approved || current !== voiceGeneration) return;
+        element('voice-status').textContent = 'Preparando voz local con Apple…';
+        await prepareVoice();
+      }
+      if (current !== voiceGeneration) return;
+      const session = await startVoice();
+      if (current !== voiceGeneration) { await cancelVoice(); return; }
+      voiceSession = session.sessionId;
+      element('voice-status').textContent = 'Te escucho. Toca Terminar para transcribir.';
+      setIntent({ alert: true });
+      voiceTimer = setTimeout(() => control.click(), session.maxDurationSeconds * 1000 - 500);
+    }
+  } catch (error) { if (current === voiceGeneration) element('voice-status').textContent = errorText(error); }
+  finally {
+    voiceStarting = false; control.disabled = false;
+    control.setAttribute('aria-pressed', String(!!voiceSession)); control.textContent = voiceSession ? 'Terminar' : 'Dictar';
+  }
+});
+element<HTMLInputElement>('chat-files').addEventListener('change', async event => {
+  const control = event.target as HTMLInputElement;
+  const files = Array.from(control.files ?? []); if (!files.length) return;
+  try {
+    const item = await createWork({ title: files[0]!.name.slice(0, 120), kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: prompt.value.trim() || 'Material adjunto a la conversación de Capri.', files });
+    attachedWork = item.id;
+    element('attachment-context').textContent = `${files.length} archivo(s) guardados · ${item.title}`;
+    notice(`Adjuntos guardados en este iPhone: ${item.title}. Trabajo ${item.id}. Todavía no enviados a la laptop.`, 'iphone');
+    control.value = ''; await inbox.refresh();
+  } catch (error) { element('chat-notice').textContent = errorText(error); }
+});
+element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = element<HTMLFormElement>('pairing').querySelector('button')!; button.disabled = true;
+  try {
+    const invitation = parseInvitation(element<HTMLInputElement>('pairing-invitation').value);
+    const epoch = ++connectionEpoch;
+    element('pairing-status').textContent = 'Esperando la vinculación con Gentle Dot…';
+    const result = await pairDevice(invitation);
+    if (epoch !== connectionEpoch) return;
+    linked.connect(result.connection.url, result.connection.token);
+    runtimeConnection = result.connection; host = result.connection.url;
+    settings.url = host; saveSettings(settings); element<HTMLInputElement>('url').value = host;
+    element<HTMLInputElement>('pairing-invitation').value = '';
+    element('pairing-status').textContent = result.persisted ? 'iPhone vinculado. Acceso guardado en Keychain.' : result.message ?? 'Vinculado; el acceso no se pudo guardar.';
+  } catch (error) { element('pairing-status').textContent = errorText(error); }
+  finally { button.disabled = false; }
+});
+async function restoreDeviceConnection() {
+  if (!isTauri() || !settings.url) return;
+  const restoredURL = settings.url;
+  const epoch = connectionEpoch;
+  try {
+    const origin = new URL(restoredURL.replace('wss:', 'https:')).origin;
+    let paired;
+    try { paired = await restorePairing(origin); } catch { /* Manual hosts may not use Tailscale. */ }
+    const token = paired?.token ?? await secretGet('daemon-manual', origin);
+    if (token && epoch === connectionEpoch) { runtimeConnection = { url: restoredURL, token }; linked.connect(restoredURL, token); }
+  } catch { if (epoch !== connectionEpoch) return; element('status').textContent = 'No se pudo recuperar el acceso guardado. Puedes volver a vincular este iPhone.'; }
+}
+async function importSharedFiles() {
+  if (!isTauri()) return;
+  try {
+    for (const item of await listSharedImports()) {
+      await importSharedItem(item, async ({ sourceId, files }) => {
+        const work = await createImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: item.notes || 'Material compartido con Capri. Pendiente de instrucciones.', files });
+        attachedWork = work.id;
+        notice(`Recibí ${work.title}. Material guardado localmente como trabajo ${work.id}; dime qué hacemos con él.`, 'iphone', `shared:${item.id}`);
+      });
+    }
+    await inbox.refresh();
+  } catch (error) { element('chat-notice').textContent = errorText(error); }
+}
+
+async function refreshConnections() {
+  try {
+    const container = element('connections-list'); container.replaceChildren();
+    for (const connection of await listConnections()) {
+      const item = document.createElement('article'); item.className = 'work-item';
+      const title = document.createElement('strong'); title.textContent = connection.label;
+      const destination = document.createElement('p'); destination.textContent = connection.endpoint;
+      const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Quitar conexión';
+      remove.addEventListener('click', async () => {
+        try { await removeConnection(connection.id, connection.revision); await refreshConnections(); }
+        catch (error) { element('connections-status').textContent = errorText(error); }
+      });
+      item.append(title, destination, remove); container.append(item);
+    }
+  } catch (error) { element('connections-status').textContent = errorText(error); }
+}
+element<HTMLFormElement>('external-connection').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = element<HTMLFormElement>('external-connection').querySelector('button')!; button.disabled = true;
+  try {
+    if (!isTauri()) throw new Error('Configura conexiones en Capri instalada en el iPhone para guardar el acceso de forma segura.');
+    await saveConnection({ kind: 'mcp', label: element<HTMLInputElement>('connection-label').value, endpoint: element<HTMLInputElement>('connection-endpoint').value }, element<HTMLInputElement>('connection-secret').value);
+    element<HTMLInputElement>('connection-secret').value = '';
+    element('connections-status').textContent = 'Conexión guardada. Pídele a Capri que consulte sus herramientas.';
+    await refreshConnections();
+  } catch (error) { element('connections-status').textContent = errorText(error); }
+  finally { button.disabled = false; }
+});

@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 test('local work and attached bytes survive reload; using instructions does not send', async ({ page }) => {
   await page.goto('/');
   await page.locator('[data-panel="inbox"]').click();
+  await page.getByText('Crear un trabajo manualmente', { exact: true }).click();
   const title = '<img src=x onerror=alert(1)> reunión';
   const instruction = 'Preparar acuerdos <script>alert(1)</script>';
   await page.locator('#work-title').fill(title);
@@ -62,6 +63,7 @@ test('instruction edits and text versions update locally through the UI', async 
   await page.goto('/');
   await page.locator('[data-panel="chat"]').click();
   await page.locator('#prompt').fill('Preparar minuta de operaciones');
+  await page.locator('[data-panel="inbox"]').click();
   await page.locator('#save-draft').click();
   await expect(page.locator('#save-draft')).toHaveText('Guardado en Trabajos');
   await expect(page.locator('#prompt')).toHaveValue('Preparar minuta de operaciones');

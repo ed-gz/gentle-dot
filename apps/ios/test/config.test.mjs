@@ -79,6 +79,8 @@ function unsignedBuildFixture(mode) {
   };
   command('uname', 'printf "Darwin\\n"');
   command('pnpm', 'exit 0');
+  // XcodeGen mutation is exercised by device-bridge.test; this fixture isolates packaging.
+  command('ruby', '[[ "$*" == scripts/configure-share-extension.rb ]]');
   command('cargo', `
     if [[ "$*" == 'tauri ios init --ci' ]]; then
       mkdir -p src-tauri/gen/apple/Capri.xcodeproj
@@ -92,16 +94,18 @@ import os, pathlib, plistlib, zipfile
 path = pathlib.Path('src-tauri/gen/apple/build/arm64/Capri.ipa')
 path.parent.mkdir(parents=True, exist_ok=True)
 info = {'CFBundleIdentifier': 'wrong.app' if os.environ['CAPRI_BUILD_FIXTURE'] == 'identity' else 'dev.gentledot.capri',
-        'DTPlatformName': 'iphoneos', 'CFBundleExecutable': 'Capri'}
+        'DTPlatformName': 'iphoneos', 'CFBundleExecutable': 'Capri', 'NSMicrophoneUsageDescription': 'Dictado local'}
 with zipfile.ZipFile(path, 'w') as archive:
     archive.writestr('Payload/Capri.app/Info.plist', plistlib.dumps(info))
     archive.writestr('Payload/Capri.app/Capri', b'fixture native executable')
+    if os.environ['CAPRI_BUILD_FIXTURE'] != 'share':
+        archive.writestr('Payload/Capri.app/PlugIns/CapriShare.appex/Info.plist', plistlib.dumps({'CFBundleIdentifier': 'dev.gentledot.capri.share', 'NSExtension': {'NSExtensionPointIdentifier': 'com.apple.share-services'}}))
 PY
     fi`);
   command('xcrun', `
     if [[ "$1" == lipo ]]; then printf 'arm64\\n';
     elif [[ "$CAPRI_BUILD_FIXTURE" == engine ]]; then printf 'UIKit.framework/UIKit\\n';
-    else printf 'FoundationModels.framework/FoundationModels\\n'; fi`);
+    else printf 'FoundationModels.framework/FoundationModels\\nSpeech.framework/Speech\\nVision.framework/Vision\\n'; fi`);
   try {
     const result = spawnSync('bash', [join(dir, 'scripts/build-unsigned.sh')], {
       cwd: dir, encoding: 'utf8',
@@ -143,6 +147,13 @@ test('unsigned packaging rejects a different application', () => {
 test('unsigned packaging rejects an executable missing Foundation Models linkage', () => {
   const result = unsignedBuildFixture('engine');
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /does not link the Foundation Models engine/);
+  assert.match(result.stderr, /does not link the FoundationModels engine/);
+  assert.equal(result.published, false);
+});
+
+test('unsigned packaging refuses an app missing its native Share Extension', () => {
+  const result = unsignedBuildFixture('share');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /must embed one Share Extension/);
   assert.equal(result.published, false);
 });

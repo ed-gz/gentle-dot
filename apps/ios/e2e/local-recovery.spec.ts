@@ -8,14 +8,15 @@ async function nativeFixture(page: Page, holdFirstReset = false) {
     state.nativeCancels = 0;
     let resetCount = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('share_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('reset') && ++resetCount === 1 && holdFirstReset) {
         return await new Promise(resolve => { state.releaseReset = () => resolve({ ok: true }); });
       }
       if (command.endsWith('cancel')) state.nativeCancels++;
-      if (command.endsWith('respond')) {
+      if (command.endsWith('agent_step')) {
         state.nativePrompts.push(args.prompt);
-        return { ok: true, text: 'Respuesta del bridge simulado.' };
+        return { ok: true, decision: { kind: 'answer', text: 'Respuesta del bridge simulado.', toolName: '', argumentsJSON: '{}' } };
       }
       return { ok: true };
     } };

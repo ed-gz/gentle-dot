@@ -1,20 +1,35 @@
 import { expect, test } from '@playwright/test';
 
-async function nativeFixture(page: import('@playwright/test').Page, delayed = false) {
-  await page.addInitScript(({ delayed }) => {
+async function nativeFixture(page: import('@playwright/test').Page, delayed = false, decisions: object[] = []) {
+  await page.addInitScript(({ delayed, decisions }) => {
     const state = globalThis as any;
     state.isTauri = true;
     state.nativePrompts = [];
+    state.nativeCalls = [];
+    state.nativeDecisions = decisions;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      state.nativeCalls.push(command);
+      if (command.endsWith('share_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
-      if (command.endsWith('respond')) {
+      if (command.endsWith('agent_step')) {
         state.nativePrompts.push(args.prompt);
         if (delayed) return await new Promise(resolve => { state.finishNative = resolve; });
-        return { ok: true, text: 'Respuesta local de prueba <b>literal</b>.' };
+        return { ok: true, decision: state.nativeDecisions.shift() ?? { kind: 'answer', text: 'Respuesta local de prueba <b>literal</b>.', toolName: '', argumentsJSON: '{}' } };
       }
       return { ok: true };
     } };
-  }, { delayed });
+  }, { delayed, decisions });
+}
+
+async function openManualConnection(page: import('@playwright/test').Page) {
+  await page.locator('[data-panel="settings"]').click();
+  if (!await page.locator('#url').isVisible()) await page.getByText('Conexión manual', { exact: true }).click();
+}
+
+async function chooseEngine(page: import('@playwright/test').Page, value: string) {
+  await page.locator('[data-panel="chat"]').click();
+  if (!await page.locator('#engine').isVisible()) await page.locator('.engine-details summary').click();
+  await page.locator('#engine').selectOption(value);
 }
 
 test('browser never claims native inference; draft survives reload without sending', async ({ page }) => {
@@ -43,7 +58,7 @@ test('native bridge fixture maintains one local timeline and bounds follow-up co
   await expect(page.locator('.chat-card[data-role="assistant"]')).toHaveCount(2);
   const prompts = await page.evaluate(() => (globalThis as any).nativePrompts);
   expect(prompts[1]).toContain('Mi proyecto se llama Capri.');
-  expect(Array.from(prompts[1]).length).toBeLessThanOrEqual(4000);
+  expect(Array.from(prompts[1]).length).toBeLessThanOrEqual(8000);
   await expect.poll(async () => page.evaluate(async () => (await (await import('/src/conversation.ts' as string)).loadConversation()).entries.length)).toBe(4);
   await page.reload();
   await page.locator('[data-panel="chat"]').click();
@@ -58,10 +73,168 @@ test('cancel suppresses late native completion and never reports success', async
   await page.locator('#send').click();
   await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishNative)).toBe('function');
   await page.locator('#stop').click();
-  await page.evaluate(() => (globalThis as any).finishNative({ ok: true, text: 'LATE RESULT' }));
+  await page.evaluate(() => (globalThis as any).finishNative({ ok: true, decision: { kind: 'answer', text: 'LATE RESULT', toolName: '', argumentsJSON: '{}' } }));
   await expect(page.locator('.chat-card[data-role="assistant"]')).toContainText('Respuesta interrumpida.');
   await expect(page.locator('#cards')).not.toContainText('LATE RESULT');
   await expect(page.locator('#send')).toBeEnabled();
+});
+
+test('agent fixture uses the real local work tool from the conversation and persists its receipt', async ({ page }) => {
+  await nativeFixture(page, false, [
+    { kind: 'tool', text: '', toolName: 'tool_describe', argumentsJSON: JSON.stringify({ name: 'work_create' }) },
+    { kind: 'tool', text: '', toolName: 'work_create', argumentsJSON: JSON.stringify({ title: 'Revisar E-503', kind: 'task', instruction: 'Contrastar el error con el registro original.' }) },
+    { kind: 'answer', text: 'Guardé Revisar E-503 en este iPhone. No se envió a la laptop.', toolName: '', argumentsJSON: '{}' },
+  ]);
+  await page.goto('/');
+  await page.locator('#prompt').fill('Capri, guarda una tarea para revisar E-503.');
+  await page.locator('#send').click();
+  await expect(page.locator('.chat-card[data-role="assistant"]')).toContainText('Guardé Revisar E-503');
+  const trace = page.locator('.chat-card[data-role="assistant"] .tool-trace');
+  await trace.locator(':scope > summary').click();
+  await expect(trace).toContainText('Completado');
+  await trace.getByText('Ver resultado', { exact: true }).click();
+  await expect(trace.locator('pre')).toContainText('"savedLocally":true');
+  const work = await page.evaluate(async () => (await (await import('/src/work-inbox.ts' as string)).listWork())[0]);
+  expect(work).toMatchObject({ title: 'Revisar E-503', kind: 'task', instruction: 'Contrastar el error con el registro original.', revision: 1, status: 'local' });
+  const prompts = await page.evaluate(() => (globalThis as any).nativePrompts);
+  expect(prompts).toHaveLength(3);
+  expect(prompts[2]).toContain('"savedLocally":true');
+  expect(prompts[2]).toContain('"synchronized":false');
+  await expect.poll(async () => page.evaluate(async () => {
+    const saved = await (await import('/src/conversation.ts' as string)).loadConversation();
+    return saved.entries.find((entry: any) => entry.role === 'assistant')?.activities?.[0]?.status;
+  })).toBe('done');
+  await page.reload();
+  await expect(page.locator('.chat-card[data-role="assistant"]')).toContainText('Guardé Revisar E-503');
+  await page.locator('[data-panel="inbox"]').click();
+  await expect(page.locator('#work-list .work-item')).toHaveCount(1);
+  await expect(page.locator('#work-list')).toContainText('Solo en este iPhone');
+});
+
+test('host activity, exact human answers and steering stay in the same conversation', async ({ page }) => {
+  const submissions: string[] = [];
+  const answers: object[] = [];
+  let hostSend: ((data: object) => void) | undefined;
+  await page.routeWebSocket('wss://activity.example/ws', ws => {
+    let sequence = 0;
+    const send = (data: object) => ws.send(JSON.stringify({ seq: sequence++, ...data }));
+    hostSend = send;
+    ws.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.type === 'hello') send({ type: 'ready', agentState: 'idle', conversationId: 'operations' });
+      if (message.type === 'get_history') send({ type: 'history', conversationId: 'operations', messages: [] });
+      if (message.type === 'send') {
+        submissions.push(message.text);
+        send({ type: 'user_message', messageId: 'user-' + submissions.length, text: message.text });
+        send({ type: 'agent_state', state: 'working' });
+        if (submissions.length === 1) {
+          send({ type: 'activity', messageId: 'assistant-1', activity: { id: 'read-1', title: 'Leyendo registro de operaciones', kind: 'read', status: 'running' } });
+          send({ type: 'ask', ask: { requestId: 'confirm-1', method: 'confirm', title: 'Revisar cambio exacto', message: 'Proyecto: CAPRI\nCambio: E-503 <b>literal</b>' } });
+        } else send({ type: 'queue', steering: [message.text], followUp: [] });
+      }
+      if (message.type === 'ui_response') answers.push(message);
+    });
+  });
+  await page.goto('/');
+  await openManualConnection(page);
+  await page.locator('#url').fill('wss://activity.example/ws');
+  await page.locator('#token').fill('fixture-only');
+  await page.locator('#connection button[type="submit"]').click();
+  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+  await page.locator('[data-panel="chat"]').click();
+  await page.locator('#prompt').fill('Revisa operaciones.');
+  await page.locator('#send').click();
+  await expect(page.locator('#active-tool')).toHaveText('Leyendo registro de operaciones');
+  await expect(page.locator('.chat-card[data-role="assistant"] .tool-trace > summary')).toHaveText('1 acciones · 1 en curso');
+  const request = page.locator('#requests .review-card').first();
+  await expect(request).toContainText('Proyecto: CAPRI\nCambio: E-503 <b>literal</b>');
+  await expect(request.locator('b')).toHaveCount(0);
+  expect(answers).toEqual([]);
+  const staleButton = await request.getByRole('button', { name: 'Permitir', exact: true }).elementHandle();
+  hostSend!({ type: 'ask', ask: { requestId: 'confirm-1', method: 'confirm', title: 'Revisar cambio exacto', message: 'Proyecto: CAPRI\nCambio actualizado: E-504' } });
+  await expect(request).toContainText('La solicitud cambió.');
+  await expect(request.getByRole('button')).toHaveCount(0);
+  // A stale DOM event must not approve the newer server snapshot.
+  await staleButton!.evaluate(button => button.click());
+  expect(answers).toEqual([]);
+  const currentRequest = page.locator('#requests .review-card').last();
+  await expect(currentRequest).toContainText('Cambio actualizado: E-504');
+  await currentRequest.getByRole('button', { name: 'Permitir', exact: true }).click();
+  await expect.poll(() => answers.length).toBe(1);
+  expect(answers[0]).toMatchObject({ type: 'ui_response', requestId: 'confirm-1', confirmed: true });
+  await expect(currentRequest).toContainText('esperando confirmación del host');
+  hostSend!({ type: 'ask_resolved', requestId: 'confirm-1' });
+  await expect(currentRequest).toContainText('Solicitud cerrada por el host.');
+  await expect(page.locator('#send')).toHaveText('Añadir instrucción');
+  await page.locator('#prompt').fill('Prioriza los errores de hoy.');
+  await page.locator('#send').click();
+  await expect.poll(() => submissions.length).toBe(2);
+  await expect(page.locator('#chat-notice')).toContainText('1 instrucción(es) recibidas');
+  hostSend!({ type: 'activity', messageId: 'assistant-1', activity: { id: 'read-1', title: 'Leyendo registro de operaciones', kind: 'read', status: 'done' } });
+  hostSend!({ type: 'message_done', messageId: 'assistant-1', text: 'Revisión preparada.' });
+  hostSend!({ type: 'agent_state', state: 'idle' });
+  await expect(page.locator('#active-tool')).toBeEmpty();
+  await expect(page.locator('.chat-card[data-role="assistant"]')).toContainText('Revisión preparada.');
+  await expect(page.locator('.chat-card[data-role="assistant"] .tool-trace > summary')).toHaveText('1 acciones · 0 en curso');
+  await expect(page.locator('.chat-card[data-role="user"]')).toHaveCount(2);
+});
+
+test('conversation approval renders exact content and cancellation cannot authorize it', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const { createConversationRequests } = await import('/src/conversation-requests.ts' as string);
+    const state = globalThis as any;
+    state.approvalController = new AbortController();
+    state.humanApproval = 'pending';
+    const requests = createConversationRequests(document.getElementById('requests')!);
+    void requests.approve({ title: 'Enviar revisión', details: 'Destinatario: ops@example.test\nTexto: <b>exacto</b>', operation: 'test' }, state.approvalController.signal)
+      .then((approved: boolean) => { state.humanApproval = approved; });
+  });
+  const card = page.locator('.review-card');
+  await expect(card).toContainText('Destinatario: ops@example.test');
+  await expect(card.locator('b')).toHaveCount(0);
+  expect(await page.evaluate(() => (globalThis as any).humanApproval)).toBe('pending');
+  await page.evaluate(() => (globalThis as any).approvalController.abort());
+  await expect.poll(() => page.evaluate(() => (globalThis as any).humanApproval)).toBe(false);
+  await expect(card).toContainText('Operación no autorizada.');
+  await expect(card.getByRole('button')).toHaveCount(0);
+});
+
+test('voice fixture prepares assets only after human review and appends dictation without sending', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any;
+    const previous = state.__TAURI_INTERNALS__.invoke;
+    let prepared = false;
+    state.voiceActions = [];
+    const availability = () => ({ ok: true, available: prepared, status: prepared ? 'available' : 'assets_required', assetsInstalled: prepared, locale: 'es-MX', microphonePermission: 'granted' });
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return availability();
+      if (command.endsWith('prepare_voice')) { state.voiceActions.push('prepare'); prepared = true; return availability(); }
+      if (command.endsWith('start_voice')) { state.voiceActions.push('start'); return { ok: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', maxDurationSeconds: 90 }; }
+      if (command.endsWith('stop_voice')) {
+        state.voiceActions.push('stop');
+        return { ok: true, sessionId: args.sessionId, text: 'Añade evidencia del error.', locale: 'es-MX', durationSeconds: 2,
+          source: 'apple-speech-analyzer', segments: [{ text: 'Añade evidencia del error.', startSeconds: 0.1, endSeconds: 1.8 }] };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.locator('#prompt').fill('Borrador existente.');
+  await page.locator('#dictate').click();
+  const review = page.locator('#requests .review-card');
+  await expect(review).toContainText('Preparar dictado local');
+  expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual([]);
+  await review.getByRole('button', { name: 'Aprobar esta operación', exact: true }).click();
+  await expect(page.locator('#dictate')).toHaveText('Terminar');
+  expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['prepare', 'start']);
+  await page.locator('#dictate').click();
+  await expect(page.locator('#prompt')).toHaveValue('Borrador existente.\nAñade evidencia del error.');
+  await expect(page.locator('#voice-status')).toContainText('Puedes corregirla antes de enviar.');
+  await expect(page.locator('.chat-card[data-role="user"]')).toHaveCount(0);
+  expect(await page.evaluate(() => (globalThis as any).nativePrompts)).toEqual([]);
+  expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['prepare', 'start', 'stop']);
 });
 
 test('linked stream, intermediate completion, error and reconnect remain honest', async ({ page }) => {
@@ -96,21 +269,20 @@ test('linked stream, intermediate completion, error and reconnect remain honest'
   await page.locator('#prompt').fill('Contexto desde el iPhone');
   await page.locator('#send').click();
   await expect(page.locator('.chat-card[data-role="assistant"]')).toHaveCount(1);
-  await page.locator('[data-panel="settings"]').click();
+  await openManualConnection(page);
   await page.locator('#url').fill('wss://fixture.example/ws');
   await page.locator('#token').fill('fixture-only');
   await page.locator('#connection button[type="submit"]').click();
   await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
   await expect(page.locator('#token')).toHaveValue('');
-  await page.locator('[data-panel="chat"]').click();
-  await page.locator('#engine').selectOption('gentle');
+  await chooseEngine(page, 'gentle');
   await page.locator('#prompt').fill('Continúa desde la laptop');
   await page.locator('#send').click();
   await expect(page.locator('#cards')).toContainText('Error de prueba visible');
   await expect(page.locator('#cards')).not.toContainText('Preparando respuesta');
   expect(wireText).toContain('Contexto desde el iPhone');
   const userCount = await page.locator('.chat-card[data-role="user"]').count();
-  await page.locator('[data-panel="settings"]').click();
+  await openManualConnection(page);
   await page.locator('#disconnect').click();
   await page.locator('#token').fill('fixture-only');
   await page.locator('#connection button[type="submit"]').click();
@@ -163,6 +335,8 @@ test('character artwork persists; appearance and motion controls fit small and l
     })), errors);
     throw error;
   }
+  await page.locator('[data-panel="settings"]').click();
+  await page.getByText('Gestos y presencia', { exact: true }).click();
   await page.locator('#appear').click();
   await expect(page.locator('#rig-handle')).toBeDisabled();
   await page.locator('#appear').click();
@@ -170,13 +344,17 @@ test('character artwork persists; appearance and motion controls fit small and l
   for (const size of [{ width: 375, height: 812 }, { width: 844, height: 390 }]) {
     await page.setViewportSize(size);
     await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
-    expect(await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('body *')].filter(node => {
-      const rect = node.getBoundingClientRect();
-      return rect.width > 0 && (rect.left < -1 || rect.right > innerWidth + 1) && !node.closest('#stage');
-    }).map(node => node.id || node.className || node.tagName))).toEqual([]);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    for (const button of await page.locator('.navigation button, .character-actions button').all()) {
-      const bounds = await button.boundingBox(); expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    for (const panel of ['settings', 'chat']) {
+      await page.locator('[data-panel="' + panel + '"]').click();
+      expect(await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('body *')].filter(node => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && (rect.left < -1 || rect.right > innerWidth + 1) && !node.closest('#stage');
+      }).map(node => node.id || node.className || node.tagName))).toEqual([]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      for (const button of await page.locator('.navigation button, .character-actions button:visible, .composer button:visible').all()) {
+        const bounds = await button.boundingBox(); expect(bounds!.height).toBeGreaterThanOrEqual(44);
+      }
+      await page.screenshot({ path: testInfo.outputPath('layout-' + panel + '-' + size.width + '-200-percent.png'), fullPage: true });
     }
     await page.screenshot({ path: testInfo.outputPath(`layout-${size.width}-200-percent.png`), fullPage: true });
   }

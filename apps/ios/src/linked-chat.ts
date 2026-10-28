@@ -1,4 +1,5 @@
-import { CloseCode, PROTOCOL_VERSION, type AgentState, type ServerMessage } from '@gentle-dot/protocol';
+import { localIdentifier } from './local-identifiers.ts';
+import { CloseCode, PROTOCOL_VERSION, parseWorkSyncReply, parseWorkSyncRequest, type AgentState, type Ask, type ServerMessage, type WorkSyncReply, type WorkSyncRequest } from '@gentle-dot/protocol';
 import { validDaemonUrl } from './local-state.ts';
 
 export type LinkedStatus = 'offline' | 'connecting' | 'ready' | 'rejected';
@@ -20,6 +21,8 @@ const activity = (value: unknown) => record(value) && id(value.id) && string(val
 const attachments = (value: unknown) => Array.isArray(value) && value.length <= 10 && value.every(item => record(item)
   && string(item.name) && string(item.mime) && typeof item.size === 'number' && Number.isFinite(item.size) && item.size >= 0);
 
+export const askSnapshot = (ask: Ask) => JSON.stringify([ask.requestId, ask.method, ask.title, ask.message, ask.options, ask.placeholder, ask.prefill, ask.expiresAt, ask.timeoutMs]);
+
 /** Only this shell's supported events cross the untrusted WebSocket boundary. */
 function parse(raw: unknown): ServerMessage | undefined {
   if (!string(raw) || raw.length > MAX_PAYLOAD || new TextEncoder().encode(raw).byteLength > MAX_PAYLOAD) return;
@@ -28,6 +31,7 @@ function parse(raw: unknown): ServerMessage | undefined {
   if (!record(message) || !Number.isSafeInteger(message.seq) || (message.seq as number) < 0) return;
   let valid = false;
   switch (message.type) {
+    case 'work_sync_reply': valid = !!parseWorkSyncReply(message); break;
     case 'ready':
       valid = state(message.agentState) && optional(message.conversationId, id) && optional(message.clientId, id)
         && optional(message.model, string)
@@ -82,6 +86,8 @@ export function createLinkedChat(callbacks: Callbacks) {
   let attempts = 0;
   let suspended = false;
   let authenticated = false;
+  const asks = new Map<string, Ask>();
+  const requests = new Map<string, { transferId: string; resolve(reply: WorkSyncReply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
 
   function clearConnection() {
     clearTimeout(retryTimer);
@@ -90,6 +96,12 @@ export function createLinkedChat(callbacks: Callbacks) {
     const old = socket;
     socket = undefined;
     authenticated = false;
+    asks.clear();
+    for (const request of requests.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error('El enlace se interrumpió; la operación no tiene confirmación.'));
+    }
+    requests.clear();
     old?.close();
   }
   function retry() {
@@ -124,6 +136,15 @@ export function createLinkedChat(callbacks: Callbacks) {
       const message = parse(event.data);
       if (!message || message.seq <= sequence || (!authenticated && message.type !== 'ready')) return;
       sequence = message.seq;
+      if (message.type === 'ask') asks.set(message.ask.requestId, message.ask);
+      if (message.type === 'ask_resolved') asks.delete(message.requestId);
+      if (message.type === 'work_sync_reply') {
+        const request = requests.get(message.requestId);
+        if (request && request.transferId === message.transferId) {
+          clearTimeout(request.timer); requests.delete(message.requestId); request.resolve(message);
+        }
+        return;
+      }
       if (message.type === 'ready') {
         if (authenticated) return;
         clearTimeout(connectTimer);
@@ -173,7 +194,32 @@ export function createLinkedChat(callbacks: Callbacks) {
     send(text: string): boolean {
       const value = text.trim();
       if (!value || text.length > 8000 || !authenticated) return false;
-      return transmit({ type: 'send', text: value, requestId: crypto.randomUUID() });
+      return transmit({ type: 'send', text: value, requestId: localIdentifier() });
+    },
+    answer(requestId: string, fields: { value?: string; confirmed?: boolean; cancelled?: boolean }, expected?: Ask): boolean {
+      const ask = asks.get(requestId);
+      if (!ask || (expected && askSnapshot(ask) !== askSnapshot(expected)) || !authenticated || ask.method === 'app' || ask.method === 'pin'
+        || (ask.expiresAt !== undefined && (!Number.isFinite(Date.parse(ask.expiresAt)) || Date.parse(ask.expiresAt) <= Date.now()))) return false;
+      if (fields.cancelled === true) return transmit({ type: 'ui_response', requestId, cancelled: true });
+      if (ask.method === 'confirm' && typeof fields.confirmed === 'boolean') return transmit({ type: 'ui_response', requestId, confirmed: fields.confirmed });
+      if (['input', 'editor', 'select'].includes(ask.method) && typeof fields.value === 'string' && fields.value.length <= 32000
+        && (ask.method !== 'select' || ask.options?.includes(fields.value))) return transmit({ type: 'ui_response', requestId, value: fields.value });
+      return false;
+    },
+    exchange(request: WorkSyncRequest): Promise<WorkSyncReply> {
+      const safe = parseWorkSyncRequest(request);
+      if (!safe || requests.has(safe.requestId) || !authenticated) return Promise.reject(new Error('Conecta Gentle Dot antes de transferir el trabajo.'));
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          requests.delete(safe.requestId);
+          reject(new Error('El host no confirmó la operación. Consulta su estado antes de reintentar.'));
+        }, 30000);
+        requests.set(safe.requestId, { transferId: safe.transferId, resolve, reject, timer });
+        if (!transmit(safe)) {
+          clearTimeout(timer); requests.delete(safe.requestId);
+          reject(new Error('No se pudo confirmar el envío al host.'));
+        }
+      });
     },
     abort: () => transmit({ type: 'abort' }),
     ready: () => authenticated && socket?.readyState === WebSocket.OPEN,

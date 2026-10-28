@@ -14,6 +14,7 @@ rm -f out/Capri-unsigned.ipa
 pnpm build
 cargo tauri icon src-tauri/icons/app.svg --output src-tauri/icons
 cargo tauri ios init --ci
+ruby scripts/configure-share-extension.rb
 project_count=$(find src-tauri/gen/apple -maxdepth 1 -name '*.xcodeproj' -type d | wc -l | tr -d ' ')
 [[ "$project_count" == 1 ]] || { printf 'Expected one generated Xcode project\n' >&2; exit 1; }
 project=$(find src-tauri/gen/apple -maxdepth 1 -name '*.xcodeproj' -type d)
@@ -21,11 +22,13 @@ node -e '
 const fs = require("fs");
 const p = process.argv[1];
 let c = fs.readFileSync(p, "utf8");
-if (!c.includes("CODE_SIGNING_ALLOWED = NO")) {
-  c = c.replace(/buildSettings = \{/g, "buildSettings = {\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;");
-  fs.writeFileSync(p, c);
-  console.log("Signing disabled in", p);
-}' "$project/project.pbxproj"
+c = c.replace(/buildSettings = \{([\s\S]*?)\n\s*\};/g, (block) => {
+  const body = block.replace(/CODE_SIGNING_(?:ALLOWED|REQUIRED) = [^;]+;/g, "");
+  return body.replace("buildSettings = {", "buildSettings = {\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n\t\t\t\tCODE_SIGNING_REQUIRED = NO;");
+});
+fs.writeFileSync(p, c);
+console.log("Signing disabled in", p);
+' "$project/project.pbxproj"
 rm -rf src-tauri/gen/apple/build
 verification=$(mktemp -d "$PWD/out/.ipa-verification.XXXXXX")
 trap 'rm -rf "$verification"' EXIT
@@ -62,6 +65,14 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     info = plistlib.loads(archive.read(plists[0]))
     if info.get('CFBundleIdentifier') != 'dev.gentledot.capri' or info.get('DTPlatformName') != 'iphoneos':
         raise SystemExit('Unsigned IPA is not the Capri device app')
+    if not info.get('NSMicrophoneUsageDescription'):
+        raise SystemExit('Unsigned IPA is missing its microphone purpose')
+    extensions = [name for name in archive.namelist() if name.endswith('.appex/Info.plist')]
+    if len(extensions) != 1:
+        raise SystemExit('Unsigned IPA must embed one Share Extension')
+    extension = plistlib.loads(archive.read(extensions[0]))
+    if extension.get('CFBundleIdentifier') != 'dev.gentledot.capri.share' or extension.get('NSExtension', {}).get('NSExtensionPointIdentifier') != 'com.apple.share-services':
+        raise SystemExit('Unsigned IPA has an invalid Share Extension')
     executable = info.get('CFBundleExecutable', '')
     if not executable or '/' in executable or executable in ('.', '..'):
         raise SystemExit('Unsigned IPA has an invalid executable name')
@@ -71,9 +82,11 @@ PY
 archs=$(xcrun lipo -archs "$verification/executable")
 [[ " $archs " == *' arm64 '* ]] || { printf 'Expected an arm64 iPhone executable\n' >&2; exit 1; }
 xcrun otool -L "$verification/executable" > "$verification/frameworks.txt"
-grep -q 'FoundationModels.framework/' "$verification/frameworks.txt" || {
-  printf 'IPA does not link the Foundation Models engine\n' >&2; exit 1;
-}
+for framework in FoundationModels Speech Vision; do
+  grep -q "$framework.framework/" "$verification/frameworks.txt" || {
+    printf 'IPA does not link the %s engine\n' "$framework" >&2; exit 1;
+  }
+done
 cp "$ipa" out/Capri-unsigned.ipa
 shasum -a 256 out/Capri-unsigned.ipa
 printf 'Unsigned IPA: apps/ios/out/Capri-unsigned.ipa\n'
