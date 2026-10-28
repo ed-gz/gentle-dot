@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { afterEach, beforeEach, mock, test } from 'node:test';
+import { afterEach, beforeEach, describe, mock, test } from 'node:test';
 import { createLinkedChat } from '../src/linked-chat.ts';
 
+describe('linked chat transport', () => {
 const originalSocket = globalThis.WebSocket;
 class FakeSocket {
   static OPEN = 1;
@@ -267,4 +268,6 @@ test('malformed advertised capabilities never cross the ready boundary', () => {
   for (const workSync of [true, '1', 0, -1, 1.5, 65536]) socket.receive({ type: 'ready', agentState: 'idle', features: { conversations: false, workSync } });
   assert.equal(chat.ready(), false);
   socket.receive({ type: 'ready', agentState: 'idle', features: { conversations: false, workSync: 1 } }); assert.equal(chat.ready(), true);
+});
+
 });
