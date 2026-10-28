@@ -40,6 +40,33 @@ test('updates preserve activity nodes, expanded result, focus and unchanged mess
   expect(errors).toEqual([]);
 });
 
+test('collapsed activity identifies current work and failures without claiming unfinished work is complete', async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(() => {
+    const w = window as any;
+    w.messages = [w.entry('active', { state: 'pending', text: '', activities: [
+      { id: 'a', kind: 'read', title: 'Leer documento', status: 'running' },
+      { id: 'b', kind: 'search', title: 'Buscar evidencia', status: 'running' },
+      { id: 'c', kind: 'other', title: 'Consultar servidor', status: 'failed' },
+    ] })];
+    w.view.render(w.messages);
+  });
+  const trace = page.locator('.tool-trace');
+  const summary = trace.locator(':scope > summary');
+  await expect(trace).not.toHaveAttribute('open', '');
+  await expect(summary).toHaveText('3 acciones · En curso: Buscar evidencia · 2 en curso · 1 interrumpida o fallida');
+  await summary.focus();
+  await page.evaluate(() => {
+    const w = window as any;
+    w.messages[0].activities[0].status = 'done'; w.messages[0].activities[1].status = 'done';
+    w.view.render(w.messages);
+  });
+  await expect(summary).toHaveText('3 acciones · 1 interrumpida o fallida');
+  await expect(summary).toBeFocused();
+  await page.evaluate(() => { const w = window as any; w.messages[0].activities[2].status = 'done'; w.view.render(w.messages); });
+  await expect(summary).toHaveText('3 acciones · Completadas');
+});
+
 test('follows new output only at the end and offers a contextual jump while reading earlier messages', async ({ page }) => {
   await fixture(page);
   await page.evaluate(() => { const w = window as any; w.messages.push(w.entry('12')); w.view.render(w.messages); });

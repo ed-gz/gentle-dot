@@ -13,9 +13,12 @@ export function mountPhoneViewport(composer: HTMLElement) {
   function update() {
     updateText();
     if (!viewport || Math.abs(viewport.scale - 1) > .02) {
-      root.style.removeProperty('--app-height'); root.dataset.keyboard = 'false'; return;
+      root.style.removeProperty('--app-height'); root.style.removeProperty('--app-offset-top'); root.dataset.keyboard = 'false'; return;
     }
     root.style.setProperty('--app-height', `${viewport.height}px`);
+    // iOS may pan the visual viewport as well as resize it for the keyboard.
+    // Keep the shell within that visible rectangle even if WKWebView scrolls the page.
+    root.style.setProperty('--app-offset-top', `${Math.max(0, viewport.pageTop)}px`);
     root.dataset.keyboard = String(window.innerHeight - viewport.height > 120);
   }
   let layoutFrame = 0;
@@ -25,6 +28,7 @@ export function mountPhoneViewport(composer: HTMLElement) {
   });
   composerSize.observe(composer);
   const header = document.querySelector('.masthead'); if (header) composerSize.observe(header);
-  viewport?.addEventListener('resize', update); window.addEventListener('resize', update); update();
-  return () => { viewport?.removeEventListener('resize', update); window.removeEventListener('resize', update); composerSize.disconnect(); cancelAnimationFrame(layoutFrame); };
+  viewport?.addEventListener('resize', update); viewport?.addEventListener('scroll', update);
+  window.addEventListener('resize', update); window.addEventListener('scroll', update); update();
+  return () => { viewport?.removeEventListener('resize', update); viewport?.removeEventListener('scroll', update); window.removeEventListener('resize', update); window.removeEventListener('scroll', update); composerSize.disconnect(); cancelAnimationFrame(layoutFrame); };
 }

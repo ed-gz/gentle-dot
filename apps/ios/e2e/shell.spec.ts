@@ -47,6 +47,21 @@ test('browser never claims native inference; draft survives reload without sendi
   await expect(page.locator('.chat-card')).toHaveCount(0);
 });
 
+test('automatic routing names its current destination and settings show connection state', async ({ page }) => {
+  await nativeFixture(page);
+  await page.goto('/');
+  await expect(page.locator('#engine-summary')).toHaveText('Auto · iPhone');
+  await page.locator('.engine-details summary').click();
+  await expect(page.locator('#engine-explanation')).toContainText('primero la IA del iPhone');
+  await page.locator('#engine').selectOption('gentle');
+  await expect(page.locator('#engine-summary')).toHaveText('Laptop');
+  await expect(page.locator('#engine-explanation')).toContainText('Gentle Dot');
+  await page.locator('[data-panel="settings"]').click();
+  await expect(page.locator('#settings-connection-state')).toHaveText('Sin conexión');
+  await expect(page.locator('#settings-connection-detail')).toContainText('Vincula tu laptop');
+  await expect(page.locator('#pairing-camera')).toBeVisible();
+});
+
 test('native bridge fixture maintains one local timeline and bounds follow-up context', async ({ page }) => {
   await nativeFixture(page);
   await page.goto('/');
@@ -148,7 +163,7 @@ test('host activity, exact human answers and steering stay in the same conversat
   await page.locator('#prompt').fill('Revisa operaciones.');
   await page.locator('#send').click();
   await expect(page.locator('#active-tool')).toHaveText('Leyendo registro de operaciones');
-  await expect(page.locator('.chat-card[data-role="assistant"] .tool-trace > summary')).toHaveText('1 acciones · 1 en curso');
+  await expect(page.locator('.chat-card[data-role="assistant"] .tool-trace > summary')).toHaveText('1 acción · En curso: Leyendo registro de operaciones');
   const request = page.locator('#requests .review-card').first();
   await expect(request).toContainText('Proyecto: CAPRI\nCambio: E-503 <b>literal</b>');
   await expect(request.locator('b')).toHaveCount(0);
@@ -178,7 +193,7 @@ test('host activity, exact human answers and steering stay in the same conversat
   hostSend!({ type: 'agent_state', state: 'idle' });
   await expect(page.locator('#active-tool')).toBeEmpty();
   await expect(page.locator('.chat-card[data-role="assistant"]')).toContainText('Revisión preparada.');
-  await expect(page.locator('.chat-card[data-role="assistant"] .tool-trace > summary')).toHaveText('1 acciones · 0 en curso');
+  await expect(page.locator('.chat-card[data-role="assistant"] .tool-trace > summary')).toHaveText('1 acción · Completada');
   await expect(page.locator('.chat-card[data-role="user"]')).toHaveCount(2);
 });
 
@@ -203,7 +218,7 @@ test('conversation approval renders exact content and cancellation cannot author
   await expect(card.getByRole('button')).toHaveCount(0);
 });
 
-test('voice fixture prepares assets only after human review and appends dictation without sending', async ({ page }) => {
+test('voice fixture prepares assets on microphone tap and appends dictation without sending', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {
     const state = globalThis as any;
@@ -226,11 +241,8 @@ test('voice fixture prepares assets only after human review and appends dictatio
   await page.goto('/');
   await page.locator('#prompt').fill('Borrador existente.');
   await page.locator('#dictate').click();
-  const review = page.locator('#requests .review-card');
-  await expect(review).toContainText('Preparar dictado local');
-  expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual([]);
-  await review.getByRole('button', { name: 'Aprobar esta operación', exact: true }).click();
   await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  await expect(page.locator('#voice-status')).toContainText('Grabando');
   expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['prepare', 'start']);
   await page.locator('#dictate').click();
   await expect(page.locator('#prompt')).toHaveValue('Borrador existente.\nAñade evidencia del error.');

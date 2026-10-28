@@ -10,7 +10,8 @@ async function linkedPhone(page: Page) {
       state.sessionCalls.push({ command, ...(command.endsWith('https_request') ? { body: args.body } : {}) });
       if (command.endsWith('check_availability')) return { available: false, status: 'model_not_ready', supportsSpanish: false };
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
-      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted', recording: false };
+      if (command.endsWith('check_voice')) return { available: !state.voiceNeedsAssets, status: state.voiceNeedsAssets ? 'assets_required' : 'available', assetsInstalled: !state.voiceNeedsAssets, microphonePermission: 'granted', recording: false };
+      if (command.endsWith('prepare_voice')) { state.voiceNeedsAssets = false; return { ok: true, available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' }; }
       if (command.endsWith('start_voice')) return { ok: true, sessionId: '12345678-1234-1234-1234-123456789012', maxDurationSeconds: 90 };
       if (command.endsWith('stop_voice') && state.holdTranscript) await new Promise(resolve => state.finishTranscript = resolve);
       if (command.endsWith('stop_voice')) return { ok: true, sessionId: args.sessionId, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2, text: 'Revisa la evidencia.', segments: [{ text: 'Revisa la evidencia.', startSeconds: 0, endSeconds: 2 }] };
@@ -105,6 +106,21 @@ test('session dictation uses Apple and leaves a reviewable draft without desktop
   const commands = await page.evaluate(() => (globalThis as any).sessionCalls.map((c: any) => c.command));
   expect(commands.some((c: string) => c.endsWith('stop_voice'))).toBe(true);
   expect(commands.some((c: string) => /voice_native|voice_transcribe|native_voice/.test(c))).toBe(false);
+});
+
+test('first session dictation prepares Apple voice after a microphone tap', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => (globalThis as any).voiceNeedsAssets = true);
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const mic = page.getByRole('button', { name: 'Dictar mensaje' });
+  await expect(mic).toBeEnabled();
+  await mic.click();
+  await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
+  const commands = await page.evaluate(() => (globalThis as any).sessionCalls.map((c: any) => c.command));
+  expect(commands.findIndex((c: string) => c.endsWith('prepare_voice'))).toBeLessThan(commands.findIndex((c: string) => c.endsWith('start_voice')));
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
 });
 
 

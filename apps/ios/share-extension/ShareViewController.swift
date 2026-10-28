@@ -111,6 +111,28 @@ final class ShareViewController: UIViewController {
             }
         }
     }
+    // NSItemProvider often exposes a concrete audio UTI even when its temporary
+    // URL has no useful suffix. Preserve that type so Capri recognises a meeting.
+    nonisolated private static func fileMetadata(_ provider: NSItemProvider, url: URL, category: UTType) -> (String, String) {
+        let suggested = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suggestedExtension = (suggested as NSString?)?.pathExtension ?? ""
+        let fromName = UTType(filenameExtension: suggestedExtension) ?? UTType(filenameExtension: url.pathExtension)
+        let registered = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
+            .first { $0.conforms(to: category) && $0.preferredMIMEType != nil }
+        let concrete = (fromName?.conforms(to: category) == true ? fromName : nil) ?? registered
+        let fallback: String
+        if category == .audio { fallback = "audio/x-unknown" }
+        else if category == .image { fallback = "image/x-unknown" }
+        else if category == .pdf { fallback = "application/pdf" }
+        else { fallback = "text/plain" }
+        let rawMime = concrete?.preferredMIMEType ?? fallback
+        let inappropriate = (category == .audio && !rawMime.lowercased().hasPrefix("audio/")) ||
+            (category == .image && !rawMime.lowercased().hasPrefix("image/"))
+        let mime = rawMime.contains("*") || inappropriate ? fallback : rawMime
+        var name = (suggested?.isEmpty == false ? suggested : nil) ?? url.lastPathComponent
+        if (name as NSString).pathExtension.isEmpty, !url.pathExtension.isEmpty { name += "." + url.pathExtension }
+        return (name, mime)
+    }
     private func copy(_ provider: NSItemProvider, into staging: URL) async throws -> SharedFile {
         let types: [UTType] = [.audio, .pdf, .image, .plainText]
         if let type = types.first(where: { provider.hasItemConformingToTypeIdentifier($0.identifier) }) {
@@ -141,9 +163,8 @@ final class ShareViewController: UIViewController {
                     do {
                         guard error == nil, let url = url else { throw ShareFailure.invalid }
                         // The provider URL is valid only during this callback: copy before returning.
-                        let inferred = UTType(filenameExtension: url.pathExtension)
-                        continuation.resume(returning: try SharedInbox.stageFile(url, name: url.lastPathComponent,
-                            mime: inferred?.preferredMIMEType ?? type.preferredMIMEType ?? "application/octet-stream", in: staging))
+                        let (name, mime) = Self.fileMetadata(provider, url: url, category: type)
+                        continuation.resume(returning: try SharedInbox.stageFile(url, name: name, mime: mime, in: staging))
                     } catch { continuation.resume(throwing: error) }
                 }
             }

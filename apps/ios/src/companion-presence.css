@@ -18,7 +18,7 @@
 #panel-chat .tool-trace > summary {
   display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 10px 12px;
   list-style: none; color: var(--ink); font-weight: 600; background: var(--panel);
-  border-left: 2px solid var(--violet); border-radius: 0 12px 12px 0;
+  border-left: 2px solid var(--violet); border-radius: 0 12px 12px 0; overflow-wrap: anywhere;
 }
 #panel-chat .tool-trace > summary::-webkit-details-marker { display: none; }
 #panel-chat .tool-trace > summary::before {
@@ -54,3 +54,7 @@
 :root[data-large-text="true"] #panel-chat .companion-presence { min-height: 36px; height: auto; }
 
 #panel-chat .presence-copy { pointer-events: none; }
+#panel-chat .presence-copy .engine-details { pointer-events: auto; }
+#panel-chat .presence-copy { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+#panel-chat .presence-copy #active-tool { flex-basis: 100%; }
+#panel-chat .presence-copy .engine-details summary { padding-inline: 12px; }

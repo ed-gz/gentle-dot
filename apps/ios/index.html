@@ -22,7 +22,7 @@
           <span class="stage-orbit" aria-hidden="true"></span><span class="stage-coordinate" aria-hidden="true">C / 01</span>
           <button id="rig-handle" class="rig" type="button" aria-label="Saludar a Capri. Usa las flechas para moverla"><canvas id="capri" aria-hidden="true"></canvas><canvas id="fx" aria-hidden="true"></canvas><span id="art-placeholder">CAPRI<span>Preparando personaje…</span></span></button>
         </section>
-        <div class="presence-copy"><span id="engine-badge" class="eyebrow">EN ESTE IPHONE</span><p id="scene-status" role="status">Aquí contigo.</p><p id="active-tool" class="hint" role="status"></p></div>
+        <div class="presence-copy"><span id="engine-badge" class="eyebrow">EN ESTE IPHONE</span><p id="scene-status" role="status">Aquí contigo.</p><p id="active-tool" class="hint" role="status"></p><details class="engine-details"><summary aria-label="Elegir motor de Capri"><span id="engine-summary">Automático</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary><label class="engine-control">Dónde trabaja Capri<select id="engine"><option value="auto">Automático · iPhone + laptop</option><option value="iphone">Este iPhone · local</option><option value="gentle">Gentle Dot · laptop</option></select></label><p id="engine-explanation" class="hint"></p></details></div>
       </div>
       <div id="conversation-scroll" class="conversation-scroll" tabindex="0" aria-label="Historial de conversación">
         <p id="history-loading" class="hint" role="status">Recuperando tu conversación…</p>
@@ -34,13 +34,15 @@
       </div>
       <button id="new-messages" type="button" class="new-messages" hidden>Nueva respuesta ↓</button>
       <form id="composer" class="composer">
-        <div class="composer-topline"><label for="prompt">DIME, ¿QUÉ HAREMOS?</label><details class="engine-details"><summary aria-label="Elegir motor de Capri"><span id="engine-summary">Automático</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary><label class="engine-control">Dónde trabaja Capri<select id="engine"><option value="auto">Automático · iPhone + laptop</option><option value="iphone">Este iPhone · local</option><option value="gentle">Gentle Dot · laptop</option></select></label></details></div>
         <div class="compose-surface">
-          <div id="attachment-context" class="hint"></div><textarea id="prompt" aria-label="Mensaje para Capri" rows="1" maxlength="2400" placeholder="Escribe a Capri…"></textarea>
+          <div id="attachment-context" class="hint"></div>
           <div class="actions composer-actions">
             <button id="attach" type="button" aria-label="Adjuntar archivos" title="Añadir archivos"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             <input id="chat-files" aria-label="Seleccionar archivos" type="file" multiple accept="audio/*,text/plain,text/markdown,application/pdf,image/*,.m4a,.txt,.md" hidden />
+            <button id="camera" type="button" aria-label="Tomar foto" title="Tomar foto"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3"/></svg></button>
+            <input id="chat-camera" aria-label="Capturar foto" type="file" accept="image/*" capture="environment" hidden />
             <button id="dictate" type="button" aria-label="Dictar" aria-pressed="false" title="Dictar"><svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><svg class="icon-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3"/></svg></button>
+            <textarea id="prompt" aria-label="Mensaje para Capri" rows="1" maxlength="2400" placeholder="Escribe a Capri…"></textarea>
             <button id="send" type="submit" class="primary" aria-label="Enviar" title="Enviar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
             <button id="stop" type="button" aria-label="Detener respuesta" title="Detener respuesta" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3"/></svg></button>
           </div>
@@ -49,21 +51,24 @@
     </section>
     <section id="panel-agents" class="panel" aria-label="Sesiones de la laptop" hidden><div id="laptop-root"></div></section>
     <section id="panel-inbox" class="panel" aria-label="Bandeja de trabajos" hidden>
-      <div class="section-heading"><span class="eyebrow">ARCHIVO</span><span>GUARDADOS EN IPHONE</span></div><h2>Trabajos y evidencia</h2><p class="hint">Conserva instrucciones, audio y transcripciones sin conexión. Guardar aquí no significa enviar ni sincronizar.</p>
+      <div class="section-heading"><span class="eyebrow">ARCHIVO</span><span>EN ESTE IPHONE</span></div><h1>Lo que guardaste</h1><p class="hint">Aquí encuentras tus trabajos, sus archivos y el historial que Capri guardó en este iPhone. Puedes consultarlos sin conexión.</p>
+      <h2>Trabajos guardados</h2><p class="hint">Un trabajo reúne instrucciones, audio, documentos y versiones. Guardarlo no lo envía a la laptop ni ejecuta acciones.</p>
+      <p id="work-status" role="status" class="hint"></p><div id="work-list"></div>
       <details><summary>Crear un trabajo manualmente</summary><form id="work-form" class="surface"><label>Título<input id="work-title" required maxlength="120" placeholder="Reunión de operaciones" /></label><label>Tipo<select id="work-kind"><option value="task">Solicitud</option><option value="meeting">Reunión</option></select></label><label>Instrucciones<textarea id="work-instruction" required maxlength="8000" rows="3" placeholder="Preparar una minuta con acuerdos y evidencia…"></textarea></label><label>Audio, transcripción o documentos<input id="work-files" type="file" multiple accept="audio/*,text/plain,text/markdown,application/pdf,image/*,.m4a,.txt,.md" /></label><p class="hint">Hasta 10 archivos; 25 MiB por archivo y 50 MiB por trabajo. Puedes importar desde Compartir de Notas de Voz cuando la extensión esté disponible, o desde Archivos.</p><button class="primary" type="submit">Guardar en este iPhone</button></form></details>
-      <button id="save-draft" type="button">Guardar el borrador de conversación</button><p id="work-status" role="status" class="hint"></p><div id="work-list"></div>
+      <button id="save-draft" type="button">Guardar el texto del mensaje como trabajo</button>
     </section>
     <section id="panel-settings" class="panel" aria-label="Ajustes" hidden>
-      <div class="settings-heading"><h1>Tu Capri</h1><p>Conexiones, inteligencia y presencia.</p></div>
+      <div class="settings-heading"><h1>Tu Capri</h1><p>Conecta tu laptop y adapta Capri a tu iPhone.</p></div>
       <form id="pairing" class="surface settings-pairing">
-        <h2>Tu laptop</h2>
+        <div class="settings-pairing-heading"><div><span class="eyebrow">GENTLE DOT</span><h2>Tu laptop</h2></div><span id="settings-connection-state" class="connection-state" role="status">Comprobando…</span></div>
+        <p id="settings-connection-detail" class="hint">Puedes usar Capri en este iPhone incluso sin conectar la laptop.</p>
         <details id="pairing-manual"><summary>Pegar una invitación</summary><label>Invitación de Gentle Dot<input id="pairing-invitation" autocomplete="off" placeholder="gentledot://pair?…" required autocapitalize="none" spellcheck="false" /></label></details>
         <button type="submit" class="primary">Vincular iPhone</button>
         <p id="pairing-status" class="hint" role="status">El acceso se recuerda en este iPhone.</p>
       </form>
       <div class="settings-group">
         <details id="settings-services" class="settings-option">
-          <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 13 4-4m-6 5-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 5 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/></svg><span><strong>Servicios y cuentas</strong><small>Tus conexiones y otros servicios MCP</small></span><svg class="settings-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></summary>
+          <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 13 4-4m-6 5-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 5 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/></svg><span><strong>Servicios y cuentas</strong><small>Conecta servicios y servidores MCP</small></span><svg class="settings-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></summary>
           <div class="settings-body"><section id="connection-settings" class="surface" aria-label="Conexiones"><h2>Conexiones</h2><p class="hint">Cargando cuentas…</p></section></div>
         </details>
         <details id="settings-intelligence" class="settings-option">

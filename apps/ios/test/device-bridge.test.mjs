@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { validSharedImport, listSharedImports, readSharedFile, importSharedItem, nativeSHA256Bytes } from '../src/device-bridge.ts';
+import { validSharedImport, listSharedImports, readSharedFile, importSharedItem, recoverImportBatch, nativeSHA256Bytes } from '../src/device-bridge.ts';
 import { privateOrigin, parseInvitation, validConnection, pairingMessage } from '../src/device-pairing.ts';
 
 const origin = 'https://workstation.tail1234.ts.net';
@@ -61,6 +61,24 @@ test('share ACK waits for durable app save and retry uses the same deduplication
   await importSharedItem(item, save, call);
   assert.deepEqual([...saved], [`share:${id}`]);
   assert.deepEqual(events, ['share_read', 'committed', 'share_ack', 'share_read', 'committed', 'share_ack']);
+});
+
+test('recovery keeps a damaged share pending while continuing to later shares', async () => {
+  const broken = manifest();
+  const intact = { ...manifest(), id: '65a6e456-7a93-4bcc-b006-4493c78b5b66', title: 'Audio de la segunda reunión' };
+  const events = [];
+  const call = async (command, request) => {
+    events.push([command, request.id]);
+    if (command === 'share_read') return { ok: true, data: (request.id === broken.id ? Buffer.alloc(bytes.length, 97) : bytes).toString('base64') };
+    return { ok: true };
+  };
+  const committed = [];
+  const result = await recoverImportBatch([broken, intact], item => importSharedItem(item, async ({ sourceId }) => { committed.push(sourceId); }, call));
+  assert.equal(result.recovered, 1);
+  assert.deepEqual(result.failures.map(failure => failure.title), ['Reunión']);
+  assert.match(result.failures[0].message, /huella/);
+  assert.deepEqual(committed, [`share:${intact.id}`]);
+  assert.deepEqual(events.filter(([command]) => command === 'share_ack'), [['share_ack', intact.id]]);
 });
 
 test('native hash fallback sends bounded binary chunks and cleans up on failures', async () => {

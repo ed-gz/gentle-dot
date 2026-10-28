@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceControls, VoicePhase } from '@gentle-dot/ui/src/useVoice.ts';
-import { checkVoice, startVoice, stopVoice, cancelVoice, type VoiceAvailability } from './perception.ts';
+import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, type VoiceAvailability } from './perception.ts';
 
 /** Session dictation is an Apple transcript left in the composer for review. */
 export function useAppleVoice(enabled: boolean): VoiceControls {
@@ -15,7 +15,7 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
     const state = owner.current;
     const hadCapture = Boolean(state.session || state.pending);
     state.epoch++; state.session = ''; state.pending = false;
-    setPhase('idle'); setElapsed(0); setDraft(undefined);
+    setPhase('idle'); setElapsed(0); setDraft(undefined); setNote(undefined);
     if (hadCapture) void cancelVoice().catch(() => {});
   }, []);
   useEffect(() => {
@@ -35,7 +35,7 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
     const id = state.session, epoch = state.epoch;
     state.pending = true; setPhase('transcribing');
     void stopVoice(id).then(value => {
-      if (state.epoch === epoch && state.enabled) setDraft({ id: epoch, text: value.text });
+      if (state.epoch === epoch && state.enabled) { setNote(undefined); setDraft({ id: epoch, text: value.text }); }
     }).catch(error => { if (state.epoch === epoch) setNote(error.message); }).finally(() => {
       if (state.epoch === epoch) { state.pending = false; state.session = ''; setPhase('idle'); }
     });
@@ -48,14 +48,24 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
   }, [phase, stop]);
   const start = useCallback(() => {
     const state = owner.current;
-    if (!state.enabled || state.pending || state.session || !availability?.available) return;
+    if (!state.enabled || state.pending || state.session || !(availability?.available || availability?.status === 'assets_required')) return;
     const epoch = ++state.epoch; state.pending = true; setNote(undefined); setDraft(undefined);
-    void startVoice().then(value => {
-      if (state.epoch !== epoch || !state.enabled) return;
+    void (async () => {
+      if (availability.status === 'assets_required') {
+        setNote('Descargando la voz en español de Apple. Necesitas internet para esta primera preparación…');
+        const prepared = await prepareVoice();
+        if (state.epoch !== epoch || !state.enabled) return;
+        setAvailability(prepared);
+        if (!prepared.available) throw new Error('Apple aún no terminó de preparar la voz. Comprueba la conexión y vuelve a intentarlo.');
+      }
+      setNote('Iniciando el micrófono. Si iOS pide permiso, acéptalo para dictar.');
+      const value = await startVoice();
+      if (state.epoch !== epoch || !state.enabled) { await cancelVoice().catch(() => {}); return; }
       state.session = value.sessionId; setElapsed(0); setPhase('recording');
-    }).catch(error => { if (state.epoch === epoch) setNote(error.message); }).finally(() => { if (state.epoch === epoch) state.pending = false; });
+      setNote('Grabando. Toca el micrófono otra vez para revisar la transcripción.');
+    })().catch(error => { if (state.epoch === epoch) setNote(error.message); }).finally(() => { if (state.epoch === epoch) state.pending = false; });
   }, [availability]);
-  return { mic: availability?.available ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
+  return { mic: availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
     phase, elapsed, level: 0, partial: '', note, draft, start, stop, cancel,
     draftTaken: id => setDraft(value => value?.id === id ? undefined : value),
     speaking: false, muted: true, stopSpeaking() {}, setMuted() {}, typed() {}, sent() {}, sendOnStop: false, setSendOnStop() {} };

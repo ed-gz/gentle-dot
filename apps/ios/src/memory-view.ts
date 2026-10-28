@@ -9,13 +9,14 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
   const parent = document.getElementById('panel-inbox');
   if (!parent) throw new Error('Falta la sección Archivo.');
   const root = document.createElement('section'); root.className = 'settings-section'; root.id = 'conversation-memory';
-  root.innerHTML = `<h2>Historial local</h2><p class="hint">Tu conversación se conserva en este iPhone aunque la vista muestre sólo los últimos 120 mensajes. No confirma una sincronización con la laptop.</p><p id="memory-status" class="hint" role="status" aria-live="polite"></p><div class="actions"><button id="memory-retry" type="button">Reintentar guardado</button><button id="memory-export" type="button">Exportar historial</button></div><details><summary>Consultar mensajes anteriores</summary><form id="memory-search"><label>Buscar texto<input id="memory-query" maxlength="200" placeholder="Palabras del mensaje" /></label><button type="submit">Buscar</button></form><div id="memory-entries"></div><button id="memory-older" type="button" hidden>Ver anteriores</button></details>`;
+  root.innerHTML = `<h2>Historial de conversación</h2><p class="hint">Busca o exporta los mensajes que Capri guardó en este iPhone, incluidos los que ya no aparecen en la conversación. Esto no confirma que el historial de la laptop esté sincronizado.</p><p id="memory-status" class="hint" role="status" aria-live="polite"></p><div class="actions"><button id="memory-retry" type="button" hidden>Reintentar guardado</button><button id="memory-export" type="button">Exportar historial</button></div><details><summary>Consultar mensajes anteriores</summary><form id="memory-search"><label>Buscar texto<input id="memory-query" maxlength="200" placeholder="Palabras del mensaje" /></label><button type="submit">Buscar</button></form><div id="memory-entries"></div><button id="memory-older" type="button" hidden>Ver anteriores</button></details>`;
   parent.append(root);
   const element = <T extends HTMLElement>(id: string) => root.querySelector<T>('#' + id)!;
   const statusElement = element('memory-status'); let cursor: string | undefined, query = '', busy = false, pendingReset = false, renderEpoch = 0;
   const describe = (error: unknown) => error instanceof Error ? error.message : 'No se pudo consultar el archivo.';
   function updateStatus(message?: string) {
     const state = options.status();
+    element('memory-retry').hidden = !state.blocked && !state.pending;
     statusElement.textContent = message ?? (state.blocked ? `No se confirmó el guardado. ${state.archiveError ?? state.conversationError} ${state.pending} mensajes pendientes en memoria. Reintenta o exporta antes de cerrar Capri. Los envíos están detenidos.` : state.pending ? `${state.pending} mensajes pendientes de guardar en el archivo local.` : 'Archivo local disponible. Exportar no borra los mensajes.');
   }
   async function refresh() {

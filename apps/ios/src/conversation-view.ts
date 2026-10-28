@@ -83,7 +83,13 @@ export function createConversationView(options: ConversationViewOptions) {
   }
   function renderActivities(view: EntryView, activities: readonly ChatActivity[]) {
     view.trace.hidden = activities.length === 0;
-    content(view.summary, `${activities.length} acciones · ${activities.filter(item => item.status === 'running').length} en curso`);
+    const running = activities.filter(item => item.status === 'running');
+    const failed = activities.filter(item => item.status === 'failed').length;
+    const count = `${activities.length} ${activities.length === 1 ? 'acción' : 'acciones'}`;
+    const progress = running.length ? `En curso: ${running[running.length - 1]!.title}${running.length > 1 ? ` · ${running.length} en curso` : ''}`
+      : failed ? '' : activities.length === 1 ? 'Completada' : 'Completadas';
+    const failures = failed ? `${failed} ${failed === 1 ? 'interrumpida o fallida' : 'interrumpidas o fallidas'}` : '';
+    content(view.summary, [count, progress, failures].filter(Boolean).join(' · '));
     const keep = new Set<string>(); const nodes: HTMLElement[] = [];
     for (const activity of activities) {
       if (keep.has(activity.id)) continue; keep.add(activity.id);

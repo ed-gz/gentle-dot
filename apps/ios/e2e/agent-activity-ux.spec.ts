@@ -20,7 +20,7 @@ test('actual agent activity stays readable, operable and bounded with large text
   });
   const trace = page.locator('.chat-card[data-role="assistant"] .tool-trace');
   const disclosure = trace.locator(':scope > summary');
-  await expect(disclosure).toHaveText('3 acciones · 1 en curso');
+  await expect(disclosure).toHaveText('3 acciones · En curso: Preparando borrador de trabajo · 1 interrumpida o fallida');
   await disclosure.click();
   await expect(trace.locator('li[data-status="done"]')).toContainText('Completado · Consultando');
   await expect(trace.locator('li[data-status="running"]')).toContainText('En curso · Preparando');

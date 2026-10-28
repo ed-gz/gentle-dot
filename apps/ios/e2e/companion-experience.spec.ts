@@ -7,11 +7,11 @@ async function expectReadableComposer(page: import('@playwright/test').Page) {
     const prompt = read('#prompt'); const css = getComputedStyle(input);
     const line = Number.parseFloat(css.lineHeight);
     const top = prompt.top + Number.parseFloat(css.borderTopWidth) + Number.parseFloat(css.paddingTop);
-    const actions = read('.composer-actions'); const send = read('#send');
+    const controls = ['#attach', '#camera', '#dictate', '#send'].map(read); const send = read('#send');
     return { copyBottom: read('.presence-copy').bottom, threadTop: read('#conversation-scroll').top,
       promptInner: input.clientHeight - Number.parseFloat(css.paddingTop) - Number.parseFloat(css.paddingBottom),
-      line, lineTop: top, lineBottom: top + line, actionsTop: actions.top,
-      actionsOverlapTextColumn: actions.left < prompt.right && actions.right > prompt.left,
+      line, lineTop: top, lineBottom: top + line,
+      actionsOverlapText: controls.some(action => action.left < prompt.right && action.right > prompt.left && action.top < top + line && action.bottom > top),
       sendTop: send.top, sendBottom: send.bottom, screenBottom: innerHeight,
       sendCenterVisible: !!document.elementFromPoint(send.left + send.width / 2, send.top + send.height / 2)?.closest('#send'),
       horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
@@ -19,7 +19,7 @@ async function expectReadableComposer(page: import('@playwright/test').Page) {
   expect(boxes.horizontalOverflow).toBe(false);
   expect(boxes.copyBottom).toBeLessThanOrEqual(boxes.threadTop + 1);
   expect(boxes.promptInner).toBeGreaterThanOrEqual(boxes.line - 1);
-  if (boxes.actionsOverlapTextColumn) expect(boxes.lineBottom).toBeLessThanOrEqual(boxes.actionsTop + 1);
+  expect(boxes.actionsOverlapText).toBe(false);
   expect(boxes.sendTop).toBeGreaterThanOrEqual(0);
   expect(boxes.sendBottom).toBeLessThanOrEqual(boxes.screenBottom + 1);
   expect(boxes.sendCenterVisible).toBe(true);
@@ -51,6 +51,10 @@ async function personalBuild(page: import('@playwright/test').Page) {
   });
   await page.reload();
   await expect(page.locator('#rig-handle')).toHaveAttribute('data-ready', 'true', { timeout: 15000 });
+  // Artwork initialization and IndexedDB restoration run independently. The
+  // rig being ready does not mean the conversation can accept a message yet.
+  await expect(page.locator('#history-loading')).toBeHidden({ timeout: 20000 });
+  await expect(page.locator('#send')).toBeEnabled({ timeout: 20000 });
   return { packagedReads: () => packagedReads };
 }
 

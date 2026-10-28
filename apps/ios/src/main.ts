@@ -32,7 +32,7 @@ import { createTrustedApprovals } from './trusted-approvals.ts';
 import { createConversationRequests } from './conversation-requests.ts';
 import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice } from './perception.ts';
 import { isTauri } from '@tauri-apps/api/core';
-import { secretGet, secretSet, secretDelete, listSharedImports, importSharedItem } from './device-bridge.ts';
+import { secretGet, secretSet, secretDelete, listSharedImports, importSharedItem, recoverImportBatch } from './device-bridge.ts';
 import { parseInvitation, pairDevice, restorePairing } from './device-pairing.ts';
 import { createWork, createImportedWork } from './work-inbox.ts';
 import { companionBounds, constrainCompanion, mountPhoneViewport } from './companion-layout.ts';
@@ -51,6 +51,7 @@ import './composer.css';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 let documentImports: Promise<void> | undefined;
+let sharedImports: Promise<void> | undefined;
 element('build-info').textContent = buildLabel();
 element('build-info').title = buildInfo.sourceCommit ?? '';
 const settings = readSettings();
@@ -409,8 +410,14 @@ function updateControls() {
   if (!localBusy && !recoveringNativeId && !pendingRemote) selected = preference === 'auto' && !localRecoveryReady && health.host.state === 'ready' ? 'gentle' : health.selectedEngine;
   const ready = selected === 'iphone' ? health.local.state === 'ready' && localRecoveryReady : health.host.state === 'ready';
   const busy = localBusy || !!recoveringNativeId || !!pendingRemote;
+  element('settings-connection-state').textContent = linkedStatus === 'ready' ? 'Conectada' : linkedStatus === 'connecting' ? 'Conectando' : linkedStatus === 'rejected' ? 'Revisar acceso' : 'Sin conexión';
+  element('settings-connection-state').dataset.state = health.host.state;
+  element('settings-connection-detail').textContent = health.host.detail;
   element('engine-status').dataset.ready = String(ready);
-  element('engine-summary').textContent = preference === 'auto' ? 'Automático' : selected === 'iphone' ? 'Este iPhone' : 'Laptop';
+  element('engine-summary').textContent = preference === 'auto' ? `Auto · ${selected === 'iphone' ? 'iPhone' : 'laptop'}` : selected === 'iphone' ? 'Este iPhone' : 'Laptop';
+  element('engine-explanation').textContent = preference === 'auto'
+    ? `Automático usa primero la IA del iPhone y, si no está disponible, la laptop conectada. Ahora: ${selected === 'iphone' ? 'iPhone' : 'laptop'}.`
+    : selected === 'iphone' ? 'La conversación usa la IA local del iPhone.' : 'La conversación usa Gentle Dot en tu laptop conectada.';
   element<HTMLButtonElement>('send').disabled = !conversationReady || persistence.status().blocked || !ready || busy;
   element<HTMLSelectElement>('engine').disabled = localBusy || !!recoveringNativeId || !!pendingRemote;
   element('stop').hidden = !(localBusy || recoveringNativeId || (selected === 'gentle' && linkedBusy));
@@ -789,18 +796,19 @@ element('dictate').addEventListener('click', async () => {
       setIntent({});
     } else {
       voiceController = new AbortController();
+      element('voice-status').textContent = 'Preparando el micrófono…';
       const availability = await checkVoice();
       if (availability.status === 'assets_required') {
-        const approved = await reviews.approve({ title: 'Preparar dictado local', details: 'Apple necesita descargar los recursos de voz en español para transcribir en este iPhone. La descarga requiere internet y espacio; después podrás dictar sin conexión.', operation: 'prepare-local-voice' }, voiceController.signal);
-        if (!approved || current !== voiceGeneration) return;
-        element('voice-status').textContent = 'Preparando voz local con Apple…';
-        await prepareVoice();
+        element('voice-status').textContent = 'Descargando la voz en español de Apple. Necesitas internet para esta primera preparación…';
+        const prepared = await prepareVoice();
+        if (!prepared.available) throw new Error('Apple aún no terminó de preparar la voz en español. Comprueba la conexión y vuelve a intentarlo.');
       }
       if (current !== voiceGeneration) return;
+      element('voice-status').textContent = 'Iniciando el micrófono. Si iOS pide permiso, acéptalo para dictar.';
       const session = await startVoice();
       if (current !== voiceGeneration) { await cancelVoice(); return; }
       voiceSession = session.sessionId;
-      element('voice-status').textContent = 'Te escucho. Toca Terminar para transcribir.';
+      element('voice-status').textContent = '● Grabando. Toca el micrófono otra vez para transcribir.';
       setIntent({ alert: true });
       voiceTimer = setTimeout(() => control.click(), session.maxDurationSeconds * 1000 - 500);
     }
@@ -817,7 +825,8 @@ element('attach').addEventListener('click', async () => {
   catch (error) { element('chat-notice').textContent = errorText(error); }
   finally { button.disabled = false; }
 });
-element<HTMLInputElement>('chat-files').addEventListener('change', async event => {
+element('camera').addEventListener('click', () => element<HTMLInputElement>('chat-camera').click());
+async function importComposerSelection(event: Event) {
   const control = event.target as HTMLInputElement;
   const files = Array.from(control.files ?? []); if (!files.length) return;
   try {
@@ -827,7 +836,9 @@ element<HTMLInputElement>('chat-files').addEventListener('change', async event =
     notice(`Adjuntos guardados en este iPhone: ${item.title}. Trabajo ${item.id}. Todavía no enviados a la laptop.`, 'iphone');
     control.value = ''; await inbox.refresh();
   } catch (error) { element('chat-notice').textContent = errorText(error); }
-});
+}
+element<HTMLInputElement>('chat-files').addEventListener('change', importComposerSelection);
+element<HTMLInputElement>('chat-camera').addEventListener('change', importComposerSelection);
 const pairingUI = mountPairingInput(element<HTMLFormElement>('pairing'), element<HTMLInputElement>('pairing-invitation'));
 element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
   event.preventDefault();
@@ -859,19 +870,27 @@ async function restoreDeviceConnection() {
     if (token && epoch === connectionEpoch) { runtimeConnection = { url: restoredURL, token }; linked.connect(restoredURL, token); }
   } catch { if (epoch !== connectionEpoch) return; element('status').textContent = 'No se pudo recuperar el acceso guardado. Puedes volver a vincular este iPhone.'; }
 }
-async function importSharedFiles() {
-  if (!isTauri()) return;
+function importSharedFiles(): Promise<void> {
+  if (!isTauri()) return Promise.resolve();
+  if (sharedImports) return sharedImports.then(() => importSharedFiles());
   void importDocumentFiles();
-  try {
-    for (const item of await listSharedImports()) {
-      await importSharedItem(item, async ({ sourceId, files }) => {
-        const work = await createImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: item.notes || 'Material compartido con Capri. Pendiente de instrucciones.', files });
-        attachedWork = work.id;
-        notice(`Recibí ${work.title}. Material guardado localmente como trabajo ${work.id}; dime qué hacemos con él.`, 'iphone', `shared:${item.id}`);
+  sharedImports = (async () => {
+    try {
+      const result = await recoverImportBatch(await listSharedImports(), async item => {
+        await importSharedItem(item, async ({ sourceId, files }) => {
+          const work = await createImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: item.notes || 'Material compartido con Capri. Pendiente de instrucciones.', files });
+          attachedWork = work.id;
+          notice(`Recibí ${work.title}. Material guardado localmente como trabajo ${work.id}; dime qué hacemos con él.`, 'iphone', `shared:${item.id}`);
+        });
       });
-    }
-    await inbox.refresh();
-  } catch (error) { element('chat-notice').textContent = errorText(error); }
+      await inbox.refresh();
+      if (result.failures.length) {
+        const first = result.failures[0]!;
+        element('chat-notice').textContent = `No se pudo recuperar ${first.title}${result.failures.length > 1 ? ` y ${result.failures.length - 1} material(es) más` : ''}; siguen pendientes. ${first.message}`;
+      }
+    } catch (error) { element('chat-notice').textContent = errorText(error); }
+  })().finally(() => { sharedImports = undefined; });
+  return sharedImports;
 }
 function importDocumentFiles(fresh = false): Promise<void> {
   // Returning from UIKit can also trigger foreground recovery. If that older
@@ -879,17 +898,23 @@ function importDocumentFiles(fresh = false): Promise<void> {
   if (documentImports) return fresh ? documentImports.then(() => importDocumentFiles()) : documentImports;
   documentImports = (async () => {
     try {
-      for (const item of await listDocumentImports()) {
+      const result = await recoverImportBatch(await listDocumentImports(), async item => {
         await importDocumentItem(item, async ({ sourceId, files }) => {
           const work = await createImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task',
-            instruction: prompt.value.trim() || 'Material adjunto a la conversación de Capri.', files });
+            // The source identity must remain stable if native acknowledgement fails
+            // and the user edits their message before the next recovery attempt.
+            instruction: 'Material adjunto a la conversación de Capri.', files });
           attachedWork = work.id;
           element('attachment-context').textContent = `${files.length} archivo${files.length === 1 ? '' : 's'} · ${work.title}`;
           notice(`Conservé ${work.title} en este iPhone. Dime qué hacemos con el material.`, 'iphone', `document:${item.id}`);
           persist();
         });
-      }
+      });
       await inbox.refresh();
+      if (result.failures.length) {
+        const first = result.failures[0]!;
+        element('chat-notice').textContent = `No se pudieron recuperar ${result.failures.length} documento(s); siguen pendientes. ${first.title}: ${first.message}`;
+      }
     } catch (error) { element('chat-notice').textContent = errorText(error); }
   })().finally(() => { documentImports = undefined; });
   return documentImports;

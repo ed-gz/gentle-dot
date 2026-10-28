@@ -271,7 +271,7 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
       const items = await listWork();
       if (revision !== loadingRevision) return;
       const content = document.createDocumentFragment();
-      if (!items.length) content.append(node('p', 'Todavía no hay trabajos guardados. Crea uno aquí o guarda las instrucciones desde la conversación.', 'hint'));
+      if (!items.length) content.append(node('p', 'Aún no tienes trabajos. Puedes crear uno aquí, guardar el texto que estás escribiendo o compartir material con Capri.', 'hint'));
       for (const item of items) content.append(renderItem(item));
       list.replaceChildren(content);
       count.textContent = String(items.length);
@@ -328,7 +328,7 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
     })();
   });
   saveButton.addEventListener('click', () => { void saveDraft(prompt.value); });
-  prompt.addEventListener('input', () => { if (!savingNew) saveButton.textContent = 'Guardar trabajo'; });
+  prompt.addEventListener('input', () => { if (!savingNew) saveButton.textContent = 'Guardar el texto del mensaje como trabajo'; });
   window.addEventListener('pagehide', () => {
     for (const url of downloadUrls) URL.revokeObjectURL(url);
     downloadUrls.clear();

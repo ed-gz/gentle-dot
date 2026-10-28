@@ -16,7 +16,7 @@ body { overscroll-behavior: none; }
 main {
   display: flex; flex-direction: column; height: min(var(--app-height, 100dvh), 100dvh); min-height: 0;
   padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(16px, env(safe-area-inset-left));
-  max-width: 52rem; margin: auto; position: relative;
+  max-width: 52rem; margin: auto; position: relative; top: var(--app-offset-top, 0px);
   background: radial-gradient(ellipse at 90% 0%, #39223b55, transparent 50%);
 }
 h1, h2, p { margin: 0; }

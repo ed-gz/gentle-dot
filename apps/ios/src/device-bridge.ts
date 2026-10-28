@@ -141,3 +141,14 @@ export async function importSharedItem(item: SharedImport,
   await save({ sourceId: `share:${item.id}`, item, files });
   await acknowledgeSharedImport(item.id, call);
 }
+
+/** A damaged item must not prevent independent, later items from being recovered. */
+export async function recoverImportBatch(items: SharedImport[], importItem: (item: SharedImport) => Promise<void>): Promise<{ recovered: number; failures: { title: string; message: string }[] }> {
+  const failures: { title: string; message: string }[] = [];
+  let recovered = 0;
+  for (const item of items) {
+    try { await importItem(item); recovered++; }
+    catch (error) { failures.push({ title: item.title, message: error instanceof Error ? error.message : 'No se pudo completar la importación.' }); }
+  }
+  return { recovered, failures };
+}

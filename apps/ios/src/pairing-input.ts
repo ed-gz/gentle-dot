@@ -26,7 +26,8 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
   const picker = document.createElement('input'); picker.type = 'file'; picker.accept = 'image/png,image/jpeg,image/heic,image/heif,image/webp,image/tiff';
   picker.hidden = true; picker.setAttribute('aria-label', 'Foto guardada para leer QR');
   controls.append(camera, photo, stop); region.append(help, controls, picker, status);
-  const heading = form.querySelector('h2'); if (heading) heading.after(region); else form.prepend(region);
+  const heading = form.querySelector('.settings-pairing-heading') ?? form.querySelector('h2');
+  if (heading) heading.after(region); else form.prepend(region);
   let epoch = 0, busy = false, submitting = false, disposed = false, controller: AbortController | undefined;
   const valid = () => { try { parseInvitation(input.value); return true; } catch { return false; } };
   const setBusy = (value: boolean) => { busy = value; const locked = value || submitting; if (submit) { submit.disabled = locked || !valid(); submit.hidden = !valid(); } camera.disabled = photo.disabled = locked || !native; input.disabled = submitting; stop.hidden = !value; region.setAttribute('aria-busy', String(locked)); };
