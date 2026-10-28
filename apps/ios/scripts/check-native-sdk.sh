@@ -54,6 +54,11 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/VoiceAudio.swift \
   test/native/VoiceAudioTests.swift -o "$verification/voice-audio-tests"
 "$verification/voice-audio-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/VoiceOwners.swift \
+  test/native/VoiceOwnersTests.swift -o "$verification/voice-owner-tests"
+"$verification/voice-owner-tests"
 xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
   "$verification/AgentTypes.swift" \
@@ -62,6 +67,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-local-intelligence/ios/Sources/ContinuedInferenceLease.swift \
   plugin-local-intelligence/ios/Sources/CompletionNotifications.swift \
   plugin-perception/ios/Sources/VoiceAudio.swift \
+  plugin-perception/ios/Sources/VoiceOwners.swift \
   plugin-perception/ios/Sources/Voice.swift \
   plugin-perception/ios/Sources/Documents.swift \
   plugin-device-bridge/ios/Sources/BoundedHTTP.swift \

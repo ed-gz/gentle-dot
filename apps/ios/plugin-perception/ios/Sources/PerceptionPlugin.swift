@@ -5,6 +5,7 @@ import UIKit
 import WebKit
 
 private struct SessionArgs: Decodable { let sessionId: String }
+private struct VoiceOwnerArgs: Decodable { let ownerId: String? }
 
 final class PerceptionPlugin: Plugin {
     private var voice: AnyObject?
@@ -57,14 +58,20 @@ final class PerceptionPlugin: Plugin {
         }
     }
     @objc func prepareVoice(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(VoiceOwnerArgs.self), args.ownerId == nil || UUID(uuidString: args.ownerId!) != nil else {
+            invoke.resolve(VoiceReply.failure("invalid_voice_owner", "El comando de voz no es válido.")); return
+        }
         Task { @MainActor in
-            if #available(iOS 26.0, *) { invoke.resolve(await controller().prepare()) }
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().prepare(ownerID: args.ownerId)) }
             else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
         }
     }
     @objc func startVoice(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(VoiceOwnerArgs.self), args.ownerId == nil || UUID(uuidString: args.ownerId!) != nil else {
+            invoke.resolve(VoiceReply.failure("invalid_voice_owner", "El comando de voz no es válido.")); return
+        }
         Task { @MainActor in
-            if #available(iOS 26.0, *) { invoke.resolve(await controller().start()) }
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().start(ownerID: args.ownerId)) }
             else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
         }
     }
@@ -78,8 +85,14 @@ final class PerceptionPlugin: Plugin {
         }
     }
     @objc func cancelVoice(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(VoiceOwnerArgs.self), args.ownerId == nil || UUID(uuidString: args.ownerId!) != nil else {
+            invoke.resolve(VoiceReply.failure("invalid_voice_owner", "El comando de voz no es válido.")); return
+        }
         Task { @MainActor in
-            if #available(iOS 26.0, *) { (voice as? VoiceController)?.cancel() }
+            if #available(iOS 26.0, *) {
+                if let id = args.ownerId { controller().cancel(ownerID: id) }
+                else { (voice as? VoiceController)?.cancel() }
+            }
             invoke.resolve(VoiceReply(ok: true))
         }
     }

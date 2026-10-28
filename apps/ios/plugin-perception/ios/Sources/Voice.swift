@@ -62,6 +62,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     private var recordedLocale: Locale?
     private var recordedKind: VoiceTranscriberKind?
     private var recordedFormat: AVAudioFormat?
+    private var owners = VoiceOwners()
     private let maximumDuration: TimeInterval = 90
 
     private static var temporaryDirectory: URL {
@@ -138,12 +139,14 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             busy: busy, sessionId: sessionID, maxDurationSeconds: Int(maximumDuration))
     }
 
-    func prepare() async -> VoiceReply {
+    func prepare(ownerID: String? = nil) async -> VoiceReply {
         guard !busy, sessionID == nil else { return .failure("busy", "Termina o cancela el comando de voz actual.") }
         guard UIApplication.shared.applicationState == .active else { return .failure("not_foreground", "Abre Capri para preparar la voz.") }
+        if let ownerID, !owners.claim(ownerID) { return .failure("cancelled", "Ese dictado fue cancelado o sustituido.") }
         busy = true
         let epoch = generation
-        defer { busy = false }
+        var prepared = false
+        defer { busy = false; if let ownerID { owners.finishAttempt(ownerID, succeeded: prepared) } }
         guard let selected = await preferredTranscriber() else {
             return .failure("unsupported_language", "Este iPhone no ofrece SpeechAnalyzer en español.")
         }
@@ -154,19 +157,23 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                 try await request.downloadAndInstall()
             }
             guard epoch == generation, !Task.isCancelled else { return .failure("cancelled", "Preparación cancelada.") }
-            return await check()
+            let state = await check()
+            prepared = state.available == true
+            return state
         } catch {
             return .failure(epoch == generation ? "asset_download_failed" : "cancelled",
                 "No se completó la preparación de voz. Comprueba la conexión y el espacio disponible.")
         }
     }
 
-    func start() async -> VoiceReply {
+    func start(ownerID: String? = nil) async -> VoiceReply {
         guard !busy, sessionID == nil else { return .failure("busy", "Ya hay un comando de voz en curso.") }
         guard UIApplication.shared.applicationState == .active else { return .failure("not_foreground", "Abre Capri para dictar.") }
+        if let ownerID, !owners.claim(ownerID) { return .failure("cancelled", "Ese dictado fue cancelado o sustituido.") }
         busy = true
         let epoch = generation
-        defer { busy = false }
+        var started = false
+        defer { busy = false; if let ownerID { owners.finishAttempt(ownerID, succeeded: started) } }
         guard let selected = await preferredTranscriber() else {
             return .failure("unsupported_language", "SpeechAnalyzer no está disponible en español en este iPhone.")
         }
@@ -205,6 +212,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             recordedLocale = selected.locale
             recordedKind = selected.kind
             recordedFormat = format
+            started = true
             return VoiceReply(ok: true, sessionId: id, maxDurationSeconds: Int(maximumDuration))
         } catch {
             try? FileManager.default.removeItem(at: url)
@@ -317,6 +325,12 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         deactivateAudio()
     }
 
+    func cancel(ownerID: String) {
+        // Record even before start/prepare arrive; only the matching owner can
+        // stop the current native operation.
+        if owners.cancel(ownerID) { cancel() }
+    }
+
     private func clearCapture() {
         if let url = recordingURL { try? FileManager.default.removeItem(at: url) }
         recordingURL = nil
@@ -324,6 +338,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         recordedLocale = nil
         recordedKind = nil
         recordedFormat = nil
+        owners.clear()
     }
 
     private func deactivateAudio() {

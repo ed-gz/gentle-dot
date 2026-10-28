@@ -32,6 +32,8 @@ La selección prioriza un transcriptor ya instalado en español para permitir di
 
 La app cancela captura/transcripción al perder primer plano, entrar en background o recibir una interrupción de audio. El diálogo inicial de permiso puede hacer que la app pierda actividad: se permite completar ese diálogo, pero un cambio real a background invalida el inicio. La cancelación también descarta resultados tardíos. Una instalación de assets ya iniciada la gestiona Apple y puede terminar aunque el usuario cancele el resultado de preparación en Capri.
 
+Cada intento de dictado lleva un identificador propio a los comandos de preparación, inicio y cancelación. Una cancelación tardía sólo puede afectar a su intento; si llega antes del inicio, el puente recuerda que el intento se canceló y rechaza ese inicio. Los identificadores cancelados se conservan en un conjunto acotado por proceso; si se agota, se rechazan nuevos intentos hasta reiniciar Capri. El bridge conserva la variante sin identificador para versiones anteriores. Esto protege contra reordenamientos del transporte; aún requiere compilación y pruebas en iPhone.
+
 Los segmentos son referencias al audio temporal del comando; tras borrarlo no constituyen un archivo de evidencia reproducible. **La evidencia de reuniones requiere conservar el audio original importado desde Notas de Voz y sus referencias temporales por otra ruta.**
 
 ## Contrato de Vision

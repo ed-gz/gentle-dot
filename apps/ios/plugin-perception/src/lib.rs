@@ -92,12 +92,24 @@ async fn check_voice<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
     native_call(app, "checkVoice", json!({})).await
 }
 #[tauri::command]
-async fn prepare_voice<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
-    native_call(app, "prepareVoice", json!({})).await
+async fn prepare_voice<R: Runtime>(
+    app: AppHandle<R>,
+    owner_id: Option<String>,
+) -> Result<Value, String> {
+    if owner_id.as_deref().is_some_and(|id| !valid_session_id(id)) {
+        return Err("invalid_voice_owner".into());
+    }
+    native_call(app, "prepareVoice", json!({"ownerId": owner_id})).await
 }
 #[tauri::command]
-async fn start_voice<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
-    native_call(app, "startVoice", json!({})).await
+async fn start_voice<R: Runtime>(
+    app: AppHandle<R>,
+    owner_id: Option<String>,
+) -> Result<Value, String> {
+    if owner_id.as_deref().is_some_and(|id| !valid_session_id(id)) {
+        return Err("invalid_voice_owner".into());
+    }
+    native_call(app, "startVoice", json!({"ownerId": owner_id})).await
 }
 #[tauri::command]
 async fn stop_voice<R: Runtime>(app: AppHandle<R>, session_id: String) -> Result<Value, String> {
@@ -107,8 +119,14 @@ async fn stop_voice<R: Runtime>(app: AppHandle<R>, session_id: String) -> Result
     native_call(app, "stopVoice", json!({"sessionId": session_id})).await
 }
 #[tauri::command]
-async fn cancel_voice<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
-    native_call(app, "cancelVoice", json!({})).await
+async fn cancel_voice<R: Runtime>(
+    app: AppHandle<R>,
+    owner_id: Option<String>,
+) -> Result<Value, String> {
+    if owner_id.as_deref().is_some_and(|id| !valid_session_id(id)) {
+        return Err("invalid_voice_owner".into());
+    }
+    native_call(app, "cancelVoice", json!({"ownerId": owner_id})).await
 }
 #[tauri::command]
 async fn cancel_document<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {

@@ -333,6 +333,38 @@ test('native cancellation of a pending microphone request remains visible and ca
   await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
 });
 
+test('a delayed old cancellation cannot stop a newer dictation', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    state.voiceOwners = []; state.cancelledCurrent = false;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
+      if (command.endsWith('start_voice')) {
+        state.activeVoiceOwner = args.ownerId; state.voiceOwners.push(args.ownerId);
+        return { ok: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', maxDurationSeconds: 90 };
+      }
+      if (command.endsWith('cancel_voice')) {
+        const captured = args.ownerId;
+        await new Promise(resolve => { state.releaseOldCancel = resolve; });
+        if (state.activeVoiceOwner === captured) state.cancelledCurrent = true;
+        return { ok: true };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/'); await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  await page.locator('[data-panel="settings"]').click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).releaseOldCancel)).toBe('function');
+  await page.locator('[data-panel="chat"]').click(); await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  await page.evaluate(() => (globalThis as any).releaseOldCancel());
+  expect(await page.evaluate(() => (globalThis as any).cancelledCurrent)).toBe(false);
+  const ids = await page.evaluate(() => (globalThis as any).voiceOwners);
+  expect(ids).toHaveLength(2); expect(ids[0]).toMatch(/^[a-f0-9-]{36}$/i); expect(ids[1]).not.toBe(ids[0]);
+});
+
 test('an interrupted recording does not leave a false recording indicator', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {

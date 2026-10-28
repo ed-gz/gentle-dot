@@ -779,12 +779,14 @@ async function initialize() {
 queueMicrotask(() => void initialize());
 
 let voiceSession: string | undefined;
+let voiceOwner: string | undefined;
 let voiceStarting = false;
 let voiceController: AbortController | undefined;
 let voiceGeneration = 0;
 let voiceTimer: ReturnType<typeof setTimeout> | undefined;
 async function cancelDictation(reason: 'navigation' | 'manual' = 'navigation') {
   const wasActive = voiceStarting || Boolean(voiceSession);
+  const owner = voiceOwner; voiceOwner = undefined;
   voiceGeneration++; voiceController?.abort(); voiceSession = undefined; clearTimeout(voiceTimer);
   voiceStarting = false;
   const control = element<HTMLButtonElement>('dictate');
@@ -792,11 +794,13 @@ async function cancelDictation(reason: 'navigation' | 'manual' = 'navigation') {
   if (wasActive) element('voice-status').textContent = reason === 'manual'
     ? 'Dictado cancelado. Toca el micrófono para volver a intentarlo.'
     : 'El dictado se interrumpió al salir de Capri. Toca el micrófono para intentarlo de nuevo.';
-  if (isTauri()) await cancelVoice().catch(() => {});
+  if (isTauri() && owner) await cancelVoice(owner).catch(() => {});
 }
 element('dictate').addEventListener('click', async () => {
   if (voiceStarting) { void cancelDictation('manual'); return; }
   const current = ++voiceGeneration;
+  const owner = voiceSession ? voiceOwner : localIdentifier();
+  voiceOwner = owner;
   voiceStarting = true;
   const control = element<HTMLButtonElement>('dictate'); control.setAttribute('aria-label', 'Cancelar dictado');
   try {
@@ -816,12 +820,12 @@ element('dictate').addEventListener('click', async () => {
       const availability = await checkVoice();
       if (availability.status === 'assets_required') {
         element('voice-status').textContent = 'Descargando la voz en español de Apple. Necesitas internet para esta primera preparación…';
-        const prepared = await prepareVoice();
+        const prepared = await prepareVoice(owner);
         if (!prepared.available) throw new Error('Apple aún no terminó de preparar la voz en español. Comprueba la conexión y vuelve a intentarlo.');
       }
       if (current !== voiceGeneration) return;
       element('voice-status').textContent = 'Iniciando el micrófono. Si iOS pide permiso, acéptalo para dictar.';
-      const session = await startVoice();
+      const session = await startVoice(owner);
       // Explicit cancellation already reached the native controller. A second
       // global cancel here could stop a newer capture owned by another panel.
       if (current !== voiceGeneration) return;
@@ -834,6 +838,7 @@ element('dictate').addEventListener('click', async () => {
   finally {
     if (current === voiceGeneration) {
       voiceStarting = false; control.disabled = false;
+      if (!voiceSession) voiceOwner = undefined;
       control.setAttribute('aria-pressed', String(!!voiceSession)); control.setAttribute('aria-label', voiceSession ? 'Terminar dictado' : 'Dictar');
     }
   }

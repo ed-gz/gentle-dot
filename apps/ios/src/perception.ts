@@ -168,17 +168,17 @@ export function parseRecognizedDocument(value: unknown, expected: { name: string
 
 export async function checkVoice(): Promise<VoiceAvailability> { return parseVoiceAvailability(await native('check_voice')); }
 /** Explicit user action: Apple may download shared language assets using internet. */
-export async function prepareVoice(): Promise<VoiceAvailability> {
-  const result = await native('prepare_voice');
+export async function prepareVoice(ownerId?: string): Promise<VoiceAvailability> {
+  const result = await native('prepare_voice', ownerId ? { ownerId: sessionId(ownerId) } : undefined);
   successful(result);
   return parseVoiceAvailability(result);
 }
-export async function startVoice(): Promise<VoiceSession> { return parseVoiceSession(await native('start_voice')); }
+export async function startVoice(ownerId?: string): Promise<VoiceSession> { return parseVoiceSession(await native('start_voice', ownerId ? { ownerId: sessionId(ownerId) } : undefined)); }
 /** Returns a draft; it never sends the instruction to a conversation or service. */
 export async function stopVoice(id: string): Promise<VoiceTranscript> {
   return parseVoiceTranscript(await native('stop_voice', { sessionId: sessionId(id) }), id);
 }
-export async function cancelVoice(): Promise<void> { successful(await native('cancel_voice')); }
+export async function cancelVoice(ownerId?: string): Promise<void> { successful(await native('cancel_voice', ownerId ? { ownerId: sessionId(ownerId) } : undefined)); }
 export async function cancelDocument(): Promise<void> { successful(await native('cancel_document')); }
 export async function recognizeDocument(file: File): Promise<RecognizedDocument> {
   validateDocument(file);

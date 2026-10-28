@@ -1,0 +1,28 @@
+import Foundation
+
+/// Prevents a delayed cancellation from affecting another dictation. A
+/// cancellation may arrive before its corresponding start crosses the bridge.
+struct VoiceOwners {
+    private(set) var active: String?
+    private var cancelled: Set<String> = []
+    private let limit = 4096
+    private var saturated = false
+
+    mutating func claim(_ id: String) -> Bool {
+        guard !saturated, !cancelled.contains(id), active == nil || active == id else { return false }
+        active = id
+        return true
+    }
+
+    mutating func cancel(_ id: String) -> Bool {
+        if !cancelled.contains(id) {
+            if cancelled.count >= limit { saturated = true }
+            else { cancelled.insert(id) }
+        }
+        return active == id
+    }
+
+    mutating func clear() { active = nil }
+    mutating func clearIfOwned(_ id: String) { if active == id { active = nil } }
+    mutating func finishAttempt(_ id: String, succeeded: Bool) { if !succeeded { clearIfOwned(id) } }
+}
