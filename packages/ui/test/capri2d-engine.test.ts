@@ -80,3 +80,66 @@ it.each([true, false])("binds the reference rig and preserves rendering with mas
  else expect(calls.readPixels).toBeUndefined();
  engine.dispose();expect(calls.deleteTexture).toHaveBeenCalledOnce();expect(calls.deleteShader).toHaveBeenCalledTimes(2);
 });
+
+function parallelGL() {
+ const state = { ready: false, lost: false, parallel: true };
+ const calls: Record<string, ReturnType<typeof vi.fn>> = {};
+ const gl = new Proxy({}, { get(_target, key: string) {
+  if (key.toUpperCase() === key) return 1;
+  return calls[key] ??= vi.fn((...args: unknown[]) => {
+   if (key === 'getExtension') return state.parallel ? { COMPLETION_STATUS_KHR: 0x91B1 } : null;
+   if (key === 'getProgramParameter') return args[1] === 0x91B1 ? state.ready : true;
+   if (key === 'isContextLost') return state.lost;
+   if (key === 'getUniformLocation') return args[1];
+   if (key.startsWith('create')) return {};
+   return undefined;
+  });
+ } }) as WebGLRenderingContext;
+ return { state, calls, canvas: { getContext: () => gl, width: 0, height: 0 } as unknown as HTMLCanvasElement };
+}
+it('prepares the existing rig without a blocking status query before parallel compilation completes', async () => {
+ const { createEngineAsync } = await import('../src/capri2d/engine.ts');
+ vi.useFakeTimers();
+ try {
+  const { state, calls, canvas } = parallelGL();
+  const pending = createEngineAsync(canvas, {} as HTMLImageElement, { maskReadback: false });
+  expect(calls.getProgramParameter!.mock.calls.every(args => args[1] === 0x91B1)).toBe(true);
+  expect(calls.getUniformLocation).toBeUndefined();
+  state.ready = true; await vi.advanceTimersByTimeAsync(16);
+  const engine = await pending; engine.draw({ alpha: 1 }, 1);
+  expect(calls.drawArrays).toHaveBeenCalledOnce(); expect(calls.readPixels).toBeUndefined();
+  engine.dispose(); expect(calls.deleteProgram).toHaveBeenCalledOnce();
+ } finally { vi.useRealTimers(); }
+});
+it('cancelling preparation releases GPU resources and cannot later activate a superseded image', async () => {
+ const { createEngineAsync } = await import('../src/capri2d/engine.ts');
+ vi.useFakeTimers();
+ try {
+  const { state, calls, canvas } = parallelGL(); const controller = new AbortController();
+  const pending = createEngineAsync(canvas, {} as HTMLImageElement, {}, controller.signal);
+  controller.abort(); await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  state.ready = true; await vi.advanceTimersByTimeAsync(100);
+  expect(calls.deleteProgram).toHaveBeenCalledOnce(); expect(calls.deleteShader).toHaveBeenCalledTimes(2);
+  expect(calls.getUniformLocation).toBeUndefined(); expect(vi.getTimerCount()).toBe(0);
+ } finally { vi.useRealTimers(); }
+});
+it('supports drivers without parallel compilation and rejects a lost context without installing it', async () => {
+ const { createEngineAsync } = await import('../src/capri2d/engine.ts');
+ const fallback = parallelGL(); fallback.state.parallel = false;
+ const engine = await createEngineAsync(fallback.canvas, {} as HTMLImageElement); engine.dispose();
+ const lost = parallelGL(); lost.state.ready = true; lost.state.lost = true;
+ await expect(createEngineAsync(lost.canvas, {} as HTMLImageElement)).rejects.toThrow('context lost');
+ expect(lost.calls.deleteProgram).toHaveBeenCalledOnce();
+});
+it('stops polling and releases resources when context is lost during compilation', async () => {
+ const { createEngineAsync } = await import('../src/capri2d/engine.ts');
+ vi.useFakeTimers();
+ try {
+  const { state, calls, canvas } = parallelGL();
+  const pending = createEngineAsync(canvas, {} as HTMLImageElement);
+  const rejected = expect(pending).rejects.toThrow('context lost');
+  state.lost = true; await vi.advanceTimersByTimeAsync(16); await rejected;
+  expect(calls.deleteProgram).toHaveBeenCalledOnce();
+  expect(calls.getUniformLocation).toBeUndefined(); expect(vi.getTimerCount()).toBe(0);
+ } finally { vi.useRealTimers(); }
+});

@@ -34,22 +34,30 @@ export const DEFAULT_RIG = {
 export interface EngineOptions { maskReadback?: boolean }
 /** Native hit testing reads rendered alpha by default. In-app callers that use
  * their own touch bounds can explicitly omit this synchronous GPU readback. */
-export function createEngine(canvas: HTMLCanvasElement, image: HTMLImageElement, options: EngineOptions = {}) {
+function prepareEngine(canvas: HTMLCanvasElement, image: HTMLImageElement, options: EngineOptions, parallel = false) {
  const gl=canvas.getContext('webgl',{alpha:true,premultipliedAlpha:true,antialias:false,preserveDrawingBuffer:true});
  if (!gl) throw new Error('WebGL unavailable');
+ const extension=parallel ? gl.getExtension('KHR_parallel_shader_compile') : null;
  const program=gl.createProgram()!;
  const shaders: WebGLShader[]=[];
  const buffer=gl.createBuffer(), texture=gl.createTexture();
- const dispose=()=>{gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteProgram(program);shaders.forEach(s=>gl.deleteShader(s));};
+ let disposed=false;
+ const dispose=()=>{if(disposed)return;disposed=true;gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteProgram(program);shaders.forEach(s=>gl.deleteShader(s));};
  const u: Record<string,WebGLUniformLocation|null>={};
  try {
   for (const [type,source] of [[gl.VERTEX_SHADER,VERT],[gl.FRAGMENT_SHADER,FRAG]] as const) {
    const shader=gl.createShader(type)!;shaders.push(shader);gl.shaderSource(shader,source);gl.compileShader(shader);
-   if (!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader)??'Shader failed');
    gl.attachShader(program,shader);
   }
   gl.linkProgram(program);
-  if (!gl.getProgramParameter(program,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program)??'Shader link failed');
+ } catch(error) {dispose();throw error;}
+ const finish=()=>{
+ try {
+  if (disposed || gl.isContextLost?.()) throw new Error('WebGL context lost');
+  if (!gl.getProgramParameter(program,gl.LINK_STATUS)) {
+   for(const shader of shaders) if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader)??'Shader failed');
+   throw new Error(gl.getProgramInfoLog(program)??'Shader link failed');
+  }
   gl.useProgram(program);
   for (const name of UNIFORMS) u[name]=gl.getUniformLocation(program,name);
   gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
@@ -82,7 +90,40 @@ export function createEngine(canvas: HTMLCanvasElement, image: HTMLImageElement,
   inputRectangles:()=>pixels ? alphaInputRectangles(pixels,144,204) : [],
   dispose,
  };
+ };
+ return {finish,dispose,ready:()=>{
+  if(disposed || gl.isContextLost?.()) throw new Error('WebGL context lost');
+  return !extension || Boolean(gl.getProgramParameter(program,extension.COMPLETION_STATUS_KHR));
+ }};
 }
+/** Existing synchronous entry point, including desktop alpha hit testing. */
+export function createEngine(canvas: HTMLCanvasElement, image: HTMLImageElement, options: EngineOptions = {}) {
+ return prepareEngine(canvas,image,options).finish();
+}
+/** The iPhone can restore its conversation while the driver prepares the same
+ * shaders. The optional extension avoids blocking compile/link status queries. */
+export async function createEngineAsync(canvas: HTMLCanvasElement, image: HTMLImageElement,
+ options: EngineOptions = {}, signal?: AbortSignal) {
+ signal?.throwIfAborted();
+ const prepared=prepareEngine(canvas,image,options,true);
+ try {
+  await new Promise<void>((resolve,reject)=>{
+   let timer: ReturnType<typeof setTimeout> | undefined;
+   const cleanup=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);};
+   const abort=()=>{cleanup();reject(signal?.reason);};
+   const poll=()=>{
+    try {
+     signal?.throwIfAborted();
+     if(prepared.ready()){cleanup();resolve();return;}
+     timer=setTimeout(poll,16);
+    } catch(error){cleanup();reject(error);}
+   };
+   signal?.addEventListener('abort',abort,{once:true}); poll();
+  });
+  signal?.throwIfAborted(); return prepared.finish();
+ } catch(error){prepared.dispose();throw error;}
+}
+
 export type InputRectangle = [number,number,number,number];
 /** Exact logical-pixel runs from the same readback as the visible body.
  * No extra GPU readback and no hit area for the decorative FX canvas. */
