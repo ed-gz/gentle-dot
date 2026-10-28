@@ -114,7 +114,7 @@ final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDelegat
         guard error == nil, let response = response, let body = String(data: bytes, encoding: .utf8) else {
             finish(.failure(DeviceFailure.network)); return
         }
-        let allowed: Set<String> = ["content-type", "etag", "retry-after", "link", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "x-github-request-id", "mcp-session-id", "mcp-protocol-version"]
+        let allowed: Set<String> = ["content-type", "etag", "retry-after", "link", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset", "x-github-request-id", "mcp-session-id", "mcp-protocol-version", "www-authenticate"]
         var headers: [String: String] = [:]
         for (key, value) in response.allHeaderFields {
             let name = String(describing: key).lowercased()
