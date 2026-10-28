@@ -144,7 +144,10 @@ test('shell stops new sends after archive failure, preserves the draft and expor
       return { ok: true };
     } };
   });
-  await page.goto('/'); await expect(page.locator('#send')).toBeEnabled();
+  await page.goto('/');
+  // Shared WebGL warmup can block browser tasks on software renderers before
+  // native availability and the initial durable checkpoint reach the UI.
+  await expect(page.locator('#send')).toBeEnabled({ timeout: 15000 });
   await page.evaluate(async () => {
     const { conversationArchive } = await import('/src/conversation-archive.ts');
     (globalThis as any).restoreArchive = conversationArchive.upsert;
