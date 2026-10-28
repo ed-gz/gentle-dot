@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-prepare-voice"
+description = "Enables the prepare_voice command without any pre-configured scope."
+commands.allow = ["prepare_voice"]
+
+[[permission]]
+identifier = "deny-prepare-voice"
+description = "Denies the prepare_voice command without any pre-configured scope."
+commands.deny = ["prepare_voice"]

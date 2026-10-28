@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-stop-voice"
+description = "Enables the stop_voice command without any pre-configured scope."
+commands.allow = ["stop_voice"]
+
+[[permission]]
+identifier = "deny-stop-voice"
+description = "Denies the stop_voice command without any pre-configured scope."
+commands.deny = ["stop_voice"]

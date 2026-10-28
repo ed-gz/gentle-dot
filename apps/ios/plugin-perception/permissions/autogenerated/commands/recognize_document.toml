@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-recognize-document"
+description = "Enables the recognize_document command without any pre-configured scope."
+commands.allow = ["recognize_document"]
+
+[[permission]]
+identifier = "deny-recognize-document"
+description = "Denies the recognize_document command without any pre-configured scope."
+commands.deny = ["recognize_document"]
