@@ -1,6 +1,9 @@
 :root {
   color-scheme: dark;
   font: 100%/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Dynamic Type on iOS; unsupported browsers keep the preceding fallback. */
+  font: -apple-system-body;
+  line-height: 1.5;
   --bg: #111019; --ink: #f4f1f9; --muted: #b8b0c8; --panel: #1d1a27;
   --edge: #8b759e; --line: #51415e; --acid: #baff67; --pink: #ff408e; --violet: #bd95fa;
   --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
