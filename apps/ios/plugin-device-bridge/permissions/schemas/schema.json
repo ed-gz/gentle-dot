@@ -1,0 +1,475 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PermissionFile",
+  "description": "Permission file that can define a default permission, a set of permissions or a list of inlined permissions.",
+  "type": "object",
+  "properties": {
+    "default": {
+      "description": "The default permission set for the plugin",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DefaultPermission"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "set": {
+      "description": "A list of permissions sets defined",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PermissionSet"
+      }
+    },
+    "permission": {
+      "description": "A list of inlined permissions",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Permission"
+      }
+    }
+  },
+  "definitions": {
+    "DefaultPermission": {
+      "description": "The default permission set of the plugin.\n\nWorks similarly to a permission with the \"default\" identifier.",
+      "type": "object",
+      "required": [
+        "permissions"
+      ],
+      "properties": {
+        "version": {
+          "description": "The version of the permission.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does. Tauri convention is to use <h4> headings in markdown content for Tauri documentation generation purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permissions": {
+          "description": "All permissions this set contains.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PermissionSet": {
+      "description": "A set of direct permissions grouped together under a new name.",
+      "type": "object",
+      "required": [
+        "description",
+        "identifier",
+        "permissions"
+      ],
+      "properties": {
+        "identifier": {
+          "description": "A unique identifier for the permission.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does.",
+          "type": "string"
+        },
+        "permissions": {
+          "description": "All permissions this set contains.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PermissionKind"
+          }
+        }
+      }
+    },
+    "Permission": {
+      "description": "Descriptions of explicit privileges of commands.\n\nIt can enable commands to be accessible in the frontend of the application.\n\nIf the scope is defined it can be used to fine grain control the access of individual or multiple commands.",
+      "type": "object",
+      "required": [
+        "identifier"
+      ],
+      "properties": {
+        "version": {
+          "description": "The version of the permission.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
+        "identifier": {
+          "description": "A unique identifier for the permission.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does. Tauri internal convention is to use <h4> headings in markdown content for Tauri documentation generation purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commands": {
+          "description": "Allowed or denied commands when using this permission.",
+          "default": {
+            "allow": [],
+            "deny": []
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Commands"
+            }
+          ]
+        },
+        "scope": {
+          "description": "Allowed or denied scoped when using this permission.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Scopes"
+            }
+          ]
+        },
+        "platforms": {
+          "description": "Target platforms this permission applies. By default all platforms are affected by this permission.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Target"
+          }
+        }
+      }
+    },
+    "Commands": {
+      "description": "Allowed and denied commands inside a permission.\n\nIf two commands clash inside of `allow` and `deny`, it should be denied by default.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Allowed command.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deny": {
+          "description": "Denied command, which takes priority.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Scopes": {
+      "description": "An argument for fine grained behavior control of Tauri commands.\n\nIt can be of any serde serializable type and is used to allow or prevent certain actions inside a Tauri command. The configured scope is passed to the command and will be enforced by the command implementation.\n\n## Example\n\n```json { \"allow\": [{ \"path\": \"$HOME/**\" }], \"deny\": [{ \"path\": \"$HOME/secret.txt\" }] } ```",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Data that defines what is allowed by the scope.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        },
+        "deny": {
+          "description": "Data that defines what is denied by the scope. This should be prioritized by validation logic.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        }
+      }
+    },
+    "Value": {
+      "description": "All supported ACL values.",
+      "anyOf": [
+        {
+          "description": "Represents a null JSON value.",
+          "type": "null"
+        },
+        {
+          "description": "Represents a [`bool`].",
+          "type": "boolean"
+        },
+        {
+          "description": "Represents a valid ACL [`Number`].",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Number"
+            }
+          ]
+        },
+        {
+          "description": "Represents a [`String`].",
+          "type": "string"
+        },
+        {
+          "description": "Represents a list of other [`Value`]s.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        },
+        {
+          "description": "Represents a map of [`String`] keys to [`Value`]s.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Value"
+          }
+        }
+      ]
+    },
+    "Number": {
+      "description": "A valid ACL number.",
+      "anyOf": [
+        {
+          "description": "Represents an [`i64`].",
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "description": "Represents a [`f64`].",
+          "type": "number",
+          "format": "double"
+        }
+      ]
+    },
+    "Target": {
+      "description": "Platform target.",
+      "oneOf": [
+        {
+          "description": "MacOS.",
+          "type": "string",
+          "enum": [
+            "macOS"
+          ]
+        },
+        {
+          "description": "Windows.",
+          "type": "string",
+          "enum": [
+            "windows"
+          ]
+        },
+        {
+          "description": "Linux.",
+          "type": "string",
+          "enum": [
+            "linux"
+          ]
+        },
+        {
+          "description": "Android.",
+          "type": "string",
+          "enum": [
+            "android"
+          ]
+        },
+        {
+          "description": "iOS.",
+          "type": "string",
+          "enum": [
+            "iOS"
+          ]
+        }
+      ]
+    },
+    "PermissionKind": {
+      "type": "string",
+      "oneOf": [
+        {
+          "description": "Enables the crypto_hash_begin command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-crypto-hash-begin"
+        },
+        {
+          "description": "Denies the crypto_hash_begin command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-crypto-hash-begin"
+        },
+        {
+          "description": "Enables the crypto_hash_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-crypto-hash-cancel"
+        },
+        {
+          "description": "Denies the crypto_hash_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-crypto-hash-cancel"
+        },
+        {
+          "description": "Enables the crypto_hash_finish command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-crypto-hash-finish"
+        },
+        {
+          "description": "Denies the crypto_hash_finish command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-crypto-hash-finish"
+        },
+        {
+          "description": "Enables the crypto_hash_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-crypto-hash-update"
+        },
+        {
+          "description": "Denies the crypto_hash_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-crypto-hash-update"
+        },
+        {
+          "description": "Enables the crypto_random command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-crypto-random"
+        },
+        {
+          "description": "Denies the crypto_random command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-crypto-random"
+        },
+        {
+          "description": "Enables the crypto_sha256 command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-crypto-sha256"
+        },
+        {
+          "description": "Denies the crypto_sha256 command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-crypto-sha256"
+        },
+        {
+          "description": "Enables the https_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-https-request"
+        },
+        {
+          "description": "Denies the https_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-https-request"
+        },
+        {
+          "description": "Enables the oauth_authorize command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-oauth-authorize"
+        },
+        {
+          "description": "Denies the oauth_authorize command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-oauth-authorize"
+        },
+        {
+          "description": "Enables the oauth_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-oauth-cancel"
+        },
+        {
+          "description": "Denies the oauth_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-oauth-cancel"
+        },
+        {
+          "description": "Enables the pair_device command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pair-device"
+        },
+        {
+          "description": "Denies the pair_device command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pair-device"
+        },
+        {
+          "description": "Enables the secret_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secret-delete"
+        },
+        {
+          "description": "Denies the secret_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secret-delete"
+        },
+        {
+          "description": "Enables the secret_get command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secret-get"
+        },
+        {
+          "description": "Denies the secret_get command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secret-get"
+        },
+        {
+          "description": "Enables the secret_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secret-set"
+        },
+        {
+          "description": "Denies the secret_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secret-set"
+        },
+        {
+          "description": "Enables the share_ack command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-share-ack"
+        },
+        {
+          "description": "Denies the share_ack command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-share-ack"
+        },
+        {
+          "description": "Enables the share_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-share-list"
+        },
+        {
+          "description": "Denies the share_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-share-list"
+        },
+        {
+          "description": "Enables the share_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-share-read"
+        },
+        {
+          "description": "Denies the share_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-share-read"
+        },
+        {
+          "description": "Enables the unpair_device command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-unpair-device"
+        },
+        {
+          "description": "Denies the unpair_device command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-unpair-device"
+        },
+        {
+          "description": "Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure hashes, and locally shared files.",
+          "type": "string",
+          "const": "default"
+        }
+      ]
+    }
+  }
+}

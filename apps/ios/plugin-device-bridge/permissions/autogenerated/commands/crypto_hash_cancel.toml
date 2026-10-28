@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-crypto-hash-cancel"
+description = "Enables the crypto_hash_cancel command without any pre-configured scope."
+commands.allow = ["crypto_hash_cancel"]
+
+[[permission]]
+identifier = "deny-crypto-hash-cancel"
+description = "Denies the crypto_hash_cancel command without any pre-configured scope."
+commands.deny = ["crypto_hash_cancel"]

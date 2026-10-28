@@ -1,0 +1,23 @@
+fn main() {
+    tauri_plugin::Builder::new(&[
+        "secret_get",
+        "secret_set",
+        "secret_delete",
+        "pair_device",
+        "unpair_device",
+        "https_request",
+        "oauth_authorize",
+        "oauth_cancel",
+        "crypto_random",
+        "crypto_sha256",
+        "crypto_hash_begin",
+        "crypto_hash_update",
+        "crypto_hash_finish",
+        "crypto_hash_cancel",
+        "share_list",
+        "share_read",
+        "share_ack",
+    ])
+    .ios_path("ios")
+    .build();
+}

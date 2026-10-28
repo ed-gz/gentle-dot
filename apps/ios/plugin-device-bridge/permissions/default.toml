@@ -1,0 +1,3 @@
+[default]
+description = "Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure hashes, and locally shared files."
+permissions = ["allow-secret-get", "allow-secret-set", "allow-secret-delete", "allow-pair-device", "allow-unpair-device", "allow-https-request", "allow-oauth-authorize", "allow-oauth-cancel", "allow-crypto-random", "allow-crypto-sha256", "allow-crypto-hash-begin", "allow-crypto-hash-update", "allow-crypto-hash-finish", "allow-crypto-hash-cancel", "allow-share-list", "allow-share-read", "allow-share-ack"]

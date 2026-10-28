@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-crypto-sha256"
+description = "Enables the crypto_sha256 command without any pre-configured scope."
+commands.allow = ["crypto_sha256"]
+
+[[permission]]
+identifier = "deny-crypto-sha256"
+description = "Denies the crypto_sha256 command without any pre-configured scope."
+commands.deny = ["crypto_sha256"]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-crypto-hash-begin"
+description = "Enables the crypto_hash_begin command without any pre-configured scope."
+commands.allow = ["crypto_hash_begin"]
+
+[[permission]]
+identifier = "deny-crypto-hash-begin"
+description = "Denies the crypto_hash_begin command without any pre-configured scope."
+commands.deny = ["crypto_hash_begin"]

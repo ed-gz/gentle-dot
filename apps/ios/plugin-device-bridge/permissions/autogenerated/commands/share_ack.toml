@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-share-ack"
+description = "Enables the share_ack command without any pre-configured scope."
+commands.allow = ["share_ack"]
+
+[[permission]]
+identifier = "deny-share-ack"
+description = "Denies the share_ack command without any pre-configured scope."
+commands.deny = ["share_ack"]

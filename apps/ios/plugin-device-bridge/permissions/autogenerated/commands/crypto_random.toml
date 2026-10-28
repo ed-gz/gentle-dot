@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-crypto-random"
+description = "Enables the crypto_random command without any pre-configured scope."
+commands.allow = ["crypto_random"]
+
+[[permission]]
+identifier = "deny-crypto-random"
+description = "Denies the crypto_random command without any pre-configured scope."
+commands.deny = ["crypto_random"]

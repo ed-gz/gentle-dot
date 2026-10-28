@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-crypto-hash-update"
+description = "Enables the crypto_hash_update command without any pre-configured scope."
+commands.allow = ["crypto_hash_update"]
+
+[[permission]]
+identifier = "deny-crypto-hash-update"
+description = "Denies the crypto_hash_update command without any pre-configured scope."
+commands.deny = ["crypto_hash_update"]

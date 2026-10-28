@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-crypto-hash-finish"
+description = "Enables the crypto_hash_finish command without any pre-configured scope."
+commands.allow = ["crypto_hash_finish"]
+
+[[permission]]
+identifier = "deny-crypto-hash-finish"
+description = "Denies the crypto_hash_finish command without any pre-configured scope."
+commands.deny = ["crypto_hash_finish"]
