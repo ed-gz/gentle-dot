@@ -99,6 +99,21 @@ test('failed persistence keeps the native copy and sends no ACK', async ({ page 
   await expect(page.locator('#send')).toBeEnabled();
 });
 
+test('a failed initial checkpoint keeps the instruction and never starts the model', async ({ page }) => {
+  await setup(page);
+  await page.evaluate(async () => {
+    const { conversationArchive } = await import('/src/conversation-archive.ts' as string);
+    conversationArchive.upsert = async () => { throw new Error('Cuota simulada'); };
+  });
+  await page.locator('#prompt').fill('Conserva esta instrucción antes de inferir.');
+  await page.locator('#send').click();
+  await expect(page.locator('#cards')).toContainText('Conserva esta instrucción antes de inferir.');
+  await expect(page.locator('#cards')).toContainText('no inicié el modelo local');
+  await expect(page.locator('#send')).toBeDisabled();
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-events') || '[]'))).toEqual([]);
+  await expect.poll(async () => page.evaluate(async () => (await (await import('/src/conversation.ts' as string)).loadConversation()).entries.some((item: { text: string }) => item.text === 'Conserva esta instrucción antes de inferir.'))).toBe(true);
+});
+
 test('explicit cancellation wins over a late native answer after restarting', async ({ page }) => {
   await setup(page); await seed(page, answer, true); await page.reload();
   await expect(page.locator('#cards')).toContainText('Respuesta interrumpida.');

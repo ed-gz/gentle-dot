@@ -148,7 +148,7 @@ test('shell stops new sends after archive failure, preserves the draft and expor
       if (command.endsWith('results_list')) return { ok: true, items: [] };
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
-      if (command.endsWith('agent_step')) return { ok: true, decision: { kind: 'answer', text: 'Respuesta que debe conservarse.', toolName: '', argumentsJSON: '{}' } };
+      if (command.endsWith('agent_step')) { state.didInfer = true; return { ok: true, decision: { kind: 'answer', text: 'Respuesta que debe conservarse.', toolName: '', argumentsJSON: '{}' } }; }
       return { ok: true };
     } };
   });
@@ -160,9 +160,8 @@ test('shell stops new sends after archive failure, preserves the draft and expor
     const { conversationArchive } = await import('/src/conversation-archive.ts');
     (globalThis as any).restoreArchive = conversationArchive.upsert;
     conversationArchive.upsert = async (...args) => {
-      // A draft-only checkpoint must remain possible before the first send.
-      // Inject the quota failure when this case actually archives messages.
-      if (args[0].length) throw new Error('Cuota local agotada (fixture).');
+      // Preserve the initial turn checkpoint, then fail when the answer arrives.
+      if (args[0].length && (globalThis as any).didInfer) throw new Error('Cuota local agotada (fixture).');
       return (globalThis as any).restoreArchive(...args);
     };
   });
@@ -171,13 +170,13 @@ test('shell stops new sends after archive failure, preserves the draft and expor
   await expect(page.locator('#send')).toBeDisabled(); await expect(page.locator('#chat-notice')).toContainText('Los envíos están detenidos');
   await page.locator('#prompt').fill('Siguiente borrador, todavía sin enviar.');
   await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).draft)).toBe('Siguiente borrador, todavía sin enviar.');
-  await page.locator('[data-panel="inbox"]').click(); await expect(page.locator('#memory-status')).toContainText('2 mensajes pendientes');
+  await page.locator('[data-panel="inbox"]').click(); await expect(page.locator('#memory-status')).toContainText('1 mensajes pendientes');
   // This case verifies the browser fallback; native delivery has its own fixture suite.
   await page.evaluate(() => { (globalThis as any).isTauri = false; });
   const download = page.waitForEvent('download'); await page.locator('#memory-export').click();
   const exported = await download; expect(exported.suggestedFilename()).toMatch(/^capri-conversacion-.*\.ndjson$/);
   const lines = (await readFile((await exported.path())!, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  expect(lines.find(line => line.schema === 'capri-conversation-pending/v1')).toMatchObject({ entries: 2, committed: false });
+  expect(lines.find(line => line.schema === 'capri-conversation-pending/v1')).toMatchObject({ entries: 1, committed: false });
   expect(lines.find(line => line.schema === 'capri-conversation-draft/v1')).toMatchObject({ submitted: false, text: 'Siguiente borrador, todavía sin enviar.' });
   expect(lines.some(line => line.text === 'Respuesta que debe conservarse.')).toBe(true);
   await page.evaluate(async () => { (await import('/src/conversation-archive.ts')).conversationArchive.upsert = (globalThis as any).restoreArchive; });
