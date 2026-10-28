@@ -112,5 +112,18 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
     assert.deepEqual(targets.CapriShare.entitlements.properties['com.apple.security.application-groups'], targets.capri_iOS.entitlements.properties['com.apple.security.application-groups']);
     assert.match(targets.CapriShare.info.properties.NSExtension.NSExtensionAttributes.NSExtensionActivationRule, /public.audio/);
     assert.doesNotMatch(readFileSync(path, 'utf8'), /TRUEPREDICATE/);
+    for (let i = 0; i < 2; i++) {
+      const result = spawnSync('ruby', [script, path, '--spec-only'], { encoding: 'utf8', env: { ...process.env, CAPRI_GOOGLE_CLIENT_ID: '123-example.apps.googleusercontent.com' } });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    const google = spawnSync('ruby', ['-ryaml', '-rjson', '-e', 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), aliases: true))', path], { encoding: 'utf8' });
+    const info = JSON.parse(google.stdout).targets.capri_iOS.info.properties;
+    assert.equal(info.CapriGoogleClientID, '123-example.apps.googleusercontent.com');
+    assert.equal(info.CFBundleURLTypes.length, 2);
+    assert.deepEqual(info.CFBundleURLTypes.find(item => item.CFBundleURLName === 'dev.gentledot.capri.google').CFBundleURLSchemes, ['com.googleusercontent.apps.123-example']);
+    const before = readFileSync(path, 'utf8');
+    const invalid = spawnSync('ruby', [script, path, '--spec-only'], { encoding: 'utf8', env: { ...process.env, CAPRI_GOOGLE_CLIENT_ID: 'not a client id' } });
+    assert.notEqual(invalid.status, 0);
+    assert.equal(readFileSync(path, 'utf8'), before);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -10,6 +10,8 @@ Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure has
 - `allow-https-request`
 - `allow-oauth-authorize`
 - `allow-oauth-cancel`
+- `allow-open-external-url`
+- `allow-registered-url-schemes`
 - `allow-crypto-random`
 - `allow-crypto-sha256`
 - `allow-crypto-hash-begin`
@@ -266,6 +268,32 @@ Denies the oauth_cancel command without any pre-configured scope.
 <tr>
 <td>
 
+`device-bridge:allow-open-external-url`
+
+</td>
+<td>
+
+Enables the open_external_url command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-open-external-url`
+
+</td>
+<td>
+
+Denies the open_external_url command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `device-bridge:allow-pair-device`
 
 </td>
@@ -285,6 +313,32 @@ Enables the pair_device command without any pre-configured scope.
 <td>
 
 Denies the pair_device command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-registered-url-schemes`
+
+</td>
+<td>
+
+Enables the registered_url_schemes command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-registered-url-schemes`
+
+</td>
+<td>
+
+Denies the registered_url_schemes command without any pre-configured scope.
 
 </td>
 </tr>

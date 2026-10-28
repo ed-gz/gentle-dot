@@ -385,6 +385,16 @@
           "const": "deny-oauth-cancel"
         },
         {
+          "description": "Enables the open_external_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-external-url"
+        },
+        {
+          "description": "Denies the open_external_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-external-url"
+        },
+        {
           "description": "Enables the pair_device command without any pre-configured scope.",
           "type": "string",
           "const": "allow-pair-device"
@@ -393,6 +403,16 @@
           "description": "Denies the pair_device command without any pre-configured scope.",
           "type": "string",
           "const": "deny-pair-device"
+        },
+        {
+          "description": "Enables the registered_url_schemes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-registered-url-schemes"
+        },
+        {
+          "description": "Denies the registered_url_schemes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-registered-url-schemes"
         },
         {
           "description": "Enables the secret_delete command without any pre-configured scope.",

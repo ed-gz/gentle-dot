@@ -27,6 +27,14 @@ raise 'Expected CFBundleURLTypes array.' unless schemes.is_a?(Array)
 unless schemes.any? { |entry| Array(entry['CFBundleURLSchemes']).include?('capri-auth') }
   schemes << { 'CFBundleURLName' => 'dev.gentledot.capri.oauth', 'CFBundleURLSchemes' => ['capri-auth'] }
 end
+google_client = ENV.fetch('CAPRI_GOOGLE_CLIENT_ID', '').strip
+unless google_client.empty?
+  raise 'Expected a public Google iOS client ID, never a client secret.' unless google_client.match?(/\A[A-Za-z0-9_-]+\.apps\.googleusercontent\.com\z/)
+  google_scheme = google_client.split('.').reverse.join('.')
+  schemes.reject! { |entry| entry['CFBundleURLName'] == 'dev.gentledot.capri.google' }
+  schemes << { 'CFBundleURLName' => 'dev.gentledot.capri.google', 'CFBundleURLSchemes' => [google_scheme] }
+  main_info['CapriGoogleClientID'] = google_client
+end
 main['entitlements'] ||= { 'path' => "#{name}/#{name}.entitlements" }
 main['entitlements']['properties'] ||= {}
 groups = main['entitlements']['properties']['com.apple.security.application-groups'] ||= []

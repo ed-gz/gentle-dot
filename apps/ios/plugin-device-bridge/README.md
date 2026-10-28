@@ -28,6 +28,8 @@ transport. Grant `device-bridge:default` only to the packaged main window.
 | `https_request` | `url, method, headers, body?` | `status, body, headers` |
 | `oauth_authorize` | `authorizationUrl, callbackScheme` | `callbackUrl` |
 | `oauth_cancel` | `{}` | — |
+| `open_external_url` | `url` (HTTPS, explicit account-setup UI only) | — |
+| `registered_url_schemes` | `{}` | `schemes` (from this installed app's Info.plist) |
 | `crypto_random` | `length` (1–64 bytes) | `data` (base64url, unpadded) |
 | `crypto_sha256` | `data` (UTF-8 text, ≤2 MiB) | `hex` (lowercase SHA-256) |
 | `crypto_hash_begin` | `{}` | `id` (ephemeral digest UUID) |
@@ -72,6 +74,12 @@ then exchange its PKCE verifier. `capri-auth` is registered by default. A Google
 client must be registered for the app's actual bundle identifier and its reverse
 client ID callback scheme; configured schemes can be added to `CFBundleURLTypes`.
 Connections in Codex do not authenticate this app.
+
+The account setup UI can open a verified device-authorization URL with
+`openExternalURL` and inspect the actual bundle callback schemes with
+`registeredURLSchemes`. Navigation remains an explicit human UI action and is not
+registered as a model tool. A requested OAuth callback that is absent from the
+installed bundle must not be presented as configured successfully.
 
 ## Share Extension integration
 

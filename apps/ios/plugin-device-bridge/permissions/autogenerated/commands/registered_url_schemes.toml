@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-registered-url-schemes"
+description = "Enables the registered_url_schemes command without any pre-configured scope."
+commands.allow = ["registered_url_schemes"]
+
+[[permission]]
+identifier = "deny-registered-url-schemes"
+description = "Denies the registered_url_schemes command without any pre-configured scope."
+commands.deny = ["registered_url_schemes"]

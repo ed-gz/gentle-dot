@@ -43,6 +43,17 @@ export async function oauthAuthorize(authorizationUrl: string, callbackScheme = 
   return reply.callbackUrl;
 }
 export async function oauthCancel(): Promise<void> { requireNative(await deviceInvoke('oauth_cancel', {})); }
+/** Explicit account-setup UI only. Never expose navigation as a model tool. */
+export async function openExternalURL(url: string): Promise<void> {
+  const target = new URL(url);
+  if (target.protocol !== 'https:' || target.username || target.password || target.hash) throw new Error('Se requiere una dirección HTTPS válida.');
+  requireNative(await deviceInvoke('open_external_url', { url: target.href }));
+}
+export async function registeredURLSchemes(): Promise<string[]> {
+  const reply = requireNative(await deviceInvoke<NativeReply & { schemes?: unknown }>('registered_url_schemes', {}));
+  if (!Array.isArray(reply.schemes) || reply.schemes.some(value => typeof value !== 'string' || !/^[A-Za-z][A-Za-z0-9+.-]{2,127}$/.test(value))) throw new Error('No se pudieron comprobar los callbacks de esta instalación.');
+  return reply.schemes;
+}
 export async function nativeRandom(length: number): Promise<string> {
   const reply = requireNative(await deviceInvoke<NativeReply & { data?: string }>('crypto_random', { length }));
   if (!reply.data || !/^[A-Za-z0-9_-]+$/.test(reply.data)) throw new Error('No se pudo obtener aleatoriedad segura.');

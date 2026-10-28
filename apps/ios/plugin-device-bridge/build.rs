@@ -8,6 +8,8 @@ fn main() {
         "https_request",
         "oauth_authorize",
         "oauth_cancel",
+        "open_external_url",
+        "registered_url_schemes",
         "crypto_random",
         "crypto_sha256",
         "crypto_hash_begin",

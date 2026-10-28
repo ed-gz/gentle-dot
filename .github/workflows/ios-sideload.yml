@@ -2,6 +2,11 @@ name: Capri unsigned iOS (SideStore)
 
 on:
   workflow_dispatch:
+    inputs:
+      google_client_id:
+        description: 'Optional public Google iOS OAuth client ID to register its callback scheme'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -16,6 +21,7 @@ jobs:
     timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: '4'
+      CAPRI_GOOGLE_CLIENT_ID: ${{ inputs.google_client_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -64,6 +70,8 @@ jobs:
           }
           SWIFT
           xcrun --sdk iphoneos swiftc -typecheck -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" "$RUNNER_TEMP/capri-foundation-check.swift"
+      - name: Typecheck native feature APIs before compiling Rust
+        run: bash apps/ios/scripts/check-native-sdk.sh
       - name: Xcode project generator
         run: brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
       - name: Rust and Tauri CLI

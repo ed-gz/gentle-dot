@@ -69,6 +69,14 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         return locales.contains { $0.identifier(.bcp47) == locale.identifier(.bcp47) }
     }
 
+    // Use the shipping initializer, with the same configuration for asset
+    // preparation, capture-format selection and final local transcription.
+    // SpeechTranscriber runs on device; there is no offlineTranscription preset
+    // in the released SDK. Final-only results retain audio timing attributes.
+    private func makeTranscriber(for locale: Locale) -> SpeechTranscriber {
+        SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+    }
+
     func check() async -> VoiceReply {
         let permission: String
         switch AVAudioSession.sharedInstance().recordPermission {
@@ -100,7 +108,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         }
         guard epoch == generation else { return .failure("cancelled", "Preparación cancelada.") }
         do {
-            let module = SpeechTranscriber(locale: locale, preset: .offlineTranscription)
+            let module = makeTranscriber(for: locale)
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
                 try await request.downloadAndInstall()
             }
@@ -122,7 +130,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             return .failure("unsupported_language", "SpeechAnalyzer no está disponible en español en este iPhone.")
         }
         guard await installed(locale) else { return .failure("assets_required", "Prepara los modelos de voz antes de dictar sin conexión.") }
-        let module = SpeechTranscriber(locale: locale, preset: .offlineTranscription)
+        let module = makeTranscriber(for: locale)
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
             return .failure("audio_format_unavailable", "No hay un formato de audio compatible con el transcriptor.")
         }
@@ -176,7 +184,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             analyzer = nil
             if sessionID == id { clearCapture() }
         }
-        let module = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+        let module = makeTranscriber(for: locale)
         let analysis = SpeechAnalyzer(modules: [module])
         analyzer = analysis
         let results = Task { @MainActor () throws -> [VoiceSegment] in

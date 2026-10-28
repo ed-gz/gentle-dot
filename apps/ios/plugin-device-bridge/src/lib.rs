@@ -48,6 +48,8 @@ request_command!(unpair_device, "unpairDevice");
 request_command!(https_request, "httpsRequest");
 request_command!(oauth_authorize, "oauthAuthorize");
 request_command!(oauth_cancel, "oauthCancel");
+request_command!(open_external_url, "openExternalURL");
+request_command!(registered_url_schemes, "registeredURLSchemes");
 request_command!(crypto_random, "cryptoRandom");
 request_command!(crypto_sha256, "cryptoSha256");
 request_command!(crypto_hash_begin, "cryptoHashBegin");
@@ -69,6 +71,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             https_request,
             oauth_authorize,
             oauth_cancel,
+            open_external_url,
+            registered_url_schemes,
             crypto_random,
             crypto_sha256,
             crypto_hash_begin,

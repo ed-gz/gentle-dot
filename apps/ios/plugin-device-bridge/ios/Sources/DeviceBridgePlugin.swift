@@ -27,6 +27,7 @@ private struct BridgeReply: Encodable {
     var id: String? = nil
     var connection: PairedConnection? = nil
     var items: [SharedManifest]? = nil
+    var schemes: [String]? = nil
 }
 private struct SecretInput: Decodable { let scope: String; let account: String; let value: String? }
 private struct PairInput: Decodable { let origin: String; let code: String; let deviceName: String }
@@ -37,6 +38,7 @@ private struct IDInput: Decodable { let id: String }
 private struct RandomInput: Decodable { let length: Int }
 private struct HashInput: Decodable { let data: String }
 private struct HashUpdateInput: Decodable { let id: String; let data: String }
+private struct URLInput: Decodable { let url: String }
 
 final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextProviding {
     private weak var webview: WKWebView?
@@ -232,6 +234,27 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
             if let pending = pending { self.fail(pending, DeviceFailure.cancelled) }
             invoke.resolve(BridgeReply())
         }
+    }
+    // These commands serve explicit account-setup controls, never model tools.
+    @objc func openExternalURL(_ invoke: Invoke) {
+        DispatchQueue.main.async {
+            do {
+                guard UIApplication.shared.applicationState == .active else { throw DeviceFailure.unavailable("Abre Capri para continuar con la autorización.") }
+                let args = try invoke.parseArgs(URLInput.self)
+                let request = try BoundedHTTP.validated(HTTPInput(url: args.url, method: "GET", headers: [:], body: nil))
+                guard let url = request.url else { throw DeviceFailure.invalid("Dirección de autorización inválida.") }
+                UIApplication.shared.open(url, options: [:]) { opened in
+                    if opened { invoke.resolve(BridgeReply()) }
+                    else { self.fail(invoke, DeviceFailure.unavailable("No se pudo abrir el navegador para autorizar la cuenta.")) }
+                }
+            } catch { self.fail(invoke, error) }
+        }
+    }
+    @objc func registeredURLSchemes(_ invoke: Invoke) {
+        let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]] ?? []
+        let schemes = types.flatMap { $0["CFBundleURLSchemes"] as? [String] ?? [] }
+            .filter { $0.range(of: "^[A-Za-z][A-Za-z0-9+.-]{2,127}$", options: .regularExpression) != nil }
+        invoke.resolve(BridgeReply(schemes: Array(Set(schemes)).sorted()))
     }
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         webview?.window ?? ASPresentationAnchor()
