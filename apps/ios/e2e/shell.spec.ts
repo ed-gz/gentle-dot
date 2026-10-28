@@ -252,6 +252,24 @@ test('voice fixture prepares assets on microphone tap and appends dictation with
   expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['prepare', 'start', 'stop']);
 });
 
+test('an interrupted recording does not leave a false recording indicator', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
+      if (command.endsWith('start_voice')) return { ok: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', maxDurationSeconds: 90 };
+      return previous(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#voice-status')).toContainText('Grabando');
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
+  await expect(page.locator('#voice-status')).toContainText('se interrumpió');
+});
+
 test('linked stream, intermediate completion, error and reconnect remain honest', async ({ page }) => {
   let wireText = '';
   let sentCount = 0;

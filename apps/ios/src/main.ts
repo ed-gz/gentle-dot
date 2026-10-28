@@ -774,10 +774,13 @@ let voiceController: AbortController | undefined;
 let voiceGeneration = 0;
 let voiceTimer: ReturnType<typeof setTimeout> | undefined;
 async function cancelDictation() {
-  voiceGeneration++; voiceController?.abort(); voiceSession = undefined; clearTimeout(voiceTimer);
+  const wasActive = voiceStarting || Boolean(voiceSession);
+  const generation = ++voiceGeneration; voiceController?.abort(); voiceSession = undefined; clearTimeout(voiceTimer);
   if (isTauri()) await cancelVoice().catch(() => {});
+  if (generation !== voiceGeneration) return;
   element('dictate').setAttribute('aria-pressed', 'false');
   element('dictate').setAttribute('aria-label', 'Dictar');
+  if (wasActive) element('voice-status').textContent = 'El dictado se interrumpió al salir de Capri. Toca el micrófono para intentarlo de nuevo.';
 }
 element('dictate').addEventListener('click', async () => {
   if (voiceStarting) return;
