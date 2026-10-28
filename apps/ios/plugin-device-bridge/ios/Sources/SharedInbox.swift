@@ -38,9 +38,10 @@ enum SharedInbox {
         UUID(uuidString: value)?.uuidString.lowercased() == value
     }
     static func root() throws -> URL {
-        guard let group = Bundle.main.object(forInfoDictionaryKey: "CapriAppGroup") as? String,
-              group.hasPrefix("group."),
-              let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group) else { throw ShareFailure.unavailable }
+        guard let group = Bundle.main.object(forInfoDictionaryKey: "CapriAppGroup") as? String else { throw ShareFailure.unavailable }
+        let container: URL
+        do { container = try AppGroupResolver.container(configured: group) }
+        catch { throw ShareFailure.unavailable }
         let root = container.appendingPathComponent("CapriSharedInbox", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
             attributes: [.protectionKey: FileProtectionType.complete])

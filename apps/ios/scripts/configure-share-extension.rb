@@ -55,6 +55,7 @@ spec['targets']['CapriShare'] = {
   'type' => 'app-extension', 'platform' => 'iOS', 'deploymentTarget' => '15.0',
   'sources' => [
     { 'path' => relative.call('share-extension/ShareViewController.swift') },
+    { 'path' => relative.call('plugin-device-bridge/ios/Sources/AppGroupResolver.swift') },
     { 'path' => relative.call('plugin-device-bridge/ios/Sources/SharedInbox.swift') }
   ],
   'settings' => { 'base' => {

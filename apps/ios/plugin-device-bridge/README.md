@@ -138,6 +138,33 @@ configuration tests. `CAPRI_APP_GROUP` can override the default
 `group.dev.gentledot.capri`; app and extension get the same entitlement and Info
 property. Sources outside the generated tree remain the source of truth.
 
+The Info value identifies the intended group, not the final signed identifier.
+SideStore's signing source appends its team identifier to application groups while
+leaving custom Info keys untouched. `AppGroupResolver` therefore reads the XML
+entitlement from the current process's own arm64 Mach-O code-signing superblob.
+It accepts only the configured group or that exact group plus one signed ten-character
+team suffix, then asks `FileManager.containerURL` to confirm OS-authorized access.
+The app and extension compile the same resolver. No team identifier is hardcoded,
+no provisioning profile or credential is read, and no private SecTask API is called.
+Reading a signed claim is not itself authorization. Missing, malformed, unsupported
+DER-only, inaccessible or ambiguous groups fail explicitly; no unrelated container
+or private app directory is substituted.
+
+The parser reads bounded headers/load commands/signature bytes, not the whole app
+binary. `test/native/AppGroupResolverTests.swift` exercises 23 synthetic native
+checks for byte order, lengths, offsets, overlapping blobs, duplicate XML slots, missing/DER signatures,
+symlinks, exact group matching and the final OS access boundary. The macOS SDK
+preflight compiles and runs that test before iOS typechecking. This Linux session
+cannot execute Swift; its result must be recorded from CI, separately from real
+SideStore signing and device access.
+
+Inspection of IPA run `40634400355` found neither executable had an
+`LC_CODE_SIGNATURE`: Xcode entitlement source files alone are not discoverable by
+SideStore. Packaging must embed the declared entitlement in both executables with
+an ad-hoc signature before distributing the personal-signing input. That signature
+does not provision or install the app; SideStore must replace it with the user's
+authorized signature and retain the Share Extension.
+
 The extension receives local audio, text, photos and PDF files through
 `NSItemProvider`. Text can accompany a Voice Memos recording as a separate transcript
 file. It saves locally without opening the containing app or contacting a server.
@@ -190,4 +217,8 @@ Sources: [Apple extension shared-container guidance](https://developer.apple.com
 [Keychain accessibility](https://developer.apple.com/documentation/security/ksecattraccessiblewhenunlockedthisdeviceonly),
 [web authentication sessions](https://developer.apple.com/documentation/authenticationservices/aswebauthenticationsession),
 [Tauri mobile plugins](https://v2.tauri.app/develop/plugins/develop-mobile/),
-[XcodeGen specification](https://github.com/yonaskolb/XcodeGen/blob/master/Docs/ProjectSpec.md).
+[XcodeGen specification](https://github.com/yonaskolb/XcodeGen/blob/master/Docs/ProjectSpec.md),
+[SideStore group adjustment](https://github.com/SideStore/SideStore/blob/cd260851ae99bf1fc946b123db24e89c8cd21dc6/SideStore/Core/Operations/PipelineOperations/FetchProvisioningProfilesOperation.swift#L415),
+[SideStore Info rewriting](https://github.com/SideStore/SideStore/blob/cd260851ae99bf1fc946b123db24e89c8cd21dc6/SideStore/Core/Operations/PipelineOperations/ResignAppOperation.swift#L159),
+[Apple code-signing blob definitions](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/cs_blobs.h),
+[Apple Mach-O definitions](https://github.com/apple-oss-distributions/xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h).

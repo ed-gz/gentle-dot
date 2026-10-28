@@ -12,6 +12,11 @@ source = Path('plugin-local-intelligence/ios/Sources/LocalIntelligencePlugin.swi
 source = source.split('final class LocalIntelligencePlugin: Plugin {', 1)[0].replace('import Tauri\n', '')
 Path(sys.argv[1]).write_text(source)
 PY
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
+  test/native/AppGroupResolverTests.swift -o "$verification/app-group-tests"
+"$verification/app-group-tests"
 xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
   "$verification/AgentTypes.swift" \
@@ -19,6 +24,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/Documents.swift \
   plugin-device-bridge/ios/Sources/BoundedHTTP.swift \
   plugin-device-bridge/ios/Sources/KeychainStore.swift \
+  plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
   plugin-device-bridge/ios/Sources/SharedInbox.swift \
   plugin-device-bridge/ios/Sources/StreamingHash.swift \
   plugin-device-bridge/ios/Sources/DocumentExport.swift
