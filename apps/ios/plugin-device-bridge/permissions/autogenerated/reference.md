@@ -532,6 +532,58 @@ Denies the pair_device command without any pre-configured scope.
 <tr>
 <td>
 
+`device-bridge:allow-pairing-scan`
+
+</td>
+<td>
+
+Enables the pairing_scan command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-pairing-scan`
+
+</td>
+<td>
+
+Denies the pairing_scan command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-pairing-scan-cancel`
+
+</td>
+<td>
+
+Enables the pairing_scan_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-pairing-scan-cancel`
+
+</td>
+<td>
+
+Denies the pairing_scan_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `device-bridge:allow-registered-url-schemes`
 
 </td>
@@ -850,6 +902,19 @@ Denies the unpair_device command without any pre-configured scope.
 <td>
 
 Present Apple's document picker and recover only the files explicitly imported into Capri.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:pairing-camera`
+
+</td>
+<td>
+
+Scan a QR through the native camera only after an explicit foreground interaction.
 
 </td>
 </tr>

@@ -69,6 +69,8 @@ request_command!(export_begin, "exportBegin");
 request_command!(export_write, "exportWrite");
 request_command!(export_present, "exportPresent");
 request_command!(export_cancel, "exportCancel");
+request_command!(pairing_scan, "pairingScan");
+request_command!(pairing_scan_cancel, "pairingScanCancel");
 request_command!(documents_pick, "documentsPick");
 request_command!(documents_list, "documentsList");
 request_command!(documents_read, "documentsRead");
@@ -104,6 +106,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             export_write,
             export_present,
             export_cancel,
+            pairing_scan,
+            pairing_scan_cancel,
             documents_pick,
             documents_list,
             documents_read,

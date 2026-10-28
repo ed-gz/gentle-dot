@@ -53,6 +53,7 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     private var uploadObservers: [NSObjectProtocol] = []
     private var documentExporter: DocumentExporter?
     private var documentImporter: DocumentImporter?
+    private var pairingScanner: PairingScannerSession?
 
     @objc override func load(webview: WKWebView) {
         self.webview = webview
@@ -283,10 +284,34 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
             } catch { self.fail(invoke, error) }
         }
     }
+    @objc func pairingScan(_ invoke: Invoke) {
+        DispatchQueue.main.async {
+            guard #available(iOS 16.0, *) else {
+                self.fail(invoke, DeviceFailure.unavailable("El escáner requiere iOS 16 o posterior. Elige una foto del QR.")); return
+            }
+            guard self.pairingScanner == nil, self.documentImporter == nil, self.documentExporter == nil,
+                  self.authSession == nil, UIApplication.shared.applicationState == .active,
+                  let presenter = self.webview?.window?.rootViewController, presenter.presentedViewController == nil else {
+                self.fail(invoke, DeviceFailure.unavailable("Cierra el selector abierto antes de escanear.")); return
+            }
+            let scanner = PairingScanner { result in
+                self.pairingScanner = nil
+                switch result {
+                case .success(let value): invoke.resolve(BridgeReply(value: value, cancelled: value == nil))
+                case .failure(let error): self.fail(invoke, error)
+                }
+            }
+            self.pairingScanner = scanner
+            scanner.present(from: presenter)
+        }
+    }
+    @objc func pairingScanCancel(_ invoke: Invoke) {
+        DispatchQueue.main.async { self.pairingScanner?.cancel(); invoke.resolve(BridgeReply()) }
+    }
     @objc func documentsPick(_ invoke: Invoke) {
         DispatchQueue.main.async {
             do {
-                guard self.documentImporter == nil, self.documentExporter == nil, self.authSession == nil,
+                guard self.documentImporter == nil, self.documentExporter == nil, self.authSession == nil, self.pairingScanner == nil,
                       let presenter = self.webview?.window?.rootViewController else {
                     throw DeviceFailure.unavailable("Cierra el selector abierto antes de adjuntar.")
                 }

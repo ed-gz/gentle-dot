@@ -1,0 +1,4 @@
+[[set]]
+identifier = "pairing-camera"
+description = "Scan a QR through the native camera only after an explicit foreground interaction."
+permissions = ["allow-pairing-scan", "allow-pairing-scan-cancel"]

@@ -27,6 +27,8 @@ fn main() {
         "export_write",
         "export_present",
         "export_cancel",
+        "pairing_scan",
+        "pairing_scan_cancel",
         "documents_pick",
         "documents_list",
         "documents_read",

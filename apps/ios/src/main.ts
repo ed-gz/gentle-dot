@@ -461,7 +461,7 @@ element('health-action').addEventListener('click', async () => {
     return;
   }
   showPanel('settings');
-  const destination = element(healthAction === 'show-pairing' || healthAction === 'show-host-help' ? 'pairing-invitation' : 'check-local');
+  const destination = element(healthAction === 'show-pairing' || healthAction === 'show-host-help' ? 'pairing-camera' : 'check-local');
   destination.scrollIntoView({ block: 'center' }); destination.focus();
 });
 element<HTMLSelectElement>('engine').addEventListener('change', () => { preference = element<HTMLSelectElement>('engine').value as Engine | 'auto'; updateControls(); });
@@ -728,10 +728,10 @@ element<HTMLInputElement>('chat-files').addEventListener('change', async event =
     control.value = ''; await inbox.refresh();
   } catch (error) { element('chat-notice').textContent = errorText(error); }
 });
-mountPairingInput(element<HTMLFormElement>('pairing'), element<HTMLInputElement>('pairing-invitation'));
+const pairingUI = mountPairingInput(element<HTMLFormElement>('pairing'), element<HTMLInputElement>('pairing-invitation'));
 element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
   event.preventDefault();
-  const button = element<HTMLFormElement>('pairing').querySelector('button')!; button.disabled = true;
+  pairingUI.setSubmitting(true);
   try {
     const invitation = parseInvitation(element<HTMLInputElement>('pairing-invitation').value);
     const epoch = ++connectionEpoch;
@@ -742,9 +742,10 @@ element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
     runtimeConnection = result.connection; host = result.connection.url;
     settings.url = host; saveSettings(settings); element<HTMLInputElement>('url').value = host;
     element<HTMLInputElement>('pairing-invitation').value = '';
+    element('pairing-invitation').dispatchEvent(new Event('input', { bubbles: true }));
     element('pairing-status').textContent = result.persisted ? 'iPhone vinculado. Acceso guardado en Keychain.' : result.message ?? 'Vinculado; el acceso no se pudo guardar.';
   } catch (error) { element('pairing-status').textContent = errorText(error); }
-  finally { button.disabled = false; }
+  finally { pairingUI.setSubmitting(false); }
 });
 async function restoreDeviceConnection() {
   if (!isTauri() || !settings.url) return;

@@ -485,6 +485,26 @@
           "const": "deny-pair-device"
         },
         {
+          "description": "Enables the pairing_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pairing-scan"
+        },
+        {
+          "description": "Denies the pairing_scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pairing-scan"
+        },
+        {
+          "description": "Enables the pairing_scan_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pairing-scan-cancel"
+        },
+        {
+          "description": "Denies the pairing_scan_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pairing-scan-cancel"
+        },
+        {
           "description": "Enables the registered_url_schemes command without any pre-configured scope.",
           "type": "string",
           "const": "allow-registered-url-schemes"
@@ -613,6 +633,11 @@
           "description": "Present Apple's document picker and recover only the files explicitly imported into Capri.",
           "type": "string",
           "const": "document-import"
+        },
+        {
+          "description": "Scan a QR through the native camera only after an explicit foreground interaction.",
+          "type": "string",
+          "const": "pairing-camera"
         },
         {
           "description": "Stage verified files and upload them to the human-selected laptop session.",

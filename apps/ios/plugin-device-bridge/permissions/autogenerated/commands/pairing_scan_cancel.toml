@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-pairing-scan-cancel"
+description = "Enables the pairing_scan_cancel command without any pre-configured scope."
+commands.allow = ["pairing_scan_cancel"]
+
+[[permission]]
+identifier = "deny-pairing-scan-cancel"
+description = "Denies the pairing_scan_cancel command without any pre-configured scope."
+commands.deny = ["pairing_scan_cancel"]
