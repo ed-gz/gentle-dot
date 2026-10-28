@@ -166,7 +166,7 @@ test('host activity, exact human answers and steering stay in the same conversat
   await expect(currentRequest).toContainText('esperando confirmación del host');
   hostSend!({ type: 'ask_resolved', requestId: 'confirm-1' });
   await expect(currentRequest).toContainText('Solicitud cerrada por el host.');
-  await expect(page.locator('#send')).toHaveText('Añadir instrucción');
+  await expect(page.locator('#send')).toHaveAccessibleName('Añadir instrucción');
   await page.locator('#prompt').fill('Prioriza los errores de hoy.');
   await page.locator('#send').click();
   await expect.poll(() => submissions.length).toBe(2);
@@ -228,7 +228,7 @@ test('voice fixture prepares assets only after human review and appends dictatio
   await expect(review).toContainText('Preparar dictado local');
   expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual([]);
   await review.getByRole('button', { name: 'Aprobar esta operación', exact: true }).click();
-  await expect(page.locator('#dictate')).toHaveText('Terminar');
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
   expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['prepare', 'start']);
   await page.locator('#dictate').click();
   await expect(page.locator('#prompt')).toHaveValue('Borrador existente.\nAñade evidencia del error.');

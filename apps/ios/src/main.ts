@@ -713,7 +713,7 @@ element('dictate').addEventListener('click', async () => {
 element('attach').addEventListener('click', async () => {
   if (!isTauri()) { element<HTMLInputElement>('chat-files').click(); return; }
   const button = element<HTMLButtonElement>('attach'); button.disabled = true;
-  try { if (await pickDocuments()) await importDocumentFiles(); }
+  try { if (await pickDocuments()) await importDocumentFiles(true); }
   catch (error) { element('chat-notice').textContent = errorText(error); }
   finally { button.disabled = false; }
 });
@@ -772,8 +772,10 @@ async function importSharedFiles() {
     await inbox.refresh();
   } catch (error) { element('chat-notice').textContent = errorText(error); }
 }
-function importDocumentFiles(): Promise<void> {
-  if (documentImports) return documentImports;
+function importDocumentFiles(fresh = false): Promise<void> {
+  // Returning from UIKit can also trigger foreground recovery. If that older
+  // scan began before publication, the explicit pick needs a fresh scan after it.
+  if (documentImports) return fresh ? documentImports.then(() => importDocumentFiles()) : documentImports;
   documentImports = (async () => {
     try {
       for (const item of await listDocumentImports()) {

@@ -15,7 +15,10 @@ async function fixture(page: Page) {
           files: [{ id: 'c623087b-1af4-4b20-a20a-31d33e419171', name: 'Reunión.txt', mime: 'text/plain', size: bytes.length, sha256: hash }] };
         state.documentItems = [item]; return { ok: true, cancelled: false, items: [item] };
       }
-      if (name === 'documents_list') return { ok: true, items: state.documentItems };
+      if (name === 'documents_list') {
+        if (state.holdDocumentsList) { state.holdDocumentsList = false; return new Promise(resolve => { state.releaseDocumentScan = () => resolve({ ok: true, items: [] }); }); }
+        return { ok: true, items: state.documentItems };
+      }
       if (name === 'documents_read') return { ok: true, data: btoa('Contenido importado') };
       if (name === 'documents_ack') { state.documentItems = []; return { ok: true, persisted: true }; }
       if (name === 'share_list') return { ok: true, items: [] };
@@ -52,6 +55,20 @@ test('background visibility no longer aborts an in-flight native answer; explici
   });
   await expect(page.locator('#cards')).toContainText('Respuesta conservada al volver.');
   await expect(page.locator('#stop')).toBeHidden();
+});
+test('a native selection waits for an older foreground scan and then imports the newly published file', async ({ page }) => {
+  await fixture(page); await page.goto('/');
+  await expect(page.locator('#history-loading')).toBeHidden();
+  await page.evaluate(() => {
+    (globalThis as any).holdDocumentsList = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).releaseDocumentScan)).toBe('function');
+  await page.locator('#attach').click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).documentItems.length)).toBe(1);
+  await page.evaluate(() => (globalThis as any).releaseDocumentScan());
+  await expect(page.locator('#attachment-context')).toContainText('Reunión.txt');
+  await expect.poll(() => page.evaluate(() => (globalThis as any).documentItems.length)).toBe(0);
 });
 test('composer controls remain fully reachable on small and landscape viewports with large text', async ({ page }) => {
   await page.goto('/');
