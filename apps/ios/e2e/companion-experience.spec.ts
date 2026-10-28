@@ -86,6 +86,9 @@ test('conversation keeps composer and companion reachable in short viewport and 
   await expect(page.locator('.chat-text ul li')).toHaveCount(2);
   for (const viewport of [{ width: 375, height: 667 }, { width: 390, height: 440 }, { width: 844, height: 390 }]) {
     await page.setViewportSize(viewport);
+    // A resize event can lag behind the new viewport; even its old, taller
+    // value must not put the composer below the screen in that interval.
+    await page.evaluate(() => document.documentElement.style.setProperty('--app-height', '900px'));
     const composer = await page.locator('#composer').boundingBox();
     expect(composer!.y).toBeGreaterThan(0); expect(composer!.y + composer!.height).toBeLessThanOrEqual(viewport.height + 1);
     expect((await page.locator('#conversation-scroll').boundingBox())!.height).toBeGreaterThan(35);
