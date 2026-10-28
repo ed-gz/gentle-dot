@@ -186,6 +186,10 @@ final class LocalIntelligencePlugin: Plugin {
         if #available(iOS 26.0, *) {
             if let id = turnID {
                 do { try journal.begin(id) }
+                catch InferenceJournalError.terminal {
+                    invoke.resolve(Reply(ok: false, error: "turn_finished", message: "Esta respuesta ya terminó o fue cancelada; no se volvió a iniciar."))
+                    return
+                }
                 catch { invoke.resolve(journalFailure()); return }
             }
             activeJournalID = turnID
@@ -300,7 +304,8 @@ final class LocalIntelligencePlugin: Plugin {
     private func journalFailure() -> Reply {
         Reply(ok: false, error: "native_storage_failed", message: "No pude confirmar el guardado nativo de esta respuesta. Los registros anteriores se conservan; vuelve a abrir Capri para recuperarlos.")
     }
-    private func resolveAgent(_ reply: Reply, terminalStatus: String? = nil) {
+    @discardableResult
+    private func resolveAgent(_ reply: Reply, terminalStatus: String? = nil) -> Reply {
         if let id = activeJournalID {
             do {
                 if let status = terminalStatus {
@@ -310,18 +315,25 @@ final class LocalIntelligencePlugin: Plugin {
                 } else if !reply.ok {
                     try journal.finish(id, status: "interrupted", text: reply.message ?? "Respuesta interrumpida.")
                 }
-            } catch { pending?.resolve(journalFailure()); return }
+            } catch {
+                let failure = journalFailure()
+                pending?.resolve(failure)
+                return failure
+            }
         }
         pending?.resolve(reply)
+        return reply
     }
-    private func cancelCurrent(message: String, explicit: Bool = false) {
-        guard task != nil else { return }
+    @discardableResult
+    private func cancelCurrent(message: String, explicit: Bool = false) -> Reply {
+        guard task != nil else { return Reply(ok: true) }
         conversation = nil
         cancellationRequested = true
         task?.cancel()
-        resolveAgent(Reply(ok: false, error: "cancelled", message: message), terminalStatus: explicit ? "cancelled" : "interrupted")
+        let result = resolveAgent(Reply(ok: false, error: "cancelled", message: message), terminalStatus: explicit ? "cancelled" : "interrupted")
         pending = nil
         endInferenceLease()
+        return result.error == "native_storage_failed" ? result : Reply(ok: true)
     }
 
     @objc func resultsList(_ invoke: Invoke) {
@@ -347,24 +359,22 @@ final class LocalIntelligencePlugin: Plugin {
             if let id = args?.turnId, id != self.activeJournalID {
                 // Completion can beat a human Stop while its WebView callback waits.
                 do {
-                    guard InferenceJournal.validID(id) else { throw InferenceJournalError.invalid }
-                    if let record = try self.journal.list(activeID: self.activeJournalID).first(where: { $0.id == id }), record.status != "cancelled" {
-                        try self.journal.finish(id, status: "cancelled", text: "Respuesta cancelada.")
-                    }
+                    // Also fence a Stop that overtakes the first native step,
+                    // or arrives between two steps of the same turn.
+                    try self.journal.cancel(id)
                     invoke.resolve(Reply(ok: true))
                 } catch { invoke.resolve(self.journalFailure()) }
                 return
             }
-            self.cancelCurrent(message: "Respuesta cancelada.", explicit: true)
-            invoke.resolve(Reply(ok: true))
+            invoke.resolve(self.cancelCurrent(message: "Respuesta cancelada.", explicit: true))
         }
     }
 
     @objc func reset(_ invoke: Invoke) {
         DispatchQueue.main.async {
-            self.cancelCurrent(message: "Conversación reiniciada.")
+            let result = self.cancelCurrent(message: "Conversación reiniciada.")
             self.conversation = nil
-            invoke.resolve(Reply(ok: true))
+            invoke.resolve(result)
         }
     }
 }

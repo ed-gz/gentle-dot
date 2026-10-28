@@ -28,6 +28,11 @@ final class InferenceJournal {
     private let root: URL
     private let limit: Int
     private let maxBytes = 2 * 1024 * 1024
+    // Tauri dispatches commands from separate worker threads. An ACK can arrive
+    // before an older agentStep reaches the main queue. Keep human cancellation
+    // fenced for this plugin lifetime even after its durable result is ACKed.
+    // No invocation survives process death; the on-disk record covers restart.
+    private var cancelledIDs = Set<String>()
     private var file: URL { root.appendingPathComponent("inferences.json") }
 
     init(root: URL? = nil, limit: Int = 100) {
@@ -56,6 +61,7 @@ final class InferenceJournal {
               envelope.records.allSatisfy(valid), Set(envelope.records.map(\.id)).count == envelope.records.count else {
             throw InferenceJournalError.corrupt
         }
+        cancelledIDs.formUnion(envelope.records.filter { $0.status == "cancelled" }.map(\.id))
         return envelope.records
     }
     private func write(_ records: [InferenceRecord]) throws {
@@ -79,6 +85,7 @@ final class InferenceJournal {
     func begin(_ id: String, now: Double = Date().timeIntervalSince1970 * 1000) throws -> InferenceRecord {
         guard Self.validID(id), now.isFinite, now >= 0, now <= 8_640_000_000_000_000 else { throw InferenceJournalError.invalid }
         var records = try read()
+        guard !cancelledIDs.contains(id) else { throw InferenceJournalError.terminal }
         let index = records.firstIndex { $0.id == id }
         if let index = index, records[index].status != "pending" { throw InferenceJournalError.terminal }
         if index == nil && records.count >= limit { throw InferenceJournalError.full }
@@ -90,15 +97,32 @@ final class InferenceJournal {
     @discardableResult
     func finish(_ id: String, status: String, text: String) throws -> InferenceRecord {
         guard ["answer", "interrupted", "cancelled"].contains(status) else { throw InferenceJournalError.invalid }
+        if status == "cancelled" { return try cancel(id, text: text) }
         var records = try read()
+        guard !cancelledIDs.contains(id) else { throw InferenceJournalError.terminal }
         guard let index = records.firstIndex(where: { $0.id == id }) else { throw InferenceJournalError.stale }
         let prior = records[index]
-        // Stop may win after inference finishes but before the WebView commits it.
-        guard prior.status == "pending" || (status == "cancelled" && prior.status != "cancelled") else { throw InferenceJournalError.terminal }
+        guard prior.status == "pending" else { throw InferenceJournalError.terminal }
         let record = InferenceRecord(id: id, revision: UUID().uuidString.lowercased(), startedAt: prior.startedAt,
                                      status: status, text: text)
         guard valid(record) else { throw InferenceJournalError.invalid }
         records[index] = record; try write(records); return record
+    }
+    @discardableResult
+    func cancel(_ id: String, text: String = "Respuesta cancelada.", now: Double = Date().timeIntervalSince1970 * 1000) throws -> InferenceRecord {
+        guard Self.validID(id), now.isFinite, now >= 0, now <= 8_640_000_000_000_000,
+              text.unicodeScalars.count <= 2_400 else { throw InferenceJournalError.invalid }
+        // The in-memory fence also survives a failed durable write. Report that
+        // failure, but never start delayed work after the person pressed Stop.
+        cancelledIDs.insert(id)
+        var records = try read()
+        let index = records.firstIndex { $0.id == id }
+        if let index = index, records[index].status == "cancelled" { return records[index] }
+        if index == nil && records.count >= limit { throw InferenceJournalError.full }
+        let record = InferenceRecord(id: id, revision: UUID().uuidString.lowercased(),
+            startedAt: index.map { records[$0].startedAt } ?? now, status: "cancelled", text: text)
+        if let index = index { records[index] = record } else { records.append(record) }
+        try write(records); return record
     }
     func list(activeID: String?) throws -> [InferenceRecord] {
         try read().map { saved in
