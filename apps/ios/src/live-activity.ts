@@ -2,14 +2,14 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 
 export type ActivityOrigin = 'iphone' | 'laptop';
 export type ActivityPhase = 'thinking' | 'working' | 'attention' | 'waiting';
-export type ActivityEnd = 'finished' | 'interrupted';
+export type ActivityEnd = 'finished' | 'interrupted' | 'dismissed';
 export type ActivityUpdate = { turnId: string; origin: ActivityOrigin; phase: ActivityPhase | ActivityEnd; sequence: number; id?: string };
 export type ActivityItem = { id: string; turnId: string; origin: ActivityOrigin; phase: ActivityPhase | ActivityEnd; sequence: number; observedAt: number; stale: boolean };
 type Invoke = (command: string, request: Record<string, unknown>) => Promise<unknown>;
 const uuid = (s: unknown): s is string => typeof s === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(s);
 const identifier = (s: unknown): s is string => typeof s === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(s);
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-const origins = new Set(['iphone', 'laptop']), active = new Set(['thinking', 'working', 'attention', 'waiting']), ended = new Set(['finished', 'interrupted']);
+const origins = new Set(['iphone', 'laptop']), active = new Set(['thinking', 'working', 'attention', 'waiting']), ended = new Set(['finished', 'interrupted', 'dismissed']);
 const native: Invoke = (command, request) => invoke(`plugin:device-bridge|live_activity_${command}`, { request });
 function validRequest(value: ActivityUpdate, end: boolean, hasID: boolean): boolean {
   return object(value) && uuid(value.turnId) && origins.has(value.origin) && (end ? ended : active).has(value.phase)

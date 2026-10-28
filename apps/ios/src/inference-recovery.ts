@@ -43,13 +43,15 @@ export async function recoverInferenceResults(options: {
   apply(entry: ChatEntry): void;
   commit(): Promise<boolean>;
   acknowledge(record: InferenceRecord): Promise<void>;
+  onSettled?(record: InferenceRecord, cancelled: boolean): void;
 }): Promise<{ activeId?: string; recovered: number }> {
   const snapshot = await options.list();
   const completed = snapshot.items.filter(item => item.id !== snapshot.activeId);
+  const cancelled = new Set<string>();
   for (const record of completed) {
     const prior = await options.find(record.id);
     if (!prior || prior.engine !== 'iphone' || prior.role === 'user') throw new Error('No encontré el turno original de una respuesta nativa. Conservé la copia para recuperarla.');
-    if (prior.localCancelled) continue;
+    if (prior.localCancelled) { cancelled.add(record.id); continue; }
     if (prior.state === 'complete' && record.status !== 'cancelled') {
       if (record.status !== 'answer' || prior.role !== 'assistant' || prior.text !== record.text) throw new Error('El resultado nativo difiere de la conversación guardada. Conservé ambas copias.');
       continue;
@@ -61,7 +63,11 @@ export async function recoverInferenceResults(options: {
   }
   if (completed.length) {
     if (!await options.commit()) throw new Error('La conversación no confirmó el guardado. Las respuestas siguen en el almacenamiento nativo.');
-    for (const record of completed) await options.acknowledge(record);
+    for (const record of completed) {
+      await options.acknowledge(record);
+      try { options.onSettled?.(record, cancelled.has(record.id) || record.status === 'cancelled'); }
+      catch { /* Presentation must not undo a confirmed conversation and ACK. */ }
+    }
   }
   return { activeId: snapshot.activeId, recovered: completed.length };
 }

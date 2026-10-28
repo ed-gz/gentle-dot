@@ -12,6 +12,9 @@ import { createLinkedChat, type LinkedStatus } from './linked-chat.ts';
 import { checkLocalIntelligence, availabilityMessage, agentStep, cancelLocal, resetLocal, type Availability } from './local-intelligence.ts';
 import { listInferenceResults, acknowledgeInference, recoverInferenceResults, withInferenceDeadline } from './inference-recovery.ts';
 import { mountCompletionNotifications } from './completion-notifications.ts';
+import { createLiveActivityCoordinator } from './live-activity-coordinator.ts';
+import { mountLiveActivitySettings } from './live-activity-settings.ts';
+import type { ActivityPhase, ActivityEnd } from './live-activity.ts';
 import { loadConversation, updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
 import { conversationArchive } from './conversation-archive.ts';
@@ -312,6 +315,15 @@ function updateLaptopView() {
 const conversationView = createConversationView({ container: element('cards'), empty: element('empty-conversation'), scroller: element('conversation-scroll'), newMessages: element<HTMLButtonElement>('new-messages') });
 const reviews = createConversationRequests(element('requests'), { append: conversationView.updateExtra });
 const completionNotifications = mountCompletionNotifications(element('completion-notifications'));
+let lockScreenSettings: ReturnType<typeof mountLiveActivitySettings> | undefined;
+const lockScreenActivity = createLiveActivityCoordinator({ onChange: state => lockScreenSettings?.render(state) });
+lockScreenSettings = mountLiveActivitySettings(element('live-activity-settings'), lockScreenActivity);
+function observeLocalActivity(turnId: string, phase: ActivityPhase) {
+  void lockScreenActivity.observe({ turnId, origin: 'iphone', phase }).catch(() => { /* The state is visible in Settings; never retry a mutation. */ });
+}
+function endLocalActivity(turnId: string, phase: ActivityEnd) {
+  void lockScreenActivity.finish({ turnId, origin: 'iphone', phase }).catch(() => { /* Keep uncertain state for explicit inspection. */ });
+}
 let availability: Availability = { available: false, status: 'checking', supportsSpanish: false };
 let linkedStatus: LinkedStatus = 'offline';
 let linkedBusy = false;
@@ -364,6 +376,7 @@ async function recoverLocalInference() {
       },
       commit: async () => { await persist(); return !persistence.status().blocked && persistence.status().pending === 0; },
       acknowledge: acknowledgeInference,
+      onSettled: (record, cancelled) => endLocalActivity(record.id, !cancelled && record.status === 'answer' ? 'finished' : 'interrupted'),
     });
     recoveringNativeId = result.activeId;
     if (recoveredFromArchive) notice('Recuperé una respuesta anterior. Está disponible en Archivo.', 'iphone');
@@ -578,6 +591,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
       const reset = await resetLocal();
       if (!reset.ok) throw new Error('No pude confirmar que el motor local esté listo. La solicitud se conserva sin ejecutar.');
       if (generation !== localGeneration) return;
+      observeLocalActivity(id, 'thinking');
       const runner = createAgentRunner({ waitUntilActive: waitForForeground, tools: [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: operation => {
         if (!linked.ready()) return undefined;
         if (!linked.supportsWorkSync()) throw new Error('Actualiza Gentle Dot en la laptop para transferir trabajos. La conversación sigue disponible y el trabajo local se conserva.');
@@ -590,18 +604,19 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
         if (at < 0) activities.push(activity); else activities[at] = activity;
         turnEntry = { ...entry, activities, state: generation !== localGeneration && entry.state === 'pending' ? 'interrupted' : entry.state };
         add(turnEntry);
-        if (generation === localGeneration) { element('active-tool').textContent = trace.status === 'running' ? trace.label : ''; setIntent({ working: trace.status === 'running', thinking: trace.status !== 'running' }); }
+        if (generation === localGeneration) { element('active-tool').textContent = trace.status === 'running' ? trace.label : ''; setIntent({ working: trace.status === 'running', thinking: trace.status !== 'running' }); observeLocalActivity(id, trace.status === 'running' ? 'working' : 'thinking'); }
       } });
       const text = await runner.run({ instruction: promptText, context, signal: controller.signal, askApproval: async request => {
-        if (generation === localGeneration) setIntent({ alert: true });
+        if (generation === localGeneration) { setIntent({ alert: true }); observeLocalActivity(id, 'attention'); }
         try { return await reviews.approve(request, controller.signal); }
-        finally { if (generation === localGeneration) setIntent({ thinking: true }); }
+        finally { if (generation === localGeneration) { setIntent({ thinking: true }); observeLocalActivity(id, 'thinking'); } }
       } });
       if (generation !== localGeneration) return;
       add({ id, role: 'assistant', text, engine: 'iphone', state: 'complete', at: Date.now() });
+      endLocalActivity(id, 'finished');
       setIntent({ outcome: { kind: 'done', at: performance.now() } });
     } catch (error) {
-      if (generation === localGeneration) add({ id, role: 'notice', text: errorText(error), engine: 'iphone', state: 'interrupted', at: Date.now() });
+      if (generation === localGeneration) { add({ id, role: 'notice', text: errorText(error), engine: 'iphone', state: 'interrupted', at: Date.now() }); endLocalActivity(id, 'interrupted'); }
     } finally { if (generation === localGeneration) { localBusy = false; localTurnId = undefined; element('active-tool').textContent = ''; element('scene-status').textContent = 'Aquí contigo.'; updateControls(); await persist(); await recoverLocalInference(); updateControls(); } }
   } else {
     if (!linked.ready()) { element('chat-notice').textContent = 'La laptop está desconectada. Guarda el trabajo para conservarlo.'; return; }
@@ -637,6 +652,7 @@ function stopLocal(): Promise<void> {
     try {
       const cancelled = await withInferenceDeadline(cancelLocal(turnId));
       if (!cancelled.ok) throw new Error('La cancelación nativa no se confirmó.');
+      if (turnId) endLocalActivity(turnId, 'interrupted');
     } catch { element('chat-notice').textContent = markerConfirmed
       ? 'No se confirmó la detención nativa. La solicitud quedó marcada como interrumpida; revisa su estado al volver.'
       : 'No pude confirmar la detención ni guardar su marca. Revisa el resultado antes de continuar.'; }
@@ -675,7 +691,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) release();
   cancelAnimationFrame(frame); fx?.clear(); persist();
   if (document.hidden) { void cancelDictation(); director.update(intent, performance.now(), true); linked.suspend(); }
-  else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void completionNotifications.refresh(); }
+  else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void completionNotifications.refresh(); void lockScreenSettings?.refresh(); }
 });
 window.addEventListener('pagehide', () => { connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
 window.addEventListener('pageshow', event => { if (event.persisted) { redraw(); linked.resume(); void recoverLocalInference(); } });
@@ -713,6 +729,7 @@ element('retry-conversation').addEventListener('click', () => void restoreConver
 async function initialize() {
   updateControls();
   void completionNotifications.refresh();
+  void lockScreenSettings?.initialize();
   // Independent stores must not delay the character or the native availability
   // check. A late startup read must also never replace newly selected artwork.
   let initialArtworkRevision = assetRevision;

@@ -10,6 +10,7 @@ enum LiveActivityPolicyTests {
         precondition(LiveActivityPolicy.valid(request(), ending: false, requireActivityID: false))
         precondition(LiveActivityPolicy.valid(request("laptop", "attention", 4, "activity-123"), ending: false, requireActivityID: true))
         precondition(LiveActivityPolicy.valid(request("iphone", "finished", 5, "activity-123"), ending: true, requireActivityID: true))
+        precondition(LiveActivityPolicy.valid(request("iphone", "dismissed", 5, "activity-123"), ending: true, requireActivityID: true))
         precondition(!LiveActivityPolicy.valid(request("cloud"), ending: false, requireActivityID: false))
         precondition(!LiveActivityPolicy.valid(request("iphone", "finished"), ending: false, requireActivityID: false))
         precondition(!LiveActivityPolicy.valid(request("iphone", "working", -1), ending: false, requireActivityID: false))
@@ -21,6 +22,6 @@ enum LiveActivityPolicyTests {
         precondition(LiveActivityPolicy.canUpdate(previous: 0, next: 1))
         precondition(!LiveActivityPolicy.canUpdate(previous: 1, next: 1))
         precondition(!LiveActivityPolicy.canUpdate(previous: 2, next: 1))
-        print("LiveActivityPolicy: 14 checks passed")
+        print("LiveActivityPolicy: 15 checks passed")
     }
 }

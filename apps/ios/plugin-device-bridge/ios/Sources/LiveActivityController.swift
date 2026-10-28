@@ -87,7 +87,7 @@ final class LiveActivityController {
         let now = Date()
         let content = ActivityContent(state: CapriActivityAttributes.ContentState(phase: request.phase,
             sequence: request.sequence, observedAt: now), staleDate: ending ? nil : now.addingTimeInterval(90))
-        if ending { await activity.end(content, dismissalPolicy: .after(now.addingTimeInterval(60))) }
+        if ending { await activity.end(content, dismissalPolicy: request.phase == "dismissed" ? .immediate : .after(now.addingTimeInterval(60))) }
         else { await activity.update(content) }
         return LiveActivityReply(id: id)
     }

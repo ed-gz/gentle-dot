@@ -77,3 +77,13 @@ test('human cancellation wins over a completed answer and survives conversation/
   assert.equal(clean.localCancelled, true); assert.equal(archiveEntry(clean).localCancelled, true);
   assert.equal(Object.hasOwn(clean, 'token'), false);
 });
+test('presentation is informed only after an acknowledged recovery and honours cancellation', async () => {
+  const f = fixture([answer], { ...anchor, localCancelled: true });
+  f.options.onSettled = (record, cancelled) => f.events.push(['settled', record.id, cancelled]);
+  await recoverInferenceResults(f.options);
+  assert.deepEqual(f.events, ['commit', ['ack', id, revision], ['settled', id, true]]);
+  const failed = fixture();
+  failed.options.commit = async () => false;
+  failed.options.onSettled = () => assert.fail('must not notify presentation without a commit');
+  await assert.rejects(recoverInferenceResults(failed.options));
+});

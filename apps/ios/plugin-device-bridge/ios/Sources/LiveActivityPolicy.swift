@@ -13,7 +13,7 @@ struct LiveActivityRequest: Decodable {
 enum LiveActivityPolicy {
     static let origins: Set<String> = ["iphone", "laptop"]
     static let activePhases: Set<String> = ["thinking", "working", "attention", "waiting"]
-    static let endPhases: Set<String> = ["finished", "interrupted"]
+    static let endPhases: Set<String> = ["finished", "interrupted", "dismissed"]
     static func validID(_ value: String) -> Bool { UUID(uuidString: value)?.uuidString.lowercased() == value }
     static func validActivityID(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 128 && value.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil
