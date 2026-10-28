@@ -8,6 +8,7 @@ import FoundationModels
 private struct PromptArgs: Decodable { let prompt: String; let turnId: String? }
 private struct JournalArgs: Decodable { let turnId: String; let revision: String? }
 private struct CancelArgs: Decodable { let turnId: String? }
+private struct NotificationArgs: Decodable { let enabled: Bool }
 private struct JournalReply: Encodable { let ok: Bool; let items: [InferenceRecord]; let activeId: String? }
 private struct Availability: Encodable {
     let available: Bool
@@ -85,6 +86,11 @@ final class LocalIntelligencePlugin: Plugin {
     private var pending: Invoke?
     private var cancellationRequested = false
     private let journal = InferenceJournal()
+    private var notificationService: CompletionNotifications?
+    @MainActor private var completionNotifications: CompletionNotifications {
+        if let notificationService { return notificationService }
+        let service = CompletionNotifications(); notificationService = service; return service
+    }
     private var activeJournalID: String?
     private var lifecycleObserver: NSObjectProtocol?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -222,8 +228,12 @@ final class LocalIntelligencePlugin: Plugin {
                         self.resolveAgent(Reply(ok: false, error: "invalid_decision", message: "El modelo no produjo un paso válido. Puedes volver a intentar."))
                         return
                     }
-                    self.resolveAgent(Reply(ok: true, decision: AgentDecision(kind: isTool ? "tool" : "answer",
+                    let reply = self.resolveAgent(Reply(ok: true, decision: AgentDecision(kind: isTool ? "tool" : "answer",
                         text: value.text, toolName: value.toolName, argumentsJSON: value.argumentsJSON)))
+                    if reply.ok, !isTool, let id = self.activeJournalID {
+                        // Hold the existing finite lease until the system accepts or rejects scheduling.
+                        await self.completionNotifications.notifyCompleted(id: id)
+                    }
                 } catch {
                     if !self.cancellationRequested { self.resolveAgent(self.failure(error)) }
                 }
@@ -317,11 +327,11 @@ final class LocalIntelligencePlugin: Plugin {
                 }
             } catch {
                 let failure = journalFailure()
-                pending?.resolve(failure)
+                let callback = pending; pending = nil; callback?.resolve(failure)
                 return failure
             }
         }
-        pending?.resolve(reply)
+        let callback = pending; pending = nil; callback?.resolve(reply)
         return reply
     }
     @discardableResult
@@ -353,6 +363,18 @@ final class LocalIntelligencePlugin: Plugin {
             } catch { invoke.resolve(self.journalFailure()) }
         }
     }
+    @objc func notificationStatus(_ invoke: Invoke) {
+        Task { @MainActor in invoke.resolve(await self.completionNotifications.status()) }
+    }
+    @objc func notificationConfigure(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(NotificationArgs.self) else {
+            invoke.resolve(Reply(ok: false, error: "invalid_notification_preference")); return
+        }
+        Task { @MainActor in
+            do { invoke.resolve(try await self.completionNotifications.configure(enabled: args.enabled)) }
+            catch { invoke.resolve(Reply(ok: false, error: "notification_unavailable", message: "No pude configurar los avisos de este iPhone.")) }
+        }
+    }
     @objc func cancel(_ invoke: Invoke) {
         let args = try? invoke.parseArgs(CancelArgs.self)
         DispatchQueue.main.async {
@@ -361,11 +383,13 @@ final class LocalIntelligencePlugin: Plugin {
                 do {
                     // Also fence a Stop that overtakes the first native step,
                     // or arrives between two steps of the same turn.
+                    self.completionNotifications.cancel(id: id)
                     try self.journal.cancel(id)
                     invoke.resolve(Reply(ok: true))
                 } catch { invoke.resolve(self.journalFailure()) }
                 return
             }
+            if let id = self.activeJournalID { self.completionNotifications.cancel(id: id) }
             invoke.resolve(self.cancelCurrent(message: "Respuesta cancelada.", explicit: true))
         }
     }

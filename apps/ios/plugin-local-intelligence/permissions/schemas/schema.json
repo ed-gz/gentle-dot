@@ -325,6 +325,26 @@
           "const": "deny-check-availability"
         },
         {
+          "description": "Enables the notification_configure command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-notification-configure"
+        },
+        {
+          "description": "Denies the notification_configure command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-notification-configure"
+        },
+        {
+          "description": "Enables the notification_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-notification-status"
+        },
+        {
+          "description": "Denies the notification_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-notification-status"
+        },
+        {
           "description": "Enables the reset command without any pre-configured scope.",
           "type": "string",
           "const": "allow-reset"

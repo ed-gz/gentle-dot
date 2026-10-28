@@ -5,6 +5,8 @@ fn main() {
         "agent_step",
         "results_list",
         "results_acknowledge",
+        "notification_status",
+        "notification_configure",
         "reset",
         "cancel",
     ])

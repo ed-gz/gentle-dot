@@ -9,6 +9,8 @@ Check and use Capri's local model, cancel a response, and clear its in-memory co
 - `allow-cancel`
 - `allow-results-list`
 - `allow-results-acknowledge`
+- `allow-notification-status`
+- `allow-notification-configure`
 
 ## Permission Table
 
@@ -93,6 +95,58 @@ Enables the check_availability command without any pre-configured scope.
 <td>
 
 Denies the check_availability command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-notification-configure`
+
+</td>
+<td>
+
+Enables the notification_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-notification-configure`
+
+</td>
+<td>
+
+Denies the notification_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-notification-status`
+
+</td>
+<td>
+
+Enables the notification_status command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-notification-status`
+
+</td>
+<td>
+
+Denies the notification_status command without any pre-configured scope.
 
 </td>
 </tr>

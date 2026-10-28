@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-notification-configure"
+description = "Enables the notification_configure command without any pre-configured scope."
+commands.allow = ["notification_configure"]
+
+[[permission]]
+identifier = "deny-notification-configure"
+description = "Denies the notification_configure command without any pre-configured scope."
+commands.deny = ["notification_configure"]

@@ -14,6 +14,16 @@ Path(sys.argv[1]).write_text(source)
 PY
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-local-intelligence/ios/Sources/CompletionNotifications.swift \
+  test/native/CompletionNotificationsTests.swift -o "$verification/completion-notification-tests"
+"$verification/completion-notification-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-device-bridge/ios/Sources/LiveActivityPolicy.swift \
+  test/native/LiveActivityPolicyTests.swift -o "$verification/live-activity-policy-tests"
+"$verification/live-activity-policy-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-local-intelligence/ios/Sources/InferenceJournal.swift \
   test/native/InferenceJournalTests.swift -o "$verification/inference-journal-tests"
 "$verification/inference-journal-tests"
@@ -38,6 +48,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
   "$verification/AgentTypes.swift" \
   plugin-local-intelligence/ios/Sources/InferenceJournal.swift \
+  plugin-local-intelligence/ios/Sources/CompletionNotifications.swift \
   plugin-perception/ios/Sources/Voice.swift \
   plugin-perception/ios/Sources/Documents.swift \
   plugin-device-bridge/ios/Sources/BoundedHTTP.swift \
@@ -48,4 +59,11 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-device-bridge/ios/Sources/SessionUpload.swift \
   plugin-device-bridge/ios/Sources/DocumentExport.swift \
   plugin-device-bridge/ios/Sources/DocumentImport.swift \
-  plugin-device-bridge/ios/Sources/PairingScanner.swift
+  plugin-device-bridge/ios/Sources/PairingScanner.swift \
+  plugin-device-bridge/ios/Sources/LiveActivityPolicy.swift \
+  plugin-device-bridge/ios/Sources/CapriActivityAttributes.swift \
+  plugin-device-bridge/ios/Sources/LiveActivityController.swift
+xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
+  -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+  plugin-device-bridge/ios/Sources/CapriActivityAttributes.swift \
+  live-activity/CapriActivityWidget.swift

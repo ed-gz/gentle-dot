@@ -11,6 +11,7 @@ import { readSettings, saveSettings, loadArtwork, saveArtwork, deleteArtwork, va
 import { createLinkedChat, type LinkedStatus } from './linked-chat.ts';
 import { checkLocalIntelligence, availabilityMessage, agentStep, cancelLocal, resetLocal, type Availability } from './local-intelligence.ts';
 import { listInferenceResults, acknowledgeInference, recoverInferenceResults, withInferenceDeadline } from './inference-recovery.ts';
+import { mountCompletionNotifications } from './completion-notifications.ts';
 import { loadConversation, updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
 import { conversationArchive } from './conversation-archive.ts';
@@ -310,6 +311,7 @@ function updateLaptopView() {
 }
 const conversationView = createConversationView({ container: element('cards'), empty: element('empty-conversation'), scroller: element('conversation-scroll'), newMessages: element<HTMLButtonElement>('new-messages') });
 const reviews = createConversationRequests(element('requests'), { append: conversationView.updateExtra });
+const completionNotifications = mountCompletionNotifications(element('completion-notifications'));
 let availability: Availability = { available: false, status: 'checking', supportsSpanish: false };
 let linkedStatus: LinkedStatus = 'offline';
 let linkedBusy = false;
@@ -673,7 +675,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) release();
   cancelAnimationFrame(frame); fx?.clear(); persist();
   if (document.hidden) { void cancelDictation(); director.update(intent, performance.now(), true); linked.suspend(); }
-  else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); }
+  else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void completionNotifications.refresh(); }
 });
 window.addEventListener('pagehide', () => { connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
 window.addEventListener('pageshow', event => { if (event.persisted) { redraw(); linked.resume(); void recoverLocalInference(); } });
@@ -710,6 +712,7 @@ async function restoreConversation() {
 element('retry-conversation').addEventListener('click', () => void restoreConversation());
 async function initialize() {
   updateControls();
+  void completionNotifications.refresh();
   // Independent stores must not delay the character or the native availability
   // check. A late startup read must also never replace newly selected artwork.
   let initialArtworkRevision = assetRevision;

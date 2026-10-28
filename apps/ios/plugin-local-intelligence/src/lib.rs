@@ -99,6 +99,19 @@ async fn results_list<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
 }
 
 #[tauri::command]
+async fn notification_status<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
+    native_call(app, "notificationStatus", json!({})).await
+}
+
+#[tauri::command]
+async fn notification_configure<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<Value, String> {
+    native_call(app, "notificationConfigure", json!({"enabled": enabled})).await
+}
+
+#[tauri::command]
 async fn results_acknowledge<R: Runtime>(
     app: AppHandle<R>,
     turn_id: String,
@@ -136,6 +149,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             agent_step,
             results_list,
             results_acknowledge,
+            notification_status,
+            notification_configure,
             reset,
             cancel
         ])
