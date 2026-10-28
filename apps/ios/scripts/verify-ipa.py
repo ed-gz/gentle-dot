@@ -115,6 +115,20 @@ def inspect(path, group, sealed=False, extract=None, personal_art_sha256=None, l
             require(artwork[:8] == b'\x89PNG\r\n\x1a\n' and artwork[8:16] == b'\x00\x00\x00\rIHDR'
                     and struct.unpack_from('>II', artwork, 16) == (240, 420), 'Personal Capri is not the expected 240x420 PNG')
             result['personalArtworkSHA256'] = personal_art_sha256
+            if live_activity:
+                widget_prefix = widget + '/personal-art/'
+                require(archive.getinfo(widget_prefix + 'manifest.json').file_size <= 2048
+                        and 57 <= archive.getinfo(widget_prefix + 'capri-full.png').file_size <= 5 * 1024 * 1024,
+                        'Invalid widget artwork size')
+                widget_artwork = archive.read(widget_prefix + 'capri-full.png')
+                widget_manifest = json.loads(archive.read(widget_prefix + 'manifest.json'))
+                require(widget_manifest == art_manifest and widget_artwork == artwork
+                        and hashlib.sha256(widget_artwork).hexdigest() == personal_art_sha256,
+                        'Widget personal artwork does not match the verified original')
+                result['widgetPersonalArtworkSHA256'] = personal_art_sha256
+        elif live_activity:
+            require(not any(name.startswith(widget + '/personal-art/') for name in names),
+                    'Generic widget unexpectedly contains personal artwork')
         for label, directory, plist in [('app', app, info), ('extension', extension, extension_info)]:
             executable = plist.get('CFBundleExecutable', '')
             require(isinstance(executable, str) and executable and '/' not in executable and '\\' not in executable and executable not in ('.', '..'), 'IPA has an invalid executable name')

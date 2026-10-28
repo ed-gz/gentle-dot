@@ -1,5 +1,7 @@
 import ActivityKit
+import ImageIO
 import SwiftUI
+import UIKit
 import WidgetKit
 
 @main
@@ -27,18 +29,38 @@ private func phaseLabel(_ phase: String) -> String {
     case "waiting": return "Esperando una señal"
     case "finished": return "Respuesta terminada"
     case "interrupted": return "Respuesta interrumpida"
+    case "dismissed": return "Actividad cerrada"
     default: return "Estado sin confirmar"
     }
 }
 
 private struct CapriLockScreen: View {
     let context: ActivityViewContext<CapriActivityAttributes>
+    // ActivityKit requires images no larger than their presentation. The
+    // original private rig PNG stays byte-for-byte in the widget bundle; this
+    // bounded 48×84 thumbnail is decoded directly for the Lock Screen.
+    private static let personalArt: UIImage? = {
+        guard let url = Bundle.main.url(forResource: "capri-full", withExtension: "png", subdirectory: "personal-art"),
+              let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 84,
+                kCGImageSourceShouldCacheImmediately: true,
+              ] as CFDictionary), image.width <= 48, image.height <= 84 else { return nil }
+        return UIImage(cgImage: image)
+    }()
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            Text("C//")
-                .font(.system(size: 23, weight: .black, design: .monospaced))
-                .foregroundStyle(Color(red: 1, green: 0.25, blue: 0.56))
-                .accessibilityHidden(true)
+            if let image = Self.personalArt {
+                Image(uiImage: image).resizable().scaledToFit().frame(width: 48, height: 84)
+                    .accessibilityHidden(true)
+            } else {
+                Text("C//")
+                    .font(.system(size: 23, weight: .black, design: .monospaced))
+                    .foregroundStyle(Color(red: 1, green: 0.25, blue: 0.56))
+                    .accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text("CAPRI · \(context.attributes.origin == "iphone" ? "iPhone" : "laptop")")
                     .font(.system(.caption, design: .monospaced, weight: .bold))

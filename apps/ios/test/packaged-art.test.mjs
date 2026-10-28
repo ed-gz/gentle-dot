@@ -176,3 +176,63 @@ for mode in ('good','missing','tampered','manifest'):
     assert.equal(result.status, 0, result.stderr);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('optional Live Activity receives only the same verified private folder, without affecting Share', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'capri-widget-art-'));
+  try {
+    mkdirSync(join(directory, 'scripts')); mkdirSync(join(directory, 'gen'));
+    copyFileSync(new URL('../scripts/configure-personal-art.rb', import.meta.url), join(directory, 'scripts/configure-personal-art.rb'));
+    stagePersonalArtwork(original, fingerprint, join(directory, 'public/personal-art'));
+    const spec = join(directory, 'gen/project.yml');
+    writeFileSync(spec, 'targets:\n  Capri:\n    type: application\n    platform: iOS\n    sources: []\n  CapriShare:\n    type: app-extension\n    platform: iOS\n    sources: []\n  CapriLive:\n    type: app-extension\n    platform: iOS\n    sources:\n      - path: Widget.swift\n');
+    for (let i = 0; i < 2; i++) {
+      const result = spawnSync('ruby', [join(directory, 'scripts/configure-personal-art.rb'), spec, '--spec-only'], { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    const parsed = spawnSync('ruby', ['-ryaml', '-rjson', '-e', 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), aliases: true))', spec], { encoding: 'utf8' });
+    assert.equal(parsed.status, 0, parsed.stderr);
+    const targets = JSON.parse(parsed.stdout).targets;
+    const resource = { path: '../public/personal-art', type: 'folder', buildPhase: 'resources' };
+    assert.deepEqual(targets.Capri.sources, [resource]);
+    assert.deepEqual(targets.CapriLive.sources, [{ path: 'Widget.swift' }, resource]);
+    assert.deepEqual(targets.CapriShare.sources, []);
+    const check = spawnSync('git', ['check-ignore', '-q', 'apps/ios/public/personal-art/capri-full.png'], { cwd: new URL('../../../', import.meta.url), encoding: 'utf8' });
+    assert.equal(check.status, 0, 'Personal artwork must remain excluded from the source repository');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('private Live Activity IPA verifies exact artwork in both app and widget; generic widget contains none', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'capri-widget-ipa-art-'));
+  try {
+    stagePersonalArtwork(original, fingerprint, directory);
+    const verifier = new URL('../scripts/verify-ipa.py', import.meta.url).pathname;
+    const driver = String.raw`
+import importlib.util, pathlib, plistlib, struct, sys, zipfile
+spec=importlib.util.spec_from_file_location('verify',sys.argv[1]); m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+root=pathlib.Path(sys.argv[2]); digest=sys.argv[3]; group='group.dev.gentledot.capri'; arm=struct.pack('<8I',0xFEEDFACF,0x0100000C,0,0,0,0,0,0)
+app='Payload/Capri.app'; share=app+'/PlugIns/CapriShare.appex'; widget=app+'/PlugIns/CapriLive.appex'
+common={'DTPlatformName':'iphoneos','CapriAppGroup':group,'CFBundleExecutable':'Capri'}
+for mode in ('good','missing','tampered','manifest','generic','generic_leak'):
+ path=root/(mode+'.ipa'); art=(root/'capri-full.png').read_bytes(); meta=(root/'manifest.json').read_bytes()
+ with zipfile.ZipFile(path,'w') as z:
+  z.writestr(app+'/Info.plist',plistlib.dumps({**common,'CFBundleIdentifier':'dev.gentledot.capri','NSMicrophoneUsageDescription':'dictation','NSSupportsLiveActivities':True})); z.writestr(app+'/Capri',arm)
+  z.writestr(share+'/Info.plist',plistlib.dumps({**common,'CFBundleIdentifier':'dev.gentledot.capri.share','NSExtension':{'NSExtensionPointIdentifier':'com.apple.share-services'}})); z.writestr(share+'/Capri',arm)
+  z.writestr(widget+'/Info.plist',plistlib.dumps({'DTPlatformName':'iphoneos','CFBundleIdentifier':'dev.gentledot.capri.live','CFBundleExecutable':'CapriLive','NSExtension':{'NSExtensionPointIdentifier':'com.apple.widgetkit-extension'}})); z.writestr(widget+'/CapriLive',arm)
+  if mode not in ('generic','generic_leak'):
+   z.writestr(app+'/personal-art/capri-full.png',art); z.writestr(app+'/personal-art/manifest.json',meta)
+  if mode not in ('missing','generic'):
+   z.writestr(widget+'/personal-art/capri-full.png',art if mode!='tampered' else art[:-1]+bytes([art[-1]^1]))
+   z.writestr(widget+'/personal-art/manifest.json',meta if mode!='manifest' else meta.replace(b'240',b'241'))
+ expected=digest if mode not in ('generic','generic_leak') else None
+ if mode in ('good','generic'):
+  value=m.inspect(path,group,personal_art_sha256=expected,live_activity=True)
+  if mode=='good': assert value['widgetPersonalArtworkSHA256']==digest
+ else:
+  try: m.inspect(path,group,personal_art_sha256=expected,live_activity=True)
+  except (ValueError,KeyError): pass
+  else: raise AssertionError('unsafe or mismatched widget artwork accepted: '+mode)
+`;
+    const result = spawnSync('python3', ['-c', driver, verifier, directory, fingerprint], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});

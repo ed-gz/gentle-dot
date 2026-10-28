@@ -14,9 +14,16 @@ raise 'Expected one iOS application target.' unless apps.length == 1
 art = File.realpath(File.join(ios, 'public/personal-art'))
 raise 'Missing verified personal artwork.' unless File.file?(File.join(art, 'capri-full.png')) && File.file?(File.join(art, 'manifest.json'))
 relative = Pathname.new(art).relative_path_from(Pathname.new(File.dirname(spec_path))).to_s
-sources = apps.values.first['sources'] ||= []
-sources.reject! { |item| item.is_a?(Hash) && item['path'] == relative }
-sources << { 'path' => relative, 'type' => 'folder', 'buildPhase' => 'resources' }
+targets = [apps.values.first]
+# ActivityKit doesn't share the application's asset bundle. Include the exact
+# validated private PNG in its own extension only when that optional target is
+# present. Generic builds never run this script or package personal artwork.
+targets << spec.fetch('targets').fetch('CapriLive') if spec.fetch('targets').key?('CapriLive')
+targets.each do |target|
+  sources = target['sources'] ||= []
+  sources.reject! { |item| item.is_a?(Hash) && item['path'] == relative }
+  sources << { 'path' => relative, 'type' => 'folder', 'buildPhase' => 'resources' }
+end
 File.write(spec_path, YAML.dump(spec))
 unless ARGV.include?('--spec-only')
   Dir.chdir(File.dirname(spec_path)) { raise 'XcodeGen failed while packaging personal Capri.' unless system('xcodegen', 'generate', '--spec', spec_path) }

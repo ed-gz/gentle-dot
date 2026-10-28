@@ -38,7 +38,7 @@ spec['targets']['CapriLive'] = {
     'NSExtension' => { 'NSExtensionPointIdentifier' => 'com.apple.widgetkit-extension' }
   } },
   'entitlements' => { 'path' => 'CapriLive/CapriLive.entitlements', 'properties' => {} },
-  'dependencies' => [{ 'sdk' => 'ActivityKit.framework' }, { 'sdk' => 'WidgetKit.framework' }, { 'sdk' => 'SwiftUI.framework' }]
+  'dependencies' => [{ 'sdk' => 'ActivityKit.framework' }, { 'sdk' => 'WidgetKit.framework' }, { 'sdk' => 'SwiftUI.framework' }, { 'sdk' => 'ImageIO.framework' }]
 }
 File.write(spec_path, YAML.dump(spec))
 unless ARGV.include?('--spec-only')
