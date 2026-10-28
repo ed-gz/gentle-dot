@@ -4,7 +4,8 @@ import { localIdentifier } from './local-identifiers.ts';
 import { prepareMCPAccess } from './mcp-oauth-store.ts';
 import type { Tool, ToolContext } from './agent-tools.ts';
 
-const VERSION = '2025-06-18';
+const PREFERRED_VERSION = '2025-11-25';
+const SUPPORTED_VERSIONS = new Set([PREFERRED_VERSION, '2025-06-18']);
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 export function canonicalJSON(value: unknown): string {
   function normalize(input: unknown, depth = 0): unknown {
@@ -21,7 +22,7 @@ export function canonicalJSON(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 /** Fail closed for unsupported validation keywords. No remote refs or regular-expression execution. */
-export function validateMCPArguments(schema: Record<string, unknown>, value: unknown): Record<string, unknown> {
+export function validateMCPArguments(schema: Record<string, unknown>, value: unknown, maximumBytes = 16 * 1024): Record<string, unknown> {
   const keywords = new Set(['$schema', '$id', '$defs', 'definitions', '$ref', 'title', 'description', 'default', 'examples', 'deprecated', 'readOnly', 'writeOnly',
     'type', 'properties', 'required', 'additionalProperties', 'items', 'minItems', 'maxItems', 'uniqueItems', 'minLength', 'maxLength', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'enum', 'const', 'anyOf', 'oneOf', 'allOf', 'minProperties', 'maxProperties']);
   function check(rule: unknown, input: unknown, depth = 0): void {
@@ -63,10 +64,10 @@ export function validateMCPArguments(schema: Record<string, unknown>, value: unk
       }
     }
   }
-  if (!object(value) || new TextEncoder().encode(canonicalJSON(value)).length > 16 * 1024) throw new Error('Argumentos MCP inválidos o demasiado grandes.');
+  if (!object(value) || new TextEncoder().encode(canonicalJSON(value)).length > maximumBytes) throw new Error('Argumentos MCP inválidos o demasiado grandes.');
   check(schema, value); return JSON.parse(canonicalJSON(value));
 }
-type RemoteTool = { name: string; description: string; inputSchema: Record<string, unknown> };
+type RemoteTool = { name: string; description: string; inputSchema: Record<string, unknown>; outputSchema?: Record<string, unknown>; taskSupport: 'forbidden' | 'optional' | 'required' };
 export type MCPServices = {
   prepare: (id: string) => Promise<ExternalConnection>;
   getConnection: (id: string) => Promise<ExternalConnection | null>;
@@ -113,6 +114,7 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
   const token = await service.token(connection);
   let session: string | undefined;
   let initialized = false;
+  let negotiatedVersion: string | undefined;
   async function current(): Promise<void> {
     if (canonicalJSON(await service.getConnection(connectionId)) !== expected) throw new Error('La conexión cambió; vuelve a descubrir las herramientas.');
     if (await service.token(connection) !== token || canonicalJSON(await service.getConnection(connectionId)) !== expected) throw new Error('El acceso cambió; vuelve a descubrir las herramientas.');
@@ -123,7 +125,7 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
     const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
     if (token) headers.Authorization = `Bearer ${token}`;
     if (session) headers['Mcp-Session-Id'] = session;
-    if (initialized) headers['MCP-Protocol-Version'] = VERSION;
+    if (initialized && negotiatedVersion) headers['MCP-Protocol-Version'] = negotiatedVersion;
     const result = await service.request({ url: connection!.endpoint, method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
     if (result.status === 404 && session) { session = undefined; initialized = false; throw new Error('La sesión MCP caducó. Vuelve a descubrir las herramientas.'); }
     if (method === 'initialize') {
@@ -133,10 +135,13 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
     }
     return parseMCPResponse(result, id);
   }
-  const init = await rpc('initialize', { protocolVersion: VERSION, capabilities: {}, clientInfo: { name: 'Capri iOS', version: '0.1.0' } });
-  if (!object(init) || init.protocolVersion !== VERSION || !object(init.capabilities) || !object(init.capabilities.tools)) throw new Error('El servidor no ofrece herramientas con MCP 2025-06-18.');
+  const init = await rpc('initialize', { protocolVersion: PREFERRED_VERSION, capabilities: {}, clientInfo: { name: 'Capri iOS', version: '0.1.0' } });
+  if (!object(init) || typeof init.protocolVersion !== 'string' || !SUPPORTED_VERSIONS.has(init.protocolVersion))
+    throw new Error('El servidor ofreció una versión MCP no compatible. Capri admite 2025-11-25 y 2025-06-18.');
+  if (!object(init.capabilities) || !object(init.capabilities.tools)) throw new Error('El servidor no ofrece la capacidad de herramientas MCP.');
+  negotiatedVersion = init.protocolVersion;
   initialized = true;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': VERSION };
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': negotiatedVersion };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (session) headers['Mcp-Session-Id'] = session;
   await current();
@@ -149,9 +154,18 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
       if (!object(result) || !Array.isArray(result.tools)) throw new Error('Catálogo MCP inválido.');
       for (const raw of result.tools) {
         if (!object(raw) || typeof raw.name !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(raw.name) || names.has(raw.name) ||
-          !object(raw.inputSchema) || raw.inputSchema.type !== 'object' || (raw.description !== undefined && typeof raw.description !== 'string')) throw new Error('Definición de herramienta MCP inválida.');
-        const tool = { name: raw.name, description: typeof raw.description === 'string' ? raw.description : raw.name, inputSchema: raw.inputSchema };
-        if (tool.description.length > 4000 || canonicalJSON(tool.inputSchema).length > 16 * 1024) throw new Error('Esquema MCP demasiado grande.');
+          !object(raw.inputSchema) || raw.inputSchema.type !== 'object' || (raw.description !== undefined && typeof raw.description !== 'string') ||
+          (raw.outputSchema !== undefined && (!object(raw.outputSchema) || raw.outputSchema.type !== 'object'))) throw new Error('Definición de herramienta MCP inválida.');
+        let taskSupport: RemoteTool['taskSupport'] = 'forbidden';
+        if (raw.execution !== undefined) {
+          if (!object(raw.execution) || (raw.execution.taskSupport !== undefined &&
+            (typeof raw.execution.taskSupport !== 'string' || !['forbidden', 'optional', 'required'].includes(raw.execution.taskSupport)))) throw new Error('La modalidad de ejecución MCP no es válida.');
+          if (raw.execution.taskSupport !== undefined) taskSupport = raw.execution.taskSupport as RemoteTool['taskSupport'];
+        }
+        const tool: RemoteTool = { name: raw.name, description: typeof raw.description === 'string' ? raw.description : raw.name, inputSchema: raw.inputSchema,
+          ...(object(raw.outputSchema) ? { outputSchema: raw.outputSchema } : {}), taskSupport };
+        if (tool.description.length > 4000 || canonicalJSON(tool.inputSchema).length > 16 * 1024 ||
+          (tool.outputSchema && canonicalJSON(tool.outputSchema).length > 16 * 1024)) throw new Error('Esquema MCP demasiado grande.');
         names.add(tool.name); all.push(tool);
         if (all.length > 64 || canonicalJSON(all).length > 512 * 1024) throw new Error('Catálogo MCP demasiado grande; habilita menos herramientas en el servidor.');
       }
@@ -164,19 +178,23 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
   const tools = await catalog();
   return Promise.all(tools.map(async remote => {
     const schemaJSON = canonicalJSON(remote.inputSchema);
+    const outputSchemaJSON = canonicalJSON(remote.outputSchema ?? null);
     const suffix = (await service.hash(connection.id + '\n' + remote.name)).slice(0, 24);
     return {
       definition: { name: `mcp_${suffix}`, description: `${connection.label}: ${remote.description}`.slice(0, 4000), parameters: structuredClone(remote.inputSchema) },
       validate(value: unknown) { return validateMCPArguments(remote.inputSchema, value); },
       async execute(value: unknown, context: ToolContext) {
+        if (remote.taskSupport === 'required') throw new Error('Esta herramienta requiere tareas MCP asíncronas, que Capri todavía no admite. No se ejecutó.');
         const args = validateMCPArguments(remote.inputSchema, value); const argumentsJSON = canonicalJSON(args);
         context.signal.throwIfAborted(); await current();
         if (!context.askApproval) throw new Error('Esta herramienta remota requiere revisión y aprobación en la conversación.');
-        const details = canonicalJSON({ endpoint: connection.endpoint, connectionRevision: connection.revision, tool: remote.name, schema: remote.inputSchema, arguments: args });
+        const details = canonicalJSON({ endpoint: connection.endpoint, connectionRevision: connection.revision, tool: remote.name, schema: remote.inputSchema,
+          ...(remote.outputSchema ? { outputSchema: remote.outputSchema } : {}), arguments: args });
         if (!await context.askApproval({ title: `Revisar ${remote.name} · ${connection.label}`, details, operation: 'mcp.tools.call' })) return { executed: false, approved: false };
         context.signal.throwIfAborted(); await current();
         const fresh = (await catalog()).find(tool => tool.name === remote.name);
-        if (!fresh || canonicalJSON(fresh.inputSchema) !== schemaJSON || fresh.description !== remote.description) throw new Error('La herramienta cambió después de revisarla. Descúbrela y aprueba de nuevo.');
+        if (!fresh || canonicalJSON(fresh.inputSchema) !== schemaJSON || canonicalJSON(fresh.outputSchema ?? null) !== outputSchemaJSON ||
+          fresh.description !== remote.description || fresh.taskSupport !== remote.taskSupport) throw new Error('La herramienta cambió después de revisarla. Descúbrela y aprueba de nuevo.');
         context.signal.throwIfAborted(); await current();
         const requestId = localIdentifier();
         // Schema and credential revisions invalidate approvals, but cannot erase
@@ -187,10 +205,17 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
         try {
           context.signal.throwIfAborted();
           const result = await rpc('tools/call', { name: remote.name, arguments: args }, requestId);
-          if (!object(result) || !Array.isArray(result.content) || (result.isError !== undefined && typeof result.isError !== 'boolean')) throw new Error('Resultado de herramienta MCP inválido.');
+          if (!object(result) || !Array.isArray(result.content) || (result.structuredContent !== undefined && !object(result.structuredContent)) ||
+            (result.isError !== undefined && typeof result.isError !== 'boolean')) throw new Error('Resultado de herramienta MCP inválido.');
+          let outputValidation: 'not_declared' | 'valid' | 'unverified' = 'not_declared';
+          if (remote.outputSchema) {
+            try { validateMCPArguments(remote.outputSchema, result.structuredContent, 2 * 1024 * 1024); outputValidation = 'valid'; }
+            catch { outputValidation = 'unverified'; }
+          }
           // Store only the correlated result; untrusted resource links are never fetched.
           await service.finish(requestId, 'succeeded', canonicalJSON(result));
-          return { requestId, confirmed: true, toolFailed: result.isError === true, result, untrustedContent: true };
+          return { requestId, confirmed: true, toolFailed: result.isError === true, result, outputValidation, untrustedContent: true,
+            ...(outputValidation === 'unverified' ? { outputWarning: 'El servidor respondió, pero su salida estructurada no pudo verificarse contra el esquema. No la presentes como validada.' } : {}) };
         } catch {
           await service.finish(requestId, 'uncertain').catch(() => {});
           throw new Error('La operación MCP quedó sin confirmar. Conservé su registro y no la repetiré automáticamente.');

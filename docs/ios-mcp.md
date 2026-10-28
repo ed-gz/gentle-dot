@@ -3,8 +3,9 @@
 Capri puede descubrir herramientas de un servidor MCP remoto configurado por el
 usuario. No hay una lista fija de proveedores. El endpoint usa HTTPS; la credencial
 Bearer opcional se guarda en Keychain y nunca se entrega al modelo. También se puede autorizar un cliente OAuth público nativo previamente registrado por el servicio. Los servicios
-deben ofrecer Streamable HTTP con MCP `2025-06-18` y respuestas JSON o SSE que
-terminen dentro de 30 segundos y 2 MiB. Esto requiere internet; no depende de la PC.
+deben ofrecer Streamable HTTP y negociar MCP `2025-11-25` o `2025-06-18`, con
+respuestas JSON o SSE que terminen dentro de 30 segundos y 2 MiB. Esto requiere
+internet; no depende de la PC.
 
 ## Configuración y almacenamiento
 
@@ -36,6 +37,26 @@ unidades separadas. Las conexiones abiertas en Codex no autentican Capri.
 posteriores. El resultado es un arreglo de `Tool` compatible con el registro local;
 sus nombres `mcp_<hash>` son estables por conexión y herramienta.
 
+El cliente propone `2025-11-25` al inicializar. Acepta una contraoferta
+`2025-06-18` y usa exclusivamente la versión negociada en los encabezados de la
+notificación y todas las solicitudes posteriores. Si el servidor ofrece otra
+versión, no envía la notificación de inicialización ni consultas o llamadas a
+herramientas. No reintenta la inicialización en respuesta a errores HTTP genéricos.
+El protocolo `2026-07-28` cambia el ciclo de conexión y todavía no está
+implementado; no se considera compatible sólo por tener una fecha más reciente.
+
+Para admitir `2026-07-28` se necesita otro transporte lógico: la versión y las
+capacidades viajan en `_meta` en cada solicitud y también se reflejan en HTTP;
+el servidor ofrece `server/discover`, y esa revisión ya no usa el handshake ni
+`Mcp-Session-Id`. La implementación deberá detectar de forma explícita qué familia
+usa el servidor, procesar sus errores y mensajes multivuelta sin ejecutar peticiones
+inesperadas, conservar revisión humana y journal durable, y no repetir mutaciones
+cuya entrega sea incierta. Sus requisitos de autorización también necesitan una
+revisión propia. No basta cambiar el número de versión. Referencias: [versionado
+2026](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning),
+[transporte](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)
+y [versiones del SDK oficial](https://ts.sdk.modelcontextprotocol.io/v2/protocol-versions).
+
 El descubrimiento admite hasta 64 herramientas, diez páginas y 512 KiB de catálogo.
 Cada esquema individual puede ocupar 16 KiB. Se validan tipos, propiedades,
 obligatorios, referencias locales, combinaciones, enumeraciones, constantes y
@@ -46,14 +67,28 @@ antes de ejecutar. No se ignoran para fingir compatibilidad.
 Cada llamada solicita una revisión humana dentro de la conversación, incluso si el
 servidor la anuncia como lectura. La revisión contiene endpoint, revisión de
 conexión, nombre remoto, esquema y argumentos exactos. Después de la aprobación se
-reconsulta el catálogo y se compara el esquema, descripción y configuración. Un
+reconsulta el catálogo y se compara el esquema de entrada, el esquema de salida,
+la modalidad de ejecución, la descripción y la configuración. Un
 cambio invalida la aprobación. Los tokens nunca forman parte de esa revisión.
+Una herramienta que declara ejecución obligatoria mediante tareas asíncronas
+se muestra como no compatible al intentar usarla, antes de pedir aprobación o
+ejecutarla. Capri aún no implementa tareas MCP. Si cambia esa modalidad durante la
+revisión, se invalida la aprobación anterior.
 
 El cliente no anuncia sampling, raíces ni elicitación; no ejecuta solicitudes que
 envíe el servidor. Los resultados se marcan como datos no confiables. Los enlaces y
 recursos devueltos no se abren automáticamente. Se rechazan redirecciones HTTP y
 respuestas JSON-RPC no correlacionadas o duplicadas. Los SSE se procesan sólo cuando
 la respuesta finita termina; no se mantiene un canal de escucha permanente.
+
+Los resultados estructurados se conservan exactamente, incluso si `content` es un
+arreglo vacío. Cuando la herramienta declara `outputSchema`, Capri valida el objeto
+estructurado contra el subconjunto de JSON Schema descrito arriba y comunica
+`outputValidation`: `valid`, `unverified` o `not_declared`. Una salida que no cumple
+el esquema o utiliza restricciones no admitidas se marca `unverified`; el recibo
+correlacionado se conserva como respuesta del servidor, sin repetir la operación.
+La validación no convierte el contenido externo en datos confiables ni demuestra que
+una operación de negocio tuvo éxito.
 
 ## Evidencia de ejecución y límites
 
@@ -80,7 +115,8 @@ de hasta 2 MiB. `listRemoteExecutions` permite mostrar la evidencia; todavía no
 una resolución automática de resultados inciertos, que requieren contrastar con
 el servicio.
 
-Nueve pruebas Node verifican negociación, sesiones, paginación, validación,
+Las pruebas Node verifican negociación de ambas versiones, rechazo de versiones
+desconocidas, sesiones, paginación, validación,
 aprobaciones, cambios durante revisión y fallos sin replay. Cuatro pruebas de
 navegador verifican transacciones reales de IndexedDB, concurrencia, restauración
 y migración de un journal versión 1. Cambiar esquema o credenciales mantiene el
@@ -88,8 +124,7 @@ bloqueo; argumentos distintos siguen creando una operación nueva revisable.
 Son fixtures de protocolo, no evidencia de autenticación contra un proveedor real
 ni de ejecución de URLSession en el iPhone instalado.
 
-Referencias de protocolo: [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
-y [herramientas MCP](https://modelcontextprotocol.io/specification/2025-06-18/server/tools).
+Referencias de protocolo: [negociación MCP](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [herramientas](https://modelcontextprotocol.io/specification/2025-11-25/server/tools) y [tareas](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks).
 
 ## OAuth de otros servicios
 
