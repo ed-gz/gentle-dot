@@ -8,14 +8,16 @@ MCP permanece disponible para otros servicios y capacidades.
 | Proveedor | Endpoint de configuración | Herramientas implementadas |
 | --- | --- | --- |
 | GitHub | `https://api.github.com/` | Repositorios, listado/lectura de issues, creación de issues con etiquetas |
-| Slack | `https://slack.com/api/` | Conversaciones accesibles, historial paginado, envío de texto |
+| Slack | `https://slack.com/api/` | Canales públicos accesibles, historial paginado, envío de texto |
 | Gmail | `https://gmail.googleapis.com/` | Búsqueda, lectura de mensajes, envío MIME con adjuntos locales verificados |
 | Odoo | Base HTTPS de la instalación | Proyectos, búsqueda de responsables/tareas, creación y edición de tareas |
 
 GitHub utiliza la versión REST `2026-03-10`. Los listados de repositorios e issues
 aceptan página y devuelven hasta 20 elementos por consulta. Slack conserva los
 cursores de respuesta y solicita 15 mensajes por lectura de historial; no reintenta
-ante límites de frecuencia. Gmail devuelve IDs y pageToken en búsquedas y extrae
+ante límites de frecuencia. El listado usa `public_channel`, compatible con los
+scopes mínimos `channels:read` y `channels:history` solicitados por la interfaz.
+Gmail devuelve IDs y pageToken en búsquedas y extrae
 texto MIME para lectura; HTML sigue siendo texto no confiable, sin renderizar ni
 abrir enlaces. Las lecturas no son un archivo completo de todas las cuentas.
 
@@ -23,7 +25,9 @@ abrir enlaces. Las lecturas no son un archivo completo de todas las cuentas.
 
 Antes de cada operación, `getValidProviderAccess` recupera o renueva la credencial
 mediante el servicio OAuth/Keychain y devuelve la revisión actual de la conexión.
-Los tokens manuales, incluidos PAT de GitHub y API keys de Odoo, usan el mismo
+La revisión se vuelve a comprobar después de recuperar la credencial, para que
+desactivar, eliminar o cambiar una conexión durante la lectura de Keychain no
+permita usar un acceso obsoleto. Los tokens manuales, incluidos PAT de GitHub y API keys de Odoo, usan el mismo
 almacenamiento. No se almacenan secretos de clientes confidenciales. Los scopes,
 permisos de cada cuenta y disponibilidad de API del proveedor determinan lo que
 puede ejecutar realmente la app.
@@ -75,9 +79,13 @@ instalación; una respuesta de error no se presenta como una tarea creada.
 
 ## Evidencia
 
-Diez pruebas Node cubren rutas, controles de argumentos, revisión y cambio de
+Doce pruebas Node cubren rutas, controles de argumentos, revisión y cambio de
 conexión, reserva antes del envío, fallos sin replay, MIME Unicode/cabeceras,
-integridad de archivos, formatos Odoo y separación de credenciales. Usan fixtures
+integridad de archivos, formatos Odoo y separación de credenciales. Incluyen el
+contrato `validate → execute` usado por `connection_call`: validar nuevamente no
+añade campos fuera del esquema ni convierte argumentos opcionales en valores
+inválidos. También comprueban que un cambio de conexión durante la recuperación
+de credenciales impida la lectura y el envío. TypeScript pasa. Usan fixtures
 de API. No constituyen envío real de correo/mensajes ni validación contra cuentas
 configuradas en un iPhone instalado.
 
