@@ -32,7 +32,13 @@ pnpm build
 if [[ -n "${CAPRI_PERSONAL_ART_SHA256:-}" ]]; then
   node scripts/personal-art.mjs verify dist/personal-art "$CAPRI_PERSONAL_ART_SHA256"
 fi
-cargo tauri icon src-tauri/icons/app.svg --output src-tauri/icons
+if [[ -n "${CAPRI_PERSONAL_ART_SHA256:-}" ]]; then
+  # Keep the derived private SVG in ignored build output, not the source tree.
+  node scripts/personal-icon.mjs public/personal-art "$CAPRI_PERSONAL_ART_SHA256" out/personal-icon.svg
+  cargo tauri icon out/personal-icon.svg --output src-tauri/icons
+else
+  cargo tauri icon src-tauri/icons/app.svg --output src-tauri/icons
+fi
 cargo tauri ios init --ci
 if [[ "${CAPRI_LIVE_ACTIVITY:-0}" == 1 ]]; then
   ruby scripts/configure-share-extension.rb --spec-only

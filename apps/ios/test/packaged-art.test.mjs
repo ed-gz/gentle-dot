@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadPackagedArtwork } from '../src/packaged-art.ts';
 import { validatePersonalPNG, stagePersonalArtwork, verifyPersonalArtwork, downloadPrivateArtwork } from '../scripts/personal-art.mjs';
+import { personalIconSVG } from '../scripts/personal-icon.mjs';
 
 function crc32(bytes) { let crc = 0xffffffff; for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0); } return (crc ^ 0xffffffff) >>> 0; }
 function chunk(type, bytes) { const result = Buffer.alloc(12 + bytes.length); result.writeUInt32BE(bytes.length); result.write(type, 4); bytes.copy(result, 8); result.writeUInt32BE(crc32(result.subarray(4, -4)), result.length - 4); return result; }
@@ -66,6 +67,19 @@ test('personal build staging validates CRC, inflate, exact digest and writes det
     assert.throws(() => validatePersonalPNG(png(241), hash(png(241))), /240/);
     writeFileSync(join(directory, 'manifest.json'), JSON.stringify({ ...metadata, sha256: '0'.repeat(64) }));
     assert.throws(() => verifyPersonalArtwork(directory, fingerprint), /manifest/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('personal app icon uses only verified artwork and rejects tampering', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'capri-icon-'));
+  try {
+    stagePersonalArtwork(original, fingerprint, directory);
+    const svg = personalIconSVG(directory, fingerprint);
+    assert.match(svg, /viewBox="0 0 1024 1024"/);
+    const data = svg.match(/data:image\/png;base64,([^\"]+)/)?.[1];
+    assert.ok(data); assert.deepEqual(Buffer.from(data, 'base64'), original);
+    writeFileSync(join(directory, 'capri-full.png'), Buffer.from('tampered'));
+    assert.throws(() => personalIconSVG(directory, fingerprint));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
