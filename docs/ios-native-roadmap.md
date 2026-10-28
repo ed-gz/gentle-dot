@@ -10,6 +10,8 @@ Corte: **28 de octubre de 2026, America/Monterrey**. Continuar exclusivamente en
 
 La IPA personal 0c20f36 ya incluye el PNG original dentro del paquete, construido en el CI privado 40721079081; la fuente pública no contiene el arte. La geometría de movimiento, el compositor, la lectura durante actividad, las revisiones y el contexto local ya tienen correcciones implementadas y pruebas de navegador. El backend de trabajos/minutas se activó sin reiniciar desktop: WSS real confirmó transferencia, reconexión, deduplicación y minutas sintéticas con seis rangos SRT/citas específicas, preservando historial y sesiones. L29–L31 conservan la evidencia; falta el recorrido desde iPhone y audio real. [Empaquetado personal](ios-personal-art.md).
 
+**Candidato más reciente: c59c69f**, construido en el CI privado [40740294204](https://github.com/ed-gz/capri-ios-personal/actions/runs/40740294204). Incorpora el retrabajo de historial, sesiones y presencia descrito abajo; `capri-personal-c59c69f.ipa` reemplaza a 0c20f36 para la siguiente prueba. App/extensión, App Groups y PNG exacto verificados dentro del paquete. Ruta y SHA-256 en la [guía de instalación](ios-sidestore.md); no se ha confirmado su instalación ni aceptación en iPhone.
+
 ## Qué está construido y qué se ha probado
 
 | Entrega | Evidencia | Lo que no demuestra |
