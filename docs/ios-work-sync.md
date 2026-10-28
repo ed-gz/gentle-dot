@@ -47,7 +47,11 @@ La inferencia usa `ModelRuntime.completeSimple` de Pi con el modelo seleccionado
 
 Cada elemento de la minuta distingue `confirmed`, `proposal` o `inference` y referencia IDs de evidencia. Los nombres y expresiones de fecha deben aparecer literalmente en la evidencia citada; los ausentes quedan en `null`. Se rechazan resultados con responsables, fechas o referencias inventadas. Esta comprobación es estructural: la interpretación semántica de acuerdos y riesgos continúa requiriendo revisión humana.
 
-Los timestamps describen segmentos de audio, no alineación exacta por palabra. El texto importado de Apple conserva fuente propia y puede contrastarse con la transcripción del desktop. La evidencia se acota a 100000 caracteres y 500 segmentos; exceder esos límites falla explícitamente, sin truncar el material presentado como completo.
+Los timestamps del transcriptor describen segmentos de audio, no alineación exacta por palabra. Los archivos SRT y WebVTT importados se separan en sus cues con `startMs`/`endMs`; permanecen como `source: "imported-text"` y sus tiempos son declaraciones del archivo, sin verificación contra audio. Cada cita enlaza al segmento concreto y a `fileId`; el manifiesto aprobado conserva hash, revisión, bytes originales y versiones. No se atribuye un texto a Apple sin procedencia acreditada.
+
+El parser admite horas/minutos/segundos y milisegundos, identificadores y ajustes WebVTT; conserva intervalos solapados sin mezclarlos, como permite [WebVTT](https://www.w3.org/TR/webvtt1/). No interpreta mapas temporales de streams. Ante tiempos invertidos, inválidos, orden temporal regresivo o estructura no admitida, conserva íntegro el texto como evidencia sin rangos. Una advertencia determinista se añade al resultado aunque el modelo no la incluya; también distingue tiempos importados de tiempos obtenidos al transcribir audio. Los originales siguen descargables sin modificaciones.
+
+La importación UTF-8 admite hasta 400000 bytes por transcripción. La evidencia se acota a 100000 caracteres y 500 segmentos, con 20000 caracteres por cue; exceder esos límites falla explícitamente antes de invocar el modelo, sin truncar el material presentado como completo. El texto sin formato temporal se pagina en bloques de 15000 caracteres sin dividir pares Unicode.
 
 El intento de procesamiento se registra antes de comenzar. Un intento interrumpido por reinicio queda `uncertain` y no se repite automáticamente. Los resultados terminados son inmutables para ese snapshot. Un nuevo intento requiere una nueva revisión/transferencia aprobada.
 
@@ -72,8 +76,12 @@ El test heredado de voz exige un frame menor a 1 MiB mientras HEAD define `MAX_V
 
 Los tests de modelo y transcriptor utilizan fixtures; el test de segmentación usa ffmpeg real. Falta una prueba de reunión real con el transcriptor desktop y la cuenta/modelo de Pi configurados, además del ciclo completo de iPhone a host. No se reinició ni desplegó el daemon durante esta unidad.
 
+Actualización del 28 de octubre: [L29–L31](../odd/tasks/capri-ios.md) registran activación independiente del daemon, transferencia real por WSS con recibo recuperado e idempotencia, y minutas sintéticas producidas por el modelo configurado `openai/gpt-5.6-sol`, sin alterar historial/sesiones ni ejecutar herramientas. El parser temporal posterior tiene 24/24 pruebas focales (incluidos transporte/gateway) y typecheck de protocolo/daemon. La repetición real confirma seis rangos SRT exactos y citas al cue concreto de la tarea y la propuesta, con advertencia de tiempos importados sin verificar contra audio. Recibo, revisión, versiones y bytes originales permanecen iguales; el resultado está guardado de forma durable. No sustituye audio ni iPhone reales.
+
+Rollback de esta unidad: retirar `imported-transcript.ts`, su uso y pruebas en `work-meeting`, y su prueba propia. Esto vuelve al texto importado sin tiempos estructurados, sin cambiar el contrato durable ni los resultados ya guardados. El harness de WSS, fixtures y evidencia filtrada están en `.cache/host-rollout/capri-minutes-temporal-4adbf83a-cd8d-4ffe-8dab-74cf2d54875d/`; `work-minutes-temporal-diagnostic.mjs` exige los PID vigentes y rechaza un motor ocupado antes de procesar.
+
 ```sh
-node_modules/.bin/vitest run packages/daemon/test/work-sync.test.ts packages/daemon/test/work-sync-gateway.test.ts packages/daemon/test/work-meeting.test.ts
+node_modules/.bin/vitest run packages/daemon/test/work-sync.test.ts packages/daemon/test/work-sync-gateway.test.ts packages/daemon/test/work-meeting.test.ts packages/daemon/test/imported-transcript.test.ts
 node --test apps/ios/test/work-sync.test.mjs apps/ios/test/work-tools.test.mjs apps/ios/test/desktop-tools.test.mjs apps/ios/test/local-identifiers.test.mjs
 node_modules/.bin/tsc -b packages/protocol packages/daemon --pretty false
 CAPRI_BROWSER_PATH=/home/egarza/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell node_modules/.bin/playwright test -c playwright.ios.config.ts apps/ios/e2e/work-sync.spec.ts --workers 1

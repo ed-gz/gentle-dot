@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { canonicalWorkManifest, type WorkSyncManifest, type WorkResult, type WorkSyncRequest } from '@gentle-dot/protocol';
 import { expect, it } from 'vitest';
@@ -44,6 +44,66 @@ it('never silently substitutes a cloud transcription when the configured desktop
   let generated = false; const processor = createMeetingProcessor({ generate: async () => { generated = true; throw new Error(); } });
   const manifest: WorkSyncManifest = { schema: 1, workId: 'w1', revision: 3, title: 'Audio', kind: 'meeting', instruction: '', files: [{ id: 'audio', name: 'meeting.m4a', mime: 'audio/mp4', bytes: 4, sha256: hash('data'), role: 'attachment' }] };
   await expect(processor({ directory: tempDir(), manifest, receipt: { transferId: 't1', workId: 'w1', revision: 3, manifestHash: hash(canonicalWorkManifest(manifest)), committedAt: 1 } }, new AbortController().signal)).rejects.toThrow('transcriptor'); expect(generated).toBe(false);
+});
+it('preserves SRT cue-level quotation provenance and deterministic warnings without touching source/version bytes', async () => {
+  const directory = tempDir();
+  const srt = '1\n00:00:00,000 --> 00:00:03,500\nPropuesta: revisar mañana, todavía sin aprobar.\n\n2\n00:00:03,500 --> 00:00:08,000\nOperador sintético acepta revisar el 3 de noviembre.';
+  const version = 'Borrador anterior, sin aprobación.';
+  await writeFile(join(directory, 'notes'), srt); await writeFile(join(directory, 'previous'), version);
+  const manifest: WorkSyncManifest = { schema: 1, workId: 'meeting-srt', revision: 2, kind: 'meeting', title: 'Synthetic', instruction: 'Draft only', files: [
+    { id: 'notes', name: 'notes.srt', mime: 'application/octet-stream', bytes: Buffer.byteLength(srt), sha256: hash(srt), role: 'attachment' },
+    { id: 'previous', name: 'draft.txt', mime: 'text/plain', bytes: Buffer.byteLength(version), sha256: hash(version), role: 'version', createdAt: 1 },
+  ] };
+  let prompt: Record<string, unknown> = {};
+  const processor = createMeetingProcessor({ generate: async input => { prompt = JSON.parse(input); return { model: 'fixture', text: JSON.stringify({ minutes: { title: 'Borrador', summary: 'Tarea confirmada y propuesta separadas.', items: [
+    { kind: 'task', certainty: 'confirmed', text: 'Revisar.', owner: 'Operador sintético', due: 'el 3 de noviembre', evidenceIds: ['notes-1'] },
+    { kind: 'task', certainty: 'proposal', text: 'Revisar mañana no está aprobado.', owner: null, due: null, evidenceIds: ['notes-0'] },
+  ] }, transcriptComparison: 'Sólo texto importado.' }) }; } });
+  const manifestHash = hash(canonicalWorkManifest(manifest));
+  const result = await processor({ directory, manifest, receipt: { transferId: 'synthetic', workId: manifest.workId, revision: 2, manifestHash, committedAt: 1 } }, new AbortController().signal);
+  expect(result.evidence).toEqual([
+    { id: 'notes-0', fileId: 'notes', text: 'Propuesta: revisar mañana, todavía sin aprobar.', source: 'imported-text', startMs: 0, endMs: 3500 },
+    { id: 'notes-1', fileId: 'notes', text: 'Operador sintético acepta revisar el 3 de noviembre.', source: 'imported-text', startMs: 3500, endMs: 8000 },
+  ]);
+  expect(result.manifestHash).toBe(manifestHash); expect(result.requiresReview).toBe(true);
+  expect(result.transcriptComparison).toContain('no se han verificado contra audio');
+  expect(prompt.importWarnings).toHaveLength(1); expect(prompt.evidence).toEqual(result.evidence);
+  expect(await readFile(join(directory, 'notes'), 'utf8')).toBe(srt);
+  expect(await readFile(join(directory, 'previous'), 'utf8')).toBe(version);
+});
+
+it('preserves malformed timed text without invented ranges even when the model omits the import warning', async () => {
+  const directory = tempDir(); const malformed = 'WEBVTT\n\n00:02.000 --> 00:01.000\nAna revisará los logs.';
+  await writeFile(join(directory, 'notes'), malformed);
+  const manifest: WorkSyncManifest = { schema: 1, workId: 'malformed', revision: 1, kind: 'meeting', title: 'Synthetic', instruction: '', files: [{ id: 'notes', name: 'notes.vtt', mime: 'text/vtt', bytes: Buffer.byteLength(malformed), sha256: hash(malformed), role: 'attachment' }] };
+  const processor = createMeetingProcessor({ generate: async () => ({ model: 'fixture', text: JSON.stringify({ minutes: { title: 'Borrador', summary: 'Sin tiempos confirmados.', items: [] }, transcriptComparison: 'Sólo texto.' }) }) });
+  const result = await processor({ directory, manifest, receipt: { transferId: 'malformed', workId: manifest.workId, revision: 1, manifestHash: hash(canonicalWorkManifest(manifest)), committedAt: 1 } }, new AbortController().signal);
+  expect(result.evidence).toEqual([{ id: 'notes-0', fileId: 'notes', text: malformed, source: 'imported-text' }]);
+  expect(result.transcriptComparison).toContain('sin rangos temporales');
+});
+
+it('refuses an over-budget imported transcript before calling the model', async () => {
+  const directory = tempDir(); const text = Array.from({ length: 501 }, (_, index) => `${index + 1}\n00:00:00,000 --> 00:00:01,000\nX`).join('\n\n');
+  await writeFile(join(directory, 'notes'), text); let generated = false;
+  const manifest: WorkSyncManifest = { schema: 1, workId: 'over-budget', revision: 1, kind: 'meeting', title: 'Synthetic', instruction: '', files: [{ id: 'notes', name: 'notes.srt', mime: 'application/x-subrip', bytes: Buffer.byteLength(text), sha256: hash(text), role: 'attachment' }] };
+  const processor = createMeetingProcessor({ generate: async () => { generated = true; throw new Error('Must not run'); } });
+  await expect(processor({ directory, manifest, receipt: { transferId: 'over-budget', workId: manifest.workId, revision: 1, manifestHash: hash(canonicalWorkManifest(manifest)), committedAt: 1 } }, new AbortController().signal)).rejects.toThrow('500 segmentos');
+  expect(generated).toBe(false);
+});
+
+it('keeps evidence IDs bounded and unique for maximum-length file IDs and fallback-name collisions', async () => {
+  const directory = tempDir(); const text = '1\n00:00:00,000 --> 00:00:01,000\nTexto sintético.';
+  const fileIds = ['a'.repeat(128), 'evidence'];
+  for (const id of fileIds) await writeFile(join(directory, id), text);
+  const manifest: WorkSyncManifest = { schema: 1, workId: 'long-ids', revision: 1, kind: 'meeting', title: 'Synthetic', instruction: '', files: fileIds.map(id => ({ id, name: 'notes.srt', mime: 'application/x-subrip', bytes: Buffer.byteLength(text), sha256: hash(text), role: 'attachment' })) };
+  const processor = createMeetingProcessor({ generate: async input => {
+    const prompt = JSON.parse(input) as { evidence: { id: string }[] };
+    return { model: 'fixture', text: JSON.stringify({ minutes: { title: 'Borrador', summary: 'Dos fuentes.', items: prompt.evidence.map(item => ({ kind: 'question', certainty: 'confirmed', text: 'Texto sintético.', owner: null, due: null, evidenceIds: [item.id] })) }, transcriptComparison: 'Texto importado.' }) };
+  } });
+  const result = await processor({ directory, manifest, receipt: { transferId: 'long-ids', workId: manifest.workId, revision: 1, manifestHash: hash(canonicalWorkManifest(manifest)), committedAt: 1 } }, new AbortController().signal);
+  expect(result.evidence.map(item => item.id)).toEqual(['evidence-0', 'evidence-1']);
+  expect(result.evidence.map(item => item.fileId)).toEqual(fileIds);
+  expect(result.minutes.items.map(item => item.evidenceIds)).toEqual([['evidence-0'], ['evidence-1']]);
 });
 it('processing requires exact approval, deduplicates starts and persists the result across restart', async () => {
   const directory = join(tempDir(), 'inbox'); let calls = 0; let finish: (() => void) | undefined;
