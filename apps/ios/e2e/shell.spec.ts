@@ -36,6 +36,7 @@ test('browser never claims native inference; draft survives reload without sendi
   await page.goto('/');
   await page.locator('[data-panel="chat"]').click();
   await expect(page.locator('#engine-status')).toContainText('esta vista no ejecuta');
+  await expect(page.locator('#engine-status')).toBeVisible();
   await expect(page.locator('#send')).toBeDisabled();
   await page.locator('#prompt').fill('Conservar este borrador offline');
   await expect.poll(async () => page.evaluate(async () => (await (await import('/src/conversation.ts' as string)).loadConversation()).draft)).toBe('Conservar este borrador offline');
