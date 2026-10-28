@@ -13,7 +13,7 @@ struct CapriActivityWidget: Widget {
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
-                DynamicIslandExpandedRegion(.center) { Text("CAPRI · \(phaseLabel(context.state.phase))") }
+                DynamicIslandExpandedRegion(.center) { Text("\(context.attributes.origin == "laptop" ? "GENTLE DOT · ESTADO GENERAL" : "CAPRI") · \(phaseLabel(context.state.phase, origin: context.attributes.origin))") }
             } compactLeading: { Text("C").foregroundStyle(.pink) }
               compactTrailing: { Image(systemName: "sparkle") }
               minimal: { Text("C").foregroundStyle(.pink) }
@@ -21,7 +21,16 @@ struct CapriActivityWidget: Widget {
     }
 }
 
-private func phaseLabel(_ phase: String) -> String {
+private func phaseLabel(_ phase: String, origin: String) -> String {
+    if origin == "laptop" {
+        switch phase {
+        case "thinking": return "Pensando"
+        case "working": return "Trabajando"
+        case "attention": return "Necesita atención"
+        case "waiting": return "Esperando señal"
+        default: return "Estado sin confirmar"
+        }
+    }
     switch phase {
     case "thinking": return "Pensando contigo"
     case "working": return "Trabajando"
@@ -62,10 +71,10 @@ private struct CapriLockScreen: View {
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text("CAPRI · \(context.attributes.origin == "iphone" ? "iPhone" : "laptop")")
+                Text(context.attributes.origin == "iphone" ? "CAPRI · iPhone" : "GENTLE DOT · estado general")
                     .font(.system(.caption, design: .monospaced, weight: .bold))
                     .foregroundStyle(Color(red: 0.73, green: 0.92, blue: 0.46))
-                Text(context.isStale ? "Sin señal reciente · abre Capri" : phaseLabel(context.state.phase))
+                Text(context.isStale ? "Sin señal reciente · abre Capri" : phaseLabel(context.state.phase, origin: context.attributes.origin))
                     .font(.headline).foregroundStyle(.white)
                 Text(context.state.observedAt, style: .relative)
                     .font(.caption).foregroundStyle(.secondary)
