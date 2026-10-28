@@ -2,6 +2,7 @@ import { createOrchestrationClient, type OrchestrationClient } from '@gentle-dot
 import { httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { validDaemonUrl } from './local-state.ts';
 import type { DesktopConnection } from './desktop-tools.ts';
+import { uploadSessionFile } from './session-upload.ts';
 
 /** Reuse the desktop session contract through the phone's authenticated native
  * transport. A connection change fences both outgoing requests and late reads. */
@@ -61,8 +62,9 @@ export function createLaptopClient(connection: DesktopConnection, options: {
       !Array.isArray(message.content) || message.content.some(block => !block || block.type !== 'text' || typeof block.text !== 'string' || block.text.length > 200_000))) throw new Error('El historial no corresponde a esta sesión.');
     return value;
   };
-  // Raw binary uploads need their own native streaming bridge. Existing work
-  // transfers remain available; never advertise a browser fetch that CSP blocks.
-  delete client.uploadAttachment;
+  client.uploadAttachment = (paneId, sessionId, file, uploadId, signal) => {
+    current();
+    return uploadSessionFile(captured, paneId, sessionId, file, { current: options.current, uploadId, signal });
+  };
   return client;
 }

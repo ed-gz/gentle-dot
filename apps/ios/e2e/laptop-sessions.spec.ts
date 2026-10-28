@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 async function linkedPhone(page: Page) {
   await page.addInitScript(() => {
     const state = globalThis as any; state.isTauri = true; state.sessionCalls = [];
-    const sessions = ['Operaciones', 'Capri iOS'].map((label, i) => ({ paneId: `pane-${i}`, sessionId: `session-${i}`, provider: 'herdr', label, cwd: '/workspace/capri', state: i ? 'working' : 'idle', connected: true, managed: true, capabilities: { inspect: true, prompt: true, abort: true, deliveryReceipts: true, deliveryModes: ['steer', 'followUp'] } }));
+    const sessions = ['Operaciones', 'Capri iOS'].map((label, i) => ({ paneId: `pane-${i}`, sessionId: `session-${i}`, provider: 'herdr', label, cwd: '/workspace/capri', state: i ? 'working' : 'idle', connected: true, managed: true, capabilities: { inspect: true, prompt: true, abort: true, deliveryReceipts: true, deliveryModes: ['steer', 'followUp'], attachments: { version: 1, files: true, images: true, audio: 'file' } } }));
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.startsWith('plugin:device-bridge|')) args = args?.request;
       state.sessionCalls.push({ command, ...(command.endsWith('https_request') ? { body: args.body } : {}) });
@@ -13,6 +13,19 @@ async function linkedPhone(page: Page) {
       if (command.endsWith('start_voice')) return { ok: true, sessionId: '12345678-1234-1234-1234-123456789012', maxDurationSeconds: 90 };
       if (command.endsWith('stop_voice') && state.holdTranscript) await new Promise(resolve => state.finishTranscript = resolve);
       if (command.endsWith('stop_voice')) return { ok: true, sessionId: args.sessionId, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2, text: 'Revisa la evidencia.', segments: [{ text: 'Revisa la evidencia.', startSeconds: 0, endSeconds: 2 }] };
+      if (command.endsWith('crypto_hash_begin')) { state.hashBytes = []; return { ok: true, id: '11111111-1111-4111-8111-111111111111' }; }
+      if (command.endsWith('crypto_hash_update')) { state.hashBytes.push(...Uint8Array.from(atob(args.data), c => c.charCodeAt(0))); return { ok: true }; }
+      if (command.endsWith('crypto_hash_finish')) return { ok: true, hex: [...new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(state.hashBytes)))].map(n => n.toString(16).padStart(2, '0')).join('') };
+      if (command.endsWith('session_upload_begin')) {
+        state.uploadTarget = { paneId: args.paneId, sessionId: args.sessionId, name: args.name, size: args.size }; state.uploadBytes = [];
+        return { ok: true, id: '22222222-2222-4222-8222-222222222222' };
+      }
+      if (command.endsWith('session_upload_write')) { state.uploadBytes.push(...Uint8Array.from(atob(args.data), c => c.charCodeAt(0))); return { ok: true, written: state.uploadBytes.length }; }
+      if (command.endsWith('session_upload_send')) {
+        const target = state.uploadTarget; state.uploadSending = true;
+        if (state.holdUpload) await new Promise(resolve => state.finishUpload = resolve);
+        return { ok: true, status: 200, body: JSON.stringify({ uploadId: 'u_abcdefghijklmnopqrstuv', name: target.name, size: target.size, mime: 'application/octet-stream', path: `uploads/u_abcdefghijklmnopqrstuv/${target.name}` }) };
+      }
       if (command.endsWith('https_request')) {
         const body = args.body ? JSON.parse(args.body) : undefined;
         const reply = !body ? { available: true, sessions, approvals: [], policies: [], events: [] } : body.action === 'inspect' ? {
@@ -106,4 +119,36 @@ test('a human session instruction uses a secure UUID even without WKWebView rand
   expect(sent).toMatchObject({ paneId: 'pane-0', sessionId: 'session-0', text: 'Revisa esta evidencia.' });
   expect(sent.clientMessageId).toMatch(/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/);
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('');
+});
+
+test('selected files stay local until Send and only a verified native upload becomes a session attachment', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const bytes = Buffer.from([0, 255, 17, 128, 42]);
+  await page.locator('.agent-reply input[type="file"]').setInputFiles({ name: 'evidence.bin', mimeType: 'application/octet-stream', buffer: bytes });
+  await expect(page.locator('.agent-reply')).toContainText('evidence.bin');
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.command.startsWith('plugin:device-bridge|session_upload_')))).toBe(false);
+  await page.getByRole('textbox', { name: 'Continuar esta sesión' }).fill('Revisa este archivo.');
+  await page.getByRole('button', { name: 'Enviar instrucción', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt').length)).toBe(1);
+  const result = await page.evaluate(() => { const s = globalThis as any; return { target: s.uploadTarget, bytes: s.uploadBytes, sent: JSON.parse(s.sessionCalls.find((c: any) => c.body && JSON.parse(c.body).action === 'prompt').body) }; });
+  expect(result.bytes).toEqual([...bytes]);
+  expect(result.target).toMatchObject({ paneId: 'pane-0', sessionId: 'session-0', size: 5 });
+  expect(result.sent).toMatchObject({ paneId: 'pane-0', sessionId: 'session-0', text: 'Revisa este archivo.', attachments: [{ uploadId: 'u_abcdefghijklmnopqrstuv', name: 'evidence.bin' }] });
+});
+
+test('leaving a session cancels its native upload and a late receipt cannot send to the next session', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.evaluate(() => (globalThis as any).holdUpload = true);
+  await page.locator('.agent-reply input[type="file"]').setInputFiles({ name: 'private.txt', mimeType: 'text/plain', buffer: Buffer.from('original') });
+  await page.getByRole('textbox', { name: 'Continuar esta sesión' }).fill('Sólo para Operaciones.');
+  await page.getByRole('button', { name: 'Enviar instrucción', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).uploadSending)).toBe(true);
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.command.endsWith('session_upload_cancel')))).toBe(true);
+  await page.evaluate(() => (globalThis as any).finishUpload());
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('');
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toBe(false);
 });

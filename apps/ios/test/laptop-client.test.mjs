@@ -11,7 +11,8 @@ test('native session transport uses the linked host and discards a late response
   await assert.rejects(reading, /Cambió la laptop/);
   assert.equal(calls[0].url, 'https://laptop.example/orchestration'); assert.equal(calls[0].headers.Authorization, 'Bearer fixture-only');
   await assert.rejects(client.snapshot(), /Cambió la laptop/); assert.equal(calls.length, 1);
-  assert.equal(client.uploadAttachment, undefined); assert.equal(client.terminalMood, undefined);
+  assert.equal(typeof client.uploadAttachment, 'function'); assert.equal(client.terminalMood, undefined);
+  assert.throws(() => client.uploadAttachment('p', 's', new File(['x'], 'note.txt')), /Cambió la laptop/);
 });
 test('session identity, malformed inventory and aborted reads cannot be presented as another session', async () => {
   let value = state; const client = createLaptopClient(connection, { current: () => connection, request: async () => reply(value) });
