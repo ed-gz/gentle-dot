@@ -256,3 +256,25 @@ test('a newer saved window after archive quota failure survives reload with both
   });
   expect(stale).toContain('revisión más reciente');
 });
+
+test('a newer archived window preserves unarchived legacy IDs before pruning migration to 120 visible messages', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createConversationArchive } = await import('/src/conversation-archive.ts');
+    const { createConversationPersistence } = await import('/src/conversation-persistence.ts');
+    const archive = createConversationArchive({ databaseName: 'legacy-unarchived-migration' });
+    const make = (id: string, at: number) => ({ id, role: 'assistant', engine: 'iphone', state: 'complete', text: id, at });
+    const archived = Array.from({ length: 120 }, (_, index) => make(`archived-${index}`, 1000 + index));
+    const old = Array.from({ length: 119 }, (_, index) => make(`legacy-${index}`, index));
+    // The old snapshot also holds a stale copy of an archived receipt. Its lower
+    // revision cannot replace the confirmed content while the orphan IDs migrate.
+    await archive.upsert(archived, undefined, archived, 5);
+    const recovery = await archive.restoreState({ entries: [...old, { ...archived[0], text: 'Stale content' }] });
+    const persistence = createConversationPersistence({ archive, save: async () => {} });
+    persistence.setRevision(recovery.revision); persistence.seed(recovery.preserved);
+    await persistence.persist({ entries: recovery.entries, draft: '' });
+    return { visible: recovery.entries.length, preserved: recovery.preserved.length, count: (await archive.stats()).entries,
+      old: (await archive.search('legacy-0')).entries[0]?.text, existing: (await archive.search('archived-0')).entries[0]?.text, blocked: persistence.status().blocked };
+  });
+  expect(result).toEqual({ visible: 120, preserved: 239, count: 239, old: 'legacy-0', existing: 'archived-0', blocked: false });
+});

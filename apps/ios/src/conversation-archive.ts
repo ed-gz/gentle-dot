@@ -181,7 +181,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
     });
   }
   /** Both stores carry a monotonic revision: either commit may succeed alone. */
-  function restoreState(fallback: Pick<Conversation, 'entries' | 'revision'>): Promise<{ entries: ChatEntry[]; revision: number }> {
+  function restoreState(fallback: Pick<Conversation, 'entries' | 'revision'>): Promise<{ entries: ChatEntry[]; preserved: ChatEntry[]; revision: number }> {
     if (!Array.isArray(fallback.entries) || fallback.entries.length > 120 || (fallback.revision !== undefined && !natural(fallback.revision))) return Promise.reject(new ArchiveError('invalid', 'Ventana de recuperación inválida.'));
     const safe = fallback.entries.map(entry => archiveEntry(entry));
     const fallbackRevision = fallback.revision ?? 0;
@@ -193,11 +193,11 @@ export function createConversationArchive(options: { databaseName?: string; maxi
       }
       // A newer secondary snapshot exists after an archive quota failure. A newer
       // archive window exists after a crash before the secondary snapshot commit.
-      const keys = archivedKeys && archivedRevision >= fallbackRevision ? archivedKeys : safe.map(keyOf);
+      const keys = archivedKeys && archivedRevision >= fallbackRevision ? [...archivedKeys] : safe.map(keyOf);
       const fallbacks = new Map(safe.map(entry => [keyOf(entry), entry]));
       const result: ChatEntry[] = []; let index = 0; let revision = Math.max(fallbackRevision, archivedRevision);
       const next = () => {
-        const key = keys[index++]; if (key === undefined) { done({ entries: result, revision }); return; }
+        const key = keys[index++]; if (key === undefined) { done({ entries: result.slice(-120), preserved: result, revision }); return; }
         read(tx.objectStore('entries').get(key), raw => {
           const archived = raw === undefined ? undefined : stored(raw), legacy = fallbacks.get(key);
           const recordRevision = archived ? Math.max(archived.snapshotRevision, archivedKeys?.includes(key) ? archivedRevision : 0) : -1;
@@ -212,7 +212,17 @@ export function createConversationArchive(options: { databaseName?: string; maxi
           next();
         }, fail);
       };
-      next();
+      // Revision ordering cannot discard a legacy message that was never archived.
+      // Capture absent IDs first; expose all preserved copies separately before
+      // pruning the visible 120, so migration cannot silently drop an orphan.
+      const candidates = safe.map(keyOf).filter(key => !keys.includes(key));
+      const orphans: string[] = []; let candidateIndex = 0;
+      const recoverOrphans = () => {
+        const key = candidates[candidateIndex++];
+        if (key === undefined) { keys.unshift(...orphans); next(); return; }
+        read(tx.objectStore('entries').get(key), raw => { if (raw === undefined) orphans.push(key); else stored(raw); recoverOrphans(); }, fail);
+      };
+      recoverOrphans();
     }, fail));
   }
   return {

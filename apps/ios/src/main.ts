@@ -474,7 +474,7 @@ async function restoreConversation() {
     const recovered = await conversationArchive.restoreState(saved);
     saved.entries = recovered.entries; persistence.setRevision(recovered.revision);
     // Capture the restored window before live startup events can cause pruning.
-    persistence.seed(saved.entries); persistence.enqueue(entries, true);
+    persistence.seed(recovered.preserved); persistence.enqueue(entries, true);
     entries = entries.reduce((history, entry) => updateEntry(history, entry), saved.entries);
     if (!draftEdited) { prompt.value = saved.draft; if (!attachedWork) attachedWork = saved.attachedWork; }
     if (attachedWork) element('attachment-context').textContent = `Material local adjunto · trabajo ${attachedWork}`;
