@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 
 test('local work and attached bytes survive reload; using instructions does not send', async ({ page }) => {
   await page.goto('/');

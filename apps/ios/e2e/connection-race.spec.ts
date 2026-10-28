@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 
 for (const disconnect of [false, true]) {
   test('late Keychain restoration cannot replace a newer connection' + (disconnect ? ' or undo disconnect' : ''), async ({ page }) => {

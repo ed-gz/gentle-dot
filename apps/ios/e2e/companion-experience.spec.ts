@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 
 async function expectReadableComposer(page: import('@playwright/test').Page) {
   const boxes = await page.evaluate(() => {

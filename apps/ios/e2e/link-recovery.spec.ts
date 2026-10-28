@@ -1,4 +1,4 @@
-import { expect, test, type Page, type WebSocketRoute } from '@playwright/test';
+import { expect, test, type Page, type WebSocketRoute } from './fixtures.ts';
 
 const endpoint = 'wss://recovery.fixture.example/ws';
 type WireMessage = Record<string, unknown>;

@@ -1,6 +1,8 @@
 /* Capri inhabits the app viewport; only her hit target intercepts touches. */
 #stage[data-companion-layer] { position: fixed; z-index: 2; overflow: hidden; pointer-events: none; }
 #stage[data-companion-layer] .rig { pointer-events: auto; width: 86px; height: 122px; left: 50%; top: 50%; }
+/* Loading/error copy belongs in Settings, never over a session's touch target. */
+#stage[data-companion-layer] .rig:not([data-ready="true"]) { visibility: hidden; pointer-events: none; }
 #stage[data-companion-layer] .stage-orbit, #stage[data-companion-layer] .stage-coordinate { display: none; }
 :root[data-companion-size="hero"] #stage[data-companion-layer] .rig { width: min(198px, 25dvh); height: min(280px, 35dvh); }
 #panel-chat .companion-presence { position: relative; flex: none; height: min(340px, 40dvh); min-height: 0; }

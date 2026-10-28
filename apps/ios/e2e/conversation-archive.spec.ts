@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 import { readFile } from 'node:fs/promises';
 
 test('archive retains more than the visible window, reloads, and idempotently completes streamed messages', async ({ page }) => {

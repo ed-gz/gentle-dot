@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 
 async function nativeFixture(page: Page, holdFirstReset = false) {
   await page.addInitScript(({ holdFirstReset }) => {

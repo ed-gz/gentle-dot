@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 
 async function fixture(page: import('@playwright/test').Page, documentScroll = false) {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

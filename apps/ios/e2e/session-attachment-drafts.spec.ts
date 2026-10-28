@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 
 test('session draft bytes survive reload, remain scoped, and concurrent stale writers cannot revive a cleared file', async ({ page }) => {
   await page.goto('/');

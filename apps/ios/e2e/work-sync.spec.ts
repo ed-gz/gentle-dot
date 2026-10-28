@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 
 test('lost commit ACK stays uncertain, then recovers exact receipt after reload without retransmission', async ({ page }) => {
   await page.goto('/');

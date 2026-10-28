@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 
 for (const supported of [false, true]) test(`${supported ? 'capable host confirms exact work transfer' : 'legacy host keeps work local without approval or work frames'} while ordinary chat remains available`, async ({ page }) => {
   const requests: any[] = [];

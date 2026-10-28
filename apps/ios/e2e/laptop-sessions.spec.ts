@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './fixtures.ts';
 
 async function linkedPhone(page: Page) {
   await page.addInitScript(() => {
@@ -69,6 +69,8 @@ test('main history and individual Herdr sessions are directly visible with earli
   await linkedPhone(page);
   await page.locator('[data-panel="chat"]').click(); await expect(page.locator('#cards .chat-card')).toHaveCount(100);
   await page.locator('[data-panel="agents"]').click(); await expect(page.locator('.agent-session')).toHaveCount(2);
+  // A missing/unprepared character must not put its placeholder over sessions.
+  await expect(page.locator('#rig-handle')).toBeHidden();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   await expect(page.getByText('Historial de session-0.', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Ver mensajes anteriores' }).click();

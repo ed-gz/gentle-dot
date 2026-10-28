@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.ts';
 
 async function nativeFixture(page: import('@playwright/test').Page, delayed = false, decisions: object[] = []) {
   await page.addInitScript(({ delayed, decisions }) => {
