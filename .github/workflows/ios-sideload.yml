@@ -74,10 +74,32 @@ jobs:
         run: bash apps/ios/scripts/check-native-sdk.sh
       - name: Xcode project generator
         run: brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
-      - name: Rust and Tauri CLI
+      - name: Rust iOS target
+        run: rustup target add aarch64-apple-ios
+      - name: Restore Tauri CLI binary
+        id: tauri-cli-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/capri-tauri-cli/bin/cargo-tauri
+          key: capri-tauri-cli-v1-macos-15-${{ runner.arch }}-2.12.1
+      - name: Install Tauri CLI
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version 2.12.1 --locked --jobs 4 --root "$RUNNER_TEMP/capri-tauri-cli"
+      - name: Verify and expose Tauri CLI
+        shell: bash
         run: |
-          rustup target add aarch64-apple-ios
-          cargo install tauri-cli --version 2.12.1 --locked --jobs 4
+          export PATH="$RUNNER_TEMP/capri-tauri-cli/bin:$PATH"
+          test "$(command -v cargo-tauri)" = "$RUNNER_TEMP/capri-tauri-cli/bin/cargo-tauri"
+          cli_version=$(cargo tauri --version)
+          test "$cli_version" = 'tauri-cli 2.12.1'
+          printf '%s\n' "$cli_version"
+          printf '%s\n' "$RUNNER_TEMP/capri-tauri-cli/bin" >> "$GITHUB_PATH"
+      - name: Save verified Tauri CLI binary
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/capri-tauri-cli/bin/cargo-tauri
+          key: ${{ steps.tauri-cli-cache.outputs.cache-primary-key }}
       - name: Build device app without signing or provisioning
         working-directory: apps/ios
         run: bash scripts/build-unsigned.sh
