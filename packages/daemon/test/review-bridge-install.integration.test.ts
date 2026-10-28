@@ -1,8 +1,70 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { isNativeReviewSource } from "../src/orchestration/review-consent.ts";
+import { afterEach, expect, it, vi } from "vitest";
 import type { LiveReviewConsent } from "../src/orchestration/review-consent.ts";
+
+const virtualSources = vi.hoisted(() => new Map<string, string>());
+vi.mock("node:fs", async importOriginal => {
+	const fs = await importOriginal<typeof import("node:fs")>();
+	return { ...fs,
+		statSync: (path: string) => virtualSources.has(String(path))
+			? { isFile: () => true, size: Buffer.byteLength(virtualSources.get(String(path))!) }
+			: fs.statSync(path),
+		readFileSync: (path: string, ...args: any[]) =>
+		virtualSources.has(String(path)) ? virtualSources.get(String(path)) : (fs.readFileSync as any)(path, ...args) };
+});
+afterEach(() => virtualSources.clear());
+
+// Read committed upstream bytes only: never load or alter installed bridge backups.
+const upstream = process.env.GENTLE_DOT_SHELL_REVIEW_GIT_SOURCE;
+const reviewFiles = ["extensions/gentle-ai.ts", "lib/review-consent-ui.ts", "lib/review-consent-component.ts"];
+it.skipIf(!upstream).each(["v4.3.0", "HEAD"])("prepares deadline-free %s sources and rejects any unknown hash without changes", async revision => {
+	const directory = "/virtual-gentle-shell";
+	for (const file of [...reviewFiles, "extensions/gentle-shell.ts"]) {
+		virtualSources.set(join(directory, file), execFileSync("git", ["-C", upstream!, "show", `${revision}:${file}`], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }));
+	}
+	const before = new Map(virtualSources);
+	const { prepareReviewBridge } = await import(resolve("scripts/orchestration/install-review-bridge.mjs"));
+	const generated = prepareReviewBridge(directory);
+	const original = virtualSources.get(join(directory, reviewFiles[0]!))!;
+	const provider = generated[reviewFiles[0]!];
+	const [prefix, suffix] = original.split("await presentReviewConsentUi(ctx, eligiblePending.consent);");
+	const injection = provider.slice(prefix!.length, provider.length - suffix!.length);
+	expect(injection).not.toMatch(/reviewConsentNow|expiresAt/);
+	expect(provider).toContain("consentBinding: eligiblePending.id");
+	expect(provider).toContain("reviewSessionPermissionEpoch(current) !== initialEpoch");
+	expect(generated[reviewFiles[1]!]).toContain("bridge.attach(done)");
+	expect(virtualSources).toEqual(before);
+	for (const file of reviewFiles) {
+		virtualSources.set(join(directory, file), before.get(join(directory, file)) + "\n// unknown bytes\n");
+		const tampered = new Map(virtualSources);
+		expect(() => prepareReviewBridge(directory)).toThrow(/Unsupported Gentle Shell source/);
+		expect(virtualSources).toEqual(tampered);
+		virtualSources.set(join(directory, file), before.get(join(directory, file))!);
+	}
+	const path = join(directory, reviewFiles[0]!);
+	expect(isNativeReviewSource(path)).toBe(false); // Pristine source has no cooperative bridge.
+	virtualSources.set(path, provider);
+	expect(isNativeReviewSource(path), `prepared provider SHA-256: ${createHash("sha256").update(provider).digest("hex")}`).toBe(true);
+});
+
+it.skipIf(!upstream)("accepts current upstream editor bytes and rejects unknown bytes", async () => {
+	const directory = "/virtual-gentle-shell";
+	const path = join(directory, "extensions/gentle-shell.ts");
+	const source = execFileSync("git", ["-C", upstream!, "show", "HEAD:extensions/gentle-shell.ts"], { encoding: "utf8" });
+	virtualSources.set(path, source);
+	const { prepareEditorActivityBridge } = await import(resolve("scripts/orchestration/install-editor-activity-bridge.mjs"));
+	expect(source.split("\t\t\t\tprompt = created;")).toHaveLength(2);
+	expect(prepareEditorActivityBridge(directory)["extensions/gentle-shell.ts"]).toContain("installEditorActivityBridge(prompt, pi.events, ctx.sessionManager.getSessionId());");
+	expect(virtualSources.get(path)).toBe(source);
+	virtualSources.set(path, source + "\n// unknown bytes\n");
+	expect(() => prepareEditorActivityBridge(directory)).toThrow(/Unsupported Gentle Shell editor source/);
+	expect(virtualSources.get(path)).toBe(source + "\n// unknown bytes\n");
+});
 
 // An opt-in compatibility audit reads the installed source, prepares it in a
 // temporary directory, and runs its real UI factory. No Shell source is written.

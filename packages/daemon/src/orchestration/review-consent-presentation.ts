@@ -4,7 +4,7 @@ export interface ReviewPresentationAuthority {
 	toolCallId: string;
 	sessionId: string;
 	consentBinding: string;
-	expiresAt: number;
+	expiresAt?: number;
 	isPending(): boolean;
 	answer(answer: "granted" | "declined" | "host-session"): Promise<boolean>;
 }
@@ -36,7 +36,8 @@ export function reviewConsentPresentation(
 			live = true;
 			const request: LiveReviewConsent = Object.freeze({
 				toolCallId: authority.toolCallId, sessionId: authority.sessionId,
-				consentBinding: authority.consentBinding, expiresAt: authority.expiresAt,
+				consentBinding: authority.consentBinding,
+				...(authority.expiresAt === undefined ? {} : { expiresAt: authority.expiresAt }),
 				consent: structuredClone(consent),
 				...(hostSessionChoice ? { hostSessionChoice: { ...hostSessionChoice } } : {}),
 				detach,
@@ -45,7 +46,8 @@ export function reviewConsentPresentation(
 						Object.keys(input).some(key => key !== "consentBinding" && key !== "answer") ||
 						input.consentBinding !== authority.consentBinding ||
 						!["granted", "declined", ...(hostSessionChoice ? ["host-session"] : [])].includes(input.answer) ||
-						!live || remoteStarted || localSettled || Date.now() >= authority.expiresAt || !authority.isPending()) return false;
+						!live || remoteStarted || localSettled ||
+						(authority.expiresAt !== undefined && Date.now() >= authority.expiresAt) || !authority.isPending()) return false;
 					remoteStarted = true;
 					detach();
 					// Assign before invoking user callbacks, so synchronous throws also
@@ -57,7 +59,7 @@ export function reviewConsentPresentation(
 			});
 			withdraw = receiver(request);
 			if (!withdraw) live = false;
-			else timer = setTimeout(() => { detach(); closeLocal?.(); }, Math.max(1, authority.expiresAt - Date.now()));
+			else if (authority.expiresAt !== undefined) timer = setTimeout(() => { detach(); closeLocal?.(); }, Math.max(1, authority.expiresAt - Date.now()));
 		},
 		local(action: () => void) {
 			if (remoteStarted || localSettled) return;

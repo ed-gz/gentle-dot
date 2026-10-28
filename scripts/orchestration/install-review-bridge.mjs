@@ -7,7 +7,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const bridge = join(root, "packages/daemon/src/orchestration/review-consent-presentation.ts");
 const hash = source => createHash("sha256").update(source).digest("hex");
 const originals = {
-    "extensions/gentle-ai.ts": "5de93fd099932e2d81391827685685765926ef0a20cc0fbb83ad3522b60b25f6",
+    // Both verified Shell versions have deadline-free pending consent (#1982).
+    "extensions/gentle-ai.ts": [
+        "5de93fd099932e2d81391827685685765926ef0a20cc0fbb83ad3522b60b25f6", // 4.3.0
+        "0a3a16e95a47f0f956e10f615497acf93e12fe739d45747d49dbda1f0cf36d14", // 4.5.0
+    ],
     "lib/review-consent-ui.ts": "7b8e6475ada8fd18617628a2b54c10b023b10450bd2a7f43c5b2e939bde07669",
     "lib/review-consent-component.ts": "f33dc5c4c2cb923b35b88e3a54d15774139efc8250e4cef08afe6f5f990516de",
 };
@@ -22,7 +26,7 @@ export function prepareReviewBridge(directory) {
     const sources = {};
     for (const [relative, expected] of Object.entries(originals)) {
         const source = readFileSync(join(directory, relative), "utf8");
-        if (hash(source) !== expected) throw new Error(`Unsupported Gentle Shell source: ${relative}. Nothing was changed.`);
+        if (!(Array.isArray(expected) ? expected : [expected]).includes(hash(source))) throw new Error(`Unsupported Gentle Shell source: ${relative}. Nothing was changed.`);
         sources[relative] = source;
     }
     if (!existsSync(bridge)) throw new Error("The Gentle Dot review bridge is unavailable.");
@@ -32,19 +36,16 @@ export function prepareReviewBridge(directory) {
                                 toolCallId: _toolCallId,
                                 sessionId: reviewSessionManagerAndId(ctx)?.sessionId ?? "",
                                 consentBinding: eligiblePending.id,
-                                expiresAt: eligiblePending.expiresAt,
                                 isPending: () => !signal?.aborted &&
                                     pendingReviewConsentSessionKey(ctx, pendingReviewConsentFallbackKey) === sessionKey &&
                                     pendingReviewConsentRegistry.resolve(eligiblePending.id)?.pending === eligiblePending &&
-                                    eligiblePending.expiresAt > reviewConsentNow() &&
                                     reviewSessionManagerAndId(ctx)?.sessionId === initialIdentity.sessionId,
                                 answer: async (answer) => {
                                     const current = await capturePermissionIdentity(ctx, permissionWorkspaceRoot);
                                     if (signal?.aborted || current === undefined ||
                                         !sameReviewSessionIdentity(initialIdentity, current) ||
                                         reviewSessionPermissionEpoch(current) !== initialEpoch ||
-                                        pendingReviewConsentRegistry.resolve(eligiblePending.id)?.pending !== eligiblePending ||
-                                        eligiblePending.expiresAt <= reviewConsentNow()) return false;
+                                        pendingReviewConsentRegistry.resolve(eligiblePending.id)?.pending !== eligiblePending) return false;
                                     const sessionGrant = answer === "host-session";
                                     details = await answerPendingConsent(sessionGrant ? "granted" : answer);
                                     if (sessionGrant) {

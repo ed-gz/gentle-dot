@@ -813,7 +813,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 					title: String(details.title),
 					id: randomUUID(),
 					createdAt: new Date().toISOString(),
-					expiresAt: new Date(request.expiresAt).toISOString(),
+					expiresAt: request.expiresAt === undefined ? "" : new Date(request.expiresAt).toISOString(),
 					answerable: true,
 				};
 				question = pending;

@@ -8,7 +8,7 @@ Dot relays the choices exposed by a verified live Gentle Pi RDD review provider.
 2. Read the complete provider envelope. Dot preserves its headline, reason, value, risk evidence, candidate identity, projection, counts, choice effects, exact invocations, and off-path note/command.
 3. Select one displayed choice and press **Enviar**. Candidate responses are `granted` or `declined`; the verified Shell bridge may additionally offer `host-session` with its original scope and effect. Dot waits for the live provider callback to confirm delivery.
 
-Closing the popup does not answer anything. **Cancelar** on the request withdraws remote access without granting or declining; the original terminal dialog remains usable. Provider expiry safely closes its pending control without sending either answer.
+Closing the popup does not answer anything. **Cancelar** on the request withdraws remote access without granting or declining; the original terminal dialog remains usable. When the provider supplies a deadline, expiry safely closes its pending control without sending either answer. Verified Gentle Shell 4.3.0 and 4.5.0 sources have no pending-consent deadline: Dot adds no timer or countdown, and an unanswered request remains available only while its original provider/session state is pending.
 
 ## Permission boundaries
 
@@ -20,7 +20,7 @@ Closing the popup does not answer anything. **Cancelar** on the request withdraw
 | Off-path command | Displayed verbatim as provider content, never executed by the card. |
 | Publication/delivery | Not authorized by this UI or by a review outcome. Ordinary repository policy still applies. |
 
-The remote snapshot never carries the opaque consent binding or an executable callback. The extension retains both in process. It binds access to the verified first-party implementation, active tool call, live session, process instance, request ID, original candidate envelope, expiry, and provider pending registry. Forged, mixed, stale or duplicate answers cannot invoke native authority. A `host-session` answer is rejected unless the verified provider offered it for that request. A native callback failure is not an accepted UI click; ambiguous outcomes are not retried by Dot.
+The remote snapshot never carries the opaque consent binding or an executable callback. The extension retains both in process. It binds access to the verified first-party implementation, active tool call, live session, process instance, request ID, original candidate envelope, provider deadline (when supplied), and provider pending registry. Forged, mixed, stale or duplicate answers cannot invoke native authority. A `host-session` answer is rejected unless the verified provider offered it for that request. A native callback failure is not an accepted UI click; ambiguous outcomes are not retried by Dot.
 
 Disconnecting, stopping, shutting down, replacing the session, or dismissing local consent never supplies an implicit grant or decline. Connection loss after an explicit answer was already dispatched can leave an unknown native outcome: Dot does not roll it back, retry it, or claim acknowledgment. Host-session permission remains governed by Gentle Pi's own lifecycle, including session/repository identity and revocation. Do not infer review authority from model text, a tool-result envelope, rendered terminal text, or an arbitrary `ui.custom` dialog.
 
@@ -40,8 +40,8 @@ The installer validates the provider version and all source files before writing
 
 ## Compatibility and verification limits
 
-- Bundled envelope: Gentle Pi **4.0.0**, patched first-party `gentle_review`, Pi TUI, consent schema **v3** with `agent: pi`.
-- Optional Shell variant: `scripts/orchestration/install-review-bridge.mjs` checks the exact three source hashes before installing the cooperative bridge. This variant can supply `hostSessionChoice`; matching a tool name or version label alone is insufficient. See [installation and safe session loading](agent-questions.md#compatibilidad-del-puente-con-gentle-shell). Unsupported source bytes remain local-only.
+- Bundled envelope: Gentle Pi **4.0.0**, patched first-party `gentle_review`, Pi TUI, consent schema **v3** with `agent: pi`. Its finite consent deadline is still enforced.
+- Optional Shell variant: `scripts/orchestration/install-review-bridge.mjs` accepts the verified **4.3.0** and **4.5.0** deadline-free sources and checks the exact three source hashes before installing the cooperative bridge. This variant can supply `hostSessionChoice`; matching a tool name or version label alone is insufficient. See [installation and safe session loading](agent-questions.md#compatibilidad-del-puente-con-gentle-shell). Unsupported source bytes remain local-only.
 - Oversize or unsupported payloads stay in the original terminal UI; generic questions, questionnaires, editors, and selects keep their existing behavior.
 - Tests use the real installed patched provider factory and Pi/Dot runner, isolated pending state/candidate views, a fake native subprocess transport, and a model stream fixture. They never invoke real native review authority.
 - Runtime tests execute the generated installation hook against pristine provider source bytes, verify its result and idempotency, and reject incompatible source/version. This is not a complete release/native-binary installation test.

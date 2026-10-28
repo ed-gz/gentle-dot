@@ -1,7 +1,9 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Socket } from "node:net";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
+import type { LiveReviewConsent } from "../src/orchestration/review-consent.ts";
 import {
 	type ExtensionAPI,
 	type ExtensionContext,
@@ -116,6 +118,7 @@ async function session(withCustom = true) {
 		});
 	return {
 		ctx,
+		pi,
 		sendUserMessage: pi.sendUserMessage,
 		native,
 		originals,
@@ -128,6 +131,39 @@ async function session(withCustom = true) {
 		finishCustom: (value: unknown) => finishCustom?.(value),
 	};
 }
+
+it.each(["absent", "future", "past"])("relays review consent with an %s deadline through the session socket", async deadline => {
+	const h = await session();
+	const gentle = dirname(createRequire(import.meta.url).resolve("gentle-pi/package.json"));
+	h.pi.getAllTools = () => [{ name: "gentle_review", sourceInfo: { path: join(gentle, "extensions/gentle-ai.ts") } }] as ReturnType<ExtensionAPI["getAllTools"]>;
+	await h.handlers.get("tool_execution_start")?.({ toolName: "gentle_review", toolCallId: "review-tool", args: {} }, h.ctx);
+	const respond = vi.fn(async () => true);
+	const expiresAt = deadline === "absent" ? undefined : Date.now() + (deadline === "past" ? -1000 : 60_000);
+	const request: LiveReviewConsent = {
+		toolCallId: "review-tool", sessionId: "s1", consentBinding: "private",
+		...(expiresAt === undefined ? {} : { expiresAt }),
+		consent: { schema: "gentle-ai.review-integration.consent/v3", agent: "pi", headline: "Review",
+			raw: { candidate: "frozen" }, choices: [
+				{ answer: "granted", label: "Review", effect: "This candidate" },
+				{ answer: "declined", label: "Decline", effect: "No review" },
+			] }, respond, detach() {},
+	};
+	const receive = Reflect.get(h.ctx.ui, Symbol.for("gentle-pi.review-consent.bridge/v1")) as (request: LiveReviewConsent) => (() => void) | undefined;
+	const withdraw = receive(request);
+	try {
+		const question = (await h.call("snapshot")).question as Record<string, unknown> | null;
+		if (deadline === "past") {
+			expect(question).toBeNull();
+			expect(withdraw).toBeUndefined();
+			return;
+		}
+		expect(question).toMatchObject({ kind: "select", answerable: true,
+			expiresAt: expiresAt === undefined ? "" : new Date(expiresAt).toISOString() });
+		expect(JSON.stringify(question)).not.toContain("private");
+		await expect(h.call("answer", { questionId: question!.id, optionId: "granted" })).resolves.toMatchObject({ accepted: true });
+		expect(respond).toHaveBeenCalledExactlyOnceWith({ consentBinding: "private", answer: "granted" });
+	} finally { withdraw?.(); }
+});
 
 it("preserves transcript timestamps and tool error status for turn disclosures", async () => {
 	const h = await session();

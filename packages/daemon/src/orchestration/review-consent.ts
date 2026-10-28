@@ -6,7 +6,8 @@ export interface LiveReviewConsent {
 	readonly toolCallId: string;
 	readonly sessionId: string;
 	readonly consentBinding: string;
-	readonly expiresAt: number;
+	/** Absent for deadline-free Shell consent; finite for the bundled 4.0.0 provider. */
+	readonly expiresAt?: number;
 	readonly consent: {
 		schema: string;
 		agent: string;
@@ -24,13 +25,16 @@ export interface LiveReviewConsent {
 const PROVIDER_SHA256 = "c68a70a8c2cfe2841e8dbdf031cd6767746c185f1b624d1f75915257c3fe6109";
 // Produced only by scripts/orchestration/install-review-bridge.mjs after checking
 // all three installed source hashes. Supports the explicit host-session choice.
-const SHELL_PROVIDER_SHA256 = "e6ec1de56d35ba93140f3de341229a2020d5200337216bc3d2d75bcc7d715bb9";
+const SHELL_PROVIDER_SHA256 = [
+	"e441c29b193a9a2d0b890ab9fa5024790c5a8146037068110f68a7464ab4f105", // 4.3.0, deadline-free bridge
+	"48bfb8e2e81fbd182eaf83e67f969c4839c075ff5f3a7baa6ad7bbf72d95ea66", // 4.5.0, deadline-free bridge
+];
 export function isNativeReviewSource(path: unknown): boolean {
 	if (typeof path !== "string") return false;
 	try {
 		const source = statSync(path);
 		if (!source.isFile() || source.size > 1024 * 1024) return false;
-		return [PROVIDER_SHA256, SHELL_PROVIDER_SHA256].includes(createHash("sha256").update(readFileSync(path)).digest("hex"));
+		return [PROVIDER_SHA256, ...SHELL_PROVIDER_SHA256].includes(createHash("sha256").update(readFileSync(path)).digest("hex"));
 	} catch {
 		return false;
 	}
@@ -65,8 +69,9 @@ export function reviewConsentDetails(request: LiveReviewConsent): Record<string,
 			typeof request.hostSessionChoice.effect !== "string" || !request.hostSessionChoice.effect ||
 			typeof request.hostSessionChoice.ownership !== "string" || !request.hostSessionChoice.ownership
 		)) ||
-		!Number.isFinite(request.expiresAt) ||
-		request.expiresAt <= Date.now() ||
+		(request.expiresAt !== undefined && (
+			!Number.isFinite(request.expiresAt) || request.expiresAt <= Date.now()
+		)) ||
 		typeof request.respond !== "function" ||
 		typeof request.detach !== "function"
 	)

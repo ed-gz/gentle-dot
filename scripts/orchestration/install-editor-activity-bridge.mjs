@@ -7,6 +7,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const bridge = join(root, "packages/daemon/src/orchestration/editor-activity-bridge.ts");
 const hash = (source) => createHash("sha256").update(source).digest("hex");
 const supported = new Set([
+	"b99530a032dd9e9530dced95bb52236e0c8f37fbc104bab3b4f734304bf9ca78", // Gentle Pi 4.5.0
 	"5f94322105e1d6ff031c0228cd06297a0b488dfb2f0bcd9842d68eb377a3f8ff", // Packaged gentle-pi 4.0.0
 	"98f0e96bf1379f8d3fd18dd1f5a09241a679b69d09ec4393384f77c106ac59b0", // Installed source, inspected 2026-10-23
 ]);

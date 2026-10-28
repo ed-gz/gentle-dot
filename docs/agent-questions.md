@@ -35,7 +35,7 @@ Los permisos de revisión requieren el puente cooperativo del proveedor. La vers
 
 ## Compatibilidad del puente con Gentle Shell
 
-El instalador preparado en `scripts/orchestration/install-review-bridge.mjs` verifica las huellas exactas de los tres archivos del proveedor antes de preparar el puente de revisión. Por defecto sólo comprueba: no toca fuentes ni procesos. `--apply` instala el puente y conserva copias originales; no reinicia sesiones. Si la versión de Gentle Shell cambió, rechaza la instalación y deja los archivos intactos.
+El instalador preparado en `scripts/orchestration/install-review-bridge.mjs` admite las fuentes verificadas de Gentle Shell **4.3.0** y **4.5.0** y verifica las huellas exactas de los tres archivos del proveedor antes de preparar el puente de revisión. Estas fuentes no tienen plazo de respuesta para el consentimiento pendiente: Dot no agrega temporizador ni cuenta regresiva. La solicitud sigue sujeta al estado pendiente original y a las comprobaciones de sesión y repositorio. La dependencia empaquetada `gentle-pi` **4.0.0** con su parche conserva y respeta su plazo finito. Por defecto sólo comprueba: no toca fuentes ni procesos. `--apply` instala el puente y conserva copias originales; no reinicia sesiones. Si la versión de Gentle Shell cambió, rechaza la instalación y deja los archivos intactos.
 
 ```sh
 node scripts/orchestration/install-review-bridge.mjs /ruta/a/gentle-pi --check
