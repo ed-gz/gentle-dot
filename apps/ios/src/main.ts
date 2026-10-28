@@ -10,6 +10,7 @@ import type { ServerMessage } from '@gentle-dot/protocol';
 import { readSettings, saveSettings, loadArtwork, saveArtwork, deleteArtwork, validateArtwork, validDaemonUrl } from './local-state.ts';
 import { createLinkedChat, type LinkedStatus } from './linked-chat.ts';
 import { checkLocalIntelligence, availabilityMessage, agentStep, cancelLocal, resetLocal, type Availability } from './local-intelligence.ts';
+import { listInferenceResults, acknowledgeInference, recoverInferenceResults, withInferenceDeadline } from './inference-recovery.ts';
 import { loadConversation, updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
 import { conversationArchive } from './conversation-archive.ts';
@@ -315,6 +316,12 @@ let linkedBusy = false;
 let hostAgentState = 'idle';
 let healthAction: HealthAction | undefined;
 let localBusy = false;
+let localTurnId: string | undefined;
+let localRecoveryReady = false;
+let recoveringLocal = false;
+let recoveringNativeId: string | undefined;
+let localRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+let localRecoveryWarning = '';
 let localGeneration = 0;
 let conversationReady = false;
 let draftEdited = false;
@@ -338,6 +345,39 @@ function persist(): Promise<void> {
 }
 
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 250); }
+async function recoverLocalInference() {
+  if (!conversationReady || localBusy || recoveringLocal || document.hidden) return;
+  recoveringLocal = true; localRecoveryReady = false; clearTimeout(localRecoveryTimer); updateControls();
+  try {
+    const hadActive = recoveringNativeId;
+    let recoveredFromArchive = false;
+    const result = await recoverInferenceResults({ list: listInferenceResults,
+      find: async id => entries.find(entry => entry.id === id && entry.engine === 'iphone')
+        ?? await conversationArchive.load(JSON.stringify(['iphone', 'iphone:main', id])),
+      apply(entry) {
+        const current = entries.find(item => item.id === entry.id && item.engine === 'iphone');
+        if (current?.localCancelled) return;
+        if (current) add(entry);
+        else { persistence.enqueue([entry]); recoveredFromArchive = true; }
+      },
+      commit: async () => { await persist(); return !persistence.status().blocked && persistence.status().pending === 0; },
+      acknowledge: acknowledgeInference,
+    });
+    recoveringNativeId = result.activeId;
+    if (recoveredFromArchive) notice('Recuperé una respuesta anterior. Está disponible en Archivo.', 'iphone');
+    localRecoveryReady = !result.activeId;
+    element('retry-conversation').hidden = true;
+    if (element('chat-notice').textContent === localRecoveryWarning) element('chat-notice').textContent = '';
+    if (result.activeId) {
+      element('scene-status').textContent = 'Terminando la respuesta en este iPhone…'; setIntent({ working: true, thinking: true });
+      localRecoveryTimer = setTimeout(() => void recoverLocalInference(), 2000);
+    } else if (hadActive) { element('scene-status').textContent = 'Aquí contigo.'; setIntent({ working: linkedBusy }); }
+  } catch (error) {
+    localRecoveryWarning = `${errorText(error)} Reintenta la recuperación antes de iniciar otra respuesta local.`;
+    element('chat-notice').textContent = localRecoveryWarning;
+    element('retry-conversation').hidden = false;
+  } finally { recoveringLocal = false; updateControls(); }
+}
 function renderChat() {
   element('panel-chat').dataset.empty = String(entries.length === 0);
   conversationView.render(entries);
@@ -351,14 +391,14 @@ function notice(text: string, target: Engine = selected, id: string = localIdent
 function remoteId(id: string) { return `host:${host}|${remoteConversation}|${id}`; }
 function updateControls() {
   const health = connectionHealth({ local: availability, linkedStatus, agentState: hostAgentState, hostConfigured: Boolean(settings.url), preference, capabilities: { workSync: linked.supportsWorkSync(), meetingDrafts: linked.supportsMeetingDrafts() } });
-  if (!localBusy && !pendingRemote) selected = health.selectedEngine;
-  const ready = selected === 'iphone' ? health.local.state === 'ready' : health.host.state === 'ready';
-  const busy = localBusy || !!pendingRemote;
+  if (!localBusy && !recoveringNativeId && !pendingRemote) selected = preference === 'auto' && !localRecoveryReady && health.host.state === 'ready' ? 'gentle' : health.selectedEngine;
+  const ready = selected === 'iphone' ? health.local.state === 'ready' && localRecoveryReady : health.host.state === 'ready';
+  const busy = localBusy || !!recoveringNativeId || !!pendingRemote;
   element('engine-status').dataset.ready = String(ready);
   element('engine-summary').textContent = preference === 'auto' ? 'Automático' : selected === 'iphone' ? 'Este iPhone' : 'Laptop';
   element<HTMLButtonElement>('send').disabled = !conversationReady || persistence.status().blocked || !ready || busy;
-  element<HTMLSelectElement>('engine').disabled = localBusy || !!pendingRemote;
-  element('stop').hidden = !(localBusy || (selected === 'gentle' && linkedBusy));
+  element<HTMLSelectElement>('engine').disabled = localBusy || !!recoveringNativeId || !!pendingRemote;
+  element('stop').hidden = !(localBusy || recoveringNativeId || (selected === 'gentle' && linkedBusy));
   element<HTMLButtonElement>('send').setAttribute('aria-label', selected === 'gentle' && linkedBusy ? 'Añadir instrucción' : 'Enviar');
   prompt.maxLength = selected === 'iphone' ? 2400 : 8000;
   element('engine-badge').textContent = selected === 'iphone' ? 'IPHONE' : 'LAPTOP';
@@ -511,15 +551,16 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
   event.preventDefault();
   const text = prompt.value.trim();
   const promptText = text;
-  if (!text || localBusy || pendingRemote || !conversationReady || persistence.status().blocked) return;
+  if (!text || localBusy || recoveringNativeId || pendingRemote || !conversationReady || persistence.status().blocked) return;
   element('chat-notice').textContent = '';
   if (selected === 'iphone') {
+    if (!localRecoveryReady) return;
     if (!availability.available || !availability.supportsSpanish) { updateControls(); return; }
     if (Array.from(text).length > 2400) { element('chat-notice').textContent = 'Usa hasta 2400 caracteres con el motor local; puedes guardar un trabajo más largo.'; return; }
     const request = localPrompt(entries, text);
     if (Array.from(request).length > 4000) { element('chat-notice').textContent = 'Reduce el mensaje para dejar espacio al contexto local.'; return; }
     const generation = ++localGeneration;
-    const id = localIdentifier(); localBusy = true;
+    const id = localIdentifier(); localBusy = true; localTurnId = id; localRecoveryReady = false;
     const controller = new AbortController(); localController = controller;
     const context = createAgentContext(entries, { ...(attachedWork ? { attachedWork } : {}) });
     add({ id: localIdentifier(), role: 'user', text, engine: 'iphone', state: 'complete', at: Date.now() });
@@ -527,15 +568,20 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
     add(turnEntry);
     prompt.value = ''; sizeDraft(); persist(); updateControls(); setIntent({ working: true, thinking: true }); element('scene-status').textContent = 'Pensando contigo…';
     try {
+      // The native journal must always have a durable original turn to attach to.
+      await persist();
+      if (generation !== localGeneration) return;
+      if (persistence.status().blocked || persistence.status().pending) throw new Error('No pude conservar la solicitud; no inicié el modelo local.');
       // Rebuild a bounded context from the visible timeline, also after app restarts.
-      await resetLocal();
+      const reset = await resetLocal();
+      if (!reset.ok) throw new Error('No pude confirmar que el motor local esté listo. La solicitud se conserva sin ejecutar.');
       if (generation !== localGeneration) return;
       const runner = createAgentRunner({ waitUntilActive: waitForForeground, tools: [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: operation => {
         if (!linked.ready()) return undefined;
         if (!linked.supportsWorkSync()) throw new Error('Actualiza Gentle Dot en la laptop para transferir trabajos. La conversación sigue disponible y el trabajo local se conserva.');
         if (operation === 'process' && !linked.supportsMeetingDrafts()) throw new Error('Este Gentle Dot no tiene disponible el procesamiento de reuniones. El material confirmado se conserva.');
         return createWorkDispatcher(linked.exchange, host);
-      } }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))], step: agentStep, onTrace(trace) {
+      } }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))], step: prompt => agentStep(prompt, id), onTrace(trace) {
         const entry = entries.find(item => item.id === id) ?? turnEntry;
         const activities = [...entry.activities ?? []]; const at = activities.findIndex(item => item.id === trace.id);
         const activity = { id: trace.id, kind: 'other' as const, title: trace.label, status: trace.status, detail: trace.detail };
@@ -554,7 +600,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
       setIntent({ outcome: { kind: 'done', at: performance.now() } });
     } catch (error) {
       if (generation === localGeneration) add({ id, role: 'notice', text: errorText(error), engine: 'iphone', state: 'interrupted', at: Date.now() });
-    } finally { if (generation === localGeneration) { localBusy = false; element('active-tool').textContent = ''; element('scene-status').textContent = 'Aquí contigo.'; updateControls(); persist(); } }
+    } finally { if (generation === localGeneration) { localBusy = false; localTurnId = undefined; element('active-tool').textContent = ''; element('scene-status').textContent = 'Aquí contigo.'; updateControls(); await persist(); await recoverLocalInference(); updateControls(); } }
   } else {
     if (!linked.ready()) { element('chat-notice').textContent = 'La laptop está desconectada. Guarda el trabajo para conservarlo.'; return; }
     const id = remoteId(`pending:${localIdentifier()}`);
@@ -571,20 +617,37 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
 let stoppingLocal: Promise<void> | undefined;
 function stopLocal(): Promise<void> {
   if (stoppingLocal) return stoppingLocal;
+  const turnId = localTurnId ?? recoveringNativeId;
   const generation = ++localGeneration; localController?.abort();
+  entries = entries.map(entry => entry.engine === 'iphone' && (entry.id === turnId || (!turnId && entry.state === 'pending'))
+    ? { ...entry, state: 'interrupted', localCancelled: true, text: 'Respuesta interrumpida.' } : entry);
+  renderChat();
   stoppingLocal = (async () => {
-    try { await cancelLocal(); } catch { /* Native lifecycle also cancels active generation. */ }
+    let hasMarker = entries.some(entry => entry.id === turnId && entry.engine === 'iphone' && entry.localCancelled);
+    if (turnId && !entries.some(entry => entry.id === turnId && entry.engine === 'iphone')) {
+      try {
+        const archived = await conversationArchive.load(JSON.stringify(['iphone', 'iphone:main', turnId]));
+        if (archived && archived.role !== 'user') { persistence.enqueue([{ ...archived, state: 'interrupted', localCancelled: true, text: 'Respuesta interrumpida.' }]); hasMarker = true; }
+      } catch { /* Native cancellation below still runs; failure remains visible. */ }
+    }
+    await persist();
+    const markerConfirmed = hasMarker && !persistence.status().blocked && persistence.status().pending === 0;
+    try {
+      const cancelled = await withInferenceDeadline(cancelLocal(turnId));
+      if (!cancelled.ok) throw new Error('La cancelación nativa no se confirmó.');
+    } catch { element('chat-notice').textContent = markerConfirmed
+      ? 'No se confirmó la detención nativa. La solicitud quedó marcada como interrumpida; revisa su estado al volver.'
+      : 'No pude confirmar la detención ni guardar su marca. Revisa el resultado antes de continuar.'; }
     if (generation !== localGeneration) return;
-    localBusy = false;
-    entries = entries.map(entry => entry.engine === 'iphone' && entry.state === 'pending' ? { ...entry, state: 'interrupted', text: entry.text || 'Respuesta interrumpida.' } : entry);
+    localBusy = false; localTurnId = undefined;
     element('active-tool').textContent = ''; element('scene-status').textContent = 'Aquí contigo.';
-    renderChat(); persist(); setIntent({}); updateControls();
+    renderChat(); await persist(); setIntent({}); await recoverLocalInference(); updateControls();
   })().finally(() => { stoppingLocal = undefined; });
   return stoppingLocal;
 }
 element('stop').addEventListener('click', () => {
-  if (localBusy) void stopLocal();
-  else if (linked.abort()) element('chat-notice').textContent = 'Se pidió detener la respuesta de Gentle Dot; esperando al host.';
+  if (localBusy || recoveringNativeId) void stopLocal();
+  else if (selected === 'gentle' && linkedBusy && linked.abort()) element('chat-notice').textContent = 'Se pidió detener la respuesta de Gentle Dot; esperando al host.';
 });
 element<HTMLFormElement>('connection').addEventListener('submit', async event => {
   event.preventDefault();
@@ -610,10 +673,10 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) release();
   cancelAnimationFrame(frame); fx?.clear(); persist();
   if (document.hidden) { void cancelDictation(); director.update(intent, performance.now(), true); linked.suspend(); }
-  else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); }
+  else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); }
 });
 window.addEventListener('pagehide', () => { connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
-window.addEventListener('pageshow', event => { if (event.persisted) { redraw(); linked.resume(); } });
+window.addEventListener('pageshow', event => { if (event.persisted) { redraw(); linked.resume(); void recoverLocalInference(); } });
 let conversationLoading = false;
 const recoveryMessage = 'No se pudo recuperar la conversación local. Tu borrador sigue aquí; reintenta antes de enviar para proteger el historial guardado.';
 async function restoreConversation() {
@@ -633,7 +696,7 @@ async function restoreConversation() {
     conversationReady = true;
     retry.hidden = true;
     if (element('chat-notice').textContent === recoveryMessage) element('chat-notice').textContent = '';
-    renderChat(); sizeDraft(); await persist();
+    renderChat(); sizeDraft(); await persist(); await recoverLocalInference();
   } catch {
     element('history-loading').hidden = true;
     // Never overwrite an unread stored timeline with the partial in-memory state.

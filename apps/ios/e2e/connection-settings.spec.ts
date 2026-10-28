@@ -9,6 +9,7 @@ async function fixture(page: Page, schemes = ['capri-auth']) {
     const state = globalThis as any;
     state.isTauri = true; state.settingsVault = new Map<string, string>(); state.settingsRequests = []; state.settingsURLs = []; state.settingsOpened = []; state.randomCounter = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('results_list')) return { ok: true, items: [] };
       const request = args?.request ?? {}, key = `${request.scope}:${request.account}`;
       if (command.endsWith('|secret_set')) { state.settingsVault.set(key, request.value); return { ok: true, persisted: true }; }
       if (command.endsWith('|secret_get')) return { ok: true, value: state.settingsVault.get(key) };

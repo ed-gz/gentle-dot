@@ -42,6 +42,7 @@ async function personalBuild(page: import('@playwright/test').Page) {
   await page.addInitScript(() => {
     const state = globalThis as any; state.isTauri = true;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
+      if (command.endsWith('results_list')) return { ok: true, items: [] };
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('agent_step')) return { ok: true, decision: { kind: 'answer', text: 'Voy contigo.\n\n- Primera tarea\n- Segunda tarea', toolName: '', argumentsJSON: '{}' } };

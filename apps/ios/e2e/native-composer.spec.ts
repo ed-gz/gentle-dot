@@ -5,6 +5,7 @@ async function fixture(page: Page) {
     const state = globalThis as any;
     state.isTauri = true; state.calls = []; state.documentItems = [];
     state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
+      if (command.endsWith('results_list')) return { ok: true, items: [] };
       const name = command.split('|').at(-1); state.calls.push(name);
       if (name === 'check_availability') return { available: true, status: 'available', supportsSpanish: true };
       if (name === 'agent_step') return new Promise(resolve => { state.completeStep = resolve; });
@@ -28,7 +29,9 @@ async function fixture(page: Page) {
 }
 test('native attachment action saves verified files before acknowledgement and survives reload', async ({ page }) => {
   await fixture(page); await page.goto('/');
-  await expect(page.locator('#send')).toBeDisabled(); // No draft yet.
+  await expect(page.locator('#send')).toBeEnabled();
+  await page.locator('#send').click(); // An empty composer must not start inference.
+  expect(await page.evaluate(() => (globalThis as any).calls.includes('agent_step'))).toBe(false);
   await page.getByRole('button', { name: 'Adjuntar archivos', exact: true }).click();
   await expect(page.locator('#attachment-context')).toContainText('Reunión.txt');
   const saved = await page.evaluate(async () => {

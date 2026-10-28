@@ -5,6 +5,7 @@ async function linkedPhone(page: Page) {
     const state = globalThis as any; state.isTauri = true; state.sessionCalls = [];
     const sessions = ['Operaciones', 'Capri iOS'].map((label, i) => ({ paneId: `pane-${i}`, sessionId: `session-${i}`, provider: 'herdr', label, cwd: '/workspace/capri', state: i ? 'working' : 'idle', connected: true, managed: true, capabilities: { inspect: true, prompt: true, abort: true, deliveryReceipts: true, deliveryModes: ['steer', 'followUp'], attachments: { version: 1, files: true, images: true, audio: 'file' } } }));
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('results_list')) return { ok: true, items: [] };
       if (command.startsWith('plugin:device-bridge|')) args = args?.request;
       state.sessionCalls.push({ command, ...(command.endsWith('https_request') ? { body: args.body } : {}) });
       if (command.endsWith('check_availability')) return { available: false, status: 'model_not_ready', supportsSpanish: false };

@@ -12,7 +12,7 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
   root.innerHTML = `<h2>Historial local</h2><p class="hint">Tu conversación se conserva en este iPhone aunque la vista muestre sólo los últimos 120 mensajes. No confirma una sincronización con la laptop.</p><p id="memory-status" class="hint" role="status" aria-live="polite"></p><div class="actions"><button id="memory-retry" type="button">Reintentar guardado</button><button id="memory-export" type="button">Exportar historial</button></div><details><summary>Consultar mensajes anteriores</summary><form id="memory-search"><label>Buscar texto<input id="memory-query" maxlength="200" placeholder="Palabras del mensaje" /></label><button type="submit">Buscar</button></form><div id="memory-entries"></div><button id="memory-older" type="button" hidden>Ver anteriores</button></details>`;
   parent.append(root);
   const element = <T extends HTMLElement>(id: string) => root.querySelector<T>('#' + id)!;
-  const statusElement = element('memory-status'); let cursor: string | undefined, query = '', busy = false, renderEpoch = 0;
+  const statusElement = element('memory-status'); let cursor: string | undefined, query = '', busy = false, pendingReset = false, renderEpoch = 0;
   const describe = (error: unknown) => error instanceof Error ? error.message : 'No se pudo consultar el archivo.';
   function updateStatus(message?: string) {
     const state = options.status();
@@ -28,7 +28,7 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
     } catch (error) { if (epoch === renderEpoch) updateStatus(describe(error)); }
   }
   async function page(reset: boolean) {
-    if (busy) return; busy = true;
+    if (busy) { if (reset) pendingReset = true; return; } busy = true;
     try {
       if (reset) { cursor = undefined; query = element<HTMLInputElement>('memory-query').value.trim(); element('memory-entries').replaceChildren(); }
       const result = query ? await conversationArchive.search(query, { cursor, limit: 20 }) : await conversationArchive.page({ cursor, limit: 20 });
@@ -43,7 +43,7 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
       element('memory-older').hidden = !result.hasMore;
       if (!nodes.length) updateStatus(result.hasMore ? 'Esta página no contiene coincidencias; puedes seguir buscando en los mensajes anteriores.' : 'No hay más mensajes que coincidan.');
     } catch (error) { updateStatus(describe(error)); }
-    finally { busy = false; }
+    finally { busy = false; if (pendingReset) { pendingReset = false; void page(true); } }
   }
   element('memory-retry').addEventListener('click', async () => { await options.retry(); await refresh(); });
   element('memory-search').addEventListener('submit', event => { event.preventDefault(); void page(true); });

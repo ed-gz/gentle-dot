@@ -54,6 +54,7 @@ test('credential rotation preserves refresh metadata and a losing CAS removes on
     state.isTauri = true;
     state.testKeychain = new Map<string, string>();
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('results_list')) return { ok: true, items: [] };
       const request = args?.request;
       const key = request ? `${request.scope}:${request.account}` : '';
       if (command.endsWith('|secret_set')) { state.testKeychain.set(key, request.value); return { ok: true, persisted: true }; }

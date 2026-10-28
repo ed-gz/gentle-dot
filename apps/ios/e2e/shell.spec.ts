@@ -8,6 +8,7 @@ async function nativeFixture(page: import('@playwright/test').Page, delayed = fa
     state.nativeCalls = [];
     state.nativeDecisions = decisions;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('results_list')) return { ok: true, items: [] };
       state.nativeCalls.push(command);
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
@@ -57,6 +58,7 @@ test('native bridge fixture maintains one local timeline and bounds follow-up co
   await page.locator('#prompt').fill('¿Cómo se llama mi proyecto?');
   await page.locator('#send').click();
   await expect(page.locator('.chat-card[data-role="assistant"]')).toHaveCount(2);
+  await expect(page.locator('.chat-card[data-role="assistant"]').last()).toContainText('Respuesta local de prueba');
   const prompts = await page.evaluate(() => (globalThis as any).nativePrompts);
   expect(prompts[1]).toContain('Mi proyecto se llama Capri.');
   expect(Array.from(prompts[1]).length).toBeLessThanOrEqual(8000);

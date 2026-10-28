@@ -7,6 +7,7 @@ async function nativeExporter(page: Page) {
     const bytes = (base64: string) => Uint8Array.from(atob(base64), c => c.charCodeAt(0));
     const digest = async (parts: Uint8Array[]) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await new Blob(parts as BlobPart[]).arrayBuffer()))).map(value => value.toString(16).padStart(2, '0')).join('');
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('results_list')) return { ok: true, items: [] };
       const name = command.split('|').at(-1)!; const request = args?.request ?? {};
       if (name.startsWith('crypto_hash_') || name.startsWith('export_')) state.exportCalls.push({ name, ...(name === 'export_write' ? { offset: request.offset, bytes: bytes(request.data).length } : {}) });
       if (name === 'share_list' || name === 'documents_list') return { ok: true, items: [] };

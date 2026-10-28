@@ -8,6 +8,7 @@ async function fixture(page: Page, options: { codes?: string[]; hold?: boolean; 
   await page.evaluate(async ({ codes, hold, native }) => {
     const state = globalThis as any; state.isTauri = native; state.qrCommands = []; state.pairSubmits = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('results_list')) return { ok: true, items: [] };
       state.qrCommands.push(command);
       if (command.endsWith('|pairing_scan_cancel')) return { ok: true };
       if (command.endsWith('|pairing_scan')) {
@@ -110,6 +111,7 @@ test('installed settings lead with the camera and keep pasted codes secondary un
   await page.addInitScript(link => {
     const state = globalThis as any; state.isTauri = true; state.pairCalls = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
+      if (command.endsWith('results_list')) return { ok: true, items: [] };
       if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: link };
       if (command.endsWith('|pair_device')) { state.pairCalls++; throw Error('No pairing expected'); }
       if (command.endsWith('|share_list') || command.endsWith('|documents_list')) return { ok: true, items: [] };
