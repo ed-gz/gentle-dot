@@ -5,17 +5,22 @@ import type { ToolApprovalRequest } from './agent-tools.ts';
 const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text = '') => {
   const element = document.createElement(tag); element.textContent = text; return element;
 };
-export function createConversationRequests(container: HTMLElement) {
+export function createConversationRequests(container: HTMLElement, options: { append?: (section: HTMLElement, mutate: () => void) => void } = {}) {
+  const announcement = node('p'); announcement.className = 'sr-only'; announcement.setAttribute('role', 'status');
+  container.append(announcement);
   const hostCards = new Map<string, { card: HTMLElement; sent: boolean; ask: Ask }>();
   let connected = false;
   function card(title: string, details: string) {
     const section = node('section'); section.className = 'review-card';
-    section.append(node('h3', title));
+    const eyebrow = node('span', 'CAPRI / NECESITO TU REVISIÓN'); eyebrow.className = 'eyebrow';
+    section.append(eyebrow, node('h3', title));
     if (details) { const preview = node('pre', details); preview.tabIndex = 0; section.append(preview); }
     const actions = node('div'); actions.className = 'actions';
     const status = node('p'); status.className = 'hint'; status.setAttribute('role', 'status');
-    section.append(actions, status); container.append(section);
-    return { section, actions, status };
+    section.append(actions, status);
+    const append = () => { container.append(section); announcement.textContent = `Capri necesita tu revisión: ${title}`; };
+    const mount = () => { if (options.append) options.append(section, append); else append(); };
+    return { section, actions, status, mount };
   }
   function button(label: string, action: () => void) {
     const element = node('button', label); element.type = 'button'; element.addEventListener('click', action); return element;
@@ -36,8 +41,9 @@ export function createConversationRequests(container: HTMLElement) {
         };
         const abort = () => finish(false);
         signal.addEventListener('abort', abort, { once: true });
-        view.actions.append(button('Aprobar esta operación', () => finish(true)), button('Rechazar', () => finish(false)));
-        view.section.scrollIntoView({ block: 'nearest' });
+        const approve = button('Aprobar esta operación', () => finish(true)); approve.className = 'primary';
+        view.actions.append(button('Rechazar', () => finish(false)), approve);
+        view.mount();
       });
     },
     host(ask: Ask, send: (fields: { value?: string; confirmed?: boolean; cancelled?: boolean }) => boolean | Promise<{ confirmed: true }>, trusted = false) {
@@ -63,7 +69,10 @@ export function createConversationRequests(container: HTMLElement) {
           // No automatic retry after a possibly delivered decision.
         }
       };
-      if (ask.method === 'confirm' || (ask.method === 'app' && trusted)) view.actions.append(button('Permitir', () => answer({ confirmed: true })), button('Rechazar', () => answer({ confirmed: false })));
+      if (ask.method === 'confirm' || (ask.method === 'app' && trusted)) {
+        const approve = button('Permitir', () => answer({ confirmed: true })); approve.className = 'primary';
+        view.actions.append(button('Rechazar', () => answer({ confirmed: false })), approve);
+      }
       else if (ask.method === 'select') for (const option of ask.options ?? []) view.actions.append(button(option, () => answer({ value: option })));
       else if (ask.method === 'input' || ask.method === 'editor') {
         const input = node('textarea'); input.value = ask.prefill ?? ''; input.maxLength = 32000; input.setAttribute('aria-label', ask.title);
@@ -73,6 +82,7 @@ export function createConversationRequests(container: HTMLElement) {
       }
       if (!['app', 'pin'].includes(ask.method)) view.actions.append(button('Cancelar', () => answer({ cancelled: true })));
       if (expired()) { view.actions.replaceChildren(); view.status.textContent = 'Esta solicitud venció.'; }
+      view.mount();
     },
     resolved(requestId: string) {
       const state = hostCards.get(requestId);

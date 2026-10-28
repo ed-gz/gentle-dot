@@ -8,23 +8,34 @@
 </head>
 <body>
   <main>
-    <header class="masthead"><div><span class="eyebrow">AQUÍ CONTIGO</span><h1>CAPRI<span aria-hidden="true">//</span></h1></div><span class="identity"><span id="connection-badge">LOCAL</span></span></header>
-    <nav class="navigation" aria-label="Secciones">
-      <button type="button" data-panel="chat" aria-current="page">Conversación</button><button type="button" data-panel="inbox">Archivo <span id="work-count">0</span></button><button type="button" data-panel="settings">Ajustes</button>
-    </nav>
-    <section id="panel-chat" class="panel" aria-label="Conversación con Capri">
+    <header class="masthead">
+      <nav class="navigation" aria-label="Secciones">
+        <button type="button" class="brand" data-panel="chat" aria-current="page" aria-label="Conversación"><span class="brand-mark" aria-hidden="true">C<span>//</span></span><span>CAPRI<small id="connection-badge">LOCAL</small></span></button>
+        <button type="button" data-panel="inbox"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2-3h10v16H3zM3 9h18"/></svg><span>Archivo <span id="work-count">0</span></span></button>
+        <button type="button" data-panel="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg><span>Ajustes</span></button>
+      </nav>
+    </header>
+    <section id="panel-chat" class="panel" data-empty="true" aria-label="Conversación con Capri">
       <div class="companion-presence">
-        <section id="stage" class="compact" aria-label="Capri te acompaña">
-          <button id="rig-handle" class="rig" type="button" aria-label="Saludar a Capri"><canvas id="capri" aria-hidden="true"></canvas><canvas id="fx" aria-hidden="true"></canvas><span id="art-placeholder">CAPRI<span>Carga tu personaje en Ajustes</span></span></button>
+        <section id="stage" aria-label="Capri te acompaña">
+          <span class="stage-orbit" aria-hidden="true"></span><span class="stage-coordinate" aria-hidden="true">C / 01</span>
+          <button id="rig-handle" class="rig" type="button" aria-label="Saludar a Capri. Usa las flechas para moverla"><canvas id="capri" aria-hidden="true"></canvas><canvas id="fx" aria-hidden="true"></canvas><span id="art-placeholder">CAPRI<span>Preparando personaje…</span></span></button>
         </section>
         <div class="presence-copy"><span id="engine-badge" class="eyebrow">EN ESTE IPHONE</span><p id="scene-status" role="status">Aquí contigo.</p><p id="active-tool" class="hint" role="status"></p></div>
       </div>
-      <details class="engine-details"><summary>Dónde trabaja Capri</summary><label class="engine-control">Preferencia<select id="engine"><option value="auto">Automático · iPhone con apoyo de Gentle Dot</option><option value="iphone">Este iPhone · local</option><option value="gentle">Gentle Dot · laptop</option></select></label></details><p id="engine-status" class="hint" role="status">Comprobando el motor local…</p>
-      <div id="cards" class="conversation" role="log" aria-label="Conversación" aria-live="polite" aria-relevant="additions"></div>
-      <p id="empty-conversation" class="empty-conversation">¿Qué resolvemos hoy?<span>Háblame, escribe o trae un archivo. Seguimos aquí mismo.</span></p>
-      <div id="requests" aria-label="Revisiones y preguntas de Capri"></div>
-      <p id="chat-notice" class="hint" role="status"></p><button id="retry-conversation" type="button" hidden>Reintentar recuperación</button>
-      <form id="composer" class="composer"><label for="prompt">Habla con Capri</label><div id="attachment-context" class="hint"></div><textarea id="prompt" rows="2" maxlength="2400" placeholder="Capri, ayúdame con…"></textarea><div class="actions composer-actions"><label class="attach-control" aria-label="Adjuntar archivos">Adjuntar<input id="chat-files" type="file" multiple accept="audio/*,text/plain,text/markdown,application/pdf,image/*,.m4a,.txt,.md" /></label><button id="dictate" type="button" aria-pressed="false">Dictar</button><button id="send" type="submit" class="primary">Enviar</button><button id="stop" type="button" hidden>Detener</button></div><p id="voice-status" class="hint" role="status"></p></form>
+      <div id="conversation-scroll" class="conversation-scroll" tabindex="0" aria-label="Historial de conversación">
+        <div id="empty-conversation" class="empty-conversation"><h1>¿Qué resolvemos<span> hoy?</span></h1><p>Tu mundo, mi siguiente misión.</p><p class="hint">Escribe, dicta o trae un archivo.</p></div>
+        <div id="engine-help"><p id="engine-status" class="engine-status hint" role="status">Comprobando el motor local…</p><button id="health-action" type="button" hidden></button></div>
+        <div id="cards" class="conversation" role="log" aria-label="Conversación" aria-live="polite" aria-relevant="additions"></div>
+        <div id="requests" aria-label="Revisiones y preguntas de Capri"></div>
+        <p id="chat-notice" class="hint" role="status"></p><button id="retry-conversation" type="button" hidden>Reintentar recuperación</button>
+      </div>
+      <button id="new-messages" type="button" class="new-messages" hidden>Nueva respuesta ↓</button>
+      <form id="composer" class="composer">
+        <div class="composer-topline"><label for="prompt">DIME, ¿QUÉ HAREMOS?</label><details class="engine-details"><summary aria-label="Elegir motor de Capri"><span id="engine-summary">Automático</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></summary><label class="engine-control">Dónde trabaja Capri<select id="engine"><option value="auto">Automático · iPhone + laptop</option><option value="iphone">Este iPhone · local</option><option value="gentle">Gentle Dot · laptop</option></select></label></details></div>
+        <div id="attachment-context" class="hint"></div><textarea id="prompt" rows="1" maxlength="2400" placeholder="Capri, ayúdame con…"></textarea>
+        <div class="actions composer-actions"><label class="attach-control"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 14 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9"/></svg><span>Adjuntar</span><input id="chat-files" aria-label="Adjuntar archivos" type="file" multiple accept="audio/*,text/plain,text/markdown,application/pdf,image/*,.m4a,.txt,.md" /></label><button id="dictate" type="button" aria-pressed="false">Dictar</button><button id="send" type="submit" class="primary">Enviar</button><button id="stop" type="button" hidden>Detener</button></div><p id="voice-status" class="hint" role="status"></p>
+      </form>
     </section>
     <section id="panel-inbox" class="panel" aria-label="Bandeja de trabajos" hidden>
       <div class="section-heading"><span class="eyebrow">ARCHIVO</span><span>GUARDADOS EN IPHONE</span></div><h2>Trabajos y evidencia</h2><p class="hint">Conserva instrucciones, audio y transcripciones sin conexión. Guardar aquí no significa enviar ni sincronizar.</p>
@@ -33,10 +44,10 @@
     </section>
     <section id="panel-settings" class="panel" aria-label="Ajustes" hidden>
       <div class="section-heading"><span class="eyebrow">AJUSTES</span><span>TU CAPRI</span></div>
-      <section class="surface"><h2>Personaje y movimiento</h2><p id="art-status" class="hint" role="status">Carga tu arte para activar el personaje.</p><label>Tu capri-full.png (240 × 420)<input id="art" type="file" accept="image/png" /></label><p class="hint">El arte se conserva en este dispositivo.</p><label>Movimiento<select id="motion"><option value="full">Completo</option><option value="reduced">Reducido</option><option value="paused">En pausa</option></select></label><details><summary>Gestos y presencia</summary><div class="actions character-actions"><button type="button" id="greet">Saludar</button><button type="button" id="chill">Descansar</button><button type="button" id="roam" aria-pressed="false">Pasear</button><button type="button" id="appear">Desaparecer</button></div></details><button id="delete-art" type="button">Quitar arte local</button></section>
+      <section class="surface"><h2>Personaje y movimiento</h2><p id="art-status" class="hint" role="status">Preparando tu Capri…</p><label>Cambiar arte personal (PNG 240 × 420)<input id="art" type="file" accept="image/png" /></label><p class="hint">El arte se conserva en este dispositivo.</p><label>Movimiento<select id="motion"><option value="full">Completo</option><option value="reduced">Reducido</option><option value="paused">En pausa</option></select></label><details><summary>Gestos y presencia</summary><div class="actions character-actions"><button type="button" id="greet">Saludar</button><button type="button" id="chill">Descansar</button><button type="button" id="roam" aria-pressed="false">Pasear</button><button type="button" id="appear">Desaparecer</button></div></details><button id="delete-art" type="button">Restaurar Capri original</button></section>
       <section class="surface"><h2>Inteligencia en el iPhone</h2><p id="local-status" role="status" class="hint">Comprobando disponibilidad…</p><button type="button" id="check-local">Comprobar otra vez</button><p class="hint">Foundation Models trabaja en el dispositivo. Requiere un modelo de Apple Intelligence disponible y compatible con español.</p></section>
       <section id="connection-settings" class="surface" aria-label="Conexiones"><h2>Conexiones</h2><p class="hint">Cargando configuración de cuentas…</p></section>
-      <form id="pairing" class="surface"><h2>Vincular esta PC</h2><label>Invitación de Gentle Dot<input id="pairing-invitation" autocomplete="off" placeholder="gentledot://pair?…" required /></label><button type="submit">Vincular iPhone</button><p id="pairing-status" class="hint" role="status">El acceso se conserva en Keychain.</p></form><details><summary>Conexión manual</summary><form id="connection" class="surface"><h2>Enlace con Gentle Dot</h2><label>Dirección segura de tu laptop<input id="url" type="url" placeholder="wss://tu-daemon/ws" required /></label><label>Token del dispositivo<input id="token" type="password" autocomplete="off" required /></label><p class="hint">Se recuerda la dirección. En la app, el token se guarda en Keychain. En el navegador sólo se mantiene en memoria.</p><div class="actions"><button class="primary" type="submit">Conectar</button><button id="disconnect" type="button">Desconectar</button></div><p id="status" role="status" class="hint">Sin conexión</p></form></details><p id="settings-status" role="status" class="hint"></p>
+      <form id="pairing" class="surface"><h2>Vincular esta PC</h2><label>Invitación de Gentle Dot<input id="pairing-invitation" autocomplete="off" placeholder="gentledot://pair?…" required /></label><button type="submit">Vincular iPhone</button><p id="pairing-status" class="hint" role="status">El acceso se conserva en Keychain.</p></form><details><summary>Conexión manual</summary><form id="connection" class="surface"><h2>Enlace con Gentle Dot</h2><label>Dirección segura de tu laptop<input id="url" type="url" placeholder="wss://tu-daemon/ws" required /></label><label>Token del dispositivo<input id="token" type="password" autocomplete="off" required /></label><p class="hint">Se recuerda la dirección. En la app, el token se guarda en Keychain. En el navegador sólo se mantiene en memoria.</p><div class="actions"><button class="primary" type="submit">Conectar</button><button id="disconnect" type="button">Desconectar</button></div><p id="status" role="status" class="hint">Sin conexión</p></form></details><p id="settings-status" role="status" class="hint"></p><p id="build-info" class="hint build-info"></p>
     </section>
   </main>
   <script type="module" src="/src/main.ts"></script>

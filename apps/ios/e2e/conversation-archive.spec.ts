@@ -148,7 +148,12 @@ test('shell stops new sends after archive failure, preserves the draft and expor
   await page.evaluate(async () => {
     const { conversationArchive } = await import('/src/conversation-archive.ts');
     (globalThis as any).restoreArchive = conversationArchive.upsert;
-    conversationArchive.upsert = async () => { throw new Error('Cuota local agotada (fixture).'); };
+    conversationArchive.upsert = async (...args) => {
+      // A draft-only checkpoint must remain possible before the first send.
+      // Inject the quota failure when this case actually archives messages.
+      if (args[0].length) throw new Error('Cuota local agotada (fixture).');
+      return (globalThis as any).restoreArchive(...args);
+    };
   });
   await page.locator('#prompt').fill('Conservar aunque falle el archivo.'); await page.locator('#send').click();
   await expect(page.locator('#cards')).toContainText('Respuesta que debe conservarse.');
@@ -178,7 +183,9 @@ test('crash between archive commit and old window save cannot erase a completed 
     document.addEventListener('visibilitychange', event => { if (state.simulateCrash) event.stopImmediatePropagation(); }, true);
   });
   await page.goto('/');
-  await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).revision)).toBe(1);
+  // Wait for the durable bootstrap checkpoint. Initial shared WebGL shader
+  // compilation can block the next browser task on CI software renderers.
+  await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).revision), { timeout: 15000 }).toBe(1);
   await page.evaluate(async () => {
     const { saveConversation } = await import('/src/conversation.ts'); const { conversationArchive } = await import('/src/conversation-archive.ts');
     const old = { id: 'crash-turn', engine: 'iphone', role: 'assistant', state: 'pending', text: '', at: 1000, activities: [{ id: 'operation', kind: 'other', title: 'Guardar trabajo', status: 'running' }] };
@@ -230,7 +237,7 @@ test('a newer saved window after archive quota failure survives reload with both
     document.addEventListener('visibilitychange', event => { if (state.simulateCrash) event.stopImmediatePropagation(); }, true);
   });
   await page.goto('/');
-  await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).revision)).toBe(1);
+  await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).revision), { timeout: 15000 }).toBe(1);
   await page.evaluate(async () => {
     const { conversationArchive } = await import('/src/conversation-archive.ts');
     const { createConversationPersistence } = await import('/src/conversation-persistence.ts');

@@ -78,7 +78,7 @@ test('history aliases keep DOM chronology and coalesce tool replies around local
   await expect.poll(link.connections).toBe(2);
   await expect(page.locator('.chat-text')).toHaveText([
     'Solicitud para la laptop', 'Primera parte\n\nParte final', 'Mi siguiente turno es local', 'Respuesta del fixture local',
-  ]);
+  ], { useInnerText: true });
   expect(link.requests.filter(message => message.type === 'send')).toHaveLength(1);
   await expect.poll(async () => page.evaluate(async () =>
     (await (await import('/src/conversation.ts' as string)).loadConversation()).entries.map((entry: any) => entry.text),

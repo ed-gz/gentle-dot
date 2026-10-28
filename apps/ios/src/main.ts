@@ -26,9 +26,18 @@ import { isTauri } from '@tauri-apps/api/core';
 import { secretGet, secretSet, secretDelete, listSharedImports, importSharedItem } from './device-bridge.ts';
 import { parseInvitation, pairDevice, restorePairing } from './device-pairing.ts';
 import { createWork, createImportedWork } from './work-inbox.ts';
+import { companionBounds, constrainCompanion, mountPhoneViewport } from './companion-layout.ts';
+import { connectionHealth, healthActionLabel, type HealthAction } from './connection-health.ts';
+import { createConversationView } from './conversation-view.ts';
+import { loadPackagedArtwork } from './packaged-art.ts';
+import { createAgentContext } from './agent-context.ts';
+import { buildInfo, buildLabel } from './build-info.ts';
+import { mountPairingInput } from './pairing-input.ts';
 import './style.css';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+element('build-info').textContent = buildLabel();
+element('build-info').title = buildInfo.sourceCommit ?? '';
 const settings = readSettings();
 const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 const canvas = element<HTMLCanvasElement>('capri');
@@ -46,7 +55,7 @@ let lastRevision = -1;
 let assetRevision = 0;
 let panel = 'chat';
 let absent = false;
-let roaming = false;
+let roaming = true;
 let position = { x: 0, y: 0 };
 let destination = { x: 0, y: 0 };
 let lastTime = 0;
@@ -55,17 +64,26 @@ let gestureTimer: ReturnType<typeof setTimeout> | undefined;
 const isReduced = () => reduced.matches || settings.motion !== 'full';
 try { fx = new RigFx(element<HTMLCanvasElement>('fx')); } catch { /* Optional procedural effects. */ }
 
+function movementBounds() {
+  return companionBounds({ width: stage.clientWidth, height: stage.clientHeight }, { width: rig.offsetWidth, height: rig.offsetHeight });
+}
 function place(x: number, y: number) {
-  const horizontal = Math.max(0, (stage.clientWidth - 216) / 2 - 4);
-  const vertical = Math.max(0, (stage.clientHeight - 306) / 2 - 4);
-  position = { x: Math.max(-horizontal, Math.min(horizontal, x)), y: Math.max(-vertical, Math.min(vertical, y)) };
+  position = constrainCompanion({ x, y }, movementBounds());
   rig.style.transform = `translate(${position.x}px, ${position.y}px)`;
+}
+let typing = false;
+let attention = false;
+function presenceIntent(): RigIntent {
+  if (attention) return { ...intent, question: 'review' };
+  if (typing && !intent.working && !intent.dragging && !intent.gesture) return { ...intent, resting: 'sit', watching: true };
+  return intent;
 }
 function animate(now: number) {
   if (!engine || document.hidden || !['companion', 'chat'].includes(panel) || absent) return;
-  if (roaming && panel === 'chat' && !isReduced()) {
+  if (roaming && panel === 'chat' && !isReduced() && !typing && !attention && !intent.working && !intent.gesture && !drag) {
     if (now >= nextRoam) {
-      destination = { x: (Math.random() - .5) * Math.max(0, stage.clientWidth - 224), y: (Math.random() - .5) * Math.max(0, stage.clientHeight - 314) };
+      const bounds = movementBounds();
+      destination = { x: (Math.random() * 2 - 1) * bounds.x, y: 0 };
       nextRoam = now + 6000;
     }
     const step = Math.min(.05, (now - (lastTime || now)) / 1000) * 28;
@@ -76,10 +94,11 @@ function animate(now: number) {
     }
   }
   lastTime = now;
-  director.update(intent, now);
+  director.update(presenceIntent(), now);
   const next = isReduced() ? 0 : frameAt(now, director.fps());
   if (next !== lastFrame || revision !== lastRevision) {
     const sample = director.sample(now, isReduced());
+    rig.dataset.pose = sample.act;
     engine.draw(sample.pose, next);
     if (!isReduced()) for (const cue of sample.cues) fx?.cue(cue, now, intent.direction);
     lastFrame = next; lastRevision = revision;
@@ -98,10 +117,10 @@ function startRig() {
   cancelAnimationFrame(frame); engine?.dispose(); engine = undefined;
   if (!image) return;
   try {
-    engine = createEngine(canvas, image); lastFrame = -1; redraw();
+    engine = createEngine(canvas, image); lastFrame = -1; rig.dataset.ready = 'true'; element('art-placeholder').hidden = true; place(position.x, position.y); redraw();
     element('art-status').textContent = 'Tu Capri está aquí. Arrástrala, salúdala o déjala chillear.';
   }
-  catch { element('art-status').textContent = 'WebGL no está disponible. La conversación sigue activa.'; }
+  catch { rig.dataset.ready = 'false'; element('art-placeholder').hidden = false; element('art-placeholder').textContent = 'No se pudo iniciar el personaje 2D. Vuelve a abrir Capri.'; element('art-status').textContent = 'WebGL no está disponible. La conversación sigue activa.'; }
 }
 async function useArtwork(blob: Blob, persist: boolean) {
   const current = ++assetRevision;
@@ -114,10 +133,10 @@ async function useArtwork(blob: Blob, persist: boolean) {
     if (persist) await saveArtwork(blob);
     if (current !== assetRevision) return;
     image = next; element('art-placeholder').hidden = true; startRig();
-    element('settings-status').textContent = 'Arte guardado en este dispositivo.';
+    if (persist) element('settings-status').textContent = 'Arte guardado en este dispositivo.';
   } finally { URL.revokeObjectURL(url); }
 }
-canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; element('art-status').textContent = 'Recuperando el personaje…'; });
+canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; rig.dataset.ready = 'false'; element('art-status').textContent = 'Recuperando el personaje…'; });
 canvas.addEventListener('webglcontextrestored', startRig);
 reduced.addEventListener('change', () => { fx?.clear(); redraw(); });
 element<HTMLInputElement>('art').addEventListener('change', async event => {
@@ -128,9 +147,12 @@ element<HTMLInputElement>('art').addEventListener('change', async event => {
 });
 element('delete-art').addEventListener('click', async () => {
   try {
-    ++assetRevision; await deleteArtwork(); image = undefined; cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; fx?.clear();
-    element('art-placeholder').hidden = false; element('settings-status').textContent = 'Arte local eliminado.';
-    element('art-status').textContent = 'Carga tu arte en Ajustes para activar el personaje.';
+    const current = ++assetRevision; await deleteArtwork();
+    const original = await loadPackagedArtwork();
+    if (current !== assetRevision) return;
+    if (!original) throw new Error('Esta instalación no contiene la Capri original. Conservé el personaje visible hasta que selecciones otro PNG.');
+    await useArtwork(original, false);
+    element('settings-status').textContent = 'Capri original restaurada. El arte personalizado se eliminó del dispositivo.';
   } catch (error) { element('settings-status').textContent = errorText(error); }
 });
 element<HTMLSelectElement>('motion').value = settings.motion;
@@ -163,18 +185,24 @@ rig.addEventListener('pointermove', event => {
   if (drag.moved) { place(drag.start.x + dx, drag.start.y + dy); setIntent({ dragging: true }); }
 });
 function release() { if (!drag) return; suppressClick = drag.moved; drag = undefined; setIntent({}); }
-rig.addEventListener('pointerup', release); rig.addEventListener('pointercancel', release);
+rig.addEventListener('pointerup', release); rig.addEventListener('pointercancel', release); rig.addEventListener('lostpointercapture', release);
 rig.addEventListener('click', () => { if (suppressClick) { suppressClick = false; return; } if (image) gesture('saludar'); else showPanel('settings'); });
-window.addEventListener('resize', () => place(position.x, position.y));
+rig.addEventListener('keydown', event => {
+  const steps: Record<string, [number, number]> = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] };
+  const step = steps[event.key]; if (!step || !image) return;
+  event.preventDefault(); roaming = false; element('roam').setAttribute('aria-pressed', 'false'); place(position.x + step[0], position.y + step[1]);
+});
+new ResizeObserver(() => place(position.x, position.y)).observe(stage);
+mountPhoneViewport(element('composer'));
+element('roam').setAttribute('aria-pressed', String(roaming));
 
 function showPanel(next: string) {
   panel = next;
-  place(0, 0);
   for (const section of document.querySelectorAll<HTMLElement>('.panel')) section.hidden = section.id !== `panel-${next}`;
   for (const button of document.querySelectorAll<HTMLElement>('[data-panel]')) {
     if (button.dataset.panel === next) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
   }
-  redraw();
+  place(position.x, position.y); redraw();
   if (next === 'inbox') { void inbox.refresh(); void memoryView.refresh(); }
 }
 for (const button of document.querySelectorAll<HTMLElement>('[data-panel]')) button.addEventListener('click', () => showPanel(button.dataset.panel!));
@@ -190,10 +218,13 @@ let attachedWork: string | undefined;
 let connectionEpoch = 0;
 let manualToSave: { url: string; token: string } | undefined;
 let runtimeConnection: { url: string; token: string } | undefined;
-const reviews = createConversationRequests(element('requests'));
+const conversationView = createConversationView({ container: element('cards'), empty: element('empty-conversation'), scroller: element('conversation-scroll'), newMessages: element<HTMLButtonElement>('new-messages') });
+const reviews = createConversationRequests(element('requests'), { append: conversationView.updateExtra });
 let availability: Availability = { available: false, status: 'checking', supportsSpanish: false };
 let linkedStatus: LinkedStatus = 'offline';
 let linkedBusy = false;
+let hostAgentState = 'idle';
+let healthAction: HealthAction | undefined;
 let localBusy = false;
 let localGeneration = 0;
 let conversationReady = false;
@@ -219,48 +250,30 @@ function persist(): Promise<void> {
 
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 250); }
 function renderChat() {
-  element('empty-conversation').hidden = entries.length > 0;
-  const container = element('cards');
-  const nodes = new Map(Array.from(container.children).map(child => [(child as HTMLElement).dataset.id, child as HTMLElement]));
-  for (const entry of entries) {
-    let node = nodes.get(entry.id);
-    if (!node) {
-      node = document.createElement('article'); node.className = 'chat-card'; node.dataset.id = entry.id;
-      const label = document.createElement('div'); label.className = 'chat-label';
-      const text = document.createElement('p'); text.className = 'chat-text';
-      const state = document.createElement('small'); const trace = document.createElement('details'); trace.className = 'tool-trace'; node.append(label, text, state, trace);
-    }
-    node.dataset.role = entry.role;
-    node.children[0]!.textContent = `${entry.role === 'user' ? 'TÚ' : entry.role === 'notice' ? 'AVISO' : 'CAPRI'} / ${entry.engine === 'iphone' ? 'IPHONE' : 'GENTLE DOT'}`;
-    node.children[1]!.textContent = entry.text;
-    node.children[2]!.textContent = entry.state === 'pending' ? (entry.role === 'user' ? 'Esperando confirmación del host…' : 'Preparando respuesta…') : entry.state === 'interrupted' ? 'Interrumpido o sin confirmar. No se reenvía automáticamente.' : '';
-    const trace = node.children[3] as HTMLDetailsElement;
-    const activities = entry.activities ?? [];
-    trace.hidden = activities.length === 0;
-    const summary = document.createElement('summary');
-    summary.textContent = `${activities.length} acciones · ${activities.filter(item => item.status === 'running').length} en curso`;
-    const list = document.createElement('ul');
-    for (const activity of activities) { const item = document.createElement('li'); item.textContent = `${activity.status === 'running' ? 'En curso' : activity.status === 'done' ? 'Completado' : 'Interrumpido o fallido'} · ${activity.title}`; if (activity.detail) { const details = document.createElement('details'); const label = document.createElement('summary'); label.textContent = 'Ver resultado'; const output = document.createElement('pre'); output.textContent = activity.detail; details.append(label, output); item.append(details); } list.append(item); }
-    trace.replaceChildren(summary, list);
-    container.append(node);
-    nodes.delete(entry.id);
-  }
-  for (const node of nodes.values()) node.remove();
+  element('panel-chat').dataset.empty = String(entries.length === 0);
+  conversationView.render(entries);
 }
+
 function add(entry: ChatEntry) { if (!entry.activities) entry.activities = entries.find(prior => prior.id === entry.id)?.activities; persistence.enqueue(entries); persistence.enqueue([entry]); entries = updateEntry(entries, entry); renderChat(); scheduleSave(); }
 function notice(text: string, target: Engine = selected, id: string = localIdentifier()) { add({ id, role: 'notice', text, engine: target, state: 'complete', at: Date.now() }); }
 function remoteId(id: string) { return `host:${host}|${remoteConversation}|${id}`; }
 function updateControls() {
-  if (!localBusy && !pendingRemote) selected = preference === 'auto' ? (availability.available && availability.supportsSpanish ? 'iphone' : linkedStatus === 'ready' ? 'gentle' : 'iphone') : preference;
-  const ready = selected === 'iphone' ? availability.available && availability.supportsSpanish : linkedStatus === 'ready';
+  const health = connectionHealth({ local: availability, linkedStatus, agentState: hostAgentState, hostConfigured: Boolean(settings.url), preference, capabilities: { workSync: linked.supportsWorkSync(), meetingDrafts: linked.supportsMeetingDrafts() } });
+  if (!localBusy && !pendingRemote) selected = health.selectedEngine;
+  const ready = selected === 'iphone' ? health.local.state === 'ready' : health.host.state === 'ready';
   const busy = localBusy || !!pendingRemote;
+  element('engine-status').dataset.ready = String(ready);
+  element('engine-summary').textContent = preference === 'auto' ? 'Automático' : selected === 'iphone' ? 'Este iPhone' : 'Laptop';
   element<HTMLButtonElement>('send').disabled = !conversationReady || persistence.status().blocked || !ready || busy;
   element<HTMLSelectElement>('engine').disabled = localBusy || !!pendingRemote;
   element('stop').hidden = !(localBusy || (selected === 'gentle' && linkedBusy));
   element<HTMLButtonElement>('send').textContent = selected === 'gentle' && linkedBusy ? 'Añadir instrucción' : 'Enviar';
   prompt.maxLength = selected === 'iphone' ? 2400 : 8000;
-  element('engine-badge').textContent = selected === 'iphone' ? 'EN ESTE IPHONE' : 'EN TU LAPTOP';
-  element('engine-status').textContent = selected === 'iphone' ? availabilityMessage(availability) : linkedStatus === 'ready' ? 'Vinculado. Se enviarán tu mensaje y hasta cuatro turnos locales recientes a la laptop.' : 'Gentle Dot no está conectado. Capri conserva la conversación y los archivos en este iPhone.';
+  element('engine-badge').textContent = selected === 'iphone' ? 'IPHONE' : 'LAPTOP';
+  healthAction = health.primaryAction;
+  element('health-action').hidden = ready || !healthAction;
+  element('health-action').textContent = healthAction ? healthActionLabel(healthAction) : '';
+  element('engine-status').textContent = selected === 'iphone' ? health.local.detail : health.host.detail;
 }
 function unconfirmedRemote() {
   if (!pendingRemote) return;
@@ -273,8 +286,9 @@ async function checkModel() {
   element('local-status').textContent = availabilityMessage(availability); updateControls();
 }
 function handleMessage(message: ServerMessage) {
-  if (message.type === 'ready') { remoteConversation = message.conversationId ?? 'default'; linkedBusy = ['thinking', 'working', 'needs_you'].includes(message.agentState); }
+  if (message.type === 'ready') { hostAgentState = message.agentState; remoteConversation = message.conversationId ?? 'default'; linkedBusy = ['thinking', 'working', 'needs_you'].includes(message.agentState); }
   if (message.type === 'agent_state') {
+    hostAgentState = message.state;
     linkedBusy = ['thinking', 'working', 'needs_you'].includes(message.state);
     if (selected === 'gentle') { setIntent({ working: linkedBusy, thinking: message.state === 'thinking', alert: message.state === 'needs_you' }); element('scene-status').textContent = ({ thinking: 'Pensando contigo…', working: 'Estoy trabajando.', needs_you: 'Necesito tu respuesta.', idle: 'Aquí contigo.', starting: 'Iniciando…', restarting: 'Recuperando el hilo…', error: 'Algo necesita atención.' })[message.state]; }
   }
@@ -356,8 +370,35 @@ const linked = createLinkedChat({
     updateControls();
   }, onMessage: handleMessage,
 });
+element('health-action').addEventListener('click', async () => {
+  if (healthAction === 'check-local') { await checkModel(); return; }
+  if (healthAction === 'use-iphone' || healthAction === 'use-gentle') {
+    preference = healthAction === 'use-iphone' ? 'iphone' : 'gentle';
+    element<HTMLSelectElement>('engine').value = preference; updateControls(); return;
+  }
+  if (healthAction === 'retry-host') {
+    if (runtimeConnection) linked.connect(runtimeConnection.url, runtimeConnection.token);
+    else await restoreDeviceConnection();
+    return;
+  }
+  showPanel('settings');
+  const destination = element(healthAction === 'show-pairing' || healthAction === 'show-host-help' ? 'pairing-invitation' : 'check-local');
+  destination.scrollIntoView({ block: 'center' }); destination.focus();
+});
 element<HTMLSelectElement>('engine').addEventListener('change', () => { preference = element<HTMLSelectElement>('engine').value as Engine | 'auto'; updateControls(); });
-prompt.addEventListener('input', () => { draftEdited = true; scheduleSave(); });
+function sizeDraft() { prompt.style.height = 'auto'; prompt.style.height = `${Math.min(prompt.scrollHeight, 180)}px`; }
+let draftWidth = 0, draftLayoutFrame = 0;
+new ResizeObserver(() => { if (draftWidth !== prompt.clientWidth) { draftWidth = prompt.clientWidth; cancelAnimationFrame(draftLayoutFrame); draftLayoutFrame = requestAnimationFrame(sizeDraft); } }).observe(prompt);
+prompt.addEventListener('input', () => { draftEdited = true; sizeDraft(); scheduleSave(); });
+prompt.addEventListener('focus', () => { typing = true; redraw(); });
+prompt.addEventListener('blur', () => { typing = false; redraw(); });
+new MutationObserver(() => {
+  const next = !!element('requests').querySelector('.actions button:not(:disabled)');
+  if (next === attention) return;
+  attention = next; redraw();
+  if (attention) element('scene-status').textContent = 'Necesito tu revisión.';
+  else if (!localBusy && !linkedBusy) element('scene-status').textContent = 'Aquí contigo.';
+}).observe(element('requests'), { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
 element<HTMLFormElement>('composer').addEventListener('submit', async event => {
   event.preventDefault();
   const text = prompt.value.trim();
@@ -372,14 +413,11 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
     const generation = ++localGeneration;
     const id = localIdentifier(); localBusy = true;
     const controller = new AbortController(); localController = controller;
-    const context = (attachedWork ? `Archivo adjunto: trabajo ${attachedWork}. Usa work_read y file_read/file_ocr para consultarlo.\n` : '') + JSON.stringify({
-      operations: entries.filter(entry => entry.activities?.length).slice(-1).map(entry => ({ state: entry.state, activities: entry.activities?.slice(-1).map(activity => ({ id: activity.id, status: activity.status, title: activity.title.slice(0, 50), result: activity.detail?.slice(0, 180) })) })),
-      turns: entries.filter(entry => entry.state === 'complete' && entry.role !== 'notice').slice(-2).reverse().map(entry => ({ role: entry.role, text: entry.text.slice(-100) })),
-    });
+    const context = createAgentContext(entries, { ...(attachedWork ? { attachedWork } : {}) });
     add({ id: localIdentifier(), role: 'user', text, engine: 'iphone', state: 'complete', at: Date.now() });
     let turnEntry: ChatEntry = { id, role: 'assistant', text: '', engine: 'iphone', state: 'pending', at: Date.now() };
     add(turnEntry);
-    prompt.value = ''; persist(); updateControls(); setIntent({ working: true, thinking: true }); element('scene-status').textContent = 'Pensando contigo…';
+    prompt.value = ''; sizeDraft(); persist(); updateControls(); setIntent({ working: true, thinking: true }); element('scene-status').textContent = 'Pensando contigo…';
     try {
       // Rebuild a bounded context from the visible timeline, also after app restarts.
       await resetLocal();
@@ -418,7 +456,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
       pendingRemote = { id, text: request, displayText: text };
       pendingTimer = setTimeout(unconfirmedRemote, 15000);
       add({ id, role: 'user', text, transportText: request, engine: 'gentle', state: 'pending', at: Date.now() });
-      prompt.value = ''; persist(); updateControls();
+      prompt.value = ''; sizeDraft(); persist(); updateControls();
     } else element('chat-notice').textContent = 'No se envió. Tu mensaje sigue aquí.';
   }
 });
@@ -461,6 +499,7 @@ const inbox = mountInbox(text => { draftEdited = true; prompt.value = text; sche
 const memoryView = mountMemoryView({ status: persistence.status, pending: persistence.pending, visible: () => structuredClone(entries), draft: () => prompt.value, retry: persist });
 
 document.addEventListener('visibilitychange', () => {
+  if (document.hidden) release();
   cancelAnimationFrame(frame); fx?.clear(); persist();
   if (document.hidden) { void cancelDictation(); director.update(intent, performance.now(), true); linked.suspend(); if (localBusy) void stopLocal(); }
   else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); }
@@ -486,7 +525,7 @@ async function restoreConversation() {
     conversationReady = true;
     retry.hidden = true;
     if (element('chat-notice').textContent === recoveryMessage) element('chat-notice').textContent = '';
-    renderChat(); await persist();
+    renderChat(); sizeDraft(); await persist();
   } catch {
     // Never overwrite an unread stored timeline with the partial in-memory state.
     element('chat-notice').textContent = recoveryMessage;
@@ -500,10 +539,29 @@ async function initialize() {
   updateControls();
   // Independent stores must not delay the character or the native availability
   // check. A late startup read must also never replace newly selected artwork.
-  const initialArtworkRevision = assetRevision;
-  const artworkReady = loadArtwork().then(async art => {
-    if (art && assetRevision === initialArtworkRevision) await useArtwork(art, false);
-  }).catch(error => { element('settings-status').textContent = errorText(error); });
+  let initialArtworkRevision = assetRevision;
+  const artworkReady = (async () => {
+    // A corrupt or unreadable override must not suppress the packaged character.
+    let art: Blob | undefined;
+    try { art = await loadArtwork() ?? undefined; } catch { /* The bundle is independent of IndexedDB. */ }
+    if (assetRevision !== initialArtworkRevision) return;
+    if (art) {
+      try {
+        const decoded = useArtwork(art, false); initialArtworkRevision = assetRevision;
+        await decoded; return;
+      } catch { if (assetRevision !== initialArtworkRevision) return; }
+    }
+    art = await loadPackagedArtwork();
+    if (assetRevision !== initialArtworkRevision) return;
+    if (!art) throw new Error('Esta instalación no incluye el arte de Capri. Instala el paquete personal o importa tu PNG en Ajustes.');
+    const decoded = useArtwork(art, false); initialArtworkRevision = assetRevision;
+    await decoded;
+  })().catch(error => {
+    if (assetRevision !== initialArtworkRevision) return;
+    element('settings-status').textContent = errorText(error);
+    element('art-status').textContent = errorText(error);
+    element('art-placeholder').textContent = 'No se pudo cargar Capri. Revisa Personaje en Ajustes.';
+  });
   const servicesReady = Promise.all([checkModel(), inbox.refresh(), restoreDeviceConnection(), importSharedFiles(), connectionSettings.refresh(), memoryView.refresh()]);
   await Promise.all([artworkReady, servicesReady, restoreConversation()]);
 }
@@ -570,6 +628,7 @@ element<HTMLInputElement>('chat-files').addEventListener('change', async event =
     control.value = ''; await inbox.refresh();
   } catch (error) { element('chat-notice').textContent = errorText(error); }
 });
+mountPairingInput(element<HTMLFormElement>('pairing'), element<HTMLInputElement>('pairing-invitation'));
 element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
   event.preventDefault();
   const button = element<HTMLFormElement>('pairing').querySelector('button')!; button.disabled = true;
