@@ -54,12 +54,34 @@
       <button id="save-draft" type="button">Guardar el borrador de conversación</button><p id="work-status" role="status" class="hint"></p><div id="work-list"></div>
     </section>
     <section id="panel-settings" class="panel" aria-label="Ajustes" hidden>
-      <div class="section-heading"><span class="eyebrow">AJUSTES</span><span>TU CAPRI</span></div>
-      <form id="pairing" class="surface"><h2>Tu laptop</h2><details id="pairing-manual"><summary>Pegar una invitación</summary><label>Invitación de Gentle Dot<input id="pairing-invitation" autocomplete="off" placeholder="gentledot://pair?…" required autocapitalize="none" spellcheck="false" /></label></details><button type="submit" class="primary">Vincular iPhone</button><p id="pairing-status" class="hint" role="status">El acceso se conserva en Keychain.</p></form>
-      <section class="surface"><h2>Personaje y movimiento</h2><p id="art-status" class="hint" role="status">Preparando tu Capri…</p><label>Cambiar arte personal (PNG 240 × 420)<input id="art" type="file" accept="image/png" /></label><p class="hint">El arte se conserva en este dispositivo.</p><label>Movimiento<select id="motion"><option value="full">Completo</option><option value="reduced">Reducido</option><option value="paused">En pausa</option></select></label><details><summary>Gestos y presencia</summary><div class="actions character-actions"><button type="button" id="greet">Saludar</button><button type="button" id="chill">Descansar</button><button type="button" id="roam" aria-pressed="false">Pasear</button><button type="button" id="appear">Desaparecer</button></div></details><button id="delete-art" type="button">Restaurar Capri original</button></section>
-      <section class="surface"><h2>Inteligencia en el iPhone</h2><p id="local-status" role="status" class="hint">Comprobando disponibilidad…</p><button type="button" id="check-local">Comprobar otra vez</button><p class="hint">Foundation Models trabaja en el dispositivo. Requiere un modelo de Apple Intelligence disponible y compatible con español.</p></section>
-      <section id="connection-settings" class="surface" aria-label="Conexiones"><h2>Conexiones</h2><p class="hint">Cargando configuración de cuentas…</p></section>
-<details><summary>Conexión manual</summary><form id="connection" class="surface"><h2>Enlace con Gentle Dot</h2><label>Dirección segura de tu laptop<input id="url" type="url" placeholder="wss://tu-daemon/ws" required /></label><label>Token del dispositivo<input id="token" type="password" autocomplete="off" required /></label><p class="hint">Se recuerda la dirección. En la app, el token se guarda en Keychain. En el navegador sólo se mantiene en memoria.</p><div class="actions"><button class="primary" type="submit">Conectar</button><button id="disconnect" type="button">Desconectar</button></div><p id="status" role="status" class="hint">Sin conexión</p></form></details><p id="settings-status" role="status" class="hint"></p><p id="build-info" class="hint build-info"></p>
+      <div class="settings-heading"><h1>Tu Capri</h1><p>Conexiones, inteligencia y presencia.</p></div>
+      <form id="pairing" class="surface settings-pairing">
+        <h2>Tu laptop</h2>
+        <details id="pairing-manual"><summary>Pegar una invitación</summary><label>Invitación de Gentle Dot<input id="pairing-invitation" autocomplete="off" placeholder="gentledot://pair?…" required autocapitalize="none" spellcheck="false" /></label></details>
+        <button type="submit" class="primary">Vincular iPhone</button>
+        <p id="pairing-status" class="hint" role="status">El acceso se recuerda en este iPhone.</p>
+      </form>
+      <div class="settings-group">
+        <details id="settings-services" class="settings-option">
+          <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 13 4-4m-6 5-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 5 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0"/></svg><span><strong>Servicios y cuentas</strong><small>Tus conexiones y otros servicios MCP</small></span><svg class="settings-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></summary>
+          <div class="settings-body"><section id="connection-settings" class="surface" aria-label="Conexiones"><h2>Conexiones</h2><p class="hint">Cargando cuentas…</p></section></div>
+        </details>
+        <details id="settings-intelligence" class="settings-option">
+          <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/></svg><span><strong>Inteligencia en el iPhone</strong><small id="local-summary">Comprobando disponibilidad…</small></span><svg class="settings-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></summary>
+          <div class="settings-body"><p id="local-status" role="status" class="hint">Comprobando disponibilidad…</p><button type="button" id="check-local">Comprobar otra vez</button><p class="hint">Usa el modelo de Apple Intelligence disponible en tu iPhone. La conversación local funciona sin internet.</p></div>
+        </details>
+        <details id="settings-character" class="settings-option">
+          <summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4 5 8l2 12h10l2-12-3-4-4 3ZM9 12h.01M15 12h.01m-5 4h4"/></svg><span><strong>Personaje y movimiento</strong><small>Tu Capri 2D, a tu ritmo</small></span><svg class="settings-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></summary>
+          <div class="settings-body">
+            <p id="art-status" class="hint" role="status">Preparando tu Capri…</p>
+            <label>Movimiento<select id="motion"><option value="full">Completo</option><option value="reduced">Reducido</option><option value="paused">En pausa</option></select></label>
+            <details><summary>Gestos y presencia</summary><div class="actions character-actions"><button type="button" id="greet">Saludar</button><button type="button" id="chill">Descansar</button><button type="button" id="roam" aria-pressed="false">Pasear</button><button type="button" id="appear">Desaparecer</button></div></details>
+            <details><summary>Cambiar imagen</summary><p class="hint">PNG de 240 × 420. Se conserva en este iPhone.</p><input id="art" type="file" accept="image/png" aria-label="Arte personal PNG" hidden /><button type="button" id="choose-art">Elegir imagen</button><button id="delete-art" type="button">Restaurar Capri original</button></details>
+          </div>
+        </details>
+      </div>
+      <details class="settings-manual"><summary>Conexión manual</summary><form id="connection" class="surface"><h2>Enlace con Gentle Dot</h2><label>Dirección segura de tu laptop<input id="url" type="url" placeholder="wss://tu-daemon/ws" required /></label><label>Token del dispositivo<input id="token" type="password" autocomplete="off" required /></label><p class="hint">La dirección se recuerda y la credencial se guarda en el llavero del iPhone. En la vista web se mantiene sólo en memoria.</p><div class="actions"><button class="primary" type="submit">Conectar</button><button id="disconnect" type="button">Desconectar</button></div><p id="status" role="status" class="hint">Sin conexión</p></form></details>
+      <p id="settings-status" role="status" class="hint"></p><p id="build-info" class="hint build-info"></p>
     </section>
   </main>
   <script type="module" src="/src/main.ts"></script>

@@ -309,6 +309,7 @@ test('character artwork persists; appearance and motion controls fit small and l
   await page.locator('[data-panel="settings"]').click();
   await page.locator('#art').setInputFiles({ name: 'capri-test.png', mimeType: 'image/png', buffer: Buffer.from(png!, 'base64') });
   await expect(page.locator('#settings-status')).toHaveText('Arte guardado en este dispositivo.');
+  await page.locator('#settings-character > summary').click();
   await page.locator('#motion').selectOption('reduced');
   await page.reload();
   const restored = await page.evaluate(async () => {
@@ -337,6 +338,7 @@ test('character artwork persists; appearance and motion controls fit small and l
     throw error;
   }
   await page.locator('[data-panel="settings"]').click();
+  await page.locator('#settings-character > summary').click();
   await page.getByText('Gestos y presencia', { exact: true }).click();
   await page.locator('#appear').click();
   await expect(page.locator('#rig-handle')).toBeDisabled();

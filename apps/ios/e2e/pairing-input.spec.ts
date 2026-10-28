@@ -56,7 +56,7 @@ test('cancellation blocks a late result and pending scan blocks form submission'
   await fixture(page, { hold: true });
   await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
   await page.waitForFunction(() => typeof (globalThis as any).finishQR === 'function');
-  await expect(page.getByRole('button', { name: 'Vincular iPhone', exact: true })).toBeDisabled();
+  await expect(page.locator('#fixture button[type=submit]')).toBeDisabled();
   await page.evaluate(() => document.querySelector('form')!.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true })));
   expect(await page.evaluate(() => (globalThis as any).pairSubmits)).toBe(0);
   await page.getByRole('button', { name: 'Cancelar lectura' }).click();
@@ -102,7 +102,7 @@ test('native camera result for an unrelated URL cannot become a candidate', asyn
   await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
   await expect(page.locator('.pairing-scan-status')).toContainText('gentledot://pair');
   await expect(page.locator('#invitation')).toHaveValue('');
-  await expect(page.getByRole('button', { name: 'Vincular iPhone', exact: true })).toBeDisabled();
+  await expect(page.locator('#fixture button[type=submit]')).toBeDisabled();
   expect(page.url()).toContain('/pairing-fixture');
 });
 

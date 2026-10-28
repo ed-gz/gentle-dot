@@ -45,7 +45,7 @@ async function fixture(page: Page, schemes = ['capri-auth']) {
   }, { schemes });
   await page.goto('/');
   await expect(page.locator('#provider-connection')).toBeAttached();
-  await page.locator('[data-panel="settings"]').click();
+  await page.locator('[data-panel="settings"]').click(); await page.locator('#settings-services > summary').click();
   await page.locator('#connection-editor summary').click();
 }
 

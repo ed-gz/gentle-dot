@@ -17,7 +17,7 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
   const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
   const region = document.createElement('div'); region.className = 'pairing-scan';
   const help = document.createElement('p'); help.className = 'pairing-scan-help';
-  help.textContent = 'Abre el QR de vinculación en Gentle Dot, en tu laptop. Apunta la cámara y confirma el equipo. El acceso se recuerda para la próxima vez.';
+  help.textContent = 'Abre el QR de Gentle Dot en tu laptop y escanéalo.';
   const controls = document.createElement('div'); controls.className = 'pairing-scan-controls';
   const status = document.createElement('p'); status.className = 'pairing-scan-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const button = (label: string) => { const value = document.createElement('button'); value.type = 'button'; value.textContent = label; return value; };
@@ -29,7 +29,7 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
   const heading = form.querySelector('h2'); if (heading) heading.after(region); else form.prepend(region);
   let epoch = 0, busy = false, submitting = false, disposed = false, controller: AbortController | undefined;
   const valid = () => { try { parseInvitation(input.value); return true; } catch { return false; } };
-  const setBusy = (value: boolean) => { busy = value; const locked = value || submitting; if (submit) submit.disabled = locked || !valid(); camera.disabled = photo.disabled = locked || !native; input.disabled = submitting; stop.hidden = !value; region.setAttribute('aria-busy', String(locked)); };
+  const setBusy = (value: boolean) => { busy = value; const locked = value || submitting; if (submit) { submit.disabled = locked || !valid(); submit.hidden = !valid(); } camera.disabled = photo.disabled = locked || !native; input.disabled = submitting; stop.hidden = !value; region.setAttribute('aria-busy', String(locked)); };
   setBusy(false);
   if (!native) { status.textContent = 'La cámara y lectura de QR funcionan en Capri instalada. Aquí puedes pegar la invitación.'; const manual = input.closest('details'); if (manual) manual.open = true; }
   const clearCandidate = () => { epoch++; setBusy(busy); if (busy) status.textContent = 'Conservando la invitación que escribiste.'; else if (valid()) showCandidate(); else status.textContent = '';  };

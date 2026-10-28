@@ -1,0 +1,38 @@
+/* Grouped settings keep secondary forms out of the initial phone viewport. */
+#panel-settings { padding-top: 24px; scroll-padding-block: 20px; }
+.settings-heading { padding: 0 4px 24px; }
+.settings-heading h1 { font-size: 1.9rem; letter-spacing: -.03em; }
+.settings-heading p { color: var(--muted); margin-top: 8px; font-size: .9rem; }
+#panel-settings .surface { border: 0; border-radius: 18px; margin: 0; padding: 20px; }
+#panel-settings .settings-pairing { margin-bottom: 24px; }
+.settings-pairing h2 { font-size: 1.1rem; margin-bottom: 8px; }
+.settings-pairing .pairing-scan { margin: 0; gap: 12px; }
+.settings-pairing .pairing-scan-help { color: var(--muted); }
+.settings-pairing .pairing-scan-controls { gap: 8px; }
+.settings-pairing .pairing-scan-controls button { border-radius: 12px; }
+.settings-pairing .pairing-scan-controls button:not(.primary) { border-color: transparent; background: transparent; color: var(--violet); }
+.settings-pairing .pairing-scan-status:empty { display: none; }
+.settings-pairing > button { margin-top: 12px; width: 100%; border-radius: 12px; }
+.settings-pairing > .hint { margin-bottom: 0; }
+#panel-settings #pairing-manual > summary { color: var(--muted); font-size: .875rem; }
+.settings-group { overflow: clip; border-radius: 18px; background: var(--panel); }
+.settings-option + .settings-option { border-top: 1px solid var(--line); }
+.settings-option > summary { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 16px; list-style: none; }
+.settings-option > summary::-webkit-details-marker { display: none; }
+.settings-option > summary::marker { content: ''; }
+.settings-option > summary > svg:first-child { color: var(--violet); }
+.settings-option > summary > span { flex: 1; min-width: 0; }
+.settings-option > summary strong { display: block; font-size: 1rem; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.settings-option > summary small { display: block; font-size: .8rem; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
+.settings-chevron { width: 16px; height: 16px; color: var(--muted); }
+.settings-option[open] > summary .settings-chevron { transform: rotate(90deg); }
+.settings-option > summary:active { background: color-mix(in srgb, var(--violet) 12%, var(--panel)); }
+.settings-option > summary:focus-visible { outline-offset: -4px; }
+.settings-body { padding: 0 16px 20px; }
+#panel-settings .settings-body .surface { padding: 0; }
+#panel-settings .settings-body > :first-child { margin-top: 0; }
+#panel-settings input, #panel-settings select { border-color: var(--line); border-radius: 10px; }
+#panel-settings button { border-radius: 10px; }
+.settings-manual { margin-top: 16px; }
+.settings-manual > summary { padding-inline: 4px; color: var(--muted); font-size: .9rem; }
+#panel-settings .build-info { font-size: .75rem; margin-top: 24px; }

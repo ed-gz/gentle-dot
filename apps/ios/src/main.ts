@@ -40,6 +40,7 @@ import { mountPairingInput } from './pairing-input.ts';
 import './style.css';
 
 import './companion-presence.css';
+import './settings.css';
 import './composer.css';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -211,6 +212,7 @@ element('delete-art').addEventListener('click', async () => {
     element('settings-status').textContent = 'Capri original restaurada. El arte personalizado se eliminó del dispositivo.';
   } catch (error) { element('settings-status').textContent = errorText(error); }
 });
+element('choose-art').addEventListener('click', () => element<HTMLInputElement>('art').click());
 element<HTMLSelectElement>('motion').value = settings.motion;
 element('motion').addEventListener('change', () => {
   settings.motion = element<HTMLSelectElement>('motion').value as typeof settings.motion;
@@ -361,7 +363,9 @@ function unconfirmedRemote() {
 }
 async function checkModel() {
   availability = await checkLocalIntelligence();
-  element('local-status').textContent = availabilityMessage(availability); updateControls();
+  element('local-status').textContent = availabilityMessage(availability);
+  element('local-summary').textContent = availability.available ? 'Disponible sin internet' : availability.status === 'browser_preview' ? 'Requiere la app instalada' : 'Revisa su disponibilidad';
+  updateControls();
 }
 function handleMessage(message: ServerMessage) {
   if (message.type === 'ready') { hostAgentState = message.agentState; remoteConversation = message.conversationId ?? 'default'; linkedBusy = ['thinking', 'working', 'needs_you'].includes(message.agentState); }
@@ -462,6 +466,7 @@ element('health-action').addEventListener('click', async () => {
   }
   showPanel('settings');
   const destination = element(healthAction === 'show-pairing' || healthAction === 'show-host-help' ? 'pairing-camera' : 'check-local');
+  for (let parent = destination.parentElement; parent; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true;
   destination.scrollIntoView({ block: 'center' }); destination.focus();
 });
 element<HTMLSelectElement>('engine').addEventListener('change', () => { preference = element<HTMLSelectElement>('engine').value as Engine | 'auto'; updateControls(); });
