@@ -1,7 +1,7 @@
 import { localIdentifier } from './local-identifiers.ts';
 import { waitForForeground } from './foreground.ts';
 import { pickDocuments, listDocumentImports, importDocumentItem } from './document-import.ts';
-import { createEngine, frameAt } from '@gentle-dot/ui/src/capri2d/engine.ts';
+import { createEngineAsync, frameAt } from '@gentle-dot/ui/src/capri2d/engine.ts';
 import { RoamDirector, type RoamPosition } from '@gentle-dot/ui/src/capri2d/roam.ts';
 import { occupiedPhoneSpace, phonePerches, phonePositionFree } from './companion-space.ts';
 import { RigDirector, type RigIntent } from '@gentle-dot/ui/src/capri2d/director.ts';
@@ -41,6 +41,7 @@ import './style.css';
 
 import './companion-presence.css';
 import './settings.css';
+import { createFramePacer } from './frame-pacer.ts';
 import './composer.css';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -53,7 +54,8 @@ const canvas = element<HTMLCanvasElement>('capri');
 const rig = element<HTMLButtonElement>('rig-handle');
 const stage = element('stage');
 const director = new RigDirector();
-let engine: ReturnType<typeof createEngine> | undefined;
+let engine: Awaited<ReturnType<typeof createEngineAsync>> | undefined;
+let preparingRig: AbortController | undefined;
 let fx: RigFx | undefined;
 let image: HTMLImageElement | undefined;
 let frame = 0;
@@ -109,10 +111,12 @@ function layoutCompanion() {
   measuredAt = -Infinity;
   place(position.x, position.y);
 }
+const framePacer = createFramePacer();
 function animate(now: number) {
   // Let the persisted transcript reach the DOM before the first GPU frame.
   // Software renderers can block unrelated IndexedDB callbacks during warmup.
   if (!conversationRestored || !engine || document.hidden || !['agents', 'chat'].includes(panel) || absent) return;
+  if (!isReduced() && !framePacer.ready(now)) { frame = requestAnimationFrame(animate); return; }
   if (intent.outcome && now - intent.outcome.at > 2400) { const { outcome: _outcome, ...rest } = intent; intent = rest; revision++; }
   if (now - measuredAt >= 1000) {
     layoutCompanion(); measuredAt = now;
@@ -154,9 +158,9 @@ function animate(now: number) {
     lastFrame = next; lastRevision = revision;
   }
   if (!isReduced()) fx?.draw(now);
-  if (!isReduced()) frame = requestAnimationFrame(animate);
+  if (!isReduced()) { framePacer.submitted(now); frame = requestAnimationFrame(animate); }
 }
-function redraw() { document.documentElement.dataset.motion = isReduced() ? 'reduced' : 'full'; revision++; cancelAnimationFrame(frame); lastTime = 0; frame = requestAnimationFrame(animate); }
+function redraw() { document.documentElement.dataset.motion = isReduced() ? 'reduced' : 'full'; revision++; cancelAnimationFrame(frame); framePacer.wake(); lastTime = 0; frame = requestAnimationFrame(animate); }
 function setIntent(next: RigIntent) { intent = next; if (next.gesture || next.dragging || next.question || next.working) travel = undefined; redraw(); }
 function gesture(name: string) {
   clearTimeout(gestureTimer);
@@ -170,14 +174,21 @@ function gesture(name: string) {
     setIntent(current);
   }, 2500);
 }
-function startRig() {
-  cancelAnimationFrame(frame); engine?.dispose(); engine = undefined;
+async function startRig() {
+  preparingRig?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined;
   if (!image) return;
+  const operation = new AbortController(); preparingRig = operation;
+  rig.dataset.ready = 'false';
   try {
-    engine = createEngine(canvas, image, { maskReadback: false }); layoutCompanion(); lastFrame = -1; rig.dataset.ready = 'true'; element('art-placeholder').hidden = true; place(position.x, position.y); redraw();
+    const prepared = await createEngineAsync(canvas, image, { maskReadback: false }, operation.signal);
+    if (operation.signal.aborted || preparingRig !== operation) { prepared.dispose(); return; }
+    engine = prepared; layoutCompanion(); lastFrame = -1; rig.dataset.ready = 'true'; element('art-placeholder').hidden = true; place(position.x, position.y); redraw();
     element('art-status').textContent = 'Tu Capri está aquí. Arrástrala, salúdala o déjala chillear.';
   }
-  catch { rig.dataset.ready = 'false'; element('art-placeholder').hidden = false; element('art-placeholder').textContent = 'No se pudo iniciar el personaje 2D. Vuelve a abrir Capri.'; element('art-status').textContent = 'WebGL no está disponible. La conversación sigue activa.'; }
+  catch {
+    if (operation.signal.aborted || preparingRig !== operation) return;
+    rig.dataset.ready = 'false'; element('art-placeholder').hidden = false; element('art-placeholder').textContent = 'No se pudo iniciar el personaje 2D. Vuelve a abrir Capri.'; element('art-status').textContent = 'WebGL no está disponible. La conversación sigue activa.';
+  } finally { if (preparingRig === operation) preparingRig = undefined; }
 }
 async function useArtwork(blob: Blob, persist: boolean) {
   const current = ++assetRevision;
@@ -189,11 +200,12 @@ async function useArtwork(blob: Blob, persist: boolean) {
     if (current !== assetRevision) return;
     if (persist) await saveArtwork(blob);
     if (current !== assetRevision) return;
-    image = next; element('art-placeholder').hidden = true; startRig();
+    image = next; element('art-placeholder').hidden = true;
     if (persist) element('settings-status').textContent = 'Arte guardado en este dispositivo.';
+    await startRig();
   } finally { URL.revokeObjectURL(url); }
 }
-canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; rig.dataset.ready = 'false'; element('art-status').textContent = 'Recuperando el personaje…'; });
+canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); preparingRig?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; rig.dataset.ready = 'false'; element('art-status').textContent = 'Recuperando el personaje…'; });
 canvas.addEventListener('webglcontextrestored', startRig);
 reduced.addEventListener('change', () => { fx?.clear(); redraw(); });
 element<HTMLInputElement>('art').addEventListener('change', async event => {
