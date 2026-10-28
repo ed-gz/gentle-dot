@@ -4,7 +4,7 @@ type Fixture = { enabled?: boolean; authorization?: string; deny?: boolean; hold
 async function nativeNotifications(page: Page, fixture: Fixture = {}) {
   await page.addInitScript((initial: Fixture) => {
     const state = globalThis as any;
-    state.isTauri = true; state.notificationCalls = [];
+    state.isTauri = true; state.notificationCalls = []; state.nativeRevision = 0;
     state.notificationState = { enabled: initial.enabled ?? false, authorization: initial.authorization ?? 'not_determined' };
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('notification_status')) {
@@ -13,7 +13,14 @@ async function nativeNotifications(page: Page, fixture: Fixture = {}) {
       }
       if (command.endsWith('notification_configure')) {
         state.notificationCalls.push({ command: 'configure', enabled: args.enabled });
-        if (initial.hold) await new Promise<void>(resolve => { state.finishNotification = resolve; });
+        const revision = ++state.nativeRevision;
+        if (initial.hold && !state.heldNotification) {
+          state.heldNotification = true;
+          await new Promise<void>(resolve => { state.finishNotification = resolve; });
+        }
+        // The native preference has its own revision guard as in
+        // CompletionNotifications.configure; a stale reply cannot undo a later choice.
+        if (revision !== state.nativeRevision) { state.staleNotificationReply = true; return { ok: true, ...state.notificationState }; }
         if (args.enabled && initial.deny) state.notificationState = { enabled: false, authorization: 'denied' };
         else state.notificationState = { enabled: args.enabled, authorization: 'authorized' };
         return { ok: true, ...state.notificationState };
@@ -86,4 +93,42 @@ test('foreground refresh during permission dialog cannot overwrite the user choi
   await page.evaluate(() => (globalThis as any).finishNotification());
   await expect(page.locator(checkbox)).toBeChecked();
   await expect(page.locator(message)).toContainText('sin mostrar su contenido');
+});
+
+test('a permission sheet that outlives the deadline is reconciled from the real native status', async ({ page }) => {
+  await nativeNotifications(page, { hold: true });
+  await page.clock.install();
+  await page.getByLabel('Avísame cuando termine').click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishNotification)).toBe('function');
+  await page.clock.fastForward(8001);
+  await expect(page.locator(checkbox)).not.toBeChecked();
+  await expect(page.locator(message)).toContainText('No pude confirmar el cambio');
+  const before = await page.evaluate(() => (globalThis as any).notificationCalls.filter((call: any) => call.command === 'status').length);
+  await page.evaluate(() => (globalThis as any).finishNotification());
+  await expect(page.locator(checkbox)).toBeChecked();
+  await expect(page.locator(message)).toContainText('sin mostrar su contenido');
+  expect(await page.evaluate(() => (globalThis as any).notificationCalls.filter((call: any) => call.command === 'status').length)).toBe(before + 1);
+});
+
+test('a later explicit choice wins over a permission reply that exceeded the deadline', async ({ page }) => {
+  await nativeNotifications(page, { hold: true });
+  await page.clock.install();
+  await page.getByLabel('Avísame cuando termine').click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishNotification)).toBe('function');
+  await page.clock.fastForward(8001);
+  await expect(page.locator(message)).toContainText('No pude confirmar el cambio');
+  await expect(page.locator(checkbox)).not.toBeChecked();
+  await page.getByLabel('Avísame cuando termine').check();
+  await expect(page.locator(checkbox)).toBeChecked();
+  await page.getByLabel('Avísame cuando termine').uncheck();
+  await expect(page.locator(message)).toContainText('Desactivados');
+  const before = await page.evaluate(() => (globalThis as any).notificationCalls.filter((call: any) => call.command === 'status').length);
+  await page.evaluate(async () => { (globalThis as any).finishNotification(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+  await expect.poll(() => page.evaluate(() => (globalThis as any).staleNotificationReply)).toBe(true);
+  await expect(page.locator(checkbox)).not.toBeChecked();
+  await expect(page.locator(message)).toContainText('Desactivados');
+  const result = await page.evaluate(() => ({ state: (globalThis as any).notificationState, calls: (globalThis as any).notificationCalls }));
+  expect(result.state.enabled).toBe(false);
+  expect(result.calls.filter((call: any) => call.command === 'status')).toHaveLength(before);
+  expect(result.calls.filter((call: any) => call.command === 'configure').map((call: any) => call.enabled)).toEqual([true, true, false]);
 });

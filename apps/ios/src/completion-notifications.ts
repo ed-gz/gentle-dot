@@ -20,7 +20,7 @@ export function mountCompletionNotifications(root: HTMLElement, dependencies: {
   const native = dependencies.native ?? isTauri();
   const status = dependencies.status ?? (() => invoke('plugin:local-intelligence|notification_status'));
   const configure = dependencies.configure ?? ((enabled: boolean) => invoke('plugin:local-intelligence|notification_configure', { enabled }));
-  let revision = 0, configuring = false, refreshAfterConfiguration = false;
+  let revision = 0, userRevision = 0, configuring = false, refreshAfterConfiguration = false;
   function show(value: CompletionNotificationStatus) {
     toggle.checked = value.enabled;
     message.textContent = value.enabled ? 'Si iOS permite completar la respuesta al salir, te avisaré sin mostrar su contenido.'
@@ -38,10 +38,15 @@ export function mountCompletionNotifications(root: HTMLElement, dependencies: {
     finally { if (current === revision) toggle.disabled = false; }
   }
   toggle.addEventListener('change', async () => {
-    const previous = !toggle.checked, enabled = toggle.checked, current = ++revision;
+    const previous = !toggle.checked, enabled = toggle.checked, current = ++revision, userChoice = ++userRevision;
     configuring = true; toggle.disabled = true;
-    try { const value = parseCompletionNotificationStatus(await withInferenceDeadline(configure(enabled))); if (current === revision) show(value); }
-    catch { if (current === revision) { toggle.checked = previous; message.textContent = 'No pude confirmar el cambio. Comprueba los avisos en Ajustes del iPhone.'; } }
+    let timedOut = false;
+    const operation = Promise.resolve().then(() => configure(enabled));
+    // A system consent sheet may outlive the bridge deadline. Re-read the
+    // actual setting when it eventually returns, unless the person changed it.
+    void operation.then(() => { if (timedOut && userChoice === userRevision) void refresh(); }, () => {});
+    try { const value = parseCompletionNotificationStatus(await withInferenceDeadline(operation)); if (current === revision) show(value); }
+    catch { timedOut = true; if (current === revision) { toggle.checked = previous; message.textContent = 'No pude confirmar el cambio. Comprueba los avisos en Ajustes del iPhone.'; } }
     finally {
       configuring = false;
       if (current === revision) toggle.disabled = false;
