@@ -3,26 +3,47 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="color-scheme" content="dark" />
+  <meta name="color-scheme" content="dark" /><meta name="theme-color" content="#111019" />
   <title>Capri</title>
 </head>
 <body>
   <main>
-    <header><h1>Capri</h1><p id="status" role="status">Sin conexión</p></header>
-    <section id="stage" aria-label="Capri 2D">
-      <div class="rig"><canvas id="capri" aria-hidden="true"></canvas><canvas id="fx" aria-hidden="true"></canvas></div>
-      <p id="art-status" role="status">Carga tu recorte local para activar Capri.</p>
+    <header class="masthead"><div><span class="eyebrow">PERSONAL INTELLIGENCE</span><h1>CAPRI<span aria-hidden="true">//</span></h1></div><span class="identity">IPHONE<br><span id="connection-badge">LOCAL</span></span></header>
+    <nav class="navigation" aria-label="Secciones">
+      <button type="button" data-panel="companion" aria-current="page">Capri</button><button type="button" data-panel="chat">Conversación</button><button type="button" data-panel="inbox">Trabajos <span id="work-count">0</span></button><button type="button" data-panel="settings">Ajustes</button>
+    </nav>
+    <section id="panel-companion" class="panel" aria-label="Tu compañera Capri">
+      <div class="section-heading"><span class="eyebrow">01 / COMPAÑERA</span><span id="scene-status">Aquí contigo.</span></div>
+      <section id="stage" aria-label="Escena interactiva de Capri">
+        <div class="scene-mark" aria-hidden="true">STAY<br>CURIOUS.</div><div class="scene-orbit" aria-hidden="true"></div>
+        <button id="rig-handle" class="rig" type="button" aria-label="Saludar a Capri. También puedes arrastrarla por la escena."><canvas id="capri" aria-hidden="true"></canvas><canvas id="fx" aria-hidden="true"></canvas><span id="art-placeholder">CARGA TU CAPRI<span>Tu personaje de la PC,<br>ahora en el iPhone.</span></span></button>
+        <span class="scene-coordinate" aria-hidden="true">CAPRI / PERSONAL LINK</span>
+      </section>
+      <p id="art-status" class="hint" role="status">Carga tu arte en Ajustes para activar el personaje.</p>
+      <div class="actions character-actions" aria-label="Acciones de Capri"><button type="button" id="greet">Saludar</button><button type="button" id="chill">Chillear</button><button type="button" id="roam" aria-pressed="false">Pasear</button><button type="button" id="appear">Desaparecer</button></div>
+      <article class="intro-card"><span class="eyebrow">DOS MOTORES. UNA COMPAÑERA.</span><h2>¿Qué resolvemos hoy?</h2><p>En tu iPhone o junto a Gentle Dot. Tú eliges dónde pensar; Capri conserva el hilo.</p><button type="button" id="open-chat" class="primary">Hablar con Capri <span aria-hidden="true">↗</span></button></article>
     </section>
-    <details open>
-      <summary>Conectar y cargar arte</summary>
-      <label>Recorte personal capri-full.png (240 × 420)<input id="art" type="file" accept="image/png" /></label>
-      <form id="connection">
-        <label>WebSocket seguro del daemon<input id="url" type="url" placeholder="wss://tu-daemon/ws" required /></label>
-        <label>Token del dispositivo<input id="token" type="password" autocomplete="off" required /></label>
-        <button>Conectar</button><button id="disconnect" type="button">Desconectar</button>
-      </form>
-    </details>
-    <section id="cards" aria-label="Viñetas recientes" aria-live="polite"></section>
+    <section id="panel-chat" class="panel" aria-label="Conversación con Capri" hidden>
+      <div class="section-heading"><span class="eyebrow">02 / CONVERSACIÓN</span><span id="engine-badge">EN ESTE IPHONE</span></div>
+      <div id="chat-companion"></div>
+      <label class="engine-control">Motor de esta respuesta<select id="engine"><option value="iphone">iPhone · IA local de Apple</option><option value="gentle">Gentle Dot · laptop</option></select></label>
+      <p id="engine-status" class="hint" role="status">Comprobando el motor local…</p>
+      <div id="cards" class="conversation" role="log" aria-label="Conversación" aria-live="polite" aria-relevant="additions"></div><p id="chat-notice" class="hint" role="status"></p><button id="retry-conversation" type="button" hidden>Reintentar recuperación</button>
+      <form id="composer" class="composer"><label for="prompt">Tu mensaje</label><textarea id="prompt" rows="3" maxlength="8000" placeholder="Capri, ayúdame con…"></textarea><div class="actions"><button id="send" type="submit" class="primary">Enviar</button><button id="stop" type="button" hidden>Detener</button><button id="save-draft" type="button">Guardar trabajo</button></div></form>
+      <p class="hint">El motor local responde y prepara texto. Las herramientas externas aún no están conectadas.</p>
+    </section>
+    <section id="panel-inbox" class="panel" aria-label="Bandeja de trabajos" hidden>
+      <div class="section-heading"><span class="eyebrow">03 / TRABAJOS</span><span>GUARDADOS EN IPHONE</span></div><h2>Lo pendiente, contigo.</h2><p class="hint">Conserva instrucciones, audio y transcripciones sin conexión. Guardar aquí no significa enviar ni sincronizar.</p>
+      <form id="work-form" class="surface"><label>Título<input id="work-title" required maxlength="120" placeholder="Reunión de operaciones" /></label><label>Tipo<select id="work-kind"><option value="task">Solicitud</option><option value="meeting">Reunión</option></select></label><label>Instrucciones<textarea id="work-instruction" required maxlength="8000" rows="3" placeholder="Preparar una minuta con acuerdos y evidencia…"></textarea></label><label>Audio, transcripción o documentos<input id="work-files" type="file" multiple accept="audio/*,text/plain,text/markdown,application/pdf,image/*,.m4a,.txt,.md" /></label><p class="hint">Hasta 10 archivos; 25 MiB por archivo y 50 MiB por trabajo. Para Notas de Voz, guarda el audio en Archivos e impórtalo aquí.</p><button class="primary" type="submit">Guardar en este iPhone</button></form>
+      <p id="work-status" role="status" class="hint"></p><div id="work-list"></div>
+    </section>
+    <section id="panel-settings" class="panel" aria-label="Ajustes" hidden>
+      <div class="section-heading"><span class="eyebrow">04 / AJUSTES</span><span>TU CAPRI</span></div>
+      <section class="surface"><h2>Personaje y movimiento</h2><label>Tu capri-full.png (240 × 420)<input id="art" type="file" accept="image/png" /></label><p class="hint">El arte se conserva en este dispositivo.</p><label>Movimiento<select id="motion"><option value="full">Completo</option><option value="reduced">Reducido</option><option value="paused">En pausa</option></select></label><button id="delete-art" type="button">Quitar arte local</button></section>
+      <section class="surface"><h2>Inteligencia en el iPhone</h2><p id="local-status" role="status" class="hint">Comprobando disponibilidad…</p><button type="button" id="check-local">Comprobar otra vez</button><p class="hint">Foundation Models trabaja en el dispositivo. Requiere un modelo de Apple Intelligence disponible y compatible con español.</p></section>
+      <form id="connection" class="surface"><h2>Enlace con Gentle Dot</h2><label>Dirección segura de tu laptop<input id="url" type="url" placeholder="wss://tu-daemon/ws" required /></label><label>Token del dispositivo<input id="token" type="password" autocomplete="off" required /></label><p class="hint">Se recuerda la dirección. El token se mantiene en memoria hasta cerrar o desconectar.</p><div class="actions"><button class="primary" type="submit">Conectar</button><button id="disconnect" type="button">Desconectar</button></div><p id="status" role="status" class="hint">Sin conexión</p></form><p id="settings-status" role="status" class="hint"></p>
+    </section>
+    <footer>CAPRI <span>ALWAYS A LITTLE CURIOUS.</span></footer>
   </main>
   <script type="module" src="/src/main.ts"></script>
 </body>
