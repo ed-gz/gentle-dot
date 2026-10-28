@@ -36,6 +36,10 @@ transport. Grant `device-bridge:default` only to the packaged main window.
 | `crypto_hash_update` | `id, data` (base64 chunk ≤256 KiB) | — |
 | `crypto_hash_finish` | `id` | `hex` |
 | `crypto_hash_cancel` | `id` | — |
+| `export_begin` | `name, size, sha256` | `id` (private temporary file UUID) |
+| `export_write` | `id, offset, data` (base64 chunk ≤256 KiB) | `written` (total bytes confirmed) |
+| `export_present` | `id` | `exported, cancelled`, after the document picker delegate |
+| `export_cancel` | `id` | — (idempotent cleanup/cancel) |
 | `share_list` | `{}` | `items` (immutable manifests) |
 | `share_read` | `id, fileId, offset, length` | `data` (standard base64) |
 | `share_ack` | `id` | — |
@@ -63,9 +67,48 @@ to the configured origin, handles provider semantics, and controls action approv
 
 `nativeSHA256Bytes` streams binary hashing through CryptoKit when WebCrypto is
 unavailable in WKWebView. It passes 256 KiB chunks, never a complete base64-encoded
-audio file. At most four incremental digest states exist; they accept up to 50 MiB
+audio file. At most four incremental digest states exist; they accept up to 256 MiB
 and expire after two idle minutes. Finish/cancel deletes the state. File bytes are
-not retained by the hashing service.
+not retained by the hashing service. The existing `nativeSHA256Bytes` helper keeps
+its 50 MiB caller limit; explicit file export uses the larger native bound.
+
+## Native export
+
+`exportNativeFile(blob, name, {signal?, expectedSHA256?})` in `file-export.ts`
+hashes the immutable Blob in bounded chunks, then streams it to a private protected
+file. Native code requires contiguous offsets, exact byte count and matching
+SHA-256 before opening `UIDocumentPickerViewController(forExporting:asCopy:)`.
+The user chooses the destination; there is no automatic activity/share sheet,
+upload, destination bookmark or model tool. Files can be empty and at most 256 MiB.
+Only one export can be active. Filenames cannot contain paths or control characters.
+
+The helper resolves `{status:'exported',name,size,sha256}` only after
+`documentPicker(_:didPickDocumentsAt:)` confirms the new copy. Cancellation resolves
+`{status:'cancelled'}`; failures reject. Creating a temporary file and presenting a
+picker are not success. A bridge error or missing confirmation never triggers a
+second export. A concurrent cancellation cannot erase a success already confirmed
+by the system. Export confirmation does not claim that a cloud provider has synced.
+
+Temporary sources use `FileProtectionType.complete`, are excluded from backup and
+removed after completion/cancellation. Incomplete transfers expire after 120 idle
+seconds and are discarded on backgrounding. A visible document picker retains its
+source while the user chooses a destination. Termination cleanup is best effort;
+force-killed processes cannot run callbacks, so startup removes orphan sources.
+The original work attachment or conversation archive remains in Capri.
+
+Eight Node tests cover exact chunked bytes, cancellation, validation/size/hash,
+missing acknowledgements, absent delegate confirmation, empty files and a success
+racing cancellation. `exportFileName` provides a bounded safe suggestion for hidden,
+Unicode or path-like attachment names while preserving the original stored name
+and bytes. Tests simulate native replies. `check-native-sdk.sh` includes
+the Swift exporter for the next Xcode build. Actual saving to local Files/iCloud,
+provider errors, locking, cancellation and dismissal still need an installed iPhone.
+UI consumers must await this helper; an HTML download remains a browser request,
+not evidence of a native export.
+
+References: [Apple export initializer](https://developer.apple.com/documentation/uikit/uidocumentpickerviewcontroller/init(forexporting:ascopy:)),
+[document picker completion](https://developer.apple.com/documentation/uikit/uidocumentpickerdelegate/documentpicker(_:didpickdocumentsat:)),
+[document picker cancellation](https://developer.apple.com/documentation/uikit/uidocumentpickerdelegate/documentpickerwascancelled(_:)).
 
 OAuth uses an ephemeral `ASWebAuthenticationSession`, one session at a time. Custom
 callback schemes are accepted after syntax validation and rejection of common web

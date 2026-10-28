@@ -28,6 +28,9 @@ private struct BridgeReply: Encodable {
     var connection: PairedConnection? = nil
     var items: [SharedManifest]? = nil
     var schemes: [String]? = nil
+    var written: Int? = nil
+    var exported: Bool? = nil
+    var cancelled: Bool? = nil
 }
 private struct SecretInput: Decodable { let scope: String; let account: String; let value: String? }
 private struct PairInput: Decodable { let origin: String; let code: String; let deviceName: String }
@@ -45,6 +48,8 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     private var authSession: ASWebAuthenticationSession?
     private var authInvoke: Invoke?
     private let hashes = StreamingHash()
+    private let exports = DocumentExportStore()
+    private var documentExporter: DocumentExporter?
 
     @objc override func load(webview: WKWebView) { self.webview = webview }
     private func fail(_ invoke: Invoke, _ error: Error) {
@@ -193,6 +198,59 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     }
     @objc func shareAck(_ invoke: Invoke) {
         work(invoke) { let args = try invoke.parseArgs(IDInput.self); try SharedInbox.acknowledge(args.id); return BridgeReply() }
+    }
+    @objc func exportBegin(_ invoke: Invoke) {
+        DispatchQueue.main.async {
+            guard UIApplication.shared.applicationState == .active else {
+                self.fail(invoke, DeviceFailure.unavailable("Abre Capri para exportar el archivo.")); return
+            }
+            self.work(invoke) {
+                let args = try invoke.parseArgs(ExportBeginInput.self)
+                return BridgeReply(id: try self.exports.begin(args))
+            }
+        }
+    }
+    @objc func exportWrite(_ invoke: Invoke) {
+        work(invoke) { let args = try invoke.parseArgs(ExportWriteInput.self); return BridgeReply(written: try self.exports.write(args)) }
+    }
+    @objc func exportPresent(_ invoke: Invoke) {
+        do {
+            let args = try invoke.parseArgs(IDInput.self)
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let url = try self.exports.prepare(args.id)
+                    DispatchQueue.main.async {
+                        do {
+                            guard self.exports.isPrepared(args.id), self.documentExporter == nil, self.authSession == nil,
+                                  let presenter = self.webview?.window?.rootViewController else {
+                                throw DeviceFailure.unavailable("Abre Capri y cierra otras ventanas antes de exportar.")
+                            }
+                            let exporter = DocumentExporter(id: args.id, file: url) { result in
+                                self.exports.cancel(args.id)
+                                if self.documentExporter?.id == args.id { self.documentExporter = nil }
+                                switch result {
+                                case .success(let exported): invoke.resolve(BridgeReply(exported: exported, cancelled: !exported))
+                                case .failure(let error): self.fail(invoke, error)
+                                }
+                            }
+                            self.documentExporter = exporter
+                            do { try exporter.present(from: presenter) }
+                            catch { self.documentExporter = nil; throw error }
+                        } catch { self.exports.cancel(args.id); self.fail(invoke, error) }
+                    }
+                } catch { self.exports.cancel(args.id); self.fail(invoke, error) }
+            }
+        } catch { fail(invoke, error) }
+    }
+    @objc func exportCancel(_ invoke: Invoke) {
+        DispatchQueue.main.async {
+            do {
+                let args = try invoke.parseArgs(IDInput.self)
+                if self.documentExporter?.id == args.id { self.documentExporter?.cancel() }
+                else { self.exports.cancel(args.id) }
+                invoke.resolve(BridgeReply())
+            } catch { self.fail(invoke, error) }
+        }
     }
     @objc func oauthAuthorize(_ invoke: Invoke) {
         DispatchQueue.main.async {

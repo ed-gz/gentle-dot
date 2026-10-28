@@ -19,6 +19,10 @@ fn main() {
         "share_list",
         "share_read",
         "share_ack",
+        "export_begin",
+        "export_write",
+        "export_present",
+        "export_cancel",
     ])
     .ios_path("ios")
     .build();

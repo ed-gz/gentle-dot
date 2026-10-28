@@ -21,7 +21,7 @@ final class StreamingHash {
               !data.isEmpty, data.count <= 256 * 1024 else { throw DeviceFailure.invalid("Bloque de verificación inválido.") }
         lock.lock(); defer { lock.unlock() }
         guard var state = states[id], state.expires > Date() else { states[id] = nil; throw DeviceFailure.invalid("La verificación expiró.") }
-        guard state.bytes + data.count <= 50 * 1024 * 1024 else { states[id] = nil; throw DeviceFailure.oversized }
+        guard state.bytes + data.count <= 256 * 1024 * 1024 else { states[id] = nil; throw DeviceFailure.oversized }
         state.digest.update(data: data); state.bytes += data.count
         state.expires = Date().addingTimeInterval(120); states[id] = state
     }

@@ -1,3 +1,5 @@
+import { isTauri } from '@tauri-apps/api/core';
+import { exportFileName, exportNativeFile } from './file-export.ts';
 import { conversationArchive, archiveScope } from './conversation-archive.ts';
 import type { ChatEntry } from './conversation.ts';
 import type { PersistenceStatus } from './conversation-persistence.ts';
@@ -62,11 +64,21 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
       }
       if (draft) chunks.push(JSON.stringify({ schema: 'capri-conversation-draft/v1', source: 'visible-draft', submitted: false, text: draft }) + '\n');
       if (archiveFailed && !pending.length && !draft) throw new Error('El archivo no está disponible y no hay mensajes pendientes para rescatar. No se exportó un historial vacío.');
-      const url = URL.createObjectURL(new Blob(chunks, { type: 'application/x-ndjson' }));
-      const anchor = document.createElement('a'); anchor.href = url; anchor.download = `capri-conversacion-${new Date().toISOString().slice(0,10)}.ndjson`; anchor.click();
+      const blob = new Blob(chunks, { type: 'application/x-ndjson' });
+      const name = exportFileName(`capri-conversacion-${new Date().toISOString().slice(0,10)}.ndjson`);
+      if (isTauri()) {
+        updateStatus('Preparando copia del historial para Archivos…');
+        const result = await exportNativeFile(blob, name);
+        updateStatus(result.status === 'cancelled' ? 'Exportación cancelada. No se borró contenido de Capri.' : archiveFailed
+          ? 'Copia parcial guardada en Archivos con el contenido visible y pendiente. El archivo guardado no pudo incluirse; no se borró contenido de Capri.'
+          : 'Copia del historial guardada en Archivos. El historial y el borrador originales se conservan en Capri.');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
       updateStatus(archiveFailed ? 'Exportación parcial preparada con el contenido visible y pendiente; el archivo guardado no pudo incluirse. Comprueba el archivo descargado.' : 'Exportación preparada. Comprueba el archivo descargado; el historial local se conserva.');
-    } catch (error) { updateStatus(describe(error)); }
+    } catch (error) { updateStatus(`No se confirmó la exportación: ${describe(error)} No se borró contenido de Capri.`); }
     finally { button.disabled = false; }
   });
   return { refresh, updateStatus };

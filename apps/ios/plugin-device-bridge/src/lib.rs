@@ -1,4 +1,6 @@
-use serde_json::{json, Value};
+#[cfg(not(target_os = "ios"))]
+use serde_json::json;
+use serde_json::Value;
 #[cfg(target_os = "ios")]
 use tauri::Manager;
 use tauri::{plugin::TauriPlugin, AppHandle, Runtime};
@@ -59,6 +61,10 @@ request_command!(crypto_hash_cancel, "cryptoHashCancel");
 request_command!(share_list, "shareList");
 request_command!(share_read, "shareRead");
 request_command!(share_ack, "shareAck");
+request_command!(export_begin, "exportBegin");
+request_command!(export_write, "exportWrite");
+request_command!(export_present, "exportPresent");
+request_command!(export_cancel, "exportCancel");
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("device-bridge")
@@ -81,7 +87,11 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             crypto_hash_cancel,
             share_list,
             share_read,
-            share_ack
+            share_ack,
+            export_begin,
+            export_write,
+            export_present,
+            export_cancel
         ])
         .setup(|_app, _api| {
             #[cfg(target_os = "ios")]

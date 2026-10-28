@@ -2,6 +2,8 @@ import {
   addWorkVersion, createWork, deleteWork, listWork, readWorkFile, reviseWork,
   WORK_LIMITS, type WorkItem, type WorkStatus,
 } from './work-inbox.ts';
+import { isTauri } from '@tauri-apps/api/core';
+import { exportFileName, exportNativeFile } from './file-export.ts';
 
 const statusLabels: Record<WorkStatus, string> = {
   local: 'Solo en este iPhone',
@@ -108,6 +110,14 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
     try {
       const blob = await readWorkFile(item.id, file.id);
       if (!blob) throw new Error('missing attachment');
+      if (isTauri()) {
+        status.textContent = 'Preparando copia para Archivos…';
+        const result = await exportNativeFile(blob, exportFileName(file.name));
+        status.textContent = result.status === 'exported'
+          ? 'Copia guardada en Archivos. El adjunto original se conserva en Capri.'
+          : 'Exportación cancelada. El adjunto original se conserva en Capri.';
+        return;
+      }
       // Keep HTML/SVG attachments inert even if a browser ignores the download attribute.
       const url = URL.createObjectURL(new Blob([blob], { type: 'application/octet-stream' }));
       downloadUrls.add(url);
@@ -119,7 +129,7 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
       link.click();
       link.remove();
       setTimeout(() => { URL.revokeObjectURL(url); downloadUrls.delete(url); }, 30_000);
-      status.textContent = 'Archivo preparado para descargar. iOS puede mostrar la opción Guardar en Archivos.';
+      status.textContent = 'Archivo preparado para descargar. Comprueba el archivo guardado por el navegador.';
     } catch (error) {
       report(error, 'No se pudo recuperar el archivo de este iPhone.');
     } finally {

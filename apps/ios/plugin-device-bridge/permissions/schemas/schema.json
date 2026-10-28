@@ -355,6 +355,46 @@
           "const": "deny-crypto-sha256"
         },
         {
+          "description": "Enables the export_begin command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-begin"
+        },
+        {
+          "description": "Denies the export_begin command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-begin"
+        },
+        {
+          "description": "Enables the export_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-cancel"
+        },
+        {
+          "description": "Denies the export_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-cancel"
+        },
+        {
+          "description": "Enables the export_present command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-present"
+        },
+        {
+          "description": "Denies the export_present command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-present"
+        },
+        {
+          "description": "Enables the export_write command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-write"
+        },
+        {
+          "description": "Denies the export_write command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-write"
+        },
+        {
           "description": "Enables the https_request command without any pre-configured scope.",
           "type": "string",
           "const": "allow-https-request"
@@ -485,7 +525,7 @@
           "const": "deny-unpair-device"
         },
         {
-          "description": "Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure hashes, and locally shared files.",
+          "description": "Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure hashes, locally shared files, and explicit document export.",
           "type": "string",
           "const": "default"
         }

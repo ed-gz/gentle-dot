@@ -1,6 +1,6 @@
 ## Default Permission
 
-Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure hashes, and locally shared files.
+Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure hashes, locally shared files, and explicit document export.
 
 - `allow-secret-get`
 - `allow-secret-set`
@@ -21,6 +21,10 @@ Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure has
 - `allow-share-list`
 - `allow-share-read`
 - `allow-share-ack`
+- `allow-export-begin`
+- `allow-export-write`
+- `allow-export-present`
+- `allow-export-cancel`
 
 ## Permission Table
 
@@ -183,6 +187,110 @@ Enables the crypto_sha256 command without any pre-configured scope.
 <td>
 
 Denies the crypto_sha256 command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-export-begin`
+
+</td>
+<td>
+
+Enables the export_begin command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-export-begin`
+
+</td>
+<td>
+
+Denies the export_begin command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-export-cancel`
+
+</td>
+<td>
+
+Enables the export_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-export-cancel`
+
+</td>
+<td>
+
+Denies the export_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-export-present`
+
+</td>
+<td>
+
+Enables the export_present command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-export-present`
+
+</td>
+<td>
+
+Denies the export_present command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-export-write`
+
+</td>
+<td>
+
+Enables the export_write command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-export-write`
+
+</td>
+<td>
+
+Denies the export_write command without any pre-configured scope.
 
 </td>
 </tr>

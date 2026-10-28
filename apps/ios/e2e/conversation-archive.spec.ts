@@ -156,6 +156,8 @@ test('shell stops new sends after archive failure, preserves the draft and expor
   await page.locator('#prompt').fill('Siguiente borrador, todavía sin enviar.');
   await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).draft)).toBe('Siguiente borrador, todavía sin enviar.');
   await page.locator('[data-panel="inbox"]').click(); await expect(page.locator('#memory-status')).toContainText('2 mensajes pendientes');
+  // This case verifies the browser fallback; native delivery has its own fixture suite.
+  await page.evaluate(() => { (globalThis as any).isTauri = false; });
   const download = page.waitForEvent('download'); await page.locator('#memory-export').click();
   const exported = await download; expect(exported.suggestedFilename()).toMatch(/^capri-conversacion-.*\.ndjson$/);
   const lines = (await readFile((await exported.path())!, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
