@@ -45,16 +45,16 @@ export function validateAgentDecision(value: unknown): value is AgentDecision {
   if (item.kind === 'answer') return item.text.trim().length > 0 && item.toolName === '' && Object.keys(args).length === 0;
   return /^[A-Za-z][A-Za-z0-9_.:-]{0,79}$/.test(item.toolName);
 }
-export async function agentStep(prompt: string): Promise<AgentReply> {
+export async function agentStep(prompt: string, turnId?: string): Promise<AgentReply> {
   if (!prompt.trim() || Array.from(prompt).length > 8000) return { ok: false, error: 'invalid_prompt', message: 'El contexto del paso debe contener entre 1 y 8000 caracteres.' };
   let reply: AgentReply;
-  try { reply = await invoke<AgentReply>('agent_step', { prompt }); }
+  try { reply = await invoke<AgentReply>('agent_step', { prompt, ...(turnId ? { turnId } : {}) }); }
   catch { return { ok: false, error: 'bridge_unavailable', message: 'El motor agéntico requiere una versión de Capri con el puente nativo instalado.' }; }
   if (!reply || typeof reply.ok !== 'boolean') return { ok: false, error: 'invalid_decision', message: 'El motor local devolvió una respuesta inválida.' };
   if (reply.ok && !validateAgentDecision(reply.decision)) return { ok: false, error: 'invalid_decision', message: 'El modelo no produjo un paso válido. Puedes volver a intentar.' };
   return reply;
 }
-export const cancelLocal = () => invoke<{ ok: boolean }>('cancel');
+export const cancelLocal = (turnId?: string) => invoke<{ ok: boolean }>('cancel', turnId ? { turnId } : undefined);
 export const resetLocal = () => invoke<{ ok: boolean }>('reset');
 export function availabilityMessage(value: Availability): string {
   if (value.available && value.supportsSpanish) return 'Lista · conversación sin internet';

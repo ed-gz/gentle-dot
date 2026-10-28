@@ -1,7 +1,7 @@
 import type { Activity } from '@gentle-dot/protocol';
 export type Engine = 'iphone' | 'gentle';
 export type ChatActivity = Activity & { detail?: string };
-export type ChatEntry = { id: string; role: 'user' | 'assistant' | 'notice'; text: string; transportText?: string; engine: Engine; state: 'complete' | 'pending' | 'interrupted'; at: number; activities?: ChatActivity[] };
+export type ChatEntry = { id: string; role: 'user' | 'assistant' | 'notice'; text: string; transportText?: string; engine: Engine; state: 'complete' | 'pending' | 'interrupted'; at: number; activities?: ChatActivity[]; localCancelled?: true };
 export type Conversation = { entries: ChatEntry[]; draft: string; attachedWork?: string; revision?: number };
 const MAX_ENTRIES = 120;
 const MAX_TEXT = 32000;
@@ -14,6 +14,7 @@ function cleanEntry(value: unknown, restoring = false): ChatEntry | undefined {
   const activities = Array.isArray(value.activities) ? value.activities.filter((item): item is Activity => record(item) && typeof item.id === 'string' && item.id.length <= 512 && typeof item.title === 'string' && item.title.length <= 1000 && ['read', 'edit', 'run', 'search', 'memory', 'delegate', 'other'].includes(item.kind as string) && ['running', 'done', 'failed'].includes(item.status as string)).slice(-80).map(item => ({ id: item.id, title: item.title, kind: item.kind, status: restoring && item.status === 'running' ? 'failed' as const : item.status, ...(typeof (item as ChatActivity).detail === 'string' ? { detail: (item as ChatActivity).detail!.slice(0, 4000) } : {}) })) : [];
   // Explicit fields only: persisted data must never acquire tokens or native payloads.
   return { ...(activities.length ? { activities } : {}), id: value.id, role: value.role as ChatEntry['role'], text: value.text.slice(0, MAX_TEXT),
+    ...(value.engine === 'iphone' && value.localCancelled === true ? { localCancelled: true } : {}),
     ...(typeof value.transportText === 'string' ? { transportText: value.transportText.slice(0, MAX_TEXT) } : {}),
     engine: value.engine as Engine, state: restoring && value.state === 'pending' ? 'interrupted' : value.state as ChatEntry['state'], at: value.at };
 }
