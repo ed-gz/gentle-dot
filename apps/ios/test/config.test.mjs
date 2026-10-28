@@ -170,7 +170,9 @@ PY`);
   try {
     const result = spawnSync('bash', [join(dir, 'scripts/build-unsigned.sh')], {
       cwd: dir, encoding: 'utf8',
-      env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, CAPRI_BUILD_FIXTURE: mode, CAPRI_APP_GROUP: 'group.dev.gentledot.capri' },
+      // These are generic packaging fixtures; a private CI job's artwork
+      // requirement is exercised separately with its own PNG/resource fixtures.
+      env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, CAPRI_BUILD_FIXTURE: mode, CAPRI_APP_GROUP: 'group.dev.gentledot.capri', CAPRI_PERSONAL_ART_SHA256: '' },
     });
     const published = existsSync(join(dir, 'out/Capri-unsigned.ipa'));
     const verified = published ? spawnSync('python3', [join(dir, 'scripts/verify-ipa.py'), join(dir, 'out/Capri-unsigned.ipa'), '--sealed'], { encoding: 'utf8' }) : undefined;

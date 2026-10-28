@@ -1,0 +1,144 @@
+name: Capri personal iOS (private SideStore build)
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 'Exact 40-character commit in ed-gz/gentle-dot'
+        required: true
+        type: string
+      artwork_asset_id:
+        description: 'Private capri-full.png release asset ID in this repository'
+        required: true
+        type: string
+      artwork_sha256:
+        description: 'Expected original PNG SHA-256'
+        required: true
+        type: string
+      google_client_id:
+        description: 'Optional public Google iOS OAuth client ID to register its callback scheme'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capri-ios-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ipa:
+    # This template may live publicly, but personal bytes and artifacts must not.
+    if: github.event.repository.private == true
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '4'
+      CAPRI_SOURCE_SHA: ${{ inputs.source_sha }}
+      CAPRI_PERSONAL_ART_SHA256: ${{ inputs.artwork_sha256 }}
+      CAPRI_GOOGLE_CLIENT_ID: ${{ inputs.google_client_id }}
+    steps:
+      - name: Validate immutable build inputs
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          ART_ASSET_ID: ${{ inputs.artwork_asset_id }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$CAPRI_PERSONAL_ART_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 1
+          [[ "$ART_ASSET_ID" =~ ^[1-9][0-9]{0,15}$ ]] || exit 1
+      - name: Checkout pinned public source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ed-gz/gentle-dot
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Provision exact personal artwork from this private repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ART_REPOSITORY: ${{ github.repository }}
+          ART_ASSET_ID: ${{ inputs.artwork_asset_id }}
+        run: node apps/ios/scripts/personal-art.mjs download "$ART_REPOSITORY" "$ART_ASSET_ID" "$CAPRI_PERSONAL_ART_SHA256"
+      - name: Workspace tooling and dependencies
+        run: |
+          npm install --global pnpm@11.5.0
+          pnpm install --frozen-lockfile --ignore-scripts --filter @gentle-dot/ios...
+      - name: Validate shell and workflow
+        run: node --test apps/ios/test/*.test.mjs
+      - name: Select Xcode with Foundation Models
+        run: |
+          # A runner with an older default SDK can build the UI but not the local engine.
+          # Numeric comparison works on macOS without GNU sort; exclude beta builds.
+          xcode_path=$(node --input-type=module <<'NODE'
+          import { readdirSync } from 'node:fs';
+          const candidates = readdirSync('/Applications')
+            .filter(name => /^Xcode_\d+(?:\.\d+)*\.app$/.test(name))
+            .filter(name => Number(name.match(/\d+/)[0]) >= 26)
+            .sort((a, b) => b.localeCompare(a, 'en', { numeric: true }));
+          if (!candidates.length) throw new Error('Xcode 26+ is required for offline intelligence');
+          console.log(`/Applications/${candidates[0]}`);
+          NODE
+          )
+          export DEVELOPER_DIR="$xcode_path/Contents/Developer"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          cat > "$RUNNER_TEMP/capri-foundation-check.swift" <<'SWIFT'
+          import Foundation
+          import FoundationModels
+          @available(iOS 26.0, *)
+          func verifyLocalModelAPI() async throws -> String {
+              let model = SystemLanguageModel.default
+              guard case .available = model.availability,
+                    model.supportsLocale(Locale(identifier: "es_MX")) else { return "" }
+              let session = LanguageModelSession(model: model, instructions: "Responde en español.")
+              let reply = try await session.respond(to: "Hola", options: GenerationOptions(maximumResponseTokens: 384))
+              return reply.content
+          }
+          SWIFT
+          xcrun --sdk iphoneos swiftc -typecheck -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" "$RUNNER_TEMP/capri-foundation-check.swift"
+      - name: Typecheck native feature APIs before compiling Rust
+        run: bash apps/ios/scripts/check-native-sdk.sh
+      - name: Xcode project generator
+        run: brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+      - name: Rust iOS target
+        run: rustup target add aarch64-apple-ios
+      - name: Restore Tauri CLI binary
+        id: tauri-cli-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/capri-tauri-cli/bin/cargo-tauri
+          key: capri-tauri-cli-v1-macos-15-${{ runner.arch }}-2.12.1
+      - name: Install Tauri CLI
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version 2.12.1 --locked --jobs 4 --root "$RUNNER_TEMP/capri-tauri-cli"
+      - name: Verify and expose Tauri CLI
+        shell: bash
+        run: |
+          export PATH="$RUNNER_TEMP/capri-tauri-cli/bin:$PATH"
+          test "$(command -v cargo-tauri)" = "$RUNNER_TEMP/capri-tauri-cli/bin/cargo-tauri"
+          cli_version=$(cargo tauri --version)
+          test "$cli_version" = 'tauri-cli 2.12.1'
+          printf '%s\n' "$cli_version"
+          printf '%s\n' "$RUNNER_TEMP/capri-tauri-cli/bin" >> "$GITHUB_PATH"
+      - name: Save verified Tauri CLI binary
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/capri-tauri-cli/bin/cargo-tauri
+          key: ${{ steps.tauri-cli-cache.outputs.cache-primary-key }}
+      - name: Build device app without signing or provisioning
+        working-directory: apps/ios
+        run: bash scripts/build-unsigned.sh
+      - name: Upload unsigned IPA (SideStore signs on device)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Capri-personal-iphone-${{ inputs.source_sha }}
+          path: apps/ios/out/Capri-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7

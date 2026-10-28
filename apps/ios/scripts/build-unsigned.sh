@@ -12,10 +12,24 @@ export CARGO_BUILD_JOBS=4
 mkdir -p out
 # A failed attempt must not leave a previous IPA looking like the new result.
 rm -f out/Capri-unsigned.ipa
+personal_art=()
+if [[ -n "${CAPRI_PERSONAL_ART_SHA256:-}" ]]; then
+  node scripts/personal-art.mjs verify public/personal-art "$CAPRI_PERSONAL_ART_SHA256"
+  personal_art=(--personal-art-sha256 "$CAPRI_PERSONAL_ART_SHA256")
+elif [[ -e public/personal-art ]]; then
+  printf 'Personal artwork is staged: use the private build with CAPRI_PERSONAL_ART_SHA256. Refusing a generic IPA.\n' >&2
+  exit 1
+fi
 pnpm build
+if [[ -n "${CAPRI_PERSONAL_ART_SHA256:-}" ]]; then
+  node scripts/personal-art.mjs verify dist/personal-art "$CAPRI_PERSONAL_ART_SHA256"
+fi
 cargo tauri icon src-tauri/icons/app.svg --output src-tauri/icons
 cargo tauri ios init --ci
 ruby scripts/configure-share-extension.rb
+if [[ -n "${CAPRI_PERSONAL_ART_SHA256:-}" ]]; then
+  ruby scripts/configure-personal-art.rb
+fi
 project_count=$(find src-tauri/gen/apple -maxdepth 1 -name '*.xcodeproj' -type d | wc -l | tr -d ' ')
 [[ "$project_count" == 1 ]] || { printf 'Expected one generated Xcode project\n' >&2; exit 1; }
 project=$(find src-tauri/gen/apple -maxdepth 1 -name '*.xcodeproj' -type d)
@@ -50,7 +64,7 @@ print(candidates[0])
 PY
 )
 group=${CAPRI_APP_GROUP:-group.dev.gentledot.capri}
-python3 scripts/verify-ipa.py "$ipa" --group "$group" --extract "$verification/payload" --manifest "$verification/manifest.json"
+python3 scripts/verify-ipa.py "$ipa" --group "$group" "${personal_art[@]}" --extract "$verification/payload" --manifest "$verification/manifest.json"
 app=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["app"])' "$verification/manifest.json")
 extension=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["extension"])' "$verification/manifest.json")
 app_executable=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["appExecutable"])' "$verification/manifest.json")
@@ -113,7 +127,7 @@ PY
 ditto -c -k --keepParent "$verification/payload/Payload" "$verification/candidate.ipa"
 # Inspect the final ZIP and its embedded Mach-O signatures independently. A
 # successful signing command alone cannot publish an unsigned/stale executable.
-python3 scripts/verify-ipa.py "$verification/candidate.ipa" --group "$group" --sealed
+python3 scripts/verify-ipa.py "$verification/candidate.ipa" --group "$group" --sealed "${personal_art[@]}"
 mv "$verification/candidate.ipa" out/Capri-unsigned.ipa
 shasum -a 256 out/Capri-unsigned.ipa
 printf 'IPA with ad-hoc entitlement seals; SideStore personal signing still required: apps/ios/out/Capri-unsigned.ipa\n'

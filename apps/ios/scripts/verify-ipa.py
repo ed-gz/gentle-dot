@@ -5,6 +5,7 @@ This validates embedded XML entitlements, not cryptographic code signatures.
 The macOS packaging script additionally runs codesign --verify --strict.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -60,7 +61,7 @@ def embedded_entitlements(data):
     return entitlements[0]
 
 
-def inspect(path, group, sealed=False, extract=None):
+def inspect(path, group, sealed=False, extract=None, personal_art_sha256=None):
     require(re.fullmatch(r'group\.[A-Za-z0-9.-]{3,200}', group), 'Invalid expected App Group')
     with zipfile.ZipFile(path) as archive:
         require(archive.testzip() is None, 'IPA has a corrupt entry')
@@ -85,6 +86,19 @@ def inspect(path, group, sealed=False, extract=None):
                 and extension_info.get('DTPlatformName') == 'iphoneos'
                 and extension_info.get('NSExtension', {}).get('NSExtensionPointIdentifier') == 'com.apple.share-services', 'IPA has an invalid Share Extension')
         result = {'app': app, 'extension': extension, 'group': group}
+        if personal_art_sha256 is not None:
+            require(re.fullmatch(r'[a-f0-9]{64}', personal_art_sha256), 'Invalid expected personal artwork fingerprint')
+            prefix = app + '/personal-art/'
+            require(archive.getinfo(prefix + 'manifest.json').file_size <= 2048, 'Oversized personal artwork manifest')
+            require(57 <= archive.getinfo(prefix + 'capri-full.png').file_size <= 5 * 1024 * 1024, 'Oversized or empty personal PNG')
+            artwork = archive.read(prefix + 'capri-full.png')
+            art_manifest = json.loads(archive.read(prefix + 'manifest.json'))
+            require(art_manifest == {'schemaVersion': 1, 'file': 'capri-full.png', 'sha256': personal_art_sha256,
+                                    'size': len(artwork), 'width': 240, 'height': 420}, 'Personal artwork manifest mismatch')
+            require(hashlib.sha256(artwork).hexdigest() == personal_art_sha256, 'Personal artwork SHA-256 mismatch')
+            require(artwork[:8] == b'\x89PNG\r\n\x1a\n' and artwork[8:16] == b'\x00\x00\x00\rIHDR'
+                    and struct.unpack_from('>II', artwork, 16) == (240, 420), 'Personal Capri is not the expected 240x420 PNG')
+            result['personalArtworkSHA256'] = personal_art_sha256
         for label, directory, plist in [('app', app, info), ('extension', extension, extension_info)]:
             executable = plist.get('CFBundleExecutable', '')
             require(isinstance(executable, str) and executable and '/' not in executable and '\\' not in executable and executable not in ('.', '..'), 'IPA has an invalid executable name')
@@ -119,9 +133,10 @@ if __name__ == '__main__':
     parser.add_argument('--sealed', action='store_true')
     parser.add_argument('--extract')
     parser.add_argument('--manifest')
+    parser.add_argument('--personal-art-sha256')
     arguments = parser.parse_args()
     try:
-        result = inspect(arguments.ipa, arguments.group, arguments.sealed, arguments.extract)
+        result = inspect(arguments.ipa, arguments.group, arguments.sealed, arguments.extract, arguments.personal_art_sha256)
         if arguments.manifest:
             Path(arguments.manifest).write_text(json.dumps(result))
         print(json.dumps(result))

@@ -10,6 +10,7 @@ apps/desktop/src-tauri/gen/
 *.log
 
 # Installer staging: downloads cache and the default runtime output
+apps/ios/public/personal-art/
 /.cache/
 /build/
 .DS_Store
