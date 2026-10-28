@@ -16,6 +16,25 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
+function failedObservation(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  return result.isError === true || result.accepted === false || result.status === 'uncertain'
+    || (result.result !== undefined && failedObservation(result.result))
+    || (result.processing !== undefined && failedObservation(result.processing)) || result.status === 'failed';
+}
+
+const activityLabels: Record<string, string> = {
+  local_capabilities: 'Comprobando capacidades', work_list: 'Consultando tus trabajos', work_read: 'Leyendo trabajo',
+  work_create: 'Guardando trabajo', work_edit: 'Actualizando borrador', work_add_version: 'Conservando nueva versión',
+  file_list: 'Consultando adjuntos', file_read: 'Leyendo archivo', file_ocr: 'Leyendo imagen o documento',
+  session_list: 'Consultando sesiones de la PC', session_read: 'Revisando avance en la PC', session_send: 'Preparando instrucción para Pi',
+  session_abort: 'Revisando detención de Pi', work_sync: 'Preparando transferencia', work_recover: 'Comprobando entrega',
+  work_process: 'Preparando minuta', work_result: 'Recuperando resultado', work_correct: 'Conservando corrección',
+  connections_list: 'Consultando conexiones', connection_tools: 'Descubriendo herramientas del servicio', connection_call: 'Preparando operación con el servicio',
+  recall_history: 'Recuperando nuestra conversación', search_memory: 'Buscando en nuestra conversación', external_prepare: 'Preparando borrador',
+};
+
 /** An inference/tool/observation loop. Tools are registered capabilities, never text commands. */
 export function createAgentRunner(options: {
   tools: Tool[];
@@ -73,16 +92,16 @@ export function createAgentRunner(options: {
             continue;
           }
           const key = JSON.stringify([decision.toolName, canonical(args)]);
-          const readOnly = new Set(['local_capabilities', 'work_list', 'work_read', 'file_list', 'file_read', 'file_ocr', 'session_list', 'session_read', 'work_result', 'connections_list', 'connection_tools']).has(decision.toolName);
+          const readOnly = new Set(['local_capabilities', 'work_list', 'work_read', 'file_list', 'file_read', 'file_ocr', 'session_list', 'session_read', 'work_result', 'connections_list', 'connection_tools', 'recall_history', 'search_memory']).has(decision.toolName);
           if (!readOnly && invoked.has(key)) throw new Error('Capri intentó repetir la misma operación. Conservé el resultado anterior; revisa el progreso antes de continuar.');
           invoked.add(key);
-          const trace: AgentTrace = { id: localIdentifier(), name: decision.toolName, label: tool.definition.description, status: 'running' };
+          const trace: AgentTrace = { id: localIdentifier(), name: decision.toolName, label: activityLabels[decision.toolName] ?? tool.definition.description.slice(0, 120), status: 'running' };
           options.onTrace(trace);
           try {
             check();
             const result = await tool.execute(args, { signal: run.signal, ...(run.askApproval ? { askApproval: run.askApproval } : {}) });
             // A completed operation is recorded even when cancellation arrived during it.
-            options.onTrace({ ...trace, status: 'done', detail: bounded(JSON.stringify(result) ?? 'Completado', 4000) });
+            options.onTrace({ ...trace, status: failedObservation(result) ? 'failed' : 'done', detail: bounded(JSON.stringify(result) ?? 'Completado', 4000) });
             observations.push({ tool: decision.toolName, arguments: args, result });
           } catch (error) {
             const failure = error instanceof Error ? bounded(error.message, 500) : 'No se confirmó la operación.';

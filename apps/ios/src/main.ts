@@ -6,10 +6,13 @@ import type { ServerMessage } from '@gentle-dot/protocol';
 import { readSettings, saveSettings, loadArtwork, saveArtwork, deleteArtwork, validateArtwork, validDaemonUrl } from './local-state.ts';
 import { createLinkedChat, type LinkedStatus } from './linked-chat.ts';
 import { checkLocalIntelligence, availabilityMessage, agentStep, cancelLocal, resetLocal, type Availability } from './local-intelligence.ts';
-import { loadConversation, saveConversation, updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
+import { loadConversation, updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
+import { createConversationPersistence } from './conversation-persistence.ts';
+import { createMemoryTools } from './conversation-memory-tools.ts';
+import { mountMemoryView } from './memory-view.ts';
 import { createAgentRunner } from './agent-runner.ts';
-import { listConnections, saveConnection, removeConnection } from './external-connections.ts';
+import { mountConnectionSettings } from './connection-settings.ts';
 import { createConnectionTools } from './connection-tools.ts';
 import { createWorkTools } from './work-tools.ts';
 import { createWorkDispatcher } from './work-sync.ts';
@@ -171,7 +174,7 @@ function showPanel(next: string) {
     if (button.dataset.panel === next) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
   }
   redraw();
-  if (next === 'inbox') void inbox.refresh();
+  if (next === 'inbox') { void inbox.refresh(); void memoryView.refresh(); }
 }
 for (const button of document.querySelectorAll<HTMLElement>('[data-panel]')) button.addEventListener('click', () => showPanel(button.dataset.panel!));
 function errorText(error: unknown) { return error instanceof Error ? error.message : 'No se pudo completar la operación.'; }
@@ -199,15 +202,20 @@ let remoteConversation = 'default';
 let pendingRemote: { id: string; text: string; displayText: string } | undefined;
 let pendingTimer: ReturnType<typeof setTimeout> | undefined;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
-let saveChain = Promise.resolve();
-function persist() {
-  if (!conversationReady) return;
+let persistenceWarning = '';
+const persistence = createConversationPersistence({ onStatus(status) {
+  if (status.blocked) {
+    persistenceWarning = `No se confirmó el guardado local. ${status.archiveError ?? status.conversationError} ${status.pending} mensajes siguen en memoria. Los envíos están detenidos: abre Archivo para reintentar o exportar antes de cerrar Capri.`;
+    element('chat-notice').textContent = persistenceWarning;
+  } else if (element('chat-notice').textContent === persistenceWarning) element('chat-notice').textContent = '';
+  memoryView.updateStatus(); updateControls();
+} });
+function persist(): Promise<void> {
+  if (!conversationReady) return Promise.resolve();
   clearTimeout(saveTimer);
-  const snapshot = { entries: structuredClone(entries), draft: prompt.value, attachedWork };
-  saveChain = saveChain.then(() => saveConversation(snapshot)).catch(() => {
-    element('chat-notice').textContent = 'No se pudo guardar la conversación. No cierres Capri hasta conservar el texto.';
-  });
+  return persistence.persist({ entries, draft: prompt.value, attachedWork });
 }
+
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 250); }
 function renderChat() {
   element('empty-conversation').hidden = entries.length > 0;
@@ -238,14 +246,14 @@ function renderChat() {
   }
   for (const node of nodes.values()) node.remove();
 }
-function add(entry: ChatEntry) { if (!entry.activities) entry.activities = entries.find(prior => prior.id === entry.id)?.activities; entries = updateEntry(entries, entry); renderChat(); scheduleSave(); }
+function add(entry: ChatEntry) { if (!entry.activities) entry.activities = entries.find(prior => prior.id === entry.id)?.activities; persistence.enqueue(entries); persistence.enqueue([entry]); entries = updateEntry(entries, entry); renderChat(); scheduleSave(); }
 function notice(text: string, target: Engine = selected, id: string = localIdentifier()) { add({ id, role: 'notice', text, engine: target, state: 'complete', at: Date.now() }); }
 function remoteId(id: string) { return `host:${host}|${remoteConversation}|${id}`; }
 function updateControls() {
   if (!localBusy && !pendingRemote) selected = preference === 'auto' ? (availability.available && availability.supportsSpanish ? 'iphone' : linkedStatus === 'ready' ? 'gentle' : 'iphone') : preference;
   const ready = selected === 'iphone' ? availability.available && availability.supportsSpanish : linkedStatus === 'ready';
   const busy = localBusy || !!pendingRemote;
-  element<HTMLButtonElement>('send').disabled = !conversationReady || !ready || busy;
+  element<HTMLButtonElement>('send').disabled = !conversationReady || persistence.status().blocked || !ready || busy;
   element<HTMLSelectElement>('engine').disabled = localBusy || !!pendingRemote;
   element('stop').hidden = !(localBusy || (selected === 'gentle' && linkedBusy));
   element<HTMLButtonElement>('send').textContent = selected === 'gentle' && linkedBusy ? 'Añadir instrucción' : 'Enviar';
@@ -271,7 +279,8 @@ function handleMessage(message: ServerMessage) {
   }
   if (message.type === 'history') {
     remoteConversation = message.conversationId ?? remoteConversation;
-    entries = reconcileHostHistory(entries, remoteId(''), message.messages.slice(-60));
+    persistence.enqueue(entries);
+    entries = reconcileHostHistory(entries, remoteId(''), message.messages.slice(-60), Date.now(), beforePrune => persistence.enqueue(beforePrune));
     renderChat(); scheduleSave();
   }
   if (message.type === 'interrupted') {
@@ -284,6 +293,7 @@ function handleMessage(message: ServerMessage) {
     let displayText = message.text;
     if (pendingRemote && message.text === pendingRemote.text) {
       displayText = pendingRemote.displayText;
+      persistence.enqueue(entries.map(entry => entry.id === pendingRemote!.id ? { ...entry, state: 'complete' as const } : entry));
       entries = entries.filter(entry => entry.id !== pendingRemote!.id); pendingRemote = undefined;
       clearTimeout(pendingTimer);
     }
@@ -351,7 +361,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
   event.preventDefault();
   const text = prompt.value.trim();
   const promptText = text;
-  if (!text || localBusy || pendingRemote || !conversationReady) return;
+  if (!text || localBusy || pendingRemote || !conversationReady || persistence.status().blocked) return;
   element('chat-notice').textContent = '';
   if (selected === 'iphone') {
     if (!availability.available || !availability.supportsSpanish) { updateControls(); return; }
@@ -360,27 +370,33 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
     if (Array.from(request).length > 4000) { element('chat-notice').textContent = 'Reduce el mensaje para dejar espacio al contexto local.'; return; }
     const generation = ++localGeneration;
     const id = localIdentifier(); localBusy = true;
-    localController = new AbortController();
+    const controller = new AbortController(); localController = controller;
     const context = (attachedWork ? `Archivo adjunto: trabajo ${attachedWork}. Usa work_read y file_read/file_ocr para consultarlo.\n` : '') + JSON.stringify({
       operations: entries.filter(entry => entry.activities?.length).slice(-1).map(entry => ({ state: entry.state, activities: entry.activities?.slice(-1).map(activity => ({ id: activity.id, status: activity.status, title: activity.title.slice(0, 50), result: activity.detail?.slice(0, 180) })) })),
       turns: entries.filter(entry => entry.state === 'complete' && entry.role !== 'notice').slice(-2).reverse().map(entry => ({ role: entry.role, text: entry.text.slice(-100) })),
     });
     add({ id: localIdentifier(), role: 'user', text, engine: 'iphone', state: 'complete', at: Date.now() });
-    add({ id, role: 'assistant', text: '', engine: 'iphone', state: 'pending', at: Date.now() });
+    let turnEntry: ChatEntry = { id, role: 'assistant', text: '', engine: 'iphone', state: 'pending', at: Date.now() };
+    add(turnEntry);
     prompt.value = ''; persist(); updateControls(); setIntent({ working: true, thinking: true }); element('scene-status').textContent = 'Pensando contigo…';
     try {
       // Rebuild a bounded context from the visible timeline, also after app restarts.
       await resetLocal();
       if (generation !== localGeneration) return;
-      const runner = createAgentRunner({ tools: [...createLocalTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: () => linked.ready() ? createWorkDispatcher(linked.exchange, host) : undefined }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))], step: agentStep, onTrace(trace) {
-        const entry = entries.find(item => item.id === id); if (!entry) return;
+      const runner = createAgentRunner({ tools: [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: () => linked.ready() ? createWorkDispatcher(linked.exchange, host) : undefined }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))], step: agentStep, onTrace(trace) {
+        const entry = entries.find(item => item.id === id) ?? turnEntry;
         const activities = [...entry.activities ?? []]; const at = activities.findIndex(item => item.id === trace.id);
         const activity = { id: trace.id, kind: 'other' as const, title: trace.label, status: trace.status, detail: trace.detail };
         if (at < 0) activities.push(activity); else activities[at] = activity;
-        add({ ...entry, activities }); element('active-tool').textContent = trace.status === 'running' ? trace.label : '';
-        setIntent({ working: trace.status === 'running', thinking: trace.status !== 'running' });
+        turnEntry = { ...entry, activities, state: generation !== localGeneration && entry.state === 'pending' ? 'interrupted' : entry.state };
+        add(turnEntry);
+        if (generation === localGeneration) { element('active-tool').textContent = trace.status === 'running' ? trace.label : ''; setIntent({ working: trace.status === 'running', thinking: trace.status !== 'running' }); }
       } });
-      const text = await runner.run({ instruction: promptText, context, signal: localController.signal, askApproval: request => reviews.approve(request, localController!.signal) });
+      const text = await runner.run({ instruction: promptText, context, signal: controller.signal, askApproval: async request => {
+        if (generation === localGeneration) setIntent({ alert: true });
+        try { return await reviews.approve(request, controller.signal); }
+        finally { if (generation === localGeneration) setIntent({ thinking: true }); }
+      } });
       if (generation !== localGeneration) return;
       add({ id, role: 'assistant', text, engine: 'iphone', state: 'complete', at: Date.now() });
       setIntent({ outcome: { kind: 'done', at: performance.now() } });
@@ -434,14 +450,16 @@ element<HTMLFormElement>('connection').addEventListener('submit', async event =>
 element('disconnect').addEventListener('click', () => { connectionEpoch++; manualToSave = undefined; linked.disconnect(); runtimeConnection = undefined; element<HTMLInputElement>('token').value = ''; if (isTauri() && host) void secretDelete('daemon-manual', new URL(host.replace('wss:', 'https:')).origin).catch(() => {}); });
 element('check-local').addEventListener('click', () => void checkModel());
 element<HTMLInputElement>('url').value = settings.url;
+const connectionSettings = mountConnectionSettings();
 const inbox = mountInbox(text => { draftEdited = true; prompt.value = text; scheduleSave(); showPanel('chat'); prompt.focus(); });
+const memoryView = mountMemoryView({ status: persistence.status, pending: persistence.pending, draft: () => prompt.value, retry: persist });
 
 document.addEventListener('visibilitychange', () => {
   cancelAnimationFrame(frame); fx?.clear(); persist();
   if (document.hidden) { void cancelDictation(); director.update(intent, performance.now(), true); linked.suspend(); if (localBusy) void stopLocal(); }
   else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); }
 });
-window.addEventListener('pagehide', () => { cancelAnimationFrame(frame); linked.suspend(); persist(); if (localBusy) void stopLocal(); });
+window.addEventListener('pagehide', () => { connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); if (localBusy) void stopLocal(); });
 window.addEventListener('pageshow', event => { if (event.persisted) { redraw(); linked.resume(); } });
 let conversationLoading = false;
 const recoveryMessage = 'No se pudo recuperar la conversación local. Tu borrador sigue aquí; reintenta antes de enviar para proteger el historial guardado.';
@@ -452,13 +470,15 @@ async function restoreConversation() {
   retry.disabled = true;
   try {
     const saved = await loadConversation();
+    // Capture the restored window before live startup events can cause pruning.
+    persistence.enqueue(saved.entries); persistence.enqueue(entries, true);
     entries = entries.reduce((history, entry) => updateEntry(history, entry), saved.entries);
     if (!draftEdited) { prompt.value = saved.draft; if (!attachedWork) attachedWork = saved.attachedWork; }
     if (attachedWork) element('attachment-context').textContent = `Material local adjunto · trabajo ${attachedWork}`;
     conversationReady = true;
     retry.hidden = true;
     if (element('chat-notice').textContent === recoveryMessage) element('chat-notice').textContent = '';
-    renderChat(); persist();
+    renderChat(); await persist();
   } catch {
     // Never overwrite an unread stored timeline with the partial in-memory state.
     element('chat-notice').textContent = recoveryMessage;
@@ -476,7 +496,7 @@ async function initialize() {
   const artworkReady = loadArtwork().then(async art => {
     if (art && assetRevision === initialArtworkRevision) await useArtwork(art, false);
   }).catch(error => { element('settings-status').textContent = errorText(error); });
-  const servicesReady = Promise.all([checkModel(), inbox.refresh(), restoreDeviceConnection(), importSharedFiles(), refreshConnections()]);
+  const servicesReady = Promise.all([checkModel(), inbox.refresh(), restoreDeviceConnection(), importSharedFiles(), connectionSettings.refresh(), memoryView.refresh()]);
   await Promise.all([artworkReady, servicesReady, restoreConversation()]);
 }
 queueMicrotask(() => void initialize());
@@ -584,32 +604,3 @@ async function importSharedFiles() {
     await inbox.refresh();
   } catch (error) { element('chat-notice').textContent = errorText(error); }
 }
-
-async function refreshConnections() {
-  try {
-    const container = element('connections-list'); container.replaceChildren();
-    for (const connection of await listConnections()) {
-      const item = document.createElement('article'); item.className = 'work-item';
-      const title = document.createElement('strong'); title.textContent = connection.label;
-      const destination = document.createElement('p'); destination.textContent = connection.endpoint;
-      const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Quitar conexión';
-      remove.addEventListener('click', async () => {
-        try { await removeConnection(connection.id, connection.revision); await refreshConnections(); }
-        catch (error) { element('connections-status').textContent = errorText(error); }
-      });
-      item.append(title, destination, remove); container.append(item);
-    }
-  } catch (error) { element('connections-status').textContent = errorText(error); }
-}
-element<HTMLFormElement>('external-connection').addEventListener('submit', async event => {
-  event.preventDefault();
-  const button = element<HTMLFormElement>('external-connection').querySelector('button')!; button.disabled = true;
-  try {
-    if (!isTauri()) throw new Error('Configura conexiones en Capri instalada en el iPhone para guardar el acceso de forma segura.');
-    await saveConnection({ kind: 'mcp', label: element<HTMLInputElement>('connection-label').value, endpoint: element<HTMLInputElement>('connection-endpoint').value }, element<HTMLInputElement>('connection-secret').value);
-    element<HTMLInputElement>('connection-secret').value = '';
-    element('connections-status').textContent = 'Conexión guardada. Pídele a Capri que consulte sus herramientas.';
-    await refreshConnections();
-  } catch (error) { element('connections-status').textContent = errorText(error); }
-  finally { button.disabled = false; }
-});

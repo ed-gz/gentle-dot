@@ -190,7 +190,7 @@ test('conversation approval renders exact content and cancellation cannot author
     void requests.approve({ title: 'Enviar revisión', details: 'Destinatario: ops@example.test\nTexto: <b>exacto</b>', operation: 'test' }, state.approvalController.signal)
       .then((approved: boolean) => { state.humanApproval = approved; });
   });
-  const card = page.locator('.review-card');
+  const card = page.locator('#requests .review-card');
   await expect(card).toContainText('Destinatario: ops@example.test');
   await expect(card.locator('b')).toHaveCount(0);
   expect(await page.evaluate(() => (globalThis as any).humanApproval)).toBe('pending');

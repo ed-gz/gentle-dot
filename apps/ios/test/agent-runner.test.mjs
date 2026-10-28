@@ -67,6 +67,16 @@ test('an uncertain failure cannot be automatically replayed', async () => {
   assert.equal(executions, 1); assert.deepEqual(f.traces.map(trace => trace.status), ['running', 'failed']);
 });
 
+test('rejected and uncertain service receipts stay failed in the conversation activity', async () => {
+  for (const receipt of [{ accepted: false }, { result: { isError: true } }, { processing: { status: 'failed' } }, { status: 'uncertain' }]) {
+    const f = sequence([call('tool_describe', { name: 'save_note' }), call('save_note', { title: 'T', text: 'X' }),
+      prompt => { assert.ok(prompt.includes(JSON.stringify(receipt))); return answer('No se confirmó.'); }],
+      { tools: [tool(async () => receipt)] });
+    assert.equal(await f.runner.run(run()), 'No se confirmó.');
+    assert.deepEqual(f.traces.map(trace => trace.status), ['running', 'failed']);
+  }
+});
+
 test('known read tools can observe advancing state without replaying a mutation', async () => {
   let reads = 0;
   const reader = { definition: { name: 'session_read', description: 'Read current session state.', parameters: { type: 'object' } },
