@@ -3,7 +3,7 @@ import * as inbox from './work-inbox.ts';
 import { createWorkDispatcher, prepareWorkTransfer } from './work-sync.ts';
 export type WorkToolDependencies = {
   getHost: () => string | undefined;
-  getDispatcher: () => ReturnType<typeof createWorkDispatcher> | undefined;
+  getDispatcher: (operation?: 'process') => ReturnType<typeof createWorkDispatcher> | undefined;
   inbox?: typeof inbox;
   prepareTransfer?: typeof prepareWorkTransfer;
 };
@@ -18,8 +18,8 @@ export function createWorkTools(dependencies: WorkToolDependencies): Tool[] {
   const prepare = dependencies.prepareTransfer ?? prepareWorkTransfer;
   const schema = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', additionalProperties: false, properties, required });
   const id = { id: { type: 'string' } }; const versioned = { ...id, revision: { type: 'integer', minimum: 1 } };
-  const getLinked = () => {
-    const host = dependencies.getHost(); const dispatcher = dependencies.getDispatcher();
+  const getLinked = (operation?: 'process') => {
+    const host = dependencies.getHost(); const dispatcher = dependencies.getDispatcher(operation);
     if (!host || !dispatcher) throw new Error('Conecta el host para transferir o procesar. El trabajo local se conserva.');
     return { host, dispatcher };
   };
@@ -43,6 +43,7 @@ export function createWorkTools(dependencies: WorkToolDependencies): Tool[] {
       if (approved.status !== 'approved') { if (approved.status !== 'prepared') approved = store.transitionWorkItem(approved, 'prepared'); approved = store.transitionWorkItem(approved, 'approved'); }
       const frozen = await prepare(approved, linked.host);
       await approve(context, linked.host, `Transferir «${item.title}» al host`, { operation: 'store-only', manifest: frozen.manifest, manifestHash: frozen.manifestHash, meaning: 'Guarda archivos y versiones; no ejecuta acciones externas ni aprueba la minuta.' });
+      getLinked();
       const current = await store.readWork(item.id); store.assertWorkRevision(current, item.revision);
       context.signal.throwIfAborted();
       if (item.status !== 'approved') { if (item.status !== 'prepared') item = await store.transitionWork(item.id, item.revision, 'prepared'); item = await store.transitionWork(item.id, item.revision, 'approved'); }
@@ -51,9 +52,10 @@ export function createWorkTools(dependencies: WorkToolDependencies): Tool[] {
     } },
     { definition: { name: 'work_recover', description: 'Consulta el ACK durable de una transferencia existente y reanuda sólo sus bytes ya aprobados. Nunca repite procesamiento ni acciones externas.', parameters: schema(id, ['id']) }, validate(args) { return { id: idOf(args) }; }, execute: async (args, context) => { context.signal.throwIfAborted(); const result = await getLinked().dispatcher.recover(idOf(args), context.signal); return { ...summary(result), receipt: result.transfer?.receipt }; } },
     { definition: { name: 'work_process', description: 'Propone procesar una reunión confirmada en el host con el transcriptor configurado de la PC y su modelo Pi. Solicita aprobación del contenido exacto y produce únicamente una minuta para revisión, sin enviar comunicaciones ni modificar servicios.', parameters: schema(versioned, ['id','revision']) }, validate(args) { return { id: idOf(args), revision: revisionOf(args) }; }, execute: async (args, context) => {
-      const linked = getLinked(); const item = await store.readWork(idOf(args)); store.assertWorkRevision(item, revisionOf(args));
+      const linked = getLinked('process'); const item = await store.readWork(idOf(args)); store.assertWorkRevision(item, revisionOf(args));
       if (!item.transfer?.receipt || item.status !== 'sent') throw new Error('El host debe confirmar primero los archivos de esta reunión.');
       await approve(context, linked.host, `Preparar borrador de «${item.title}»`, { operation: 'meeting-draft-only', receipt: item.transfer.receipt, manifest: item.transfer.manifest, requiresReview: true });
+      getLinked('process');
       store.assertWorkRevision(await store.readWork(item.id), item.revision);
       context.signal.throwIfAborted();
       return { id: item.id, processing: await linked.dispatcher.process(item.id, item.transfer.manifestHash, context.signal) };

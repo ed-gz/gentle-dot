@@ -22,7 +22,7 @@ function fixture() {
   chat.connect('wss://example.ts.net/ws', ' example-secret ');
   return { chat, statuses, messages, socket: FakeSocket.all.at(-1) };
 }
-function ready(socket) { socket.open(); socket.receive({ type: 'ready', agentState: 'idle' }); }
+function ready(socket, features) { socket.open(); socket.receive({ type: 'ready', agentState: 'idle', ...(features ? { features: { conversations: false, ...features } } : {}) }); }
 beforeEach(() => {
   globalThis.WebSocket = FakeSocket;
   FakeSocket.all = [];
@@ -216,7 +216,7 @@ test('option and expiry changes invalidate the reviewed ask snapshot', () => {
 });
 
 test('work RPC requires matching request and transfer IDs and does not replay after disconnect', async () => {
-  const { chat, socket } = fixture(); ready(socket);
+  const { chat, socket } = fixture(); ready(socket, { workSync: 1 });
   const request = { type: 'work_sync', operation: 'status', requestId: 'request-1', transferId: 'transfer-1' };
   let settled = false;
   const response = chat.exchange(request).then(value => { settled = true; return value; });
@@ -231,9 +231,40 @@ test('work RPC requires matching request and transfer IDs and does not replay af
 });
 
 test('a missing durable reply times out without inventing receipt or resending', async () => {
-  const { chat, socket } = fixture(); ready(socket);
+  const { chat, socket } = fixture(); ready(socket, { workSync: 1 });
   const response = chat.exchange({ type: 'work_sync', operation: 'status', requestId: 'status-1', transferId: 'transfer-1' });
   const rejected = assert.rejects(response, /no confirmó/);
   mock.timers.tick(30000); await rejected;
   assert.equal(socket.sent.filter(message => message.type === 'work_sync').length, 1);
+});
+
+test('legacy or future unsupported work capability keeps chat ready without emitting a work request', async () => {
+  for (const flags of [undefined, { workSync: 2, meetingDrafts: 2 }]) {
+    const { chat, socket, statuses } = fixture(); ready(socket, flags);
+    assert.equal(chat.ready(), true); assert.equal(chat.supportsWorkSync(), false);
+    await assert.rejects(chat.exchange({ type: 'work_sync', operation: 'status', requestId: 'legacy-request', transferId: 'legacy-transfer' }), /Actualiza Gentle Dot/);
+    assert.equal(socket.sent.some(message => message.type === 'work_sync'), false);
+    assert.equal(chat.send('El chat continúa disponible'), true); assert.equal(statuses.at(-1), 'ready');
+    chat.disconnect();
+  }
+});
+test('meeting processing needs its own capability and reconnect cannot retain capabilities from the previous socket', async () => {
+  const { chat, socket } = fixture(); ready(socket, { workSync: 1 });
+  assert.equal(chat.supportsWorkSync(), true); assert.equal(chat.supportsMeetingDrafts(), false);
+  const process = { type: 'work_sync', operation: 'process', requestId: 'process-1', transferId: 'meeting-1', approvedManifestHash: 'a'.repeat(64) };
+  await assert.rejects(chat.exchange(process), /procesamiento de reuniones/);
+  assert.equal(socket.sent.some(message => message.type === 'work_sync'), false);
+  socket.drop(); assert.equal(chat.supportsWorkSync(), false); mock.timers.tick(500);
+  const current = FakeSocket.all.at(-1); ready(current, { workSync: 1, meetingDrafts: 1 });
+  assert.equal(chat.supportsMeetingDrafts(), true);
+  const operation = chat.exchange(process); current.receive({ type: 'work_sync_reply', requestId: 'process-1', transferId: 'meeting-1', state: 'processing', processing: { status: 'running', message: 'Preparando borrador' } });
+  assert.equal((await operation).state, 'processing');
+  chat.suspend(); assert.equal(chat.supportsMeetingDrafts(), false); chat.resume(); ready(FakeSocket.all.at(-1));
+  assert.equal(chat.ready(), true); assert.equal(chat.supportsWorkSync(), false);
+});
+test('malformed advertised capabilities never cross the ready boundary', () => {
+  const { chat, socket } = fixture(); socket.open();
+  for (const workSync of [true, '1', 0, -1, 1.5, 65536]) socket.receive({ type: 'ready', agentState: 'idle', features: { conversations: false, workSync } });
+  assert.equal(chat.ready(), false);
+  socket.receive({ type: 'ready', agentState: 'idle', features: { conversations: false, workSync: 1 } }); assert.equal(chat.ready(), true);
 });

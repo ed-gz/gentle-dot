@@ -88,6 +88,10 @@ export interface Features {
 	conversations: boolean;
 	/** Correlates background history refreshes so a late response cannot move a reader. */
 	historyRefresh?: boolean;
+	/** Durable inbox RPC version. Absent means unsupported; chat remains compatible. */
+	workSync?: number;
+	/** Meeting draft processor version; requires workSync. */
+	meetingDrafts?: number;
 }
 
 /** The web PIN on a server (S25.8): whether it was set, and whether wrong tries locked it for now. */

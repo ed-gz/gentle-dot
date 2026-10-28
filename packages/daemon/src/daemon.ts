@@ -1229,7 +1229,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 					mobilePresence.configure(key, req.headers["x-gentle-presence"] === "off" ? false : req.headers["x-gentle-presence"] === "on" ? true : undefined);
 					return key;
 				},
-				(key, message) => workSync.handle(mobile.deviceIdForToken(key) ?? "desktop", message),
+				{ handle: (key, message) => workSync.handle(mobile.deviceIdForToken(key) ?? "desktop", message), meetingDrafts: !vps },
 			),
 		);
 	});
@@ -1393,7 +1393,7 @@ function acceptClient(
 	onAuth: (key: string) => void,
 	onDisconnect: () => void,
 	mobileKey: (key: string) => string | undefined,
-	syncWork: (key: string, message: WorkSyncRequest) => Promise<WorkSyncReply>,
+	syncWork?: { handle(key: string, message: WorkSyncRequest): Promise<WorkSyncReply>; meetingDrafts: boolean },
 ): void {
 	let seq = 0;
 	let clientKey: string | undefined;
@@ -1423,6 +1423,7 @@ function acceptClient(
 			}
 			clientKey = message.token;
 			client.mobileKey = mobileKey(message.token);
+			if (syncWork) client.workSync = { handle: request => syncWork.handle(message.token, request), meetingDrafts: syncWork.meetingDrafts };
 			onAuth(message.token);
 			detach = bridge.attach(client);
 			return;
@@ -1433,10 +1434,6 @@ function acceptClient(
 				code: "bad_message",
 				message: "The app sent a message the assistant did not understand.",
 			});
-			return;
-		}
-		if (message.type === "work_sync" && clientKey !== undefined) {
-			void syncWork(clientKey, message).then(reply => client.send(reply));
 			return;
 		}
 		void bridge.handle(client, message as ClientMessage);

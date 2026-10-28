@@ -12,6 +12,7 @@ const string = (value: unknown): value is string => typeof value === 'string';
 const id = (value: unknown): value is string => string(value) && value.length > 0 && value.length <= 512;
 const optional = (value: unknown, check: (input: unknown) => boolean) => value === undefined || check(value);
 const boolean = (value: unknown) => typeof value === 'boolean';
+const featureVersion = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= 65535;
 const state = (value: unknown) => string(value) && STATES.has(value as AgentState);
 const oneOf = (value: unknown, values: readonly string[]) => string(value) && values.includes(value);
 const strings = (value: unknown) => Array.isArray(value) && value.length <= 1000 && value.every(string);
@@ -35,7 +36,8 @@ function parse(raw: unknown): ServerMessage | undefined {
     case 'ready':
       valid = state(message.agentState) && optional(message.conversationId, id) && optional(message.clientId, id)
         && optional(message.model, string)
-        && optional(message.features, value => record(value) && boolean(value.conversations) && optional(value.historyRefresh, boolean))
+        && optional(message.features, value => record(value) && boolean(value.conversations) && optional(value.historyRefresh, boolean)
+          && optional(value.workSync, featureVersion) && optional(value.meetingDrafts, featureVersion))
         && optional(message.voice, value => record(value) && boolean(value.transcribe) && boolean(value.speak) && optional(value.local, boolean))
         && optional(message.pin, value => record(value) && boolean(value.set) && optional(value.locked, boolean));
       break;
@@ -86,6 +88,7 @@ export function createLinkedChat(callbacks: Callbacks) {
   let attempts = 0;
   let suspended = false;
   let authenticated = false;
+  let workSync = false, meetingDrafts = false;
   const asks = new Map<string, Ask>();
   const requests = new Map<string, { transferId: string; resolve(reply: WorkSyncReply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
 
@@ -95,7 +98,7 @@ export function createLinkedChat(callbacks: Callbacks) {
     retryTimer = connectTimer = undefined;
     const old = socket;
     socket = undefined;
-    authenticated = false;
+    authenticated = false; workSync = meetingDrafts = false;
     asks.clear();
     for (const request of requests.values()) {
       clearTimeout(request.timer);
@@ -150,6 +153,7 @@ export function createLinkedChat(callbacks: Callbacks) {
         clearTimeout(connectTimer);
         connectTimer = undefined;
         authenticated = true;
+        workSync = message.features?.workSync === 1; meetingDrafts = workSync && message.features?.meetingDrafts === 1;
         attempts = 0;
         callbacks.onStatus('ready');
         if (!current() || !transmit({ type: 'get_history' })) return;
@@ -209,6 +213,8 @@ export function createLinkedChat(callbacks: Callbacks) {
     exchange(request: WorkSyncRequest): Promise<WorkSyncReply> {
       const safe = parseWorkSyncRequest(request);
       if (!safe || requests.has(safe.requestId) || !authenticated) return Promise.reject(new Error('Conecta Gentle Dot antes de transferir el trabajo.'));
+      if (!workSync) return Promise.reject(new Error('Actualiza Gentle Dot en la laptop para transferir trabajos. La conversación sigue disponible y el trabajo local se conserva.'));
+      if (safe.operation === 'process' && !meetingDrafts) return Promise.reject(new Error('Este Gentle Dot no tiene disponible el procesamiento de reuniones. El material confirmado se conserva.'));
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           requests.delete(safe.requestId);
@@ -222,6 +228,8 @@ export function createLinkedChat(callbacks: Callbacks) {
       });
     },
     abort: () => transmit({ type: 'abort' }),
+    supportsWorkSync: () => authenticated && workSync,
+    supportsMeetingDrafts: () => authenticated && meetingDrafts,
     ready: () => authenticated && socket?.readyState === WebSocket.OPEN,
   };
 }

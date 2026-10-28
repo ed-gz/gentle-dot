@@ -384,7 +384,12 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
       // Rebuild a bounded context from the visible timeline, also after app restarts.
       await resetLocal();
       if (generation !== localGeneration) return;
-      const runner = createAgentRunner({ tools: [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: () => linked.ready() ? createWorkDispatcher(linked.exchange, host) : undefined }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))], step: agentStep, onTrace(trace) {
+      const runner = createAgentRunner({ tools: [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: operation => {
+        if (!linked.ready()) return undefined;
+        if (!linked.supportsWorkSync()) throw new Error('Actualiza Gentle Dot en la laptop para transferir trabajos. La conversación sigue disponible y el trabajo local se conserva.');
+        if (operation === 'process' && !linked.supportsMeetingDrafts()) throw new Error('Este Gentle Dot no tiene disponible el procesamiento de reuniones. El material confirmado se conserva.');
+        return createWorkDispatcher(linked.exchange, host);
+      } }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))], step: agentStep, onTrace(trace) {
         const entry = entries.find(item => item.id === id) ?? turnEntry;
         const activities = [...entry.activities ?? []]; const at = activities.findIndex(item => item.id === trace.id);
         const activity = { id: trace.id, kind: 'other' as const, title: trace.label, status: trace.status, detail: trace.detail };

@@ -21,6 +21,8 @@ import {
 	type RoleRoute,
 	type ServerPayload,
 	type VoiceCapability,
+	type WorkSyncRequest,
+	type WorkSyncReply,
 } from "@gentle-dot/protocol";
 import { APPROVAL_WAIT_MS, type AppApproval, type AppLink } from "./app-channel.ts";
 import type { AuthManager } from "./auth.ts";
@@ -58,6 +60,8 @@ import { isBlockedInput, presentText, shouldShowToast } from "./white-label.ts";
 export interface BridgeClient {
 	/** Set only after authenticating a paired phone, never by a client message. */
 	mobileKey?: string;
+	/** Installed by the authenticated transport, never supplied by a client frame. */
+	workSync?: { handle(request: WorkSyncRequest): Promise<WorkSyncReply>; meetingDrafts: boolean };
 	send(payload: ServerPayload): void;
 }
 
@@ -377,7 +381,8 @@ export class DotBridge {
 			clientId,
 			...this.conversationRef(),
 			...(this.supervisor.model ? { model: this.supervisor.model } : {}),
-			features: { ...this.features, historyRefresh: true },
+			features: { conversations: this.features.conversations, historyRefresh: true,
+				...(client.workSync ? { workSync: 1, ...(client.workSync.meetingDrafts ? { meetingDrafts: 1 } : {}) } : {}) },
 			...(this.options.voice ? { voice: this.options.voice.capability() } : {}),
 			...(this.options.pin && !this.options.app?.connected ? { pin: this.options.pin.status() } : {}),
 		});
@@ -413,6 +418,14 @@ export class DotBridge {
 
 	/** A window's message. Connector changes come only from the desktop app (S25.2). */
 	async handle(client: BridgeClient, message: ClientMessage): Promise<void> {
+		if (message.type === "work_sync") {
+			const unavailable = (text: string) => this.deliver(client, { type: "work_sync_reply", requestId: message.requestId, transferId: message.transferId, state: "error", code: "storage", message: text });
+			if (!client.workSync) { unavailable("Durable work transfer is unavailable on this connection."); return; }
+			if (message.operation === "process" && !client.workSync.meetingDrafts) { unavailable("Meeting processing is unavailable on this host."); return; }
+			try { this.deliver(client, await client.workSync.handle(message)); }
+			catch { unavailable("The host could not confirm this work operation."); }
+			return;
+		}
 		if (message.type === "pin_set" || message.type === "pin_command" || message.type === "pin_approve") {
 			await this.pinMessage(client, message);
 			return;
