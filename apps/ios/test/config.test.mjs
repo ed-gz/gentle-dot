@@ -69,7 +69,7 @@ test('non-macOS host fails early, before builds or dependency changes', { skip: 
 function unsignedBuildFixture(mode, live = false) {
   const dir = mkdtempSync(join(tmpdir(), 'capri-unsigned-'));
   for (const path of ['scripts', 'bin', 'out', 'src-tauri/target']) mkdirSync(join(dir, path), { recursive: true });
-  for (const file of ['build-unsigned.sh', 'verify-ipa.py']) copyFileSync(new URL(`../scripts/${file}`, import.meta.url), join(dir, 'scripts', file));
+  for (const file of ['build-unsigned.sh', 'verify-ipa.py', 'verify-app-icon.py']) copyFileSync(new URL(`../scripts/${file}`, import.meta.url), join(dir, 'scripts', file));
   writeFileSync(join(dir, 'out/Capri-unsigned.ipa'), 'previous published result');
   writeFileSync(join(dir, 'src-tauri/target/stale.ipa'), 'old product from a different build');
   const command = (name, body) => {
@@ -85,6 +85,7 @@ function unsignedBuildFixture(mode, live = false) {
   command('cargo', String.raw`
     if [[ "$*" == 'tauri ios init --ci' ]]; then
       mkdir -p src-tauri/gen/apple/Capri.xcodeproj
+      mkdir -p src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset
       printf 'buildSettings = {\n};\n' > src-tauri/gen/apple/Capri.xcodeproj/project.pbxproj
       python3 - <<'PY'
 import os, pathlib, plistlib
@@ -100,12 +101,26 @@ for product in (('AppProduct', 'CapriShare', 'CapriLive') if live else ('AppProd
     entitlements = {} if product == 'CapriLive' else {'com.apple.security.application-groups': [group]}
     (directory/(product+'.entitlements')).write_bytes(plistlib.dumps(entitlements))
 PY
+    elif [[ "$*" == 'tauri icon '* ]]; then
+      # Like Tauri, icon generation requires a pre-existing Xcode catalog to
+      # populate it. Use a real, opaque RGBA PNG for the packaging gate.
+      python3 - <<'PY'
+import pathlib, struct, zlib
+directory = pathlib.Path('src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset')
+assert directory.is_dir(), 'iOS icon generation ran before project initialization'
+def chunk(kind, data):
+    return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind+data))
+header = struct.pack('>IIBBBBB', 120, 120, 8, 6, 0, 0, 0)
+raw = b''.join(b'\0'+b''.join(bytes((x, y, 40, 255)) for x in range(120)) for y in range(120))
+image = b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',header)+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b'')
+(directory/'AppIcon-60x60@2x.png').write_bytes(image)
+PY
     elif [[ "$*" == 'tauri ios build '* ]]; then
       printf '%s\n' "$*" >> build-calls.txt
       [[ "$CAPRI_BUILD_FIXTURE" != failure ]] || exit 42
       [[ "$CAPRI_BUILD_FIXTURE" != stale ]] || exit 0
       python3 - <<'PY'
-import os, pathlib, plistlib, struct, zipfile
+import os, pathlib, plistlib, struct, zipfile, zlib
 mode = os.environ['CAPRI_BUILD_FIXTURE']
 path = pathlib.Path('src-tauri/gen/apple/build/arm64/Capri.ipa')
 path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,6 +130,13 @@ if os.environ['CAPRI_LIVE_ACTIVITY'] == '1': info['NSSupportsLiveActivities'] = 
 with zipfile.ZipFile(path, 'w') as archive:
     archive.writestr('Payload/Capri.app/Info.plist', plistlib.dumps(info))
     archive.writestr('Payload/Capri.app/Capri', struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 0, 0, 0, 0))
+    # Xcode can package the icon as CgBI, with BGRA channels and raw DEFLATE.
+    def chunk(kind, data): return struct.pack('>I',len(data))+kind+data+struct.pack('>I',zlib.crc32(kind+data))
+    header = struct.pack('>IIBBBBB',120,120,8,6,0,0,0)
+    raw = b''.join(b'\0'+b''.join(bytes((40, y, x+(1 if mode == 'icon_mismatch' and x == y == 50 else 0), 255)) for x in range(120)) for y in range(120))
+    encoder = zlib.compressobj(wbits=-15)
+    image = b'\x89PNG\r\n\x1a\n'+chunk(b'CgBI',b'\0'*4)+chunk(b'IHDR',header)+chunk(b'IDAT',encoder.compress(raw)+encoder.flush())+chunk(b'IEND',b'')
+    archive.writestr('Payload/Capri.app/AppIcon60x60@2x.png', image)
     if mode != 'share':
         archive.writestr('Payload/Capri.app/PlugIns/CapriShare.appex/Info.plist', plistlib.dumps({'CFBundleIdentifier': 'dev.gentledot.capri.share', 'CFBundleExecutable': 'CapriShare', 'DTPlatformName': 'iphoneos', 'CapriAppGroup': 'group.dev.gentledot.capri', 'NSExtension': {'NSExtensionPointIdentifier': 'com.apple.share-services'}}))
         archive.writestr('Payload/Capri.app/PlugIns/CapriShare.appex/CapriShare', struct.pack('<8I', 0xfeedfacf, 0x1000007 if mode == 'share_arch' else 0x100000c, 0, 2, 0, 0, 0, 0))
@@ -188,7 +210,7 @@ PY`);
     const verified = published ? spawnSync('python3', [join(dir, 'scripts/verify-ipa.py'), join(dir, 'out/Capri-unsigned.ipa'), '--sealed', ...(live ? ['--live-activity'] : [])], { encoding: 'utf8' }) : undefined;
     return { ...result, published, verified,
       signing: existsSync(join(dir, 'sign-calls.jsonl')) ? readFileSync(join(dir, 'sign-calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [],
-      calls: readFileSync(join(dir, 'build-calls.txt'), 'utf8').trim().split('\n') };
+      calls: existsSync(join(dir, 'build-calls.txt')) ? readFileSync(join(dir, 'build-calls.txt'), 'utf8').trim().split('\n') : [] };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
@@ -217,6 +239,14 @@ test('unsigned packaging publishes a newly built device IPA after inspecting it'
   assert.match(seals[0].at(-1), /CapriShare\.appex$/);
   assert.match(seals[1].at(-1), /Capri\.app$/);
   assert.equal(result.signing.filter(args => args.includes('--verify')).length, 2);
+});
+
+test('unsigned packaging rejects an icon that differs from the generated iPhone asset', () => {
+  const result = unsignedBuildFixture('icon_mismatch');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /icon does not match/);
+  assert.equal(result.published, false);
+  assert.equal(result.signing.length, 0);
 });
 
 test('optional Live Activity packaging seals and verifies both extensions', () => {
