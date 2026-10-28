@@ -295,6 +295,16 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the agent_step command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-agent-step"
+        },
+        {
+          "description": "Denies the agent_step command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-agent-step"
+        },
+        {
           "description": "Enables the cancel command without any pre-configured scope.",
           "type": "string",
           "const": "allow-cancel"

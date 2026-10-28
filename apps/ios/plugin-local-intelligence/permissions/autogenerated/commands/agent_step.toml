@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-agent-step"
+description = "Enables the agent_step command without any pre-configured scope."
+commands.allow = ["agent_step"]
+
+[[permission]]
+identifier = "deny-agent-step"
+description = "Denies the agent_step command without any pre-configured scope."
+commands.deny = ["agent_step"]

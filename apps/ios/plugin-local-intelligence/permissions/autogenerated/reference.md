@@ -4,6 +4,7 @@ Check and use Capri's local model, cancel a response, and clear its in-memory co
 
 - `allow-check-availability`
 - `allow-respond`
+- `allow-agent-step`
 - `allow-reset`
 - `allow-cancel`
 
@@ -15,6 +16,32 @@ Check and use Capri's local model, cancel a response, and clear its in-memory co
 <th>Description</th>
 </tr>
 
+
+<tr>
+<td>
+
+`local-intelligence:allow-agent-step`
+
+</td>
+<td>
+
+Enables the agent_step command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-agent-step`
+
+</td>
+<td>
+
+Denies the agent_step command without any pre-configured scope.
+
+</td>
+</tr>
 
 <tr>
 <td>

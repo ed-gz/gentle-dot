@@ -14,6 +14,10 @@ fn valid_prompt(prompt: &str) -> bool {
     !prompt.trim().is_empty() && prompt.chars().count() <= 4_000
 }
 
+fn valid_agent_prompt(prompt: &str) -> bool {
+    !prompt.trim().is_empty() && prompt.chars().count() <= 8_000
+}
+
 async fn native_call<R: Runtime>(
     app: AppHandle<R>,
     command: &'static str,
@@ -58,6 +62,15 @@ async fn respond<R: Runtime>(app: AppHandle<R>, prompt: String) -> Result<Value,
 }
 
 #[tauri::command]
+async fn agent_step<R: Runtime>(app: AppHandle<R>, prompt: String) -> Result<Value, String> {
+    if !valid_agent_prompt(&prompt) {
+        return Ok(json!({"ok": false, "error": "invalid_prompt",
+            "message": "El contexto del paso debe contener entre 1 y 8000 caracteres."}));
+    }
+    native_call(app, "agentStep", json!({"prompt": prompt})).await
+}
+
+#[tauri::command]
 async fn reset<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
     native_call(app, "reset", json!({})).await
 }
@@ -72,6 +85,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
         .invoke_handler(tauri::generate_handler![
             check_availability,
             respond,
+            agent_step,
             reset,
             cancel
         ])
@@ -87,7 +101,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::valid_prompt;
+    use super::{valid_agent_prompt, valid_prompt};
 
     #[test]
     fn accepts_spanish_and_unicode_up_to_the_character_limit() {
@@ -100,5 +114,13 @@ mod tests {
     fn rejects_empty_or_whitespace_only_requests() {
         assert!(!valid_prompt(""));
         assert!(!valid_prompt(" \n\t\u{2003}"));
+    }
+
+    #[test]
+    fn agent_step_has_a_separate_unicode_budget() {
+        assert!(valid_agent_prompt(&"🦖".repeat(8_000)));
+        assert!(!valid_agent_prompt(&"🦖".repeat(8_001)));
+        assert!(!valid_agent_prompt(" \n\t"));
+        assert!(!valid_prompt(&"a".repeat(4_001)));
     }
 }
