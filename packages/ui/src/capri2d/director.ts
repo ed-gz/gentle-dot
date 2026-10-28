@@ -58,8 +58,10 @@ export class RigDirector {
   if(id!==this.identity){
    this.identity=id;
    const next=['stand','sleep','sit','peek','fall'].includes(name)?undefined:new RigPlayer(name,now,this.direction);
-   // Human attention and drag reactions must not wait for an uninterruptible celebration.
-   const release=Boolean(intent.question)||intent.alert||intent.dragging||this.prior==='point'||this.prior==='fall'||wasSleeping&&!sleeping;
+   // Explicit human gestures must not disappear behind a celebration. Only a
+   // gesture selected by the priority rules can interrupt the current overlay.
+   const humanGesture=Boolean(intent.gesture&&gestures[intent.gesture.name]===name);
+   const release=humanGesture||Boolean(intent.question)||intent.alert||intent.dragging||this.prior==='point'||this.prior==='fall'||wasSleeping&&!sleeping;
    if(release||!this.overlay||!this.overlay.sample(now)||(next?.act.priority??0)>=(this.overlay.act.priority??0))this.overlay=next;
    if(this.prior==='point'&&!intent.question&&!next)this.overlay=new RigPlayer('unpoint',now,this.direction);
    if(this.prior==='fall'&&!intent.falling&&!next)this.overlay=new RigPlayer(intent.resting==='sit'?'plop':'land',now,this.direction);

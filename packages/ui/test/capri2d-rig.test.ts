@@ -21,6 +21,14 @@ it('lets human questions interrupt victory immediately, including retraction',()
  rig.update({question:'q'},300);expect(rig.sample(300).act).toBe('point');
  rig.update({},400);expect(rig.sample(400).act).toBe('unpoint');
 });
+it.each([false,true])('responds to an explicit greeting during celebration, reduced motion %s',reduced=>{
+ const rig=new RigDirector();rig.update({outcome:{kind:'done',at:1}},0);
+ expect(rig.sample(50,reduced).act).toBe('victory');
+ rig.update({gesture:{name:'saludar',at:100}},100);
+ expect(rig.sample(100,reduced).act).toBe('hop');
+ rig.sample(3000);rig.update({gesture:{name:'saludar',at:100}},3001);
+ expect(rig.sample(3001).act).toBe('stand');
+});
 it('repeats talking for the whole speech, but never replays a one-shot pointer episode',()=>{
  const rig=new RigDirector();rig.update({talking:true},0);
  rig.sample(2000);rig.update({talking:true},2100);

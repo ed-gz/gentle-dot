@@ -1,7 +1,7 @@
 // Window-ledged choreography adapted from capri-desktop (MIT):
 // https://github.com/mochiiwuff/capri-desktop . No artwork is bundled.
 export interface Rect { x:number; y:number; width:number; height:number }
-export interface RoamFeed { laptop:Rect; region:Rect; x:number; y:number; width:number; height:number; herdr:boolean; blankGrid?:{columns:number;rows:number;scores:number[];perches?:[number,number][]}|null; roamZone?:{xRatio:number} }
+export interface RoamFeed { laptop:Rect; region:Rect; x:number; y:number; width:number; height:number; herdr:boolean; blankGrid?:{columns:number;rows:number;scores:number[];perches?:[number,number][]}|null; roamZone?:{xRatio:number}; safePerches?:[number,number][] }
 export interface RoamGuards { composer?:boolean; question?:boolean; approval?:boolean; sleeping?:boolean; reduced?:boolean; stale?:boolean; paused?:boolean }
 export interface RoamPosition { x:number; y:number; resting:'sit'|'stand'; direction:number }
 const FLAT_VARIANCE=16;
@@ -70,7 +70,7 @@ export class RoamDirector {
  dragged(now:number){this.resumeAt=now+10*60*1000;}
  step(feed:RoamFeed,now:number,g:RoamGuards):RoamPosition|undefined {
   if(g.composer||g.question||g.approval||g.sleeping||g.stale||g.paused||now<this.resumeAt)return;
-  const key=JSON.stringify([feed.laptop,feed.region,feed.width,feed.height,feed.roamZone]);
+  const key=JSON.stringify([feed.laptop,feed.region,feed.width,feed.height,feed.roamZone,feed.safePerches]);
   if(key===this.geometry&&(g.reduced||now<this.due))return;
   const l=feed.laptop;
   let r=feed.region;
@@ -88,7 +88,10 @@ export class RoamDirector {
   const right=Math.max(left,Math.min(l.x+l.width-feed.width,r.x+r.width-feed.width));
   const top=Math.max(l.y,Math.min(l.y+l.height-feed.height,r.y));
   const bottom=Math.max(top,Math.min(l.y+l.height-feed.height,r.y+r.height-feed.height));
-  const points=perchCandidates(feed)??[[left,bottom],[right,bottom],[right,top],[left,top]];
+  // A phone supplies DOM-verified spaces. Empty means no safe relocation;
+  // never fall back to a corner covering a control or text.
+  const points=feed.safePerches?.slice(0,128).filter(([x,y])=>Number.isFinite(x)&&Number.isFinite(y)&&x>=left&&x<=right&&y>=top&&y<=bottom)
+   ??perchCandidates(feed)??[[left,bottom],[right,bottom],[right,top],[left,top]];
   if(!points.length)return;
   const index=g.reduced?0:this.index++%points.length;
   const [x,y]=points[index]!;
