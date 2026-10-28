@@ -701,7 +701,14 @@ const memoryView = mountMemoryView({ status: persistence.status, pending: persis
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) release();
   cancelAnimationFrame(frame); fx?.clear(); persist();
-  if (document.hidden) { void cancelDictation(); director.update(intent, performance.now(), true); linked.suspend(); }
+  if (document.hidden) {
+    // The native permission sheet can temporarily hide WKWebView while the
+    // microphone request is still pending. Native iOS lifecycle handling
+    // cancels an actual background transition; do not invalidate that prompt.
+    // Also avoid cancelling a capture owned by the laptop-session composer.
+    if (voiceSession) void cancelDictation();
+    director.update(intent, performance.now(), true); linked.suspend();
+  }
   else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void completionNotifications.refresh(); void lockScreenSettings?.refresh(); }
 });
 window.addEventListener('pagehide', () => { connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
@@ -776,20 +783,22 @@ let voiceStarting = false;
 let voiceController: AbortController | undefined;
 let voiceGeneration = 0;
 let voiceTimer: ReturnType<typeof setTimeout> | undefined;
-async function cancelDictation() {
+async function cancelDictation(reason: 'navigation' | 'manual' = 'navigation') {
   const wasActive = voiceStarting || Boolean(voiceSession);
-  const generation = ++voiceGeneration; voiceController?.abort(); voiceSession = undefined; clearTimeout(voiceTimer);
+  voiceGeneration++; voiceController?.abort(); voiceSession = undefined; clearTimeout(voiceTimer);
+  voiceStarting = false;
+  const control = element<HTMLButtonElement>('dictate');
+  control.disabled = false; control.setAttribute('aria-pressed', 'false'); control.setAttribute('aria-label', 'Dictar');
+  if (wasActive) element('voice-status').textContent = reason === 'manual'
+    ? 'Dictado cancelado. Toca el micrófono para volver a intentarlo.'
+    : 'El dictado se interrumpió al salir de Capri. Toca el micrófono para intentarlo de nuevo.';
   if (isTauri()) await cancelVoice().catch(() => {});
-  if (generation !== voiceGeneration) return;
-  element('dictate').setAttribute('aria-pressed', 'false');
-  element('dictate').setAttribute('aria-label', 'Dictar');
-  if (wasActive) element('voice-status').textContent = 'El dictado se interrumpió al salir de Capri. Toca el micrófono para intentarlo de nuevo.';
 }
 element('dictate').addEventListener('click', async () => {
-  if (voiceStarting) return;
+  if (voiceStarting) { void cancelDictation('manual'); return; }
   const current = ++voiceGeneration;
   voiceStarting = true;
-  const control = element<HTMLButtonElement>('dictate'); control.disabled = true;
+  const control = element<HTMLButtonElement>('dictate'); control.setAttribute('aria-label', 'Cancelar dictado');
   try {
     if (voiceSession) {
       const id = voiceSession; voiceSession = undefined; clearTimeout(voiceTimer);
@@ -813,7 +822,9 @@ element('dictate').addEventListener('click', async () => {
       if (current !== voiceGeneration) return;
       element('voice-status').textContent = 'Iniciando el micrófono. Si iOS pide permiso, acéptalo para dictar.';
       const session = await startVoice();
-      if (current !== voiceGeneration) { await cancelVoice(); return; }
+      // Explicit cancellation already reached the native controller. A second
+      // global cancel here could stop a newer capture owned by another panel.
+      if (current !== voiceGeneration) return;
       voiceSession = session.sessionId;
       element('voice-status').textContent = '● Grabando. Toca el micrófono otra vez para transcribir.';
       setIntent({ alert: true });
@@ -821,8 +832,10 @@ element('dictate').addEventListener('click', async () => {
     }
   } catch (error) { if (current === voiceGeneration) element('voice-status').textContent = errorText(error); }
   finally {
-    voiceStarting = false; control.disabled = false;
-    control.setAttribute('aria-pressed', String(!!voiceSession)); control.setAttribute('aria-label', voiceSession ? 'Terminar dictado' : 'Dictar');
+    if (current === voiceGeneration) {
+      voiceStarting = false; control.disabled = false;
+      control.setAttribute('aria-pressed', String(!!voiceSession)); control.setAttribute('aria-label', voiceSession ? 'Terminar dictado' : 'Dictar');
+    }
   }
 });
 element('attach').addEventListener('click', async () => {

@@ -252,6 +252,87 @@ test('voice fixture prepares assets on microphone tap and appends dictation with
   expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['prepare', 'start', 'stop']);
 });
 
+test('a temporary hidden web view during the microphone permission does not cancel the pending capture', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    state.voiceActions = [];
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'undetermined' };
+      if (command.endsWith('start_voice')) { state.voiceActions.push('start'); return await new Promise(resolve => { state.finishPermission = resolve; }); }
+      if (command.endsWith('cancel_voice')) state.voiceActions.push('cancel');
+      if (command.endsWith('stop_voice')) return { ok: true, sessionId: args.sessionId, text: 'Transcripción de prueba.', locale: 'es-MX', durationSeconds: 2,
+        source: 'apple-speech-analyzer', segments: [{ text: 'Transcripción de prueba.', startSeconds: 0.1, endSeconds: 1.8 }] };
+      return previous(command, args);
+    };
+  });
+  await page.goto('/'); await page.locator('#dictate').click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishPermission)).toBe('function');
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.evaluate(() => (globalThis as any).finishPermission({ ok: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', maxDurationSeconds: 90 }));
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['start']);
+  await page.locator('#dictate').click();
+  await expect(page.locator('#prompt')).toHaveValue('Transcripción de prueba.');
+});
+
+test('a stuck microphone start can be cancelled and its late result does not cancel a newer recording', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke; let starts = 0;
+    state.voiceActions = [];
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
+      if (command.endsWith('start_voice')) {
+        state.voiceActions.push('start');
+        if (++starts === 1) return await new Promise(resolve => { state.finishOldVoice = resolve; });
+        return { ok: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', maxDurationSeconds: 90 };
+      }
+      if (command.endsWith('cancel_voice')) state.voiceActions.push('cancel');
+      if (command.endsWith('stop_voice')) return { ok: true, sessionId: args.sessionId, text: 'Nuevo dictado.', locale: 'es-MX', durationSeconds: 2,
+        source: 'apple-speech-analyzer', segments: [{ text: 'Nuevo dictado.', startSeconds: 0, endSeconds: 1.8 }] };
+      return previous(command, args);
+    };
+  });
+  await page.goto('/'); await page.locator('#dictate').click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishOldVoice)).toBe('function');
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Cancelar dictado');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#voice-status')).toContainText('cancelado');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  await page.evaluate(() => (globalThis as any).finishOldVoice({ ok: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', maxDurationSeconds: 90 }));
+  await expect.poll(() => page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['start', 'cancel', 'start']);
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#prompt')).toHaveValue('Nuevo dictado.');
+});
+
+test('native cancellation of a pending microphone request remains visible and can be retried', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke; let starts = 0;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'undetermined' };
+      if (command.endsWith('start_voice')) {
+        if (++starts === 1) return await new Promise(resolve => { state.finishBackgroundedVoice = resolve; });
+        return { ok: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', maxDurationSeconds: 90 };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/'); await page.locator('#dictate').click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishBackgroundedVoice)).toBe('function');
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.evaluate(() => (globalThis as any).finishBackgroundedVoice({ ok: false, error: 'cancelled', message: 'Dictado cancelado al salir.' }));
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
+  await expect(page.locator('#voice-status')).toContainText('cancelado al salir');
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+});
+
 test('an interrupted recording does not leave a false recording indicator', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {

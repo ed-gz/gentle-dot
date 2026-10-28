@@ -2,6 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceControls, VoicePhase } from '@gentle-dot/ui/src/useVoice.ts';
 import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, type VoiceAvailability } from './perception.ts';
 
+function availabilityNote(value: VoiceAvailability): string | undefined {
+  if (value.microphonePermission === 'denied') return 'Activa el micrófono para Capri en Ajustes del iPhone.';
+  if (value.available || value.status === 'assets_required') return undefined;
+  if (value.status === 'unsupported_language') return 'La transcripción local en español no está disponible en este iPhone.';
+  if (value.status === 'os_unsupported') return 'El dictado local necesita iOS 26 o posterior.';
+  if (value.status === 'device_not_supported') return 'La transcripción local no está disponible en este dispositivo.';
+  return 'No pude preparar el dictado local. Cierra y vuelve a abrir esta sesión para intentarlo.';
+}
+
 /** Session dictation is an Apple transcript left in the composer for review. */
 export function useAppleVoice(enabled: boolean): VoiceControls {
   const [availability, setAvailability] = useState<VoiceAvailability>();
@@ -20,12 +29,14 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
   }, []);
   useEffect(() => {
     let live = true;
-    if (enabled) void checkVoice().then(value => { if (live) setAvailability(value); }).catch(error => { if (live) setNote(String(error.message)); });
+    if (enabled) void checkVoice().then(value => { if (live) { setAvailability(value); setNote(availabilityNote(value)); } }).catch(error => { if (live) setNote(String(error.message)); });
     else cancel();
     return () => { live = false; cancel(); };
   }, [enabled, cancel]);
   useEffect(() => {
-    const hidden = () => { if (document.hidden) cancel(); };
+    // A native permission dialog may obscure the web view before a capture is
+    // established. The native controller handles real background transitions.
+    const hidden = () => { if (document.hidden && owner.current.session) cancel(); };
     document.addEventListener('visibilitychange', hidden);
     return () => document.removeEventListener('visibilitychange', hidden);
   }, [cancel]);
@@ -60,7 +71,9 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
       }
       setNote('Iniciando el micrófono. Si iOS pide permiso, acéptalo para dictar.');
       const value = await startVoice();
-      if (state.epoch !== epoch || !state.enabled) { await cancelVoice().catch(() => {}); return; }
+      // cancel() already reached the native controller; a late second global
+      // cancellation could stop a newer session in the main conversation.
+      if (state.epoch !== epoch || !state.enabled) return;
       state.session = value.sessionId; setElapsed(0); setPhase('recording');
       setNote('Grabando. Toca el micrófono otra vez para revisar la transcripción.');
     })().catch(error => { if (state.epoch === epoch) setNote(error.message); }).finally(() => { if (state.epoch === epoch) state.pending = false; });

@@ -123,6 +123,72 @@ test('first session dictation prepares Apple voice after a microphone tap', asyn
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
 });
 
+test('a microphone permission dialog does not cancel a pending session capture', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
+    state.permissionActions = [];
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('start_voice')) { state.permissionActions.push('start'); return await new Promise(resolve => { state.finishSessionPermission = resolve; }); }
+      if (command.endsWith('cancel_voice')) state.permissionActions.push('cancel');
+      return original(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishSessionPermission)).toBe('function');
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.evaluate(() => (globalThis as any).finishSessionPermission({ ok: true, sessionId: '12345678-1234-1234-1234-123456789012', maxDurationSeconds: 90 }));
+  await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as any).permissionActions)).toEqual(['start']);
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
+});
+
+test('an unavailable session microphone explains the problem instead of silently disabling the control', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => command.endsWith('check_voice')
+      ? { available: false, status: 'unsupported_language', assetsInstalled: false, microphonePermission: 'granted' }
+      : original(command, args);
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.getByRole('button', { name: 'Dictar mensaje' })).toBeDisabled();
+  await expect(page.locator('.agent-reply .voice-status')).toContainText('transcripción local en español no está disponible');
+});
+
+test('late permission result after leaving one session never cancels a newer capture', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke; let starts = 0;
+    state.permissionActions = [];
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('start_voice')) {
+        state.permissionActions.push('start');
+        if (++starts === 1) return await new Promise(resolve => { state.finishOldPermission = resolve; });
+      }
+      if (command.endsWith('cancel_voice')) state.permissionActions.push('cancel');
+      return original(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishOldPermission)).toBe('function');
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
+  await page.evaluate(() => (globalThis as any).finishOldPermission({ ok: true, sessionId: '12345678-1234-1234-1234-123456789012', maxDurationSeconds: 90 }));
+  await expect.poll(() => page.evaluate(() => (globalThis as any).permissionActions)).toEqual(['start', 'cancel', 'start']);
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
+});
+
 
 test('leaving a session discards its late dictation instead of inserting it into the next session', async ({ page }) => {
   await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
