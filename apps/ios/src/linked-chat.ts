@@ -1,0 +1,181 @@
+import { CloseCode, PROTOCOL_VERSION, type AgentState, type ServerMessage } from '@gentle-dot/protocol';
+import { validDaemonUrl } from './local-state.ts';
+
+export type LinkedStatus = 'offline' | 'connecting' | 'ready' | 'rejected';
+type Callbacks = { onStatus(status: LinkedStatus): void; onMessage(message: ServerMessage): void };
+const MAX_PAYLOAD = 1_000_000;
+const STATES = new Set<AgentState>(['starting', 'idle', 'thinking', 'working', 'needs_you', 'restarting', 'error']);
+const BACKOFF = [500, 1000, 2000, 5000, 10000, 30000];
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const string = (value: unknown): value is string => typeof value === 'string';
+const id = (value: unknown): value is string => string(value) && value.length > 0 && value.length <= 512;
+const optional = (value: unknown, check: (input: unknown) => boolean) => value === undefined || check(value);
+const boolean = (value: unknown) => typeof value === 'boolean';
+const state = (value: unknown) => string(value) && STATES.has(value as AgentState);
+const oneOf = (value: unknown, values: readonly string[]) => string(value) && values.includes(value);
+const strings = (value: unknown) => Array.isArray(value) && value.length <= 1000 && value.every(string);
+const activity = (value: unknown) => record(value) && id(value.id) && string(value.title)
+  && oneOf(value.kind, ['read', 'edit', 'run', 'search', 'memory', 'delegate', 'other'])
+  && oneOf(value.status, ['running', 'done', 'failed']);
+const attachments = (value: unknown) => Array.isArray(value) && value.length <= 10 && value.every(item => record(item)
+  && string(item.name) && string(item.mime) && typeof item.size === 'number' && Number.isFinite(item.size) && item.size >= 0);
+
+/** Only this shell's supported events cross the untrusted WebSocket boundary. */
+function parse(raw: unknown): ServerMessage | undefined {
+  if (!string(raw) || raw.length > MAX_PAYLOAD || new TextEncoder().encode(raw).byteLength > MAX_PAYLOAD) return;
+  let message: unknown;
+  try { message = JSON.parse(raw); } catch { return; }
+  if (!record(message) || !Number.isSafeInteger(message.seq) || (message.seq as number) < 0) return;
+  let valid = false;
+  switch (message.type) {
+    case 'ready':
+      valid = state(message.agentState) && optional(message.conversationId, id) && optional(message.clientId, id)
+        && optional(message.model, string)
+        && optional(message.features, value => record(value) && boolean(value.conversations) && optional(value.historyRefresh, boolean))
+        && optional(message.voice, value => record(value) && boolean(value.transcribe) && boolean(value.speak) && optional(value.local, boolean))
+        && optional(message.pin, value => record(value) && boolean(value.set) && optional(value.locked, boolean));
+      break;
+    case 'agent_state': valid = state(message.state); break;
+    case 'history':
+      valid = optional(message.conversationId, id) && optional(message.requestId, id) && optional(message.hasEarlier, boolean)
+        && Array.isArray(message.messages) && message.messages.length <= 2000 && message.messages.every(entry => record(entry)
+          && id(entry.id) && oneOf(entry.role, ['user', 'assistant']) && string(entry.text)
+          && Array.isArray(entry.activities) && entry.activities.length <= 1000 && entry.activities.every(activity)
+          && optional(entry.attachments, attachments) && optional(entry.earlier, value => value === true));
+      break;
+    case 'user_message':
+      valid = id(message.messageId) && string(message.text) && optional(message.attachments, attachments); break;
+    case 'message_delta': valid = id(message.messageId) && string(message.delta); break;
+    case 'message_done':
+      valid = id(message.messageId) && string(message.text) && optional(message.error, string)
+        && optional(message.intermediate, value => value === true) && optional(message.stopped, value => value === true); break;
+    case 'activity': valid = id(message.messageId) && activity(message.activity); break;
+    case 'toast':
+      valid = oneOf(message.level, ['info', 'warning', 'error']) && string(message.message)
+        && optional(message.title, string) && optional(message.notificationId, id)
+        && optional(message.notificationEvent, value => oneOf(value, ['dotReply', 'dotError', 'agentCompleted', 'agentAttention', 'agentError', 'agentAvailable', 'permission']))
+        && optional(message.session, value => record(value) && id(value.paneId) && optional(value.sessionId, id));
+      break;
+    case 'ask': {
+      const ask = message.ask;
+      valid = record(ask) && id(ask.requestId) && string(ask.title)
+        && oneOf(ask.method, ['select', 'confirm', 'input', 'editor', 'app', 'pin'])
+        && optional(ask.message, string) && optional(ask.options, strings) && optional(ask.placeholder, string)
+        && optional(ask.prefill, string) && optional(ask.expiresAt, string)
+        && optional(ask.timeoutMs, value => typeof value === 'number' && Number.isFinite(value) && value >= 0);
+      break;
+    }
+    case 'ask_resolved': valid = id(message.requestId); break;
+    case 'error': valid = id(message.code) && string(message.message); break;
+    case 'interrupted': valid = true; break;
+    case 'queue': valid = strings(message.steering) && strings(message.followUp); break;
+  }
+  return valid ? message as ServerMessage : undefined;
+}
+
+/** Foreground connection only. No credential storage, automatic prompt retry or native privileges. */
+export function createLinkedChat(callbacks: Callbacks) {
+  let credentials: { url: string; token: string } | undefined;
+  let socket: WebSocket | undefined;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  let connectTimer: ReturnType<typeof setTimeout> | undefined;
+  let attempts = 0;
+  let suspended = false;
+  let authenticated = false;
+
+  function clearConnection() {
+    clearTimeout(retryTimer);
+    clearTimeout(connectTimer);
+    retryTimer = connectTimer = undefined;
+    const old = socket;
+    socket = undefined;
+    authenticated = false;
+    old?.close();
+  }
+  function retry() {
+    clearConnection();
+    callbacks.onStatus('offline');
+    if (!credentials || suspended) return;
+    const delay = BACKOFF[Math.min(attempts++, BACKOFF.length - 1)]!;
+    retryTimer = setTimeout(() => { retryTimer = undefined; open(); }, delay);
+  }
+  function transmit(message: object): boolean {
+    if (!authenticated || !socket || socket.readyState !== WebSocket.OPEN) return false;
+    try { socket.send(JSON.stringify(message)); return true; }
+    catch { retry(); return false; }
+  }
+  function open() {
+    if (!credentials || suspended) return;
+    clearConnection();
+    callbacks.onStatus('connecting');
+    let ws: WebSocket;
+    try { ws = new WebSocket(credentials.url); } catch { retry(); return; }
+    socket = ws;
+    let sequence = -1;
+    const current = () => socket === ws && !suspended;
+    connectTimer = setTimeout(() => { if (current() && !authenticated) retry(); }, 12000);
+    ws.onopen = () => {
+      if (!current() || !credentials) return;
+      try { ws.send(JSON.stringify({ type: 'hello', token: credentials.token, protocol: PROTOCOL_VERSION })); }
+      catch { retry(); }
+    };
+    ws.onmessage = event => {
+      if (!current()) return;
+      const message = parse(event.data);
+      if (!message || message.seq <= sequence || (!authenticated && message.type !== 'ready')) return;
+      sequence = message.seq;
+      if (message.type === 'ready') {
+        if (authenticated) return;
+        clearTimeout(connectTimer);
+        connectTimer = undefined;
+        authenticated = true;
+        attempts = 0;
+        callbacks.onStatus('ready');
+        if (!current() || !transmit({ type: 'get_history' })) return;
+      }
+      if (current()) callbacks.onMessage(message);
+    };
+    ws.onclose = event => {
+      if (!current()) return;
+      if (event.code === CloseCode.unauthorized || event.code === CloseCode.badProtocol) {
+        credentials = undefined;
+        clearConnection();
+        callbacks.onStatus('rejected');
+      } else retry();
+    };
+    ws.onerror = () => { if (current()) retry(); };
+  }
+  return {
+    connect(url: string, token: string) {
+      const endpoint = validDaemonUrl(url);
+      const secret = token.trim();
+      if (!secret || secret.length > 4096) throw new Error('Introduce un token válido para conectar.');
+      clearConnection();
+      credentials = { url: endpoint, token: secret };
+      attempts = 0;
+      suspended = false;
+      open();
+    },
+    disconnect() {
+      credentials = undefined;
+      clearConnection();
+      callbacks.onStatus('offline');
+    },
+    suspend() {
+      suspended = true;
+      clearConnection();
+      callbacks.onStatus('offline');
+    },
+    resume() {
+      suspended = false;
+      if (credentials && !socket && !retryTimer) { attempts = 0; open(); }
+    },
+    send(text: string): boolean {
+      const value = text.trim();
+      if (!value || text.length > 8000 || !authenticated) return false;
+      return transmit({ type: 'send', text: value, requestId: crypto.randomUUID() });
+    },
+    abort: () => transmit({ type: 'abort' }),
+    ready: () => authenticated && socket?.readyState === WebSocket.OPEN,
+  };
+}
