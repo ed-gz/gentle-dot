@@ -3,6 +3,7 @@ import type { AgentConversation, AgentSession, OrchestrationClient } from "../or
 import type { OrchestrationControls } from "../useOrchestration.ts";
 import { reconcileDeliveries, restoreDeliveries, persistDeliveries, type OutgoingMessage } from "../session-delivery.ts";
 import { useSessionPolling } from "../useSessionPolling.ts";
+import { reconcileRecentConversation } from "../session-history.ts";
 import { publishCompanionActivity, useCompanionResponse } from "../companion-activity.ts";
 import "../session-delivery.css";
 import { AgentPermissionCard } from "./AgentPermissionCard.tsx";
@@ -73,6 +74,8 @@ export function OrchestrationPanel({
 	const [deliverAs, setDeliverAs] = useState<"steer" | "followUp">("steer");
 	const [mobileDisclosure, setMobileDisclosure] = useState<"work" | "delivery">();
 	const [conversation, setConversation] = useState<AgentConversation>();
+	const currentConversation = useRef(conversation);
+	currentConversation.current = conversation;
 	const [conversationError, setConversationError] = useState<string>();
 	const [loadingEarlier, setLoadingEarlier] = useState(false);
 	const [canJump, setCanJump] = useState(false);
@@ -203,27 +206,32 @@ export function OrchestrationPanel({
 	const loadEarlier = async () => {
 		if (!identity || !session?.sessionId || !conversation?.history?.before || loadingEarlier) return;
 		const key = identity;
+		const before = conversation.history.before;
 		const controller = new AbortController();
 		pageAbort.current = controller;
 		setLoadingEarlier(true);
 		setConversationError(undefined);
 		try {
 			const earlier = await client.inspect(session.paneId, session.sessionId, controller.signal, {
-				before: conversation.history.before,
+				before,
 				limit: 50,
 			});
 			if (controller.signal.aborted || viewedSession.current !== key) return;
+			if (currentConversation.current?.history?.before !== before) {
+				setConversationError("El historial cambió mientras se cargaba. Vuelve a pedir los mensajes anteriores.");
+				return;
+			}
 			const element = conversationViewport.current;
 			if (element) pendingPrepend.current = { top: element.scrollTop, height: element.scrollHeight };
 			followConversation.current = false;
 			setConversation((current) =>
-				current
+				current && current.history?.before === before
 					? {
 							...current,
 							history: earlier.history,
 							messages: mergeMessages(earlier.messages, current.messages),
 						}
-					: earlier,
+					: current,
 			);
 		} catch (problem) {
 			if (!controller.signal.aborted)
@@ -238,11 +246,7 @@ export function OrchestrationPanel({
 		session?.state === "working" || outbox.some(item => item.identity === identity && ["sending", "accepted", "queued"].includes(item.status)),
 		(next) => {
 			setConversation((current) => {
-				const value = current && next.history?.supported ? {
-					...next,
-					messages: mergeMessages(current.messages, next.messages),
-					history: current.history?.supported && current.messages[0]?.id !== next.messages[0]?.id ? current.history : next.history,
-				} : next;
+				const value = reconcileRecentConversation(current, next);
 				if (identity) {
 					history.current.set(identity, value);
 					if (history.current.size > 12) { const oldest = history.current.keys().next().value; if (oldest) history.current.delete(oldest); }

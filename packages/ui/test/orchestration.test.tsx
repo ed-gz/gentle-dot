@@ -796,4 +796,25 @@ describe("session continuity", () => {
 		expect(screen.getByText("El comienzo")).toBeVisible();
 		expect(screen.queryByRole("button", { name: "Ver mensajes anteriores" })).toBeNull();
 	});
+	it("discards an earlier page when the host changes branches before it returns", async () => {
+		const latest: AgentConversation = { sessionId: "s1", status: "idle", question: null,
+			history: { supported: true, hasEarlier: true, before: "old-cursor" },
+			messages: [{ id: "old-tail", role: "assistant", content: [{ type: "text", text: "Rama anterior" }] }] };
+		const replacement: AgentConversation = { ...latest, history: { supported: true, hasEarlier: true, before: "new-cursor" },
+			messages: [{ id: "new-tail", role: "assistant", content: [{ type: "text", text: "Rama actual" }] }] };
+		const { client } = setup({ ...snapshot, approvals: [] }, latest);
+		await userEvent.click(screen.getByRole("button", { name: "Release · Te necesita" }));
+		await screen.findByText("Rama anterior");
+		let finish!: (value: AgentConversation) => void;
+		vi.mocked(client.inspect).mockImplementation(async (_pane, _session, _signal, page) =>
+			page ? new Promise<AgentConversation>(resolve => { finish = resolve; }) : replacement);
+		await userEvent.click(screen.getByRole("button", { name: "Ver mensajes anteriores" }));
+		fireEvent(document, new Event("visibilitychange"));
+		await screen.findByText("Rama actual");
+		await act(async () => finish({ ...latest, messages: [{ id: "old-history", role: "assistant", content: [{ type: "text", text: "Contenido descartado" }] }] }));
+		expect(screen.queryByText("Contenido descartado")).toBeNull();
+		expect(screen.queryByText("Rama anterior")).toBeNull();
+		expect(screen.getByText("Rama actual")).toBeVisible();
+		expect(screen.getByText("El historial cambió mientras se cargaba. Vuelve a pedir los mensajes anteriores.")).toBeVisible();
+	});
 });
