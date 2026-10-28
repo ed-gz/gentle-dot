@@ -167,6 +167,23 @@ test('leaving a session cancels its native upload and a late receipt cannot send
   await expect(page.locator('.agent-reply')).toContainText('private.txt');
 });
 
+test('working sessions keep the full action row visible with attachments and large landscape text', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  await selectSessionFile(page, { name: 'follow-up.txt', mimeType: 'text/plain', buffer: Buffer.from('Revisa al terminar.') });
+  await expect(page.locator('.agent-reply')).toContainText('Adjuntos guardados');
+  await page.setViewportSize({ width: 667, height: 375 });
+  await page.evaluate(() => document.documentElement.style.fontSize = '200%');
+  await expect(page.locator('.agent-detail-scroll .session-working')).toHaveCount(1);
+  await expect(page.getByRole('img', { name: 'Trabajando', exact: true })).toBeVisible();
+  for (const name of ['Todos los agentes', 'Enviar instrucción', 'Quitar follow-up.txt']) {
+    const box = await page.getByRole('button', { name, exact: true }).boundingBox();
+    expect(box!.y).toBeGreaterThanOrEqual(0); expect(box!.y + box!.height).toBeLessThanOrEqual(375);
+  }
+  expect(await page.locator('.agent-detail-scroll').evaluate(el => el.clientHeight)).toBeGreaterThanOrEqual(64);
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toBe(false);
+});
+
 test('attachments restore only into their owning session after restart, and accepted delivery clears the local draft', async ({ page }) => {
   // Two complete app starts plus portrait/landscape checks; individual assertions keep their 5s deadline.
   test.setTimeout(60_000);

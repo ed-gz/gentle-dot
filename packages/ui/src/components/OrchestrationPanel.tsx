@@ -341,6 +341,12 @@ export function OrchestrationPanel({
 				/>
 			</SessionWorkShelf>
 	) : null;
+	const sessionWorking = active && connected && session?.connected && session.state === "working" ? (
+		<div className="session-working" role="status" aria-label="Actividad de la sesión" aria-atomic="true">
+			<span className="session-working-spinner" aria-hidden="true" />
+			Trabajando…
+		</div>
+	) : null;
 	const selectedView = session ? (
 		<section className="agent-detail" aria-label={`Sesión ${session.label}`}>
 			{!capriMobile ? sessionWork : null}
@@ -406,6 +412,7 @@ export function OrchestrationPanel({
 					</section>
 				) : null}
 
+				{capriMobile ? sessionWorking : null}
 			</div>
 			{canJump ? (
 				<button
@@ -422,12 +429,7 @@ export function OrchestrationPanel({
 				</button>
 			) : null}
 			<SessionPendingQuestion session={session} conversation={conversation} controls={controls} disabled={!active || !answerConnected || !session.connected || !!conversationError}/>
-			{active && connected && session.connected && session.state === "working" ? (
-				<div className="session-working" role="status" aria-label="Actividad de la sesión" aria-atomic="true">
-					<span className="session-working-spinner" aria-hidden="true" />
-					Trabajando…
-				</div>
-			) : null}
+			{!capriMobile ? sessionWorking : null}
 			{!(session.capabilities?.prompt ?? session.managed) || !session.sessionId ? (
 				<p className="orchestration-intro">
 					Solo consulta
