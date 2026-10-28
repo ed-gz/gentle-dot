@@ -5,7 +5,7 @@ for (const supported of [false, true]) test(`${supported ? 'capable host confirm
   await page.addInitScript(() => {
     const state = globalThis as any; state.isTauri = true; state.nativePrompts = []; let step = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
-      if (command.endsWith('share_list')) return { ok: true, items: [] };
+      if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('agent_step')) {
         state.nativePrompts.push(args.prompt); step++;

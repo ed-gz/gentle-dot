@@ -9,7 +9,7 @@ async function nativeExporter(page: Page) {
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       const name = command.split('|').at(-1)!; const request = args?.request ?? {};
       if (name.startsWith('crypto_hash_') || name.startsWith('export_')) state.exportCalls.push({ name, ...(name === 'export_write' ? { offset: request.offset, bytes: bytes(request.data).length } : {}) });
-      if (name === 'share_list') return { ok: true, items: [] };
+      if (name === 'share_list' || name === 'documents_list') return { ok: true, items: [] };
       if (name === 'check_availability') return { available: false, status: 'device_not_eligible', supportsSpanish: false };
       if (name === 'crypto_hash_begin') { hashChunks = []; return { ok: true, id: '00000000-0000-0000-0000-000000000001' }; }
       if (name === 'crypto_hash_update') { hashChunks.push(bytes(request.data)); return { ok: true }; }

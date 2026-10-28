@@ -29,7 +29,7 @@ for (const disconnect of [false, true]) {
       state.isTauri = true;
       state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
         if (command.endsWith('check_availability')) return { available: false, status: 'model_not_ready', supportsSpanish: false };
-        if (command.endsWith('share_list')) return { ok: true, items: [] };
+        if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
         if (command.endsWith('secret_get') && args.request.scope === 'daemon-manual' && args.request.account === 'https://old.fixture.example') {
           return await new Promise(resolve => { state.releaseOldKeychain = () => resolve({ ok: true, value: 'fixture-token-A' }); });
         }

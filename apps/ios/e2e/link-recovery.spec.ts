@@ -25,7 +25,7 @@ async function fixture(page: Page, onRequest: (message: WireMessage, send: (mess
     const state = globalThis as any;
     state.isTauri = true;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
-      if (command.endsWith('share_list')) return { ok: true, items: [] };
+      if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('agent_step')) return { ok: true, decision: { kind: 'answer', text: 'Respuesta del fixture local', toolName: '', argumentsJSON: '{}' } };
       return { ok: true };

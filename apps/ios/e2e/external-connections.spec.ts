@@ -59,7 +59,7 @@ test('credential rotation preserves refresh metadata and a losing CAS removes on
       if (command.endsWith('|secret_set')) { state.testKeychain.set(key, request.value); return { ok: true, persisted: true }; }
       if (command.endsWith('|secret_get')) return { ok: true, value: state.testKeychain.get(key) };
       if (command.endsWith('|secret_delete')) { state.testKeychain.delete(key); return { ok: true }; }
-      if (command.endsWith('|share_list')) return { ok: true, items: [] };
+      if (command.endsWith('|share_list') || command.endsWith('|documents_list')) return { ok: true, items: [] };
       return { ok: false, available: false, status: 'fixture_unavailable' };
     } };
   });

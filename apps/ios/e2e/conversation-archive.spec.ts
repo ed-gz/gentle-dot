@@ -113,7 +113,7 @@ test('an interrupted agent turn keeps its committed tool receipt in memory acros
   await page.addInitScript(() => {
     const state = globalThis as any; state.isTauri = true; let step = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
-      if (command.endsWith('share_list')) return { ok: true, items: [] };
+      if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('agent_step')) {
         step++;
@@ -144,7 +144,7 @@ test('an interrupted agent turn keeps its committed tool receipt in memory acros
 test('shell stops new sends after archive failure, preserves the draft and exports pending data without deleting it', async ({ page }) => {
   await page.addInitScript(() => {
     const state = globalThis as any; state.isTauri = true; state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
-      if (command.endsWith('share_list')) return { ok: true, items: [] };
+      if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('agent_step')) return { ok: true, decision: { kind: 'answer', text: 'Respuesta que debe conservarse.', toolName: '', argumentsJSON: '{}' } };
       return { ok: true };

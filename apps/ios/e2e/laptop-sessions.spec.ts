@@ -8,7 +8,7 @@ async function linkedPhone(page: Page) {
       if (command.startsWith('plugin:device-bridge|')) args = args?.request;
       state.sessionCalls.push({ command, ...(command.endsWith('https_request') ? { body: args.body } : {}) });
       if (command.endsWith('check_availability')) return { available: false, status: 'model_not_ready', supportsSpanish: false };
-      if (command.endsWith('share_list')) return { ok: true, items: [] };
+      if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted', recording: false };
       if (command.endsWith('start_voice')) return { ok: true, sessionId: '12345678-1234-1234-1234-123456789012', maxDurationSeconds: 90 };
       if (command.endsWith('stop_voice') && state.holdTranscript) await new Promise(resolve => state.finishTranscript = resolve);

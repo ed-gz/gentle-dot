@@ -9,7 +9,7 @@ async function nativeFixture(page: import('@playwright/test').Page, delayed = fa
     state.nativeDecisions = decisions;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       state.nativeCalls.push(command);
-      if (command.endsWith('share_list')) return { ok: true, items: [] };
+      if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('agent_step')) {
         state.nativePrompts.push(args.prompt);

@@ -1,5 +1,6 @@
 import { localIdentifier } from './local-identifiers.ts';
 import { waitForForeground } from './foreground.ts';
+import { pickDocuments, listDocumentImports, importDocumentItem } from './document-import.ts';
 import { createEngine, frameAt } from '@gentle-dot/ui/src/capri2d/engine.ts';
 import { RoamDirector, type RoamPosition } from '@gentle-dot/ui/src/capri2d/roam.ts';
 import { occupiedPhoneSpace, phonePerches, phonePositionFree } from './companion-space.ts';
@@ -39,8 +40,10 @@ import { mountPairingInput } from './pairing-input.ts';
 import './style.css';
 
 import './companion-presence.css';
+import './composer.css';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+let documentImports: Promise<void> | undefined;
 element('build-info').textContent = buildLabel();
 element('build-info').title = buildInfo.sourceCommit ?? '';
 const settings = readSettings();
@@ -342,7 +345,7 @@ function updateControls() {
   element<HTMLButtonElement>('send').disabled = !conversationReady || persistence.status().blocked || !ready || busy;
   element<HTMLSelectElement>('engine').disabled = localBusy || !!pendingRemote;
   element('stop').hidden = !(localBusy || (selected === 'gentle' && linkedBusy));
-  element<HTMLButtonElement>('send').textContent = selected === 'gentle' && linkedBusy ? 'Añadir instrucción' : 'Enviar';
+  element<HTMLButtonElement>('send').setAttribute('aria-label', selected === 'gentle' && linkedBusy ? 'Añadir instrucción' : 'Enviar');
   prompt.maxLength = selected === 'iphone' ? 2400 : 8000;
   element('engine-badge').textContent = selected === 'iphone' ? 'IPHONE' : 'LAPTOP';
   healthAction = health.primaryAction;
@@ -666,7 +669,7 @@ async function cancelDictation() {
   voiceGeneration++; voiceController?.abort(); voiceSession = undefined; clearTimeout(voiceTimer);
   if (isTauri()) await cancelVoice().catch(() => {});
   element('dictate').setAttribute('aria-pressed', 'false');
-  element('dictate').textContent = 'Dictar';
+  element('dictate').setAttribute('aria-label', 'Dictar');
 }
 element('dictate').addEventListener('click', async () => {
   if (voiceStarting) return;
@@ -704,8 +707,15 @@ element('dictate').addEventListener('click', async () => {
   } catch (error) { if (current === voiceGeneration) element('voice-status').textContent = errorText(error); }
   finally {
     voiceStarting = false; control.disabled = false;
-    control.setAttribute('aria-pressed', String(!!voiceSession)); control.textContent = voiceSession ? 'Terminar' : 'Dictar';
+    control.setAttribute('aria-pressed', String(!!voiceSession)); control.setAttribute('aria-label', voiceSession ? 'Terminar dictado' : 'Dictar');
   }
+});
+element('attach').addEventListener('click', async () => {
+  if (!isTauri()) { element<HTMLInputElement>('chat-files').click(); return; }
+  const button = element<HTMLButtonElement>('attach'); button.disabled = true;
+  try { if (await pickDocuments()) await importDocumentFiles(); }
+  catch (error) { element('chat-notice').textContent = errorText(error); }
+  finally { button.disabled = false; }
 });
 element<HTMLInputElement>('chat-files').addEventListener('change', async event => {
   const control = event.target as HTMLInputElement;
@@ -750,6 +760,7 @@ async function restoreDeviceConnection() {
 }
 async function importSharedFiles() {
   if (!isTauri()) return;
+  void importDocumentFiles();
   try {
     for (const item of await listSharedImports()) {
       await importSharedItem(item, async ({ sourceId, files }) => {
@@ -760,4 +771,23 @@ async function importSharedFiles() {
     }
     await inbox.refresh();
   } catch (error) { element('chat-notice').textContent = errorText(error); }
+}
+function importDocumentFiles(): Promise<void> {
+  if (documentImports) return documentImports;
+  documentImports = (async () => {
+    try {
+      for (const item of await listDocumentImports()) {
+        await importDocumentItem(item, async ({ sourceId, files }) => {
+          const work = await createImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task',
+            instruction: prompt.value.trim() || 'Material adjunto a la conversación de Capri.', files });
+          attachedWork = work.id;
+          element('attachment-context').textContent = `${files.length} archivo${files.length === 1 ? '' : 's'} · ${work.title}`;
+          notice(`Conservé ${work.title} en este iPhone. Dime qué hacemos con el material.`, 'iphone', `document:${item.id}`);
+          persist();
+        });
+      }
+      await inbox.refresh();
+    } catch (error) { element('chat-notice').textContent = errorText(error); }
+  })().finally(() => { documentImports = undefined; });
+  return documentImports;
 }
