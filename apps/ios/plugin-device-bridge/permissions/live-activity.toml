@@ -1,0 +1,4 @@
+[[set]]
+identifier = "live-activity"
+description = "Present explicit Capri turn status in an optional system Live Activity without notification pushes or external actions."
+permissions = ["allow-live-activity-available", "allow-live-activity-list", "allow-live-activity-start", "allow-live-activity-update", "allow-live-activity-end"]

@@ -1,5 +1,10 @@
 fn main() {
     tauri_plugin::Builder::new(&[
+        "live_activity_available",
+        "live_activity_list",
+        "live_activity_start",
+        "live_activity_update",
+        "live_activity_end",
         "secret_get",
         "secret_set",
         "secret_delete",

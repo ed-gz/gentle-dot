@@ -54,6 +54,7 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     private var documentExporter: DocumentExporter?
     private var documentImporter: DocumentImporter?
     private var pairingScanner: PairingScannerSession?
+    @MainActor private lazy var liveActivity = LiveActivityController()
 
     @objc override func load(webview: WKWebView) {
         self.webview = webview
@@ -79,6 +80,30 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
         DispatchQueue.global(qos: .userInitiated).async {
             do { invoke.resolve(try body()) } catch { self.fail(invoke, error) }
         }
+    }
+    @objc func liveActivityAvailable(_ invoke: Invoke) {
+        Task { @MainActor in invoke.resolve(self.liveActivity.availability()) }
+    }
+    @objc func liveActivityList(_ invoke: Invoke) {
+        Task { @MainActor in invoke.resolve(self.liveActivity.list()) }
+    }
+    @objc func liveActivityStart(_ invoke: Invoke) {
+        do {
+            let request = try invoke.parseArgs(LiveActivityRequest.self)
+            Task { @MainActor in invoke.resolve(self.liveActivity.start(request)) }
+        } catch { fail(invoke, error) }
+    }
+    @objc func liveActivityUpdate(_ invoke: Invoke) {
+        do {
+            let request = try invoke.parseArgs(LiveActivityRequest.self)
+            Task { @MainActor in invoke.resolve(await self.liveActivity.update(request, ending: false)) }
+        } catch { fail(invoke, error) }
+    }
+    @objc func liveActivityEnd(_ invoke: Invoke) {
+        do {
+            let request = try invoke.parseArgs(LiveActivityRequest.self)
+            Task { @MainActor in invoke.resolve(await self.liveActivity.update(request, ending: true)) }
+        } catch { fail(invoke, error) }
     }
     @objc func secretGet(_ invoke: Invoke) {
         work(invoke) { let args = try invoke.parseArgs(SecretInput.self); return BridgeReply(value: try KeychainStore.get(args.scope, args.account)) }

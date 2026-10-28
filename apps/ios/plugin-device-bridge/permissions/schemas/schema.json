@@ -445,6 +445,56 @@
           "const": "deny-https-request"
         },
         {
+          "description": "Enables the live_activity_available command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-live-activity-available"
+        },
+        {
+          "description": "Denies the live_activity_available command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-live-activity-available"
+        },
+        {
+          "description": "Enables the live_activity_end command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-live-activity-end"
+        },
+        {
+          "description": "Denies the live_activity_end command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-live-activity-end"
+        },
+        {
+          "description": "Enables the live_activity_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-live-activity-list"
+        },
+        {
+          "description": "Denies the live_activity_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-live-activity-list"
+        },
+        {
+          "description": "Enables the live_activity_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-live-activity-start"
+        },
+        {
+          "description": "Denies the live_activity_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-live-activity-start"
+        },
+        {
+          "description": "Enables the live_activity_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-live-activity-update"
+        },
+        {
+          "description": "Denies the live_activity_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-live-activity-update"
+        },
+        {
           "description": "Enables the oauth_authorize command without any pre-configured scope.",
           "type": "string",
           "const": "allow-oauth-authorize"
@@ -633,6 +683,11 @@
           "description": "Present Apple's document picker and recover only the files explicitly imported into Capri.",
           "type": "string",
           "const": "document-import"
+        },
+        {
+          "description": "Present explicit Capri turn status in an optional system Live Activity without notification pushes or external actions.",
+          "type": "string",
+          "const": "live-activity"
         },
         {
           "description": "Scan a QR through the native camera only after an explicit foreground interaction.",

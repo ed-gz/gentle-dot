@@ -42,6 +42,11 @@ macro_rules! request_command {
         }
     };
 }
+request_command!(live_activity_available, "liveActivityAvailable");
+request_command!(live_activity_list, "liveActivityList");
+request_command!(live_activity_start, "liveActivityStart");
+request_command!(live_activity_update, "liveActivityUpdate");
+request_command!(live_activity_end, "liveActivityEnd");
 request_command!(secret_get, "secretGet");
 request_command!(secret_set, "secretSet");
 request_command!(secret_delete, "secretDelete");
@@ -79,6 +84,11 @@ request_command!(documents_ack, "documentsAck");
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("device-bridge")
         .invoke_handler(tauri::generate_handler![
+            live_activity_available,
+            live_activity_list,
+            live_activity_start,
+            live_activity_update,
+            live_activity_end,
             secret_get,
             secret_set,
             secret_delete,

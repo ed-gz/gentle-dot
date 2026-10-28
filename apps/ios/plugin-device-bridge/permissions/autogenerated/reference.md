@@ -428,6 +428,136 @@ Denies the https_request command without any pre-configured scope.
 <tr>
 <td>
 
+`device-bridge:allow-live-activity-available`
+
+</td>
+<td>
+
+Enables the live_activity_available command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-live-activity-available`
+
+</td>
+<td>
+
+Denies the live_activity_available command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-live-activity-end`
+
+</td>
+<td>
+
+Enables the live_activity_end command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-live-activity-end`
+
+</td>
+<td>
+
+Denies the live_activity_end command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-live-activity-list`
+
+</td>
+<td>
+
+Enables the live_activity_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-live-activity-list`
+
+</td>
+<td>
+
+Denies the live_activity_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-live-activity-start`
+
+</td>
+<td>
+
+Enables the live_activity_start command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-live-activity-start`
+
+</td>
+<td>
+
+Denies the live_activity_start command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-live-activity-update`
+
+</td>
+<td>
+
+Enables the live_activity_update command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-live-activity-update`
+
+</td>
+<td>
+
+Denies the live_activity_update command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `device-bridge:allow-oauth-authorize`
 
 </td>
@@ -902,6 +1032,19 @@ Denies the unpair_device command without any pre-configured scope.
 <td>
 
 Present Apple's document picker and recover only the files explicitly imported into Capri.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:live-activity`
+
+</td>
+<td>
+
+Present explicit Capri turn status in an optional system Live Activity without notification pushes or external actions.
 
 </td>
 </tr>
