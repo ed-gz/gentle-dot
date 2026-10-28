@@ -44,3 +44,11 @@ test('history reconciliation exposes older inserted messages before clipping the
   const result=reconcileHostHistory(entries,'host:wss://a.example/ws|session|',[{id:'old',role:'user',text:'Earlier host message'}],2000,values=>captured=values);
   assert.equal(result.length,120); assert.equal(captured.length,121); assert.equal(captured[0].id,'local-0');
 });
+
+test('a late restore cannot replace newer live entries already pruned out of the visible window', async () => {
+  const persistence=createConversationPersistence({ archive:{upsert:async()=>{}},save:async()=>{} });
+  const live=entry('pruned-live',{text:'Confirmed live receipt',state:'complete'});
+  persistence.enqueue([live]);
+  persistence.seed([entry('pruned-live',{text:'Stale restore',state:'interrupted'})]);
+  assert.equal(persistence.pending()[0].text,'Confirmed live receipt');
+});

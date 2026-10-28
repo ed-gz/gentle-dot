@@ -8,6 +8,7 @@ import { createLinkedChat, type LinkedStatus } from './linked-chat.ts';
 import { checkLocalIntelligence, availabilityMessage, agentStep, cancelLocal, resetLocal, type Availability } from './local-intelligence.ts';
 import { loadConversation, updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
+import { conversationArchive } from './conversation-archive.ts';
 import { createConversationPersistence } from './conversation-persistence.ts';
 import { createMemoryTools } from './conversation-memory-tools.ts';
 import { mountMemoryView } from './memory-view.ts';
@@ -452,7 +453,7 @@ element('check-local').addEventListener('click', () => void checkModel());
 element<HTMLInputElement>('url').value = settings.url;
 const connectionSettings = mountConnectionSettings();
 const inbox = mountInbox(text => { draftEdited = true; prompt.value = text; scheduleSave(); showPanel('chat'); prompt.focus(); });
-const memoryView = mountMemoryView({ status: persistence.status, pending: persistence.pending, draft: () => prompt.value, retry: persist });
+const memoryView = mountMemoryView({ status: persistence.status, pending: persistence.pending, visible: () => structuredClone(entries), draft: () => prompt.value, retry: persist });
 
 document.addEventListener('visibilitychange', () => {
   cancelAnimationFrame(frame); fx?.clear(); persist();
@@ -470,8 +471,10 @@ async function restoreConversation() {
   retry.disabled = true;
   try {
     const saved = await loadConversation();
+    const recovered = await conversationArchive.restoreState(saved);
+    saved.entries = recovered.entries; persistence.setRevision(recovered.revision);
     // Capture the restored window before live startup events can cause pruning.
-    persistence.enqueue(saved.entries); persistence.enqueue(entries, true);
+    persistence.seed(saved.entries); persistence.enqueue(entries, true);
     entries = entries.reduce((history, entry) => updateEntry(history, entry), saved.entries);
     if (!draftEdited) { prompt.value = saved.draft; if (!attachedWork) attachedWork = saved.attachedWork; }
     if (attachedWork) element('attachment-context').textContent = `Material local adjunto · trabajo ${attachedWork}`;

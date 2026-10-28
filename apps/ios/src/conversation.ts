@@ -2,7 +2,7 @@ import type { Activity } from '@gentle-dot/protocol';
 export type Engine = 'iphone' | 'gentle';
 export type ChatActivity = Activity & { detail?: string };
 export type ChatEntry = { id: string; role: 'user' | 'assistant' | 'notice'; text: string; transportText?: string; engine: Engine; state: 'complete' | 'pending' | 'interrupted'; at: number; activities?: ChatActivity[] };
-export type Conversation = { entries: ChatEntry[]; draft: string; attachedWork?: string };
+export type Conversation = { entries: ChatEntry[]; draft: string; attachedWork?: string; revision?: number };
 const MAX_ENTRIES = 120;
 const MAX_TEXT = 32000;
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -179,6 +179,7 @@ export async function loadConversation(): Promise<Conversation> {
   if (!record(saved)) return { entries: [], draft: '' };
   return {
     entries: cleanEntries(saved.entries, true),
+    ...(Number.isSafeInteger(saved.revision) && Number(saved.revision) >= 0 ? { revision: Number(saved.revision) } : {}),
     ...(typeof saved.attachedWork === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(saved.attachedWork) ? { attachedWork: saved.attachedWork } : {}),
     draft: typeof saved.draft === 'string' ? saved.draft.slice(0, 8000) : '',
   };
@@ -186,6 +187,7 @@ export async function loadConversation(): Promise<Conversation> {
 export async function saveConversation(value: Conversation): Promise<void> {
   await access('readwrite', store => store.put({
     ...(typeof value.attachedWork === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value.attachedWork) ? { attachedWork: value.attachedWork } : {}),
+    ...(Number.isSafeInteger(value.revision) && Number(value.revision) >= 0 ? { revision: Number(value.revision) } : {}),
     entries: cleanEntries(value.entries), draft: typeof value.draft === 'string' ? value.draft.slice(0, 8000) : '',
   }, 'current'));
 }

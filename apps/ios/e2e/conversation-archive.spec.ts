@@ -168,3 +168,89 @@ test('shell stops new sends after archive failure, preserves the draft and expor
   await expect(page.locator('#prompt')).toHaveValue('Siguiente borrador, todavía sin enviar.');
   await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation-archive.ts')).conversationArchive.stats()).entries)).toBe(2);
 });
+
+test('crash between archive commit and old window save cannot erase a completed answer or its receipt', async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = globalThis as any;
+    window.addEventListener('pagehide', event => { if (state.simulateCrash) event.stopImmediatePropagation(); }, true);
+    document.addEventListener('visibilitychange', event => { if (state.simulateCrash) event.stopImmediatePropagation(); }, true);
+  });
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).revision)).toBe(1);
+  await page.evaluate(async () => {
+    const { saveConversation } = await import('/src/conversation.ts'); const { conversationArchive } = await import('/src/conversation-archive.ts');
+    const old = { id: 'crash-turn', engine: 'iphone', role: 'assistant', state: 'pending', text: '', at: 1000, activities: [{ id: 'operation', kind: 'other', title: 'Guardar trabajo', status: 'running' }] };
+    await saveConversation({ entries: [old], draft: 'Borrador conservado aparte', revision: 10 });
+    const completed = { ...old, state: 'complete', text: 'Trabajo guardado en este iPhone.', activities: [{ ...old.activities[0], status: 'done', detail: '{"receipt":"local-42","synchronized":false}' }] };
+    const later = { id: 'crash-new-entry', engine: 'iphone', role: 'user', state: 'complete', text: 'Nuevo mensaje confirmado sólo en el archivo.', at: 2000 };
+    await conversationArchive.upsert([completed, later], undefined, [completed, later], 11);
+    (globalThis as any).simulateCrash = true;
+  });
+  await page.reload();
+  await expect(page.locator('#cards')).toContainText('Trabajo guardado en este iPhone.');
+  await expect(page.locator('#cards')).toContainText('Nuevo mensaje confirmado sólo en el archivo.');
+  await expect(page.locator('#prompt')).toHaveValue('Borrador conservado aparte');
+  const result = await page.evaluate(async () => (await (await import('/src/conversation-archive.ts')).conversationArchive.page()).entries);
+  expect(result.find(entry => entry.id === 'crash-turn')).toMatchObject({ state: 'complete', text: 'Trabajo guardado en este iPhone.', activities: [{ status: 'done', detail: '{"receipt":"local-42","synchronized":false}' }] });
+});
+
+test('legacy archive hydration keeps a newer receipt and rescue exports visible messages if archive reading fails', async ({ page }) => {
+  await page.goto('/');
+  const migration = await page.evaluate(async () => {
+    const { createConversationArchive } = await import('/src/conversation-archive.ts'); const archive = createConversationArchive({ databaseName: 'legacy-crash-archive' });
+    const old = { id: 'old-window', engine: 'iphone', role: 'assistant', state: 'interrupted', text: '', at: 1000 };
+    await archive.upsert([{ ...old, state: 'complete', text: 'Confirmed legacy receipt' }]);
+    return archive.restoreWindow([old]);
+  });
+  expect(migration[0]).toMatchObject({ state: 'complete', text: 'Confirmed legacy receipt' });
+  await page.evaluate(async () => {
+    const { saveConversation } = await import('/src/conversation.ts');
+    // Capture-phase handler simulates losing the old WebView without a final save.
+    window.addEventListener('pagehide', event => event.stopImmediatePropagation(), true);
+    await saveConversation({ entries: [{ id: 'rescue-visible', engine: 'iphone', role: 'user', state: 'complete', text: 'Mensaje visible para rescatar', at: 1000 }], draft: '' });
+    const { conversationArchive } = await import('/src/conversation-archive.ts');
+    await conversationArchive.upsert([{ id: 'rescue-visible', engine: 'iphone', role: 'user', state: 'complete', text: 'Mensaje visible para rescatar', at: 1000 }], undefined, [{ id: 'rescue-visible', engine: 'iphone', role: 'user', state: 'complete', text: 'Mensaje visible para rescatar', at: 1000 }]);
+  });
+  await page.reload(); await expect(page.locator('#cards')).toContainText('Mensaje visible para rescatar');
+  await page.evaluate(async () => { (await import('/src/conversation-archive.ts')).conversationArchive.export = async () => { throw new Error('Lectura no disponible (fixture).'); }; });
+  await page.locator('[data-panel="inbox"]').click();
+  const download = page.waitForEvent('download'); await page.locator('#memory-export').click();
+  const lines = (await readFile((await (await download).path())!, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  expect(lines.find(line => line.schema === 'capri-conversation-pending/v1')).toMatchObject({ committed: false, source: 'visible-and-pending-rescue', entries: 1 });
+  expect(lines.some(line => line.text === 'Mensaje visible para rescatar')).toBe(true);
+  await expect(page.locator('#memory-status')).toContainText('Exportación parcial');
+});
+
+test('a newer saved window after archive quota failure survives reload with both new messages and updated receipts', async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = globalThis as any;
+    window.addEventListener('pagehide', event => { if (state.simulateCrash) event.stopImmediatePropagation(); }, true);
+    document.addEventListener('visibilitychange', event => { if (state.simulateCrash) event.stopImmediatePropagation(); }, true);
+  });
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).revision)).toBe(1);
+  await page.evaluate(async () => {
+    const { conversationArchive } = await import('/src/conversation-archive.ts');
+    const { createConversationPersistence } = await import('/src/conversation-persistence.ts');
+    const original = { id: 'quota-stream', engine: 'iphone', role: 'assistant', state: 'pending', text: 'Parcial', at: 1000, activities: [{ id: 'operation', kind: 'other', title: 'Guardar', status: 'running' }] };
+    await conversationArchive.upsert([original], undefined, [original], 10);
+    const final = { ...original, state: 'complete', text: 'Texto final conservado en la ventana más nueva.', activities: [{ ...original.activities[0], status: 'done', detail: '{"receipt":"saved-after-quota"}' }] };
+    const added = { id: 'quota-new-message', engine: 'iphone', role: 'user', state: 'complete', text: 'Mensaje nuevo durante la cuota.', at: 2000 };
+    const persistence = createConversationPersistence({ archive: { upsert: async () => { throw new Error('Cuota agotada'); } } });
+    persistence.setRevision(10); await persistence.persist({ entries: [final, added], draft: 'Borrador después de cuota' });
+    (globalThis as any).simulateCrash = true;
+  });
+  await page.reload();
+  await expect(page.locator('#cards')).toContainText('Texto final conservado en la ventana más nueva.');
+  await expect(page.locator('#cards')).toContainText('Mensaje nuevo durante la cuota.');
+  await expect(page.locator('#prompt')).toHaveValue('Borrador después de cuota');
+  await expect.poll(() => page.evaluate(async () => {
+    const records = (await (await import('/src/conversation-archive.ts')).conversationArchive.page()).entries;
+    return records.find(entry => entry.id === 'quota-stream')?.activities?.[0]?.detail;
+  })).toBe('{"receipt":"saved-after-quota"}');
+  const stale = await page.evaluate(async () => {
+    const { conversationArchive } = await import('/src/conversation-archive.ts');
+    try { await conversationArchive.upsert([], undefined, [], 1); return 'accepted'; } catch (error: any) { return error.message; }
+  });
+  expect(stale).toContain('revisión más reciente');
+});

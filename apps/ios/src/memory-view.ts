@@ -3,7 +3,7 @@ import type { ChatEntry } from './conversation.ts';
 import type { PersistenceStatus } from './conversation-persistence.ts';
 
 /** Local archive controls live in Archivo; model retrieval is provided separately. */
-export function mountMemoryView(options: { status(): PersistenceStatus; pending(): ChatEntry[]; draft(): string; retry(): Promise<void> }) {
+export function mountMemoryView(options: { status(): PersistenceStatus; pending(): ChatEntry[]; visible(): ChatEntry[]; draft(): string; retry(): Promise<void> }) {
   const parent = document.getElementById('panel-inbox');
   if (!parent) throw new Error('Falta la sección Archivo.');
   const root = document.createElement('section'); root.className = 'settings-section'; root.id = 'conversation-memory';
@@ -51,12 +51,12 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
     const button = element<HTMLButtonElement>('memory-export'); button.disabled = true;
     try {
       await options.retry();
-      const pending = options.pending(); const draft = options.draft(); const chunks: BlobPart[] = []; let archiveFailed = false;
+      let pending = options.pending(); const draft = options.draft(); const chunks: BlobPart[] = []; let archiveFailed = false;
       try { chunks.push((await conversationArchive.export()).blob); }
-      catch (error) { archiveFailed = true; chunks.push(JSON.stringify({ schema: 'capri-conversation-rescue/v1', archiveAvailable: false, error: describe(error), exportedAt: Date.now() }) + '\n'); }
+      catch (error) { archiveFailed = true; pending = [...new Map([...options.visible(), ...pending].map(entry => [JSON.stringify([entry.engine, entry.id]), entry])).values()]; chunks.push(JSON.stringify({ schema: 'capri-conversation-rescue/v1', archiveAvailable: false, error: describe(error), exportedAt: Date.now() }) + '\n'); }
       // Pending entries are explicitly distinguished from records confirmed by IndexedDB.
       if (pending.length) {
-        chunks.push(JSON.stringify({ schema: 'capri-conversation-pending/v1', committed: false, entries: pending.length }) + '\n');
+        chunks.push(JSON.stringify({ schema: 'capri-conversation-pending/v1', committed: false, source: archiveFailed ? 'visible-and-pending-rescue' : 'pending-archive-write', entries: pending.length }) + '\n');
         for (const entry of pending) chunks.push(JSON.stringify({ id: entry.id, scope: archiveScope(entry), engine: entry.engine, role: entry.role, state: entry.state, text: entry.text, at: entry.at,
           ...(entry.activities ? { activities: entry.activities.map(activity => ({ id: activity.id, kind: activity.kind, title: activity.title, status: activity.status, detail: activity.detail })) } : {}) }) + '\n');
       }
