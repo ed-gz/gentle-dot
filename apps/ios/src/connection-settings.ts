@@ -3,6 +3,7 @@ import { openExternalURL, registeredURLSchemes, secretGet } from './device-bridg
 import { listConnections, saveConnection, saveConnectionCredentials, removeConnection, validateCredentialBundle,
   type ConnectionInput, type ExternalConnection, type Provider } from './external-connections.ts';
 import { authorizeProviderAndSave } from './provider-oauth-store.ts';
+import { authorizeMCPAndSave } from './mcp-oauth-store.ts';
 import { PROVIDER_API_ENDPOINTS, validateOAuthConfig, type ProviderOAuthConfig } from './provider-oauth.ts';
 
 const names = { mcp: 'MCP remoto', github: 'GitHub', slack: 'Slack', gmail: 'Gmail', odoo: 'Odoo' };
@@ -29,12 +30,13 @@ export function mountConnectionSettings(): { refresh(): Promise<void>; cancel():
       <form id="provider-connection">
         <label>Servicio<select id="connection-provider"><option value="mcp">MCP remoto</option><option value="github">GitHub</option><option value="slack">Slack</option><option value="gmail">Gmail</option><option value="odoo">Odoo</option></select></label>
         <label>Nombre<input id="connection-label" maxlength="80" required placeholder="Mi servicio" /></label>
-        <label id="connection-method-field">Acceso a GitHub<select id="connection-method"><option value="token">Token personal</option><option value="oauth">Autorizar con código</option></select></label>
+        <label id="connection-method-field">Acceso<select id="connection-method"><option value="token">Token de acceso</option><option value="oauth">Autorizar cuenta</option></select></label>
         <label id="connection-endpoint-field"><span id="connection-endpoint-label">Endpoint MCP</span><input id="connection-endpoint" type="url" maxlength="2048" placeholder="https://servicio.example/mcp" /></label>
         <label id="connection-secret-field"><span id="connection-secret-label">Token de acceso, si lo requiere</span><input id="connection-secret" type="password" autocomplete="off" maxlength="12000" /></label>
         <div id="connection-oauth-fields">
           <label>Client ID público<input id="connection-client-id" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="200" aria-describedby="connection-auth-hint" /></label>
-          <label>Permisos<select id="connection-permissions"><option value="read">Sólo lectura</option><option value="write">Con escritura</option></select></label>
+          <label id="connection-permissions-field">Permisos<select id="connection-permissions"><option value="read">Sólo lectura</option><option value="write">Con escritura</option></select></label>
+          <label id="connection-scopes-field">Permisos del servicio (opcional)<input id="connection-scopes" maxlength="4000" autocapitalize="none" spellcheck="false" placeholder="files:read" /><span class="hint">Separados por espacios. Si lo dejas vacío, el servicio indicará cuáles necesita al autorizar.</span></label>
           <label id="connection-private-field">Repositorios de GitHub<select id="connection-private"><option value="public">Sólo públicos</option><option value="private">Públicos y privados</option></select></label>
           <p id="connection-auth-hint" class="hint"></p>
           <p id="connection-callback-status" class="hint" role="status"></p>
@@ -59,15 +61,16 @@ export function mountConnectionSettings(): { refresh(): Promise<void>; cancel():
   let editing: ExternalConnection | undefined, active: AbortController | undefined, busy = false, sequence = 0, renderSequence = 0;
   let deviceURL: string | undefined;
   const service = () => select('provider').value as Service;
-  const oauth = () => service() === 'slack' || service() === 'gmail' || service() === 'github' && select('method').value === 'oauth';
+  const oauth = () => service() === 'slack' || service() === 'gmail' || (service() === 'github' || service() === 'mcp') && select('method').value === 'oauth';
   function section(id: string, visible: boolean) {
     const field = element('connection-' + id); field.hidden = !visible;
     field.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input,select').forEach(control => { control.disabled = !visible || busy; });
   }
   function updateFields() {
     const provider = service(), auth = oauth();
-    section('method-field', provider === 'github'); section('endpoint-field', provider === 'mcp' || provider === 'odoo');
+    section('method-field', provider === 'github' || provider === 'mcp'); section('endpoint-field', provider === 'mcp' || provider === 'odoo');
     section('secret-field', !auth); section('oauth-fields', auth); section('private-field', auth && provider === 'github');
+    section('permissions-field', auth && provider !== 'mcp'); section('scopes-field', auth && provider === 'mcp');
     section('odoo-fields', provider === 'odoo'); section('uid-field', provider === 'odoo' && select('odoo-mode').value === 'legacy');
     const privateGrant = provider === 'github' && auth && select('private').value === 'private';
     select('permissions').options[0]!.disabled = privateGrant;
@@ -85,7 +88,8 @@ export function mountConnectionSettings(): { refresh(): Promise<void>; cancel():
     element('connection-credential-hint').textContent = editing && !auth
       ? 'Deja la credencial vacía para conservarla. Al cambiar el servidor, introduce una credencial nueva para ese destino.'
       : 'Las credenciales se guardan en Keychain. Guardarlas no comprueba el acceso ni autoriza envíos o cambios.';
-    element('connection-auth-hint').textContent = provider === 'slack' ? 'Usa una app Slack con PKCE público y callback capri-auth://oauth/slack. Se consultan canales públicos; enviar mensajes requiere el permiso opcional.'
+    element('connection-auth-hint').textContent = provider === 'mcp' ? 'Registra Capri como cliente público nativo del servicio con retorno dev.gentledot.capri.auth:/oauth/mcp. Debe admitir PKCE S256 y este retorno nativo. Usa el client ID público, sin client secret. Capri descubrirá su servidor de autorización.'
+      : provider === 'slack' ? 'Usa una app Slack con PKCE público y callback capri-auth://oauth/slack. Se consultan canales públicos; enviar mensajes requiere el permiso opcional.'
       : provider === 'gmail' ? 'Usa un client ID de tipo iOS del bundle de Capri. Esta IPA debe incluir su esquema de retorno; se comprueba antes de abrir Google.'
       : 'Usa el client ID público de una app GitHub con device flow habilitado. El código se autoriza en github.com. GitHub concede lectura y escritura para repositorios privados; cada cambio seguirá requiriendo tu revisión. No hace falta client secret.';
     element<HTMLButtonElement>('connection-save').disabled = busy;
@@ -115,7 +119,7 @@ export function mountConnectionSettings(): { refresh(): Promise<void>; cancel():
     select('odoo-mode').value = connection.apiMode ?? 'json2'; input('database').value = connection.database ?? ''; input('uid').value = connection.uid?.toString() ?? '';
     editor.open = true; editor.querySelector('summary')!.textContent = 'Editar ' + connection.label;
     updateFields(); input('label').focus();
-    if (connection.credentialAccount && connection.provider && connection.provider !== 'odoo') {
+    if (connection.credentialAccount && connection.provider !== 'odoo') {
       try {
         const raw = await secretGet('external-connections', connection.credentialAccount);
         if (epoch !== sequence || editing?.id !== connection.id) return;
@@ -124,6 +128,7 @@ export function mountConnectionSettings(): { refresh(): Promise<void>; cancel():
           if (credential.clientId) {
             input('client-id').value = credential.clientId;
             select('method').value = 'oauth';
+            input('scopes').value = credential.mcpOAuth ? (credential.scopes ?? []).join(' ') : '';
             select('permissions').value = credential.scopes?.some(scope => ['repo', 'public_repo', 'chat:write', 'https://www.googleapis.com/auth/gmail.send'].includes(scope)) ? 'write' : 'read';
             select('private').value = credential.scopes?.includes('repo') ? 'private' : 'public'; updateFields();
           }
@@ -160,7 +165,7 @@ export function mountConnectionSettings(): { refresh(): Promise<void>; cancel():
     } catch (error) { if (epoch === renderSequence) status.textContent = errorText(error); }
   }
   function cancel() { sequence++; active?.abort(); input('secret').value = ''; deviceURL = undefined; element('connection-device').hidden = true; element('connection-device-code').textContent = ''; }
-  select('provider').addEventListener('change', () => { sequence++; input('secret').value = ''; input('client-id').value = ''; input('endpoint').value = ''; select('permissions').value = 'read'; element('connection-callback-status').textContent = ''; updateFields(); });
+  select('provider').addEventListener('change', () => { sequence++; input('secret').value = ''; input('client-id').value = ''; input('endpoint').value = ''; input('scopes').value = ''; select('method').value = 'token'; select('permissions').value = 'read'; element('connection-callback-status').textContent = ''; updateFields(); });
   select('method').addEventListener('change', () => { input('secret').value = ''; updateFields(); });
   select('private').addEventListener('change', () => { select('permissions').value = select('private').value === 'private' ? 'write' : 'read'; updateFields(); });
   select('odoo-mode').addEventListener('change', updateFields);
@@ -180,11 +185,14 @@ export function mountConnectionSettings(): { refresh(): Promise<void>; cancel():
         ...(provider !== 'mcp' ? { provider: provider as Provider } : {}), ...(provider === 'odoo' ? { apiMode: select('odoo-mode').value as 'json2' | 'legacy',
           ...(input('database').value.trim() ? { database: input('database').value.trim() } : {}), ...(select('odoo-mode').value === 'legacy' ? { uid: Number(input('uid').value) } : {}) } : {}) };
       const revision = editing?.revision, token = input('secret').value;
-      const config = auth ? settingsOAuthConfig(provider as 'github' | 'slack' | 'gmail', input('client-id').value.trim(), select('permissions').value === 'write', select('private').value === 'private') : undefined;
+      const config = auth && provider !== 'mcp' ? settingsOAuthConfig(provider as 'github' | 'slack' | 'gmail', input('client-id').value.trim(), select('permissions').value === 'write', select('private').value === 'private') : undefined;
+      const mcpConfig = auth && provider === 'mcp' ? { endpoint: destination.endpoint, clientId: input('client-id').value.trim(),
+        ...(input('scopes').value.trim() ? { scopes: input('scopes').value.trim().split(/\s+/) } : {}) } : undefined;
       busy = true; controller = new AbortController(); active = controller; updateFields(); await refresh();
       input('secret').value = ''; status.textContent = auth ? 'Esperando autorización de la cuenta…' : 'Guardando acceso en este iPhone…';
       element('connection-auth-cancel').hidden = !auth;
-      if (config) {
+      if (mcpConfig) await authorizeMCPAndSave(destination, mcpConfig, controller.signal, revision);
+      else if (config) {
         await checkCallback(config); controller.signal.throwIfAborted();
         await authorizeProviderAndSave(destination, config, controller.signal, info => {
           controller!.signal.throwIfAborted(); deviceURL = info.verificationUri;
@@ -194,7 +202,7 @@ export function mountConnectionSettings(): { refresh(): Promise<void>; cancel():
         }, revision);
       } else if (token && provider !== 'mcp') await saveConnectionCredentials(destination, { provider, accessToken: token }, revision);
       else await saveConnection(destination, token || (editing ? undefined : ''), revision);
-      status.textContent = config ? 'Autorización guardada. Ya puedes pedirle a Capri que consulte esta cuenta.' : 'Configuración guardada. Se comprobará el acceso cuando Capri use la conexión.';
+      status.textContent = auth ? 'Autorización guardada. Ya puedes pedirle a Capri que consulte esta cuenta.' : 'Configuración guardada. Se comprobará el acceso cuando Capri use la conexión.';
       resetForm(); editor.open = false;
     } catch (error) { status.textContent = controller?.signal.aborted ? 'Autorización cancelada. No se iniciarán más solicitudes.' : errorText(error); }
     finally { active = undefined; busy = false; deviceURL = undefined; element('connection-device').hidden = true; element('connection-device-code').textContent = ''; element('connection-auth-cancel').hidden = true; updateFields(); await refresh(); }

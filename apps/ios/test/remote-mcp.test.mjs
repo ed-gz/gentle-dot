@@ -11,6 +11,7 @@ const remote = () => ({ name: 'custom.send', description: 'Envía al servicio co
 function fixture() {
   const calls = []; const journal = []; let connection = base(); let changedSchema = false; let failCall = false; let token = 'secret-stays-in-headers';
   const services = {
+    prepare: async () => connection,
     getConnection: async () => connection,
     token: async () => token,
     hash: async text => createHash('sha256').update(text).digest('hex'),

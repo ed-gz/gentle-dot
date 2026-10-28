@@ -26,13 +26,20 @@ async function fixture(page: Page, schemes = ['capri-auth']) {
       if (command.endsWith('|oauth_cancel')) { state.settingsCancelled = true; return { ok: true }; }
       if (command.endsWith('|https_request')) {
         state.settingsRequests.push(request);
+        if (request.url.startsWith('https://custom.example/')) {
+          const body = request.url.includes('oauth-protected-resource') ? { resource: 'https://custom.example/mcp', authorization_servers: ['https://custom.example/'], scopes_supported: ['read'] }
+            : request.url.includes('oauth-authorization-server') ? { issuer: 'https://custom.example/', authorization_endpoint: 'https://custom.example/authorize', token_endpoint: 'https://custom.example/token', code_challenge_methods_supported: ['S256'], response_types_supported: ['code'], token_endpoint_auth_methods_supported: ['none'] }
+            : { access_token: 'fixture-custom-access', refresh_token: 'fixture-custom-refresh', token_type: 'Bearer', expires_in: 3600, scope: 'read' };
+          return request.url === 'https://custom.example/mcp' ? { ok: true, status: 401, headers: {}, body: '' }
+            : { ok: true, status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
+        }
         const body = request.url.includes('/login/device/code') ? { device_code: 'fixture-device-secret', user_code: 'ABCD-EFGH', verification_uri: 'https://github.com/login/device', expires_in: 900, interval: 5 }
           : request.url.includes('github.com') ? { access_token: 'fixture-github-access', token_type: 'bearer', scope: 'read:user' }
           : request.url.includes('slack.com') ? { ok: true, authed_user: { access_token: 'fixture-slack-access', refresh_token: 'fixture-slack-refresh', token_type: 'user', expires_in: 43200, scope: 'channels:read,channels:history,users:read' } }
           : { access_token: 'fixture-google-access', refresh_token: 'fixture-google-refresh', token_type: 'Bearer', expires_in: 3600, scope: 'https://www.googleapis.com/auth/gmail.readonly' };
         return { ok: true, status: 200, headers: {}, body: JSON.stringify(body) };
       }
-      if (command.endsWith('|share_list')) return { ok: true, items: [] };
+      if (command.endsWith('|share_list') || command.endsWith('|documents_list')) return { ok: true, items: [] };
       return { ok: false, available: false, status: 'fixture_unavailable' };
     } };
   }, { schemes });
@@ -66,6 +73,25 @@ test('provider form stores PAT only in Keychain and binds edits to the visible r
   await page.locator('#connection-save').click();
   await expect(page.locator('#connections-status')).toContainText('La conexión cambió');
   expect((await metadata(page))[0].label).toBe('Otra ventana');
+});
+
+test('an additional MCP service authorizes a public native client and keeps access out of metadata', async ({ page }) => {
+  await fixture(page, ['capri-auth', 'dev.gentledot.capri.auth']);
+  await page.locator('#connection-provider').selectOption('mcp');
+  await page.locator('#connection-label').fill('Mi servicio adicional');
+  await page.locator('#connection-endpoint').fill('https://custom.example/mcp');
+  await page.locator('#connection-method').selectOption('oauth');
+  await page.locator('#connection-client-id').fill('public-capri');
+  await expect(page.locator('#connection-permissions')).toBeHidden();
+  await expect(page.locator('#connection-scopes')).toBeVisible();
+  await page.locator('#connection-save').click();
+  await expect(page.locator('#connections-status')).toContainText('Autorización guardada');
+  const stored = await metadata(page);
+  expect(stored[0]).toMatchObject({ kind: 'mcp', endpoint: 'https://custom.example/mcp', revision: 1 });
+  expect(JSON.stringify(stored)).not.toContain('fixture-custom');
+  expect(await page.locator('body').innerText()).not.toContain('fixture-custom');
+  const secret = await page.evaluate(() => [...(globalThis as any).settingsVault.values()]);
+  expect(JSON.parse(secret[0]).mcpOAuth.resource).toBe('https://custom.example/mcp');
 });
 
 test('Slack consent uses minimum read scopes and persists refresh credentials without exposing them', async ({ page }) => {

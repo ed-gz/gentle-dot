@@ -2,7 +2,9 @@ import { secretGet, secretSet, secretDelete } from './device-bridge.ts';
 import { localIdentifier } from './local-identifiers.ts';
 
 export type Provider = 'github' | 'slack' | 'gmail' | 'odoo';
-export type ProviderCredentialBundle = { accessToken: string; refreshToken?: string; expiresAt?: number; provider?: Provider; clientId?: string; redirectUri?: string; scopes?: string[]; obtainedAt?: number; refreshState?: 'ready' | 'refreshing' | 'uncertain' };
+export const MCP_OAUTH_CALLBACK = 'dev.gentledot.capri.auth:/oauth/mcp';
+export type MCPOAuthGrant = { resource: string; issuer: string; tokenEndpoint: string };
+export type ProviderCredentialBundle = { accessToken: string; refreshToken?: string; expiresAt?: number; provider?: Provider; clientId?: string; redirectUri?: string; scopes?: string[]; obtainedAt?: number; refreshState?: 'ready' | 'refreshing' | 'uncertain'; mcpOAuth?: MCPOAuthGrant };
 export type ExternalConnection = { id: string; kind: 'mcp' | 'https-api'; label: string; endpoint: string; revision: number; enabled: boolean; credentialAccount?: string; createdAt: number; updatedAt: number; provider?: Provider; apiMode?: 'json2' | 'legacy'; database?: string; uid?: number };
 export type ConnectionInput = Pick<ExternalConnection, 'kind' | 'label' | 'endpoint' | 'provider' | 'apiMode' | 'database' | 'uid'> & { id?: string; enabled?: boolean };
 export type RemoteExecution = { requestId: string; fingerprint: string; connectionId: string; connectionRevision: number; endpoint: string; toolName: string; schemaJSON: string; argumentsJSON: string; state: 'executing' | 'succeeded' | 'uncertain'; createdAt: number; updatedAt: number; resultJSON?: string };
@@ -38,6 +40,13 @@ export function validateCredentialBundle(input: ProviderCredentialBundle): Provi
   for (const key of ['clientId', 'redirectUri'] as const) if (input[key] !== undefined) { if (typeof input[key] !== 'string' || !input[key] || input[key]!.length > 2048 || /[\u0000-\u0020\u007f]/.test(input[key]!)) throw new Error('Configuración OAuth inválida.'); bundle[key] = input[key]; }
   if (input.scopes !== undefined) { if (!Array.isArray(input.scopes) || input.scopes.length > 50 || input.scopes.some(scope => typeof scope !== 'string' || !scope || scope.length > 300 || /\s/.test(scope))) throw new Error('Scopes inválidos.'); bundle.scopes = [...new Set(input.scopes)]; }
   if (input.refreshState !== undefined) { if (!['ready', 'refreshing', 'uncertain'].includes(input.refreshState)) throw new Error('Estado de renovación inválido.'); bundle.refreshState = input.refreshState; }
+  if (input.mcpOAuth !== undefined) {
+    const grant = input.mcpOAuth;
+    if (!grant || typeof grant !== 'object' || input.provider || !bundle.clientId || bundle.redirectUri !== MCP_OAUTH_CALLBACK) throw new Error('La credencial OAuth MCP no corresponde a un cliente nativo.');
+    const issuer = validEndpoint(grant.issuer);
+    if (new URL(issuer).search) throw new Error('Emisor OAuth MCP inválido.');
+    bundle.mcpOAuth = { resource: validEndpoint(grant.resource), issuer, tokenEndpoint: validEndpoint(grant.tokenEndpoint) };
+  }
   if (new TextEncoder().encode(JSON.stringify(bundle)).length > 16384) throw new Error('La credencial supera el límite de Keychain.');
   return bundle;
 }
@@ -94,6 +103,7 @@ export async function connectionToken(connection: ExternalConnection): Promise<s
   const token = (value as { accessToken?: unknown } | null)?.accessToken;
   if (typeof token !== 'string' || !token || token.length > 12000 || /[\u0000-\u0020\u007f]/.test(token)) throw new Error('La credencial de conexión no es válida.');
   const bundle = validateCredentialBundle(value as ProviderCredentialBundle);
+  if (bundle.mcpOAuth && (connection.kind !== 'mcp' || bundle.mcpOAuth.resource !== connection.endpoint)) throw new Error('La credencial corresponde a otro recurso MCP.');
   if (bundle.refreshState && bundle.refreshState !== 'ready') throw new Error('La renovación está pendiente o incierta; vuelve a autorizar la conexión antes de usarla.');
   if (bundle.expiresAt !== undefined && bundle.expiresAt <= Date.now() + 30_000) throw new Error('La credencial requiere renovación antes de usarla.');
   return token;
@@ -112,6 +122,7 @@ async function saveCredentials(input: ConnectionInput, token?: '' | ProviderCred
   const endpoint = validEndpoint(input.endpoint);
   if (old?.credentialAccount && endpoint !== old.endpoint && token === undefined) throw new Error('Al cambiar el endpoint, introduce la credencial para ese destino o déjala explícitamente vacía.');
   if (token) token = validateCredentialBundle(token);
+  if (token && token.mcpOAuth && (input.kind !== 'mcp' || input.provider || token.mcpOAuth.resource !== endpoint)) throw new Error('La credencial corresponde a otro recurso MCP.');
   const credentialAccount = token === undefined ? old?.credentialAccount : token ? localIdentifier() : undefined;
   const time = Date.now();
   const next = validateConnection({ id, kind: input.kind, label: input.label, endpoint, enabled: input.enabled ?? true,

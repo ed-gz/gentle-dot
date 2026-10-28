@@ -109,7 +109,8 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
     assert.equal(targets.capri_iOS.info.properties.NSPhotoLibraryUsageDescription, undefined);
     assert.equal(targets.capri_iOS.entitlements.properties['test.existing'], true);
     assert.equal(targets.capri_iOS.dependencies.filter(item => item.target === 'CapriShare').length, 1);
-    assert.equal(targets.capri_iOS.info.properties.CFBundleURLTypes.length, 1);
+    assert.equal(targets.capri_iOS.info.properties.CFBundleURLTypes.length, 2);
+    assert.deepEqual(targets.capri_iOS.info.properties.CFBundleURLTypes.find(item => item.CFBundleURLName === 'dev.gentledot.capri.mcp-oauth').CFBundleURLSchemes, ['dev.gentledot.capri.auth']);
     assert.equal(targets.CapriShare.type, 'app-extension');
     assert.equal(targets.CapriShare.info.properties.CFBundleVersion, '42');
     assert.deepEqual(targets.CapriShare.entitlements.properties['com.apple.security.application-groups'], targets.capri_iOS.entitlements.properties['com.apple.security.application-groups']);
@@ -126,7 +127,7 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
     assert.equal(info.NSCameraUsageDescription, 'Propósito de cámara personalizado');
     assert.equal(info.NSMicrophoneUsageDescription, 'Usar voz');
     assert.equal(info.CapriGoogleClientID, '123-example.apps.googleusercontent.com');
-    assert.equal(info.CFBundleURLTypes.length, 2);
+    assert.equal(info.CFBundleURLTypes.length, 3);
     assert.deepEqual(info.CFBundleURLTypes.find(item => item.CFBundleURLName === 'dev.gentledot.capri.google').CFBundleURLSchemes, ['com.googleusercontent.apps.123-example']);
     const before = readFileSync(path, 'utf8');
     const invalid = spawnSync('ruby', [script, path, '--spec-only'], { encoding: 'utf8', env: { ...process.env, CAPRI_GOOGLE_CLIENT_ID: 'not a client id' } });

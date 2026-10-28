@@ -2,7 +2,7 @@
 
 Capri puede descubrir herramientas de un servidor MCP remoto configurado por el
 usuario. No hay una lista fija de proveedores. El endpoint usa HTTPS; la credencial
-Bearer opcional se guarda en Keychain y nunca se entrega al modelo. Los servicios
+Bearer opcional se guarda en Keychain y nunca se entrega al modelo. También se puede autorizar un cliente OAuth público nativo previamente registrado por el servicio. Los servicios
 deben ofrecer Streamable HTTP con MCP `2025-06-18` y respuestas JSON o SSE que
 terminen dentro de 30 segundos y 2 MiB. Esto requiere internet; no depende de la PC.
 
@@ -13,7 +13,7 @@ terminen dentro de 30 segundos y 2 MiB. Esto requiere internet; no depende de la
 Los campos de configuración persistidos son `id`, `kind`, `label`, `endpoint`,
 `revision`, `enabled`, `credentialAccount`, `createdAt` y `updatedAt`.
 `credentialAccount` es un identificador UUID, no la credencial. El valor de Keychain
-es JSON `{accessToken}` bajo el scope `external-connections`.
+es JSON bajo el scope `external-connections`: token y, cuando se usa OAuth, renovación, vigencia y recurso/emisor/endpoints vinculados.
 
 Al guardar, un token vacío configura acceso sin autenticación; omitirlo conserva la
 credencial existente. Cambiar un endpoint autenticado exige proporcionar de nuevo
@@ -90,3 +90,13 @@ ni de ejecución de URLSession en el iPhone instalado.
 
 Referencias de protocolo: [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
 y [herramientas MCP](https://modelcontextprotocol.io/specification/2025-06-18/server/tools).
+
+## OAuth de otros servicios
+
+En Ajustes → Conexiones → MCP remoto, el acceso «Autorizar cuenta» usa el client ID público del servicio. El callback nativo es `dev.gentledot.capri.auth:/oauth/mcp`. Los permisos son opcionales; sin selección explícita se usan los anunciados por el recurso. El navegador de autenticación pertenece a iOS. No se incluye un client secret ni se entrega una credencial al agente.
+
+Se descubren metadatos de recurso y OAuth/OIDC, se vinculan recurso/emisor, se usa PKCE S256 y se comprueban estado, callback y emisor de respuesta cuando se anuncia. La renovación reserva una revisión durable antes de consumir el token; una respuesta incierta exige nueva autorización. Cambiar el destino o credencial invalida las herramientas ya revisadas.
+
+Este acceso requiere que el proveedor admita un cliente nativo y su callback privado. No implementa todavía registro dinámico, documentos públicos de client ID, callbacks HTTPS universales ni autorización incremental automática. No se presenta como compatibilidad universal con todos los servidores OAuth MCP. La especificación MCP HTTP limita sus callbacks a HTTPS/localhost; esta ruta utiliza el perfil nativo de RFC 8252 cuando el proveedor lo admite. Referencias: [autorización MCP](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) y [OAuth para apps nativas](https://www.rfc-editor.org/rfc/rfc8252).
+
+Las pruebas de códigos, rotación, cancelación, UI y Keychain simulado no autorizan cuentas reales ni prueban SideStore.

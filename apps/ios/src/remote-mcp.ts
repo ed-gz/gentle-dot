@@ -1,6 +1,7 @@
 import { httpsRequest, nativeSHA256, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { getConnection, connectionToken, beginRemoteExecution, finishRemoteExecution, type ExternalConnection, type RemoteExecution } from './external-connections.ts';
 import { localIdentifier } from './local-identifiers.ts';
+import { prepareMCPAccess } from './mcp-oauth-store.ts';
 import type { Tool, ToolContext } from './agent-tools.ts';
 
 const VERSION = '2025-06-18';
@@ -67,6 +68,7 @@ export function validateMCPArguments(schema: Record<string, unknown>, value: unk
 }
 type RemoteTool = { name: string; description: string; inputSchema: Record<string, unknown> };
 export type MCPServices = {
+  prepare: (id: string) => Promise<ExternalConnection>;
   getConnection: (id: string) => Promise<ExternalConnection | null>;
   token: (connection: ExternalConnection) => Promise<string | null>;
   request: (request: HTTPSRequest) => Promise<HTTPSResponse>;
@@ -104,8 +106,8 @@ export function parseMCPResponse(response: HTTPSResponse, id: string): unknown {
 }
 
 export async function discoverMCPTools(connectionId: string, overrides: Partial<MCPServices> = {}): Promise<Tool[]> {
-  const service: MCPServices = { getConnection, token: connectionToken, request: httpsRequest, begin: beginRemoteExecution, finish: finishRemoteExecution, hash, ...overrides };
-  const connection = await service.getConnection(connectionId);
+  const service: MCPServices = { prepare: prepareMCPAccess, getConnection, token: connectionToken, request: httpsRequest, begin: beginRemoteExecution, finish: finishRemoteExecution, hash, ...overrides };
+  const connection = await service.prepare(connectionId);
   if (!connection || !connection.enabled || connection.kind !== 'mcp') throw new Error('La conexión MCP no está habilitada.');
   const expected = canonicalJSON(connection);
   const token = await service.token(connection);
@@ -113,6 +115,7 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
   let initialized = false;
   async function current(): Promise<void> {
     if (canonicalJSON(await service.getConnection(connectionId)) !== expected) throw new Error('La conexión cambió; vuelve a descubrir las herramientas.');
+    if (await service.token(connection) !== token || canonicalJSON(await service.getConnection(connectionId)) !== expected) throw new Error('El acceso cambió; vuelve a descubrir las herramientas.');
   }
   async function rpc(method: string, params: unknown, id = localIdentifier()): Promise<unknown> {
     await current();
