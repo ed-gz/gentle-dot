@@ -62,12 +62,57 @@ async fn respond<R: Runtime>(app: AppHandle<R>, prompt: String) -> Result<Value,
 }
 
 #[tauri::command]
-async fn agent_step<R: Runtime>(app: AppHandle<R>, prompt: String) -> Result<Value, String> {
+async fn agent_step<R: Runtime>(
+    app: AppHandle<R>,
+    prompt: String,
+    turn_id: Option<String>,
+) -> Result<Value, String> {
     if !valid_agent_prompt(&prompt) {
         return Ok(json!({"ok": false, "error": "invalid_prompt",
             "message": "El contexto del paso debe contener entre 1 y 8000 caracteres."}));
     }
-    native_call(app, "agentStep", json!({"prompt": prompt})).await
+    if turn_id.as_ref().is_some_and(|id| !valid_id(id)) {
+        return Ok(json!({"ok": false, "error": "invalid_identity"}));
+    }
+    native_call(
+        app,
+        "agentStep",
+        json!({"prompt": prompt, "turnId": turn_id}),
+    )
+    .await
+}
+
+fn valid_id(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                b == b'-'
+            } else {
+                b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+            }
+        })
+}
+
+#[tauri::command]
+async fn results_list<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
+    native_call(app, "resultsList", json!({})).await
+}
+
+#[tauri::command]
+async fn results_acknowledge<R: Runtime>(
+    app: AppHandle<R>,
+    turn_id: String,
+    revision: String,
+) -> Result<Value, String> {
+    if !valid_id(&turn_id) || !valid_id(&revision) {
+        return Ok(json!({"ok": false, "error": "invalid_identity"}));
+    }
+    native_call(
+        app,
+        "resultsAcknowledge",
+        json!({"turnId": turn_id, "revision": revision}),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -76,8 +121,11 @@ async fn reset<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn cancel<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
-    native_call(app, "cancel", json!({})).await
+async fn cancel<R: Runtime>(app: AppHandle<R>, turn_id: Option<String>) -> Result<Value, String> {
+    if turn_id.as_ref().is_some_and(|id| !valid_id(id)) {
+        return Ok(json!({"ok": false, "error": "invalid_identity"}));
+    }
+    native_call(app, "cancel", json!({"turnId": turn_id})).await
 }
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
@@ -86,6 +134,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             check_availability,
             respond,
             agent_step,
+            results_list,
+            results_acknowledge,
             reset,
             cancel
         ])
@@ -101,7 +151,20 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::{valid_agent_prompt, valid_prompt};
+    use super::{valid_agent_prompt, valid_id, valid_prompt};
+
+    #[test]
+    fn journal_ids_are_canonical_and_cannot_be_paths() {
+        assert!(valid_id("d3dba896-4b5c-4c1c-98c9-4e60238fe6b9"));
+        for id in [
+            "../../state",
+            "",
+            "D3DBA896-4B5C-4C1C-98C9-4E60238FE6B9",
+            "d3dba896_4b5c-4c1c-98c9-4e60238fe6b9",
+        ] {
+            assert!(!valid_id(id));
+        }
+    }
 
     #[test]
     fn accepts_spanish_and_unicode_up_to_the_character_limit() {

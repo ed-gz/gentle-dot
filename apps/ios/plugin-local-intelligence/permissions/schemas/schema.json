@@ -345,6 +345,26 @@
           "const": "deny-respond"
         },
         {
+          "description": "Enables the results_acknowledge command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-results-acknowledge"
+        },
+        {
+          "description": "Denies the results_acknowledge command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-results-acknowledge"
+        },
+        {
+          "description": "Enables the results_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-results-list"
+        },
+        {
+          "description": "Denies the results_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-results-list"
+        },
+        {
           "description": "Check and use Capri's local model, cancel a response, and clear its in-memory conversation.",
           "type": "string",
           "const": "default"

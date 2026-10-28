@@ -3,6 +3,8 @@ fn main() {
         "check_availability",
         "respond",
         "agent_step",
+        "results_list",
+        "results_acknowledge",
         "reset",
         "cancel",
     ])

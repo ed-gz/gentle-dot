@@ -5,7 +5,10 @@ import WebKit
 // A build without this SDK must fail instead of shipping a UI-only local engine.
 import FoundationModels
 
-private struct PromptArgs: Decodable { let prompt: String }
+private struct PromptArgs: Decodable { let prompt: String; let turnId: String? }
+private struct JournalArgs: Decodable { let turnId: String; let revision: String? }
+private struct CancelArgs: Decodable { let turnId: String? }
+private struct JournalReply: Encodable { let ok: Bool; let items: [InferenceRecord]; let activeId: String? }
 private struct Availability: Encodable {
     let available: Bool
     let status: String
@@ -81,6 +84,8 @@ final class LocalIntelligencePlugin: Plugin {
     private var task: Task<Void, Never>?
     private var pending: Invoke?
     private var cancellationRequested = false
+    private let journal = InferenceJournal()
+    private var activeJournalID: String?
     private var lifecycleObserver: NSObjectProtocol?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
@@ -156,10 +161,10 @@ final class LocalIntelligencePlugin: Plugin {
             invoke.resolve(Reply(ok: false, error: "invalid_prompt", message: "El contexto del paso no es válido."))
             return
         }
-        DispatchQueue.main.async { self.startAgent(prompt: args.prompt, invoke: invoke) }
+        DispatchQueue.main.async { self.startAgent(prompt: args.prompt, turnID: args.turnId, invoke: invoke) }
     }
 
-    private func startAgent(prompt: String, invoke: Invoke) {
+    private func startAgent(prompt: String, turnID: String?, invoke: Invoke) {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               prompt.unicodeScalars.count <= 8_000 else {
             invoke.resolve(Reply(ok: false, error: "invalid_prompt", message: "El contexto del paso debe contener entre 1 y 8000 caracteres."))
@@ -179,6 +184,11 @@ final class LocalIntelligencePlugin: Plugin {
             return
         }
         if #available(iOS 26.0, *) {
+            if let id = turnID {
+                do { try journal.begin(id) }
+                catch { invoke.resolve(journalFailure()); return }
+            }
+            activeJournalID = turnID
             // Each step reconstructs bounded context supplied by the conversation. Never
             // duplicate a transcript, retain a cancelled step or share the legacy session.
             conversation = nil
@@ -188,7 +198,7 @@ final class LocalIntelligencePlugin: Plugin {
             beginInferenceLease()
             task = Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                defer { self.task = nil; self.pending = nil; self.cancellationRequested = false; self.endInferenceLease() }
+                defer { self.task = nil; self.pending = nil; self.activeJournalID = nil; self.cancellationRequested = false; self.endInferenceLease() }
                 do {
                     try Task.checkCancellation()
                     let response = try await session.respond(to: prompt, generating: GeneratedDecision.self,
@@ -205,13 +215,13 @@ final class LocalIntelligencePlugin: Plugin {
                           let arguments = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                           isTool ? value.toolName.range(of: "^[A-Za-z][A-Za-z0-9_.:-]{0,79}$", options: .regularExpression) != nil
                                  : (value.toolName.isEmpty && arguments.isEmpty && !value.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) else {
-                        self.pending?.resolve(Reply(ok: false, error: "invalid_decision", message: "El modelo no produjo un paso válido. Puedes volver a intentar."))
+                        self.resolveAgent(Reply(ok: false, error: "invalid_decision", message: "El modelo no produjo un paso válido. Puedes volver a intentar."))
                         return
                     }
-                    self.pending?.resolve(Reply(ok: true, decision: AgentDecision(kind: isTool ? "tool" : "answer",
+                    self.resolveAgent(Reply(ok: true, decision: AgentDecision(kind: isTool ? "tool" : "answer",
                         text: value.text, toolName: value.toolName, argumentsJSON: value.argumentsJSON)))
                 } catch {
-                    if !self.cancellationRequested { self.pending?.resolve(self.failure(error)) }
+                    if !self.cancellationRequested { self.resolveAgent(self.failure(error)) }
                 }
             }
         }
@@ -244,7 +254,7 @@ final class LocalIntelligencePlugin: Plugin {
             beginInferenceLease()
             task = Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                defer { self.task = nil; self.pending = nil; self.cancellationRequested = false; self.endInferenceLease() }
+                defer { self.task = nil; self.pending = nil; self.activeJournalID = nil; self.cancellationRequested = false; self.endInferenceLease() }
                 do {
                     try Task.checkCancellation()
                     let response = try await local.session.respond(
@@ -257,7 +267,7 @@ final class LocalIntelligencePlugin: Plugin {
                 } catch {
                     // An interrupted/failed transcript is never reused.
                     self.conversation = nil
-                    if !self.cancellationRequested { self.pending?.resolve(self.failure(error)) }
+                    if !self.cancellationRequested { self.resolveAgent(self.failure(error)) }
                 }
             }
         }
@@ -287,19 +297,65 @@ final class LocalIntelligencePlugin: Plugin {
         return Reply(ok: false, error: "generation_failed", message: "No pude completar la respuesta local. Puedes volver a intentarlo.")
     }
 
-    private func cancelCurrent(message: String) {
+    private func journalFailure() -> Reply {
+        Reply(ok: false, error: "native_storage_failed", message: "No pude confirmar el guardado nativo de esta respuesta. Los registros anteriores se conservan; vuelve a abrir Capri para recuperarlos.")
+    }
+    private func resolveAgent(_ reply: Reply, terminalStatus: String? = nil) {
+        if let id = activeJournalID {
+            do {
+                if let status = terminalStatus {
+                    try journal.finish(id, status: status, text: reply.message ?? "Respuesta interrumpida.")
+                } else if reply.ok, let decision = reply.decision, decision.kind == "answer" {
+                    try journal.finish(id, status: "answer", text: decision.text)
+                } else if !reply.ok {
+                    try journal.finish(id, status: "interrupted", text: reply.message ?? "Respuesta interrumpida.")
+                }
+            } catch { pending?.resolve(journalFailure()); return }
+        }
+        pending?.resolve(reply)
+    }
+    private func cancelCurrent(message: String, explicit: Bool = false) {
         guard task != nil else { return }
         conversation = nil
         cancellationRequested = true
         task?.cancel()
-        pending?.resolve(Reply(ok: false, error: "cancelled", message: message))
+        resolveAgent(Reply(ok: false, error: "cancelled", message: message), terminalStatus: explicit ? "cancelled" : "interrupted")
         pending = nil
         endInferenceLease()
     }
 
-    @objc func cancel(_ invoke: Invoke) {
+    @objc func resultsList(_ invoke: Invoke) {
         DispatchQueue.main.async {
-            self.cancelCurrent(message: "Respuesta cancelada.")
+            do { invoke.resolve(JournalReply(ok: true, items: try self.journal.list(activeID: self.activeJournalID), activeId: self.activeJournalID)) }
+            catch { invoke.resolve(self.journalFailure()) }
+        }
+    }
+    @objc func resultsAcknowledge(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(JournalArgs.self), let revision = args.revision else {
+            invoke.resolve(Reply(ok: false, error: "invalid_receipt")); return
+        }
+        DispatchQueue.main.async {
+            do {
+                try self.journal.acknowledge(args.turnId, revision: revision, activeID: self.activeJournalID)
+                invoke.resolve(Reply(ok: true))
+            } catch { invoke.resolve(self.journalFailure()) }
+        }
+    }
+    @objc func cancel(_ invoke: Invoke) {
+        let args = try? invoke.parseArgs(CancelArgs.self)
+        DispatchQueue.main.async {
+            if let id = args?.turnId, id != self.activeJournalID {
+                // Completion can beat a human Stop while its WebView callback waits.
+                do {
+                    guard InferenceJournal.validID(id) else { throw InferenceJournalError.invalid }
+                    if let record = try self.journal.list(activeID: self.activeJournalID).first(where: { $0.id == id }), record.status != "cancelled" {
+                        try self.journal.finish(id, status: "cancelled", text: "Respuesta cancelada.")
+                    }
+                    invoke.resolve(Reply(ok: true))
+                } catch { invoke.resolve(self.journalFailure()) }
+                return
+            }
+            self.cancelCurrent(message: "Respuesta cancelada.", explicit: true)
             invoke.resolve(Reply(ok: true))
         }
     }

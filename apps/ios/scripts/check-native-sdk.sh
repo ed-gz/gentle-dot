@@ -14,6 +14,11 @@ Path(sys.argv[1]).write_text(source)
 PY
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-local-intelligence/ios/Sources/InferenceJournal.swift \
+  test/native/InferenceJournalTests.swift -o "$verification/inference-journal-tests"
+"$verification/inference-journal-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
   test/native/AppGroupResolverTests.swift -o "$verification/app-group-tests"
 "$verification/app-group-tests"
@@ -32,6 +37,7 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
   "$verification/AgentTypes.swift" \
+  plugin-local-intelligence/ios/Sources/InferenceJournal.swift \
   plugin-perception/ios/Sources/Voice.swift \
   plugin-perception/ios/Sources/Documents.swift \
   plugin-device-bridge/ios/Sources/BoundedHTTP.swift \

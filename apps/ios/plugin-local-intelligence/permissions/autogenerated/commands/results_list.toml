@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-results-list"
+description = "Enables the results_list command without any pre-configured scope."
+commands.allow = ["results_list"]
+
+[[permission]]
+identifier = "deny-results-list"
+description = "Denies the results_list command without any pre-configured scope."
+commands.deny = ["results_list"]

@@ -7,6 +7,8 @@ Check and use Capri's local model, cancel a response, and clear its in-memory co
 - `allow-agent-step`
 - `allow-reset`
 - `allow-cancel`
+- `allow-results-list`
+- `allow-results-acknowledge`
 
 ## Permission Table
 
@@ -143,6 +145,58 @@ Enables the respond command without any pre-configured scope.
 <td>
 
 Denies the respond command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-results-acknowledge`
+
+</td>
+<td>
+
+Enables the results_acknowledge command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-results-acknowledge`
+
+</td>
+<td>
+
+Denies the results_acknowledge command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-results-list`
+
+</td>
+<td>
+
+Enables the results_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-results-list`
+
+</td>
+<td>
+
+Denies the results_list command without any pre-configured scope.
 
 </td>
 </tr>
