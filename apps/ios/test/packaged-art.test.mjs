@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { deflateSync } from 'node:zlib';
+import { deflateSync, deflateRawSync } from 'node:zlib';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, copyFileSync, chmodSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,6 +80,34 @@ test('personal app icon uses only verified artwork and rejects tampering', () =>
     assert.ok(data); assert.deepEqual(Buffer.from(data, 'base64'), original);
     writeFileSync(join(directory, 'capri-full.png'), Buffer.from('tampered'));
     assert.throws(() => personalIconSVG(directory, fingerprint));
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('Xcode icon generation follows ios init and packaged CgBI pixels match the generated icon', () => {
+  const build = readFileSync(new URL('../scripts/build-unsigned.sh', import.meta.url), 'utf8');
+  assert.ok(build.indexOf('cargo tauri ios init --ci') < build.indexOf('cargo tauri icon "$icon_source"'));
+  assert.ok(build.includes('verify-app-icon.py "$ipa" out/expected-ios-icon.png'));
+  assert.ok(build.includes('verify-app-icon.py "$verification/candidate.ipa" out/expected-ios-icon.png'));
+  const directory = mkdtempSync(join(tmpdir(), 'capri-icon-verify-'));
+  try {
+    const header = Buffer.alloc(13); header.writeUInt32BE(120); header.writeUInt32BE(120, 4); header[8] = 8; header[9] = 6;
+    const make = (apple, changed = false) => {
+      const raw = Buffer.alloc(120 * 481);
+      for (let y = 0; y < 120; y++) for (let x = 0; x < 120; x++) {
+        const i = y * 481 + 1 + x * 4, red = x + (changed && x === 50 && y === 50 ? 1 : 0), green = y, blue = 40;
+        raw.set(apple ? [blue, green, red, 255] : [red, green, blue, 255], i);
+      }
+      return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), ...(apple ? [chunk('CgBI', Buffer.alloc(4))] : []),
+        chunk('IHDR', header), chunk('IDAT', apple ? deflateRawSync(raw) : deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+    };
+    const expected = join(directory, 'expected.png'), actual = join(directory, 'actual.png'), ipa = join(directory, 'fixture.ipa');
+    writeFileSync(expected, make(false)); writeFileSync(actual, make(true));
+    const makeIPA = () => spawnSync('python3', ['-c', 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],"w"); z.write(sys.argv[2],"Payload/Capri.app/AppIcon60x60@2x.png"); z.close()', ipa, actual]);
+    assert.equal(makeIPA().status, 0);
+    const verify = () => spawnSync('python3', [new URL('../scripts/verify-app-icon.py', import.meta.url).pathname, ipa, expected], { encoding: 'utf8' });
+    assert.equal(verify().status, 0);
+    writeFileSync(actual, make(true, true)); assert.equal(makeIPA().status, 0);
+    assert.notEqual(verify().status, 0); assert.match(verify().stderr, /does not match/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

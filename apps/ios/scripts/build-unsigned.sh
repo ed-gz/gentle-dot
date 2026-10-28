@@ -35,11 +35,15 @@ fi
 if [[ -n "${CAPRI_PERSONAL_ART_SHA256:-}" ]]; then
   # Keep the derived private SVG in ignored build output, not the source tree.
   node scripts/personal-icon.mjs public/personal-art "$CAPRI_PERSONAL_ART_SHA256" out/personal-icon.svg
-  cargo tauri icon out/personal-icon.svg --output src-tauri/icons
+  icon_source=out/personal-icon.svg
 else
-  cargo tauri icon src-tauri/icons/app.svg --output src-tauri/icons
+  icon_source=src-tauri/icons/app.svg
 fi
 cargo tauri ios init --ci
+# Tauri writes the iOS icons into the asset catalog only after `ios init` has
+# created it; generating first instead writes unused icons/ios/*.png.
+cargo tauri icon "$icon_source" --output src-tauri/icons
+cp src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-60x60@2x.png out/expected-ios-icon.png
 if [[ "${CAPRI_LIVE_ACTIVITY:-0}" == 1 ]]; then
   ruby scripts/configure-share-extension.rb --spec-only
   ruby scripts/configure-live-activity.rb
@@ -83,6 +87,7 @@ print(candidates[0])
 PY
 )
 python3 scripts/verify-ipa.py "$ipa" "${verification_args[@]}" --extract "$verification/payload" --manifest "$verification/manifest.json"
+python3 scripts/verify-app-icon.py "$ipa" out/expected-ios-icon.png
 app=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["app"])' "$verification/manifest.json")
 extension=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["extension"])' "$verification/manifest.json")
 app_executable=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["appExecutable"])' "$verification/manifest.json")
@@ -177,6 +182,7 @@ ditto -c -k --keepParent "$verification/payload/Payload" "$verification/candidat
 # Inspect the final ZIP and its embedded Mach-O signatures independently. A
 # successful signing command alone cannot publish an unsigned/stale executable.
 python3 scripts/verify-ipa.py "$verification/candidate.ipa" "${verification_args[@]}" --sealed
+python3 scripts/verify-app-icon.py "$verification/candidate.ipa" out/expected-ios-icon.png
 mv "$verification/candidate.ipa" out/Capri-unsigned.ipa
 shasum -a 256 out/Capri-unsigned.ipa
 printf 'IPA with ad-hoc entitlement seals; SideStore personal signing still required: apps/ios/out/Capri-unsigned.ipa\n'
