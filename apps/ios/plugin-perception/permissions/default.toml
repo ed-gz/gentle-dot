@@ -1,3 +1,3 @@
 [default]
 description = "Use local Apple speech transcription and Vision document recognition in Capri. Microphone permission is requested only when starting a voice command."
-permissions = ["allow-check-voice", "allow-prepare-voice", "allow-start-voice", "allow-stop-voice", "allow-cancel-voice", "allow-recognize-document", "allow-cancel-document"]
+permissions = ["allow-check-voice", "allow-prepare-voice", "allow-start-voice", "allow-stop-voice", "allow-cancel-voice", "allow-recognize-document", "allow-cancel-document", "allow-scan-pairing-code", "allow-cancel-pairing-code"]

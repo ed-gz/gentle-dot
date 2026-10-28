@@ -9,6 +9,7 @@ private struct SessionArgs: Decodable { let sessionId: String }
 final class PerceptionPlugin: Plugin {
     private var voice: AnyObject?
     private var document: DocumentOperation?
+    private var pairingCode: DocumentOperation?
     private var observers: [NSObjectProtocol] = []
 
     @objc override func load(webview: WKWebView) {
@@ -17,6 +18,7 @@ final class PerceptionPlugin: Plugin {
                 Task { @MainActor in
                     if #available(iOS 26.0, *) { (self?.voice as? VoiceController)?.resignActive() }
                     self?.document?.cancel()
+                    self?.pairingCode?.cancel()
                 }
             })
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
@@ -24,6 +26,7 @@ final class PerceptionPlugin: Plugin {
                 Task { @MainActor in
                     if #available(iOS 26.0, *) { (self?.voice as? VoiceController)?.cancel() }
                     self?.document?.cancel()
+                    self?.pairingCode?.cancel()
                 }
             })
         observers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification,
@@ -37,6 +40,7 @@ final class PerceptionPlugin: Plugin {
     deinit {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         document?.cancel()
+        pairingCode?.cancel()
     }
 
     @available(iOS 26.0, *)
@@ -106,6 +110,34 @@ final class PerceptionPlugin: Plugin {
     }
     @objc func cancelDocument(_ invoke: Invoke) {
         DispatchQueue.main.async { self.document?.cancel(); invoke.resolve(VoiceReply(ok: true)) }
+    }
+    @objc func scanPairingCode(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(DocumentArgs.self) else {
+            invoke.resolve(PairingCodeReply(error: "invalid_image")); return
+        }
+        DispatchQueue.main.async {
+            guard UIApplication.shared.applicationState == .active else {
+                invoke.resolve(PairingCodeReply(error: "not_foreground")); return
+            }
+            guard self.pairingCode == nil else {
+                invoke.resolve(PairingCodeReply(error: "busy")); return
+            }
+            let operation = DocumentOperation()
+            self.pairingCode = operation
+            let timeout = DispatchWorkItem { operation.cancel(timeout: true) }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 30, execute: timeout)
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = operation.scanPairingCode(args)
+                timeout.cancel()
+                DispatchQueue.main.async {
+                    if self.pairingCode === operation { self.pairingCode = nil }
+                    invoke.resolve(operation.finalResult(result))
+                }
+            }
+        }
+    }
+    @objc func cancelPairingCode(_ invoke: Invoke) {
+        DispatchQueue.main.async { self.pairingCode?.cancel(); invoke.resolve(VoiceReply(ok: true)) }
     }
 }
 

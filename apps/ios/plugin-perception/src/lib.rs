@@ -54,6 +54,10 @@ fn valid_session_id(id: &str) -> bool {
         })
 }
 
+fn valid_pairing_image(request: &DocumentRequest) -> bool {
+    valid_document(request) && request.mime_type != "application/pdf"
+}
+
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_perception);
 #[cfg(target_os = "ios")]
@@ -121,6 +125,22 @@ async fn recognize_document<R: Runtime>(
     native_call(app, "recognizeDocument", json!(request)).await
 }
 
+#[tauri::command]
+async fn scan_pairing_code<R: Runtime>(
+    app: AppHandle<R>,
+    request: DocumentRequest,
+) -> Result<Value, String> {
+    if !valid_pairing_image(&request) {
+        return Err("invalid_pairing_image".into());
+    }
+    native_call(app, "scanPairingCode", json!(request)).await
+}
+
+#[tauri::command]
+async fn cancel_pairing_code<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
+    native_call(app, "cancelPairingCode", json!({})).await
+}
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("perception")
         .invoke_handler(tauri::generate_handler![
@@ -130,7 +150,9 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             stop_voice,
             cancel_voice,
             recognize_document,
-            cancel_document
+            cancel_document,
+            scan_pairing_code,
+            cancel_pairing_code
         ])
         .setup(|_app, _api| {
             #[cfg(target_os = "ios")]
@@ -193,5 +215,18 @@ mod tests {
         ] {
             assert!(!valid_session_id(id));
         }
+    }
+    #[test]
+    fn pairing_accepts_only_bounded_image_requests() {
+        let mut image = request();
+        assert!(valid_pairing_image(&image));
+        image.mime_type = "application/pdf".into();
+        assert!(valid_document(&image));
+        assert!(!valid_pairing_image(&image));
+        image.mime_type = "image/svg+xml".into();
+        assert!(!valid_pairing_image(&image));
+        image.mime_type = "image/png".into();
+        image.base64 = "A".repeat(MAX_DOCUMENT_BYTES.div_ceil(3) * 4 + 4);
+        assert!(!valid_pairing_image(&image));
     }
 }

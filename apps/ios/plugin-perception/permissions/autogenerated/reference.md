@@ -9,6 +9,8 @@ Use local Apple speech transcription and Vision document recognition in Capri. M
 - `allow-cancel-voice`
 - `allow-recognize-document`
 - `allow-cancel-document`
+- `allow-scan-pairing-code`
+- `allow-cancel-pairing-code`
 
 ## Permission Table
 
@@ -41,6 +43,32 @@ Enables the cancel_document command without any pre-configured scope.
 <td>
 
 Denies the cancel_document command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:allow-cancel-pairing-code`
+
+</td>
+<td>
+
+Enables the cancel_pairing_code command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:deny-cancel-pairing-code`
+
+</td>
+<td>
+
+Denies the cancel_pairing_code command without any pre-configured scope.
 
 </td>
 </tr>
@@ -145,6 +173,32 @@ Enables the recognize_document command without any pre-configured scope.
 <td>
 
 Denies the recognize_document command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:allow-scan-pairing-code`
+
+</td>
+<td>
+
+Enables the scan_pairing_code command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:deny-scan-pairing-code`
+
+</td>
+<td>
+
+Denies the scan_pairing_code command without any pre-configured scope.
 
 </td>
 </tr>

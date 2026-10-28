@@ -17,6 +17,11 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
   test/native/AppGroupResolverTests.swift -o "$verification/app-group-tests"
 "$verification/app-group-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/Documents.swift \
+  test/native/PairingCodeVisionTests.swift -o "$verification/pairing-qr-tests"
+"$verification/pairing-qr-tests"
 xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
   "$verification/AgentTypes.swift" \

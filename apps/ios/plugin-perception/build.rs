@@ -7,6 +7,8 @@ fn main() {
         "cancel_voice",
         "recognize_document",
         "cancel_document",
+        "scan_pairing_code",
+        "cancel_pairing_code",
     ])
     .ios_path("ios")
     .build();

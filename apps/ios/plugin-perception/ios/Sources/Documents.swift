@@ -51,6 +51,13 @@ struct DocumentReply: Encodable {
     var engine: String? = nil
     var warnings: [String]? = nil
 }
+struct PairingCodeReply: Encodable {
+    var ok = false
+    var error: String? = nil
+    var source: DocumentSource? = nil
+    var codes: [String]? = nil
+    var engine: String? = nil
+}
 private enum DocumentFailure: Error { case invalid, locked, tooManyPages, cancelled, timeout, textLimit }
 
 /// Cancellation may arrive on the main queue while Vision runs on its worker.
@@ -73,11 +80,59 @@ final class DocumentOperation {
         catch DocumentFailure.timeout { return failure("document_timeout", "La lectura tardó demasiado. Divide el documento.") }
         catch { return failure("cancelled", "Lectura cancelada.") }
     }
+    func finalResult(_ result: PairingCodeReply) -> PairingCodeReply {
+        do { try check(); return result }
+        catch DocumentFailure.timeout { return PairingCodeReply(error: "scan_timeout") }
+        catch { return PairingCodeReply(error: "cancelled") }
+    }
     private func install(_ next: [VNRequest]) throws {
         lock.lock()
         if cancelled { let timeout = timedOut; lock.unlock(); throw timeout ? DocumentFailure.timeout : DocumentFailure.cancelled }
         requests = next
         lock.unlock()
+    }
+
+    /// QR-only local recognition. Payloads are inert strings; the frontend validates the invitation.
+    func scanPairingCode(_ args: DocumentArgs) -> PairingCodeReply {
+        do {
+            try check()
+            let maximum = 12 * 1024 * 1024
+            guard ["image/png", "image/jpeg", "image/heic", "image/heif", "image/webp", "image/tiff"].contains(args.mimeType),
+                  args.base64.utf8.count <= ((maximum + 2) / 3) * 4,
+                  let data = Data(base64Encoded: args.base64), !data.isEmpty, data.count <= maximum,
+                  !args.fileName.isEmpty, args.fileName.count <= 255,
+                  !args.fileName.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+                  let imageSource = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+                  let identifier = CGImageSourceGetType(imageSource) as String?,
+                  let mime = UTType(identifier)?.preferredMIMEType,
+                  mime == args.mimeType || (["image/heic", "image/heif"].contains(mime) && ["image/heic", "image/heif"].contains(args.mimeType)),
+                  CGImageSourceGetCount(imageSource) == 1 else { throw DocumentFailure.invalid }
+            let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 2400,
+                kCGImageSourceShouldCacheImmediately: true]
+            guard let image = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else { throw DocumentFailure.invalid }
+            let request = VNDetectBarcodesRequest()
+            request.symbologies = [.qr]
+            try install([request])
+            try VNImageRequestHandler(cgImage: image, orientation: .up, options: [:]).perform([request])
+            try check()
+            let results = request.results ?? []
+            guard results.count <= 16 else { return PairingCodeReply(error: "too_many_codes") }
+            var codes: [String] = []
+            for result in results {
+                guard let payload = result.payloadStringValue, !payload.isEmpty else { continue }
+                guard payload.utf8.count <= 4096 else { return PairingCodeReply(error: "invalid_code") }
+                if !codes.contains(payload) { codes.append(payload) }
+            }
+            let source = DocumentSource(name: args.fileName, mimeType: args.mimeType, size: data.count,
+                sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+            return PairingCodeReply(ok: true, source: source, codes: codes, engine: "apple-vision")
+        } catch {
+            do { try check() }
+            catch DocumentFailure.timeout { return PairingCodeReply(error: "scan_timeout") }
+            catch { return PairingCodeReply(error: "cancelled") }
+            return PairingCodeReply(error: error is DocumentFailure ? "invalid_image" : "recognition_failed")
+        }
     }
 
     func recognize(_ args: DocumentArgs) -> DocumentReply {

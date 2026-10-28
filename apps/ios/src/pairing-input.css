@@ -1,0 +1,6 @@
+.pairing-scan { display: grid; gap: .75rem; margin-block: .75rem 1rem; }
+.pairing-scan-help, .pairing-scan-status { margin: 0; font-size: .875rem; line-height: 1.5; }
+.pairing-scan-controls { display: flex; flex-wrap: wrap; gap: .5rem; }
+.pairing-scan-controls button { min-height: 44px; min-width: 44px; padding: .65rem .9rem; }
+.pairing-scan-status { white-space: pre-line; overflow-wrap: anywhere; }
+.pairing-scan [hidden] { display: none !important; }

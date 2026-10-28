@@ -24,7 +24,7 @@ main_info['CapriAppGroup'] = group
 main_info['NSMicrophoneUsageDescription'] ||= 'Capri usa el micrófono cuando dictas una instrucción. La transcripción se realiza en este iPhone.'
 # WKWebView's existing file picker can open UIImagePickerController's camera.
 # This declaration does not request access before the person chooses capture.
-main_info['NSCameraUsageDescription'] ||= 'Capri usa la cámara cuando eliges capturar una foto o un video para adjuntarlo a una conversación o un trabajo.'
+main_info['NSCameraUsageDescription'] ||= 'Capri usa la cámara cuando eliges leer el QR de tu laptop o capturar una foto o un video para adjuntarlo a una conversación o un trabajo.'
 schemes = main_info['CFBundleURLTypes'] ||= []
 raise 'Expected CFBundleURLTypes array.' unless schemes.is_a?(Array)
 unless schemes.any? { |entry| Array(entry['CFBundleURLSchemes']).include?('capri-auth') }
