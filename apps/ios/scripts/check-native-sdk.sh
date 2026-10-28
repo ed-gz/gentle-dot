@@ -49,6 +49,11 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/Documents.swift \
   test/native/PairingCodeVisionTests.swift -o "$verification/pairing-qr-tests"
 "$verification/pairing-qr-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/VoiceAudio.swift \
+  test/native/VoiceAudioTests.swift -o "$verification/voice-audio-tests"
+"$verification/voice-audio-tests"
 xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
   "$verification/AgentTypes.swift" \
@@ -56,6 +61,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-local-intelligence/ios/Sources/InferenceStartGate.swift \
   plugin-local-intelligence/ios/Sources/ContinuedInferenceLease.swift \
   plugin-local-intelligence/ios/Sources/CompletionNotifications.swift \
+  plugin-perception/ios/Sources/VoiceAudio.swift \
   plugin-perception/ios/Sources/Voice.swift \
   plugin-perception/ios/Sources/Documents.swift \
   plugin-device-bridge/ios/Sources/BoundedHTTP.swift \

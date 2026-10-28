@@ -262,8 +262,11 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             await analysis.cancelAndFinishNow()
         }
         defer { timeout.cancel(); results.cancel() }
+        let convertedURL = url.deletingPathExtension().appendingPathExtension("analysis.caf")
+        defer { try? FileManager.default.removeItem(at: convertedURL) }
         do {
-            let audioFile = try AVAudioFile(forReading: url, commonFormat: format.commonFormat, interleaved: format.isInterleaved)
+            let audioFile = try VoiceAudio.openForAnalysis(source: url, converted: convertedURL,
+                format: format, maximumSeconds: maximumDuration)
             let duration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
             guard duration.isFinite, duration > 0, duration <= maximumDuration + 1 else {
                 await analysis.cancelAndFinishNow()
@@ -284,6 +287,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         } catch {
             await analysis.cancelAndFinishNow()
             if epoch != generation || Task.isCancelled { return .failure("cancelled", "Dictado cancelado.") }
+            if error is VoiceAudioError {
+                return .failure("audio_format_unavailable", "No pude preparar el audio para el reconocimiento local. Intenta dictar de nuevo.")
+            }
             return .failure(timedOut ? "transcription_timeout" : "transcription_failed",
                 "No pude completar la transcripción local. El audio temporal se eliminó.")
         }
