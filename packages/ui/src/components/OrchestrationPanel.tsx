@@ -317,8 +317,7 @@ export function OrchestrationPanel({
 		return () => window.removeEventListener("keydown", onEscape);
 	}, [active, mobile, mobileDisclosure, closeMobileDisclosure]);
 
-	const selectedView = session ? (
-		<section className="agent-detail" aria-label={`Sesión ${session.label}`}>
+	const sessionWork = session ? (
 			<SessionWorkShelf mobile={mobile} capriMobile={mobile && capriMobile} open={mobileDisclosure === "work"}
 				onToggle={() => setMobileDisclosure(current => current === "work" ? undefined : "work")}
 				work={conversation?.work} stale={Boolean(conversationError) || !connected || !session.connected}>
@@ -341,6 +340,10 @@ export function OrchestrationPanel({
 					}}
 				/>
 			</SessionWorkShelf>
+	) : null;
+	const selectedView = session ? (
+		<section className="agent-detail" aria-label={`Sesión ${session.label}`}>
+			{!capriMobile ? sessionWork : null}
 			<div
 				className="agent-detail-scroll"
 				ref={conversationViewport}
@@ -357,6 +360,7 @@ export function OrchestrationPanel({
 					}
 				}}
 			>
+				{capriMobile ? sessionWork : null}
 				{receipt ? (
 					<p className="orchestration-receipt" role="status">
 						{receipt}

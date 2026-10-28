@@ -95,7 +95,7 @@ export function Composer({
 	}, [focusKey]);
 
 	const files = attachments?.files ?? [];
-	const uploading = attachments?.uploading === true;
+	const uploading = attachments?.uploading === true || attachments?.saving === true;
 	const blocked = files.some((f) => f.refused);
 	// One stable action slot: Stop while working, Send when there is a follow-up draft.
 	const showStop = !recording && (busy || voice?.speaking) && !text.trim() && files.length === 0;

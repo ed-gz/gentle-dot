@@ -47,11 +47,22 @@ async function linkedPhone(page: Page) {
       if (m.type === 'get_history') ws.send(JSON.stringify({ type: 'history', seq: ++seq, conversationId: 'main', messages: Array.from({ length: 100 }, (_, i) => ({ id: `main-${i}`, role: i % 2 ? 'assistant' : 'user', text: `Turno ${i}`, activities: [] })) }));
     });
   });
+  await connectPhone(page);
+}
+
+async function connectPhone(page: Page) {
   await page.goto('/'); await page.locator('[data-panel="settings"]').click();
   await page.getByText('Conexión manual', { exact: true }).click();
   await page.locator('#url').fill('wss://sessions.fixture.example/ws'); await page.locator('#token').fill('fixture-only');
   await page.locator('#connection button[type="submit"]').click();
   await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+}
+
+async function selectSessionFile(page: Page, file: { name: string; mimeType: string; buffer: Buffer }) {
+  await expect(page.locator('.agent-reply input[type="file"]')).toBeEnabled();
+  const selecting = page.waitForEvent('filechooser');
+  await page.locator('.agent-reply .composer-attach').click();
+  await (await selecting).setFiles(file);
 }
 
 test('main history and individual Herdr sessions are directly visible with earlier pages and separate drafts', async ({ page }) => {
@@ -125,7 +136,7 @@ test('selected files stay local until Send and only a verified native upload bec
   await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   const bytes = Buffer.from([0, 255, 17, 128, 42]);
-  await page.locator('.agent-reply input[type="file"]').setInputFiles({ name: 'evidence.bin', mimeType: 'application/octet-stream', buffer: bytes });
+  await selectSessionFile(page, { name: 'evidence.bin', mimeType: 'application/octet-stream', buffer: bytes });
   await expect(page.locator('.agent-reply')).toContainText('evidence.bin');
   expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.command.startsWith('plugin:device-bridge|session_upload_')))).toBe(false);
   await page.getByRole('textbox', { name: 'Continuar esta sesión' }).fill('Revisa este archivo.');
@@ -141,7 +152,7 @@ test('leaving a session cancels its native upload and a late receipt cannot send
   await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   await page.evaluate(() => (globalThis as any).holdUpload = true);
-  await page.locator('.agent-reply input[type="file"]').setInputFiles({ name: 'private.txt', mimeType: 'text/plain', buffer: Buffer.from('original') });
+  await selectSessionFile(page, { name: 'private.txt', mimeType: 'text/plain', buffer: Buffer.from('original') });
   await page.getByRole('textbox', { name: 'Continuar esta sesión' }).fill('Sólo para Operaciones.');
   await page.getByRole('button', { name: 'Enviar instrucción', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (globalThis as any).uploadSending)).toBe(true);
@@ -151,4 +162,59 @@ test('leaving a session cancels its native upload and a late receipt cannot send
   await page.evaluate(() => (globalThis as any).finishUpload());
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('');
   expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toBe(false);
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.locator('.agent-reply')).toContainText('private.txt');
+});
+
+test('attachments restore only into their owning session after restart, and accepted delivery clears the local draft', async ({ page }) => {
+  // Two complete app starts plus portrait/landscape checks; individual assertions keep their 5s deadline.
+  test.setTimeout(60_000);
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.locator('.agent-reply input[type="file"]')).toBeEnabled();
+  const clip = page.locator('.agent-reply .composer-attach');
+  const target = await clip.boundingBox();
+  expect(target!.width).toBeGreaterThanOrEqual(44); expect(target!.height).toBeGreaterThanOrEqual(44);
+  const nativeInput = await page.locator('.agent-reply input[type="file"]').boundingBox();
+  expect(nativeInput!.height).toBeLessThanOrEqual(1); expect(nativeInput!.width).toBeLessThanOrEqual(1);
+  await selectSessionFile(page, { name: 'recover.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([0, 255, 19]) });
+  await expect(page.locator('.agent-reply')).toContainText('Adjuntos guardados en el iPhone.');
+  await connectPhone(page); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  await expect(page.locator('.agent-reply input[type="file"]')).toBeEnabled();
+  await expect(page.locator('.agent-reply .attachment-chips')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.locator('.agent-reply')).toContainText('recover.bin');
+  await expect(page.locator('.agent-reply')).toContainText('Adjuntos recuperados. Revisa el historial.');
+  for (const viewport of [{ width: 375, height: 667 }, { width: 667, height: 375 }]) {
+    await page.setViewportSize(viewport); await page.evaluate(() => document.documentElement.style.fontSize = '200%');
+    await expect.poll(async () => page.locator('.agent-reply').evaluate(el => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(viewport.height);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await expect(page.getByRole('button', { name: 'Enviar instrucción', exact: true })).toBeInViewport();
+    const send = await page.getByRole('button', { name: 'Enviar instrucción', exact: true }).boundingBox();
+    expect(send!.y + send!.height).toBeLessThanOrEqual(viewport.height);
+    await expect(clip).toBeInViewport();
+    const removal = await page.getByRole('button', { name: 'Quitar recover.bin' }).boundingBox();
+    const list = await page.locator('.agent-reply .attachment-chips').boundingBox();
+    expect(removal!.height).toBeGreaterThanOrEqual(44);
+    expect(removal!.y + removal!.height).toBeLessThanOrEqual(list!.y + list!.height);
+    expect(await page.locator('.agent-detail-scroll').evaluate(el => el.clientHeight)).toBeGreaterThan(30);
+    if (viewport.width > viewport.height) {
+      const note = await page.locator('.agent-reply .voice-status').evaluate(el => ({ visible: el.clientHeight, text: el.scrollHeight }));
+      expect(note.visible).toBeGreaterThanOrEqual(note.text);
+    }
+  }
+  await page.screenshot({ path: '.cache/capri-phase2-qa/session-files-landscape-large-text.png' });
+  await page.setViewportSize({ width: 390, height: 844 }); await page.evaluate(() => document.documentElement.style.fontSize = '');
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.command.endsWith('session_upload_begin')))).toBe(false);
+  await page.getByRole('button', { name: 'Enviar instrucción', exact: true }).click();
+  await expect(page.locator('.agent-reply .attachment-chips')).toHaveCount(0);
+  expect(await page.evaluate(() => (globalThis as any).uploadBytes)).toEqual([0, 255, 19]);
+  expect(await page.evaluate(async () => {
+    const path = '/src/session-attachment-drafts.ts';
+    const { sessionAttachmentDraft } = await import(path);
+    return (await sessionAttachmentDraft('wss://sessions.fixture.example/ws', 'pane-0', 'session-0').load()).length;
+  })).toBe(0);
 });

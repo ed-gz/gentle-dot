@@ -1,7 +1,7 @@
 import type { AttachmentRef } from "@gentle-dot/protocol";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { OrchestrationClient } from "../orchestration.ts";
-import { useAttachments } from "../useAttachments.ts";
+import { useAttachments, type AttachmentDraftStore } from "../useAttachments.ts";
 import { AgentVoiceContext, useAgentVoice } from "../useAgentVoice.ts";
 import { Composer } from "./Composer.tsx";
 import "../agent-attachments.css";
@@ -9,6 +9,8 @@ import type { VoiceControls } from "../useVoice.ts";
 
 /** Platforms can supply their own transcriber without initializing desktop capture. */
 export const AgentVoiceOverrideContext = createContext<VoiceControls | undefined>(undefined);
+/** Optional platform storage; never includes credentials or uploaded host references. */
+export const AgentAttachmentDraftContext = createContext<((paneId: string, sessionId: string) => AttachmentDraftStore) | undefined>(undefined);
 
 /** Files belong to client + pane + session; availability only cancels capture/pre-dispatch work. */
 interface AgentAttachmentsProps {
@@ -43,7 +45,9 @@ function AgentAttachmentsBody(props: AgentAttachmentsProps & { voice: VoiceContr
  const uploader = useMemo(() => filesEnabled && client.uploadAttachment
   ? (file: File, options: { uploadId?: string }) => client.uploadAttachment!(paneId, sessionId, file, options.uploadId, controller.current.signal)
   : undefined, [client, paneId, sessionId, filesEnabled]);
- const attachments = useAttachments(uploader);
+ const draftFactory = useContext(AgentAttachmentDraftContext);
+ const draftStore = useMemo(() => filesEnabled ? draftFactory?.(paneId, sessionId) : undefined, [draftFactory, paneId, sessionId, filesEnabled]);
+ const attachments = useAttachments(uploader, draftStore);
  const voice = props.voice;
  useEffect(() => () => voice.cancel(), [client, paneId, sessionId, voice.cancel]);
  const guardedAttachments = attachments ? { ...attachments, upload: async () => {
@@ -59,7 +63,7 @@ function AgentAttachmentsBody(props: AgentAttachmentsProps & { voice: VoiceContr
  }, [client, paneId, sessionId]);
  useEffect(() => { if (disconnected) controller.current.abort(); }, [disconnected]);
  return <div className="agent-reply agent-attachments">
-  <Composer mobile inputOnly busy={false} disabled={disconnected || busy} send={() => false}
+  <Composer mobile inputOnly busy={false} disabled={disconnected || busy || Boolean(attachments?.storageError)} send={() => false}
    text={text} onText={onText} attachments={guardedAttachments} voice={voice}
    labels={{ text: "Continuar esta sesión", send: "Enviar instrucción", files: "Archivos para esta sesión", remove: "Quitar" }}
    onSubmitText={async (value, refs) => {
@@ -79,8 +83,10 @@ function AgentAttachmentsBody(props: AgentAttachmentsProps & { voice: VoiceContr
      return accepted && mounted.current;
     } finally { if (mounted.current) setPending(false); }
    }} />
+  {attachments?.storageNote ? <p className="voice-status" role="status">{attachments.storageNote}</p> : null}
+  {attachments?.storageError ? <p className="voice-status" role="alert">{attachments.storageError} <button type="button" disabled={attachments.saving} onClick={attachments.retrySave}>Reintentar guardado</button></p> : null}
   {attachments?.uploading && !pending ? <button type="button" aria-label="Cancelar subida" onClick={() => {
-   controller.current.abort(); attachments.clear();
+   controller.current.abort(); if (!draftStore) attachments.clear();
   }}>×</button> : null}
  </div>;
 }

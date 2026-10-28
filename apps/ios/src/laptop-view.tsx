@@ -4,11 +4,12 @@ import { OrchestrationPanel } from '@gentle-dot/ui/src/components/OrchestrationP
 import { useOrchestration } from '@gentle-dot/ui/src/useOrchestration.ts';
 import { createLaptopClient } from './laptop-client.ts';
 import type { DesktopConnection } from './desktop-tools.ts';
-import { AgentVoiceOverrideContext } from '@gentle-dot/ui/src/components/AgentAttachments.tsx';
+import { AgentVoiceOverrideContext, AgentAttachmentDraftContext } from '@gentle-dot/ui/src/components/AgentAttachments.tsx';
 import { SharedLinkContext } from '@gentle-dot/ui/src/components/SharedMarkdown.tsx';
 import { useAppleVoice } from './use-apple-voice.ts';
 import { localIdentifier } from './local-identifiers.ts';
 import { openExternalURL } from './device-bridge.ts';
+import { sessionAttachmentDraft } from './session-attachment-drafts.ts';
 import '@gentle-dot/ui/src/mobile-navigation.css';
 import './laptop-view.css';
 
@@ -22,14 +23,15 @@ export function mountLaptopView(container: HTMLElement, onConnect: () => void, o
       [connection?.url, connection?.token, connection?.deviceId]);
     const controls = useOrchestration(client, active);
     const voice = useAppleVoice(active && Boolean(client));
+    const attachmentDrafts = useMemo(() => connection ? (paneId: string, sessionId: string) => sessionAttachmentDraft(connection.url, paneId, sessionId) : undefined, [connection?.url]);
     const [visiblePane, setVisiblePane] = useState<string>();
     const session = controls.snapshot?.sessions.find(item => item.paneId === visiblePane);
     useEffect(() => { if (active) onPresence(controls.error ? 'unknown' : session?.state ?? 'idle'); }, [active, controls.error, session?.state]);
     const [linkError, setLinkError] = useState('');
     if (!client) return <section className="laptop-empty"><p className="eyebrow">TU LAPTOP</p><h2>Tus sesiones, aquí.</h2><p>Vincula Gentle Dot para abrir las conversaciones de Herdr, seguir su trabajo y responder cuando te necesiten.</p><button type="button" onClick={onConnect}>Vincular laptop</button></section>;
-    return <AgentVoiceOverrideContext.Provider value={voice}><SharedLinkContext.Provider value={url => {
+    return <AgentAttachmentDraftContext.Provider value={attachmentDrafts}><AgentVoiceOverrideContext.Provider value={voice}><SharedLinkContext.Provider value={url => {
       setLinkError(''); void openExternalURL(url).catch(error => setLinkError(error.message));
-    }}>{linkError ? <p role="alert">{linkError}</p> : null}<OrchestrationPanel key={connection?.url} createMessageId={localIdentifier} identityScope={`${connection?.url}|`} onVisibleSession={value => setVisiblePane(value?.paneId)} client={client} controls={controls} active={active} mobile capriMobile /></SharedLinkContext.Provider></AgentVoiceOverrideContext.Provider>;
+    }}>{linkError ? <p role="alert">{linkError}</p> : null}<OrchestrationPanel key={connection?.url} createMessageId={localIdentifier} identityScope={`${connection?.url}|`} onVisibleSession={value => setVisiblePane(value?.paneId)} client={client} controls={controls} active={active} mobile capriMobile /></SharedLinkContext.Provider></AgentVoiceOverrideContext.Provider></AgentAttachmentDraftContext.Provider>;
   }
   return {
     update(state: State) { current = state.connection; root.render(<Laptop {...state} />); },
