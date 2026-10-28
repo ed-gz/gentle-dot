@@ -84,6 +84,7 @@ function place(x: number, y: number) {
 let typing = false;
 let attention = false;
 let conversationRestored = false;
+let manuallyPlaced = false;
 function presenceIntent(): RigIntent {
   if (travel) return { travelling: true, direction: travel.target.direction };
   if (attention) return { ...intent, question: 'review' };
@@ -115,7 +116,7 @@ function animate(now: number) {
     safePerches = phonePerches({ x: 0, y: 0, width: area.width, height: area.height },
       { width: rig.offsetWidth, height: rig.offsetHeight }, occupied);
     rig.style.visibility = '';
-    if (roaming && !drag && !travel) {
+    if (roaming && !manuallyPlaced && !drag && !travel) {
       const here = { x: position.x + (area.width - rig.offsetWidth) / 2, y: position.y + (area.height - rig.offsetHeight) / 2, width: rig.offsetWidth, height: rig.offsetHeight };
       // Newly loaded controls take precedence over a perch from the old view.
       // Relocate immediately, without spending a teleport blocking a button.
@@ -127,7 +128,7 @@ function animate(now: number) {
     const region = { x: 0, y: 0, width: stage.clientWidth, height: stage.clientHeight };
     const next = roamDirector.step({ laptop: region, region, x: 0, y: 0, width: rig.offsetWidth, height: rig.offsetHeight, herdr: false, safePerches }, now,
       { composer: typing, question: attention, paused: isReduced() || Boolean(intent.working || intent.gesture || intent.outcome) });
-    if (next) { travel = { started: now, target: next, moved: false }; nextRoam = now + 18000; revision++; }
+    if (next) { manuallyPlaced = false; travel = { started: now, target: next, moved: false }; nextRoam = now + 18000; revision++; }
   }
   if (travel) {
     // The PC teleport is transparent on frames 6–7 at 24 fps. Relocate there.
@@ -233,22 +234,23 @@ rig.addEventListener('pointermove', event => {
   if (!drag || drag.id !== event.pointerId) return;
   const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
   if (Math.hypot(dx, dy) > 5) drag.moved = true;
-  if (drag.moved) { roamDirector.dragged(performance.now()); place(drag.start.x + dx, drag.start.y + dy); setIntent({ dragging: true }); }
+  if (drag.moved) { manuallyPlaced = true; roamDirector.dragged(performance.now()); place(drag.start.x + dx, drag.start.y + dy); setIntent({ ...intent, dragging: true }); }
 });
-function release() { if (!drag) return; suppressClick = drag.moved; drag = undefined; setIntent({}); }
+function release() { if (!drag) return; suppressClick = drag.moved; drag = undefined; const { dragging: _dragging, ...current } = intent; setIntent(current); }
 rig.addEventListener('pointerup', release); rig.addEventListener('pointercancel', release); rig.addEventListener('lostpointercapture', release);
 rig.addEventListener('click', () => { if (suppressClick) { suppressClick = false; return; } if (image) gesture('saludar'); else showPanel('settings'); });
 rig.addEventListener('keydown', event => {
   const steps: Record<string, [number, number]> = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] };
   const step = steps[event.key]; if (!step || !image) return;
-  event.preventDefault(); roamDirector.dragged(performance.now()); place(position.x + step[0], position.y + step[1]);
+  event.preventDefault(); manuallyPlaced = true; roamDirector.dragged(performance.now()); place(position.x + step[0], position.y + step[1]);
 });
 new ResizeObserver(() => { place(position.x, position.y); measuredAt = -Infinity; }).observe(stage);
-window.addEventListener('resize', () => { layoutCompanion(); redraw(); });
+window.addEventListener('resize', () => { manuallyPlaced = false; layoutCompanion(); redraw(); });
 mountPhoneViewport(element('composer'));
 element('roam').setAttribute('aria-pressed', String(roaming));
 
 function showPanel(next: string) {
+  manuallyPlaced = false;
   panel = next;
   updateLaptopView();
   if (next !== 'chat' && (voiceSession || voiceStarting)) void cancelDictation();

@@ -55,6 +55,7 @@ async function personalBuild(page: import('@playwright/test').Page) {
 
 test('personal package starts with the shared animated rig and real draggable travel space', async ({ page }) => {
   test.slow(); // Real shared WebGL shaders also run on CI software renderers.
+  await page.clock.install();
   await personalBuild(page);
   await expect(page.locator('#art-placeholder')).toBeHidden();
   expect(await page.evaluate(async () => (await (await import('/src/local-state.ts' as string)).loadArtwork()) === undefined)).toBe(true);
@@ -67,8 +68,13 @@ test('personal package starts with the shared animated rig and real draggable tr
   await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2);
   await page.mouse.down(); await page.mouse.move(before!.x + before!.width / 2 + direction * 70, before!.y + before!.height / 2, { steps: 8 }); await page.mouse.up();
   const after = await rig.boundingBox(); expect(Math.abs(after!.x - before!.x)).toBeGreaterThan(40);
+  // Geometry refresh must respect the same manual pause as the PC roam director.
+  await page.clock.runFor(1300);
+  expect((await rig.boundingBox())!.x).toBeCloseTo(after!.x, 0);
   await rig.focus(); await page.keyboard.press('ArrowLeft');
   expect((await rig.boundingBox())!.x).toBeLessThan(after!.x - 10);
+  const keyed = await rig.boundingBox(); await page.clock.runFor(1300);
+  expect((await rig.boundingBox())!.x).toBeCloseTo(keyed!.x, 0);
   await page.reload(); await expect(rig).toHaveAttribute('data-ready', 'true', { timeout: 15000 });
 });
 
