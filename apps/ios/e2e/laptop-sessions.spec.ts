@@ -1,0 +1,109 @@
+import { expect, test, type Page } from '@playwright/test';
+
+async function linkedPhone(page: Page) {
+  await page.addInitScript(() => {
+    const state = globalThis as any; state.isTauri = true; state.sessionCalls = [];
+    const sessions = ['Operaciones', 'Capri iOS'].map((label, i) => ({ paneId: `pane-${i}`, sessionId: `session-${i}`, provider: 'herdr', label, cwd: '/workspace/capri', state: i ? 'working' : 'idle', connected: true, managed: true, capabilities: { inspect: true, prompt: true, abort: true, deliveryReceipts: true, deliveryModes: ['steer', 'followUp'] } }));
+    state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.startsWith('plugin:device-bridge|')) args = args?.request;
+      state.sessionCalls.push({ command, ...(command.endsWith('https_request') ? { body: args.body } : {}) });
+      if (command.endsWith('check_availability')) return { available: false, status: 'model_not_ready', supportsSpanish: false };
+      if (command.endsWith('share_list')) return { ok: true, items: [] };
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted', recording: false };
+      if (command.endsWith('start_voice')) return { ok: true, sessionId: '12345678-1234-1234-1234-123456789012', maxDurationSeconds: 90 };
+      if (command.endsWith('stop_voice') && state.holdTranscript) await new Promise(resolve => state.finishTranscript = resolve);
+      if (command.endsWith('stop_voice')) return { ok: true, sessionId: args.sessionId, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2, text: 'Revisa la evidencia.', segments: [{ text: 'Revisa la evidencia.', startSeconds: 0, endSeconds: 2 }] };
+      if (command.endsWith('https_request')) {
+        const body = args.body ? JSON.parse(args.body) : undefined;
+        const reply = !body ? { available: true, sessions, approvals: [], policies: [], events: [] } : body.action === 'inspect' ? {
+          sessionId: body.sessionId, instanceId: 'instance-1', status: 'idle', deliveries: [],
+          messages: [{ id: body.before ? 'older' : 'new', role: 'assistant', content: [{ type: 'text', text: body.before ? 'Acuerdo anterior verificable.' : `Historial de ${body.sessionId}.` }], timestamp: '2026-10-28T12:00:00Z' }],
+          history: { hasEarlier: !body.before, ...(body.before ? {} : { before: 'older-cursor' }) },
+          metadata: { version: 1, model: { id: 'configured', name: 'Modelo configurado', provider: 'host' } },
+          work: { version: 1, commands: [], agents: [], truncated: false },
+        } : { ok: true };
+        return { ok: true, status: 200, headers: {}, body: JSON.stringify(reply) };
+      }
+      return { ok: true };
+    } };
+  });
+  await page.routeWebSocket('wss://sessions.fixture.example/ws', ws => {
+    let seq = 0;
+    ws.onMessage(raw => { const m = JSON.parse(String(raw));
+      if (m.type === 'hello') ws.send(JSON.stringify({ type: 'ready', seq: ++seq, agentState: 'idle', conversationId: 'main' }));
+      if (m.type === 'get_history') ws.send(JSON.stringify({ type: 'history', seq: ++seq, conversationId: 'main', messages: Array.from({ length: 100 }, (_, i) => ({ id: `main-${i}`, role: i % 2 ? 'assistant' : 'user', text: `Turno ${i}`, activities: [] })) }));
+    });
+  });
+  await page.goto('/'); await page.locator('[data-panel="settings"]').click();
+  await page.getByText('Conexión manual', { exact: true }).click();
+  await page.locator('#url').fill('wss://sessions.fixture.example/ws'); await page.locator('#token').fill('fixture-only');
+  await page.locator('#connection button[type="submit"]').click();
+  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+}
+
+test('main history and individual Herdr sessions are directly visible with earlier pages and separate drafts', async ({ page }) => {
+  await linkedPhone(page);
+  await page.locator('[data-panel="chat"]').click(); await expect(page.locator('#cards .chat-card')).toHaveCount(100);
+  await page.locator('[data-panel="agents"]').click(); await expect(page.locator('.agent-session')).toHaveCount(2);
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.getByText('Historial de session-0.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Ver mensajes anteriores' }).click();
+  await expect(page.getByText('Acuerdo anterior verificable.')).toBeVisible();
+  await page.getByRole('textbox', { name: 'Continuar esta sesión' }).fill('Borrador para operaciones');
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('');
+  await expect(page.getByText('Historial de session-1.', { exact: true })).toBeVisible();
+  const boxes = await page.locator('.agent-reply').boundingBox(); expect(boxes!.y + boxes!.height).toBeLessThanOrEqual(844);
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Borrador para operaciones');
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action !== 'inspect'))).toEqual([]);
+  for (const viewport of [{ width: 375, height: 667 }, { width: 667, height: 375 }]) {
+    await page.setViewportSize(viewport); await page.evaluate(() => document.documentElement.style.fontSize = '200%');
+    await expect.poll(async () => page.locator('.agent-reply').evaluate(el => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(viewport.height);
+    expect(await page.locator('.agent-detail-scroll').evaluate(el => el.clientHeight)).toBeGreaterThan(30);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    const line = await page.locator('.agent-reply textarea').evaluate(el => { const css = getComputedStyle(el); return { available: el.clientHeight - parseFloat(css.paddingTop) - parseFloat(css.paddingBottom), needed: parseFloat(css.lineHeight) }; });
+    expect(line.available).toBeGreaterThanOrEqual(line.needed - 1);
+  }
+});
+
+test('session dictation uses Apple and leaves a reviewable draft without desktop transcription', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: /Dictar mensaje/ }).click();
+  await page.getByRole('button', { name: /Terminar y revisar/ }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
+  const commands = await page.evaluate(() => (globalThis as any).sessionCalls.map((c: any) => c.command));
+  expect(commands.some((c: string) => c.endsWith('stop_voice'))).toBe(true);
+  expect(commands.some((c: string) => /voice_native|voice_transcribe|native_voice/.test(c))).toBe(false);
+});
+
+
+test('leaving a session discards its late dictation instead of inserting it into the next session', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.evaluate(() => (globalThis as any).holdTranscript = true);
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  await page.evaluate(() => (globalThis as any).finishTranscript());
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('');
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.command.endsWith('cancel_voice')))).toBe(true);
+});
+
+
+test('a human session instruction uses a secure UUID even without WKWebView randomUUID', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.evaluate(() => Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true }));
+  await page.getByRole('textbox', { name: 'Continuar esta sesión' }).fill('Revisa esta evidencia.');
+  await page.getByRole('button', { name: 'Enviar instrucción' }).click();
+  await expect.poll(async () => page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt').length)).toBe(1);
+  const sent = await page.evaluate(() => JSON.parse((globalThis as any).sessionCalls.find((c: any) => c.body && JSON.parse(c.body).action === 'prompt').body));
+  expect(sent).toMatchObject({ paneId: 'pane-0', sessionId: 'session-0', text: 'Revisa esta evidencia.' });
+  expect(sent.clientMessageId).toMatch(/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/);
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('');
+});

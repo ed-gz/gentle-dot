@@ -11,6 +11,7 @@
     <header class="masthead">
       <nav class="navigation" aria-label="Secciones">
         <button type="button" class="brand" data-panel="chat" aria-current="page" aria-label="Conversación"><span class="brand-mark" aria-hidden="true">C<span>//</span></span><span>CAPRI<small id="connection-badge">LOCAL</small></span></button>
+        <button type="button" data-panel="agents"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h18v13H3zM8 21h8M12 17v4"/></svg><span>Sesiones</span></button>
         <button type="button" data-panel="inbox"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2-3h10v16H3zM3 9h18"/></svg><span>Archivo <span id="work-count">0</span></span></button>
         <button type="button" data-panel="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/></svg><span>Ajustes</span></button>
       </nav>
@@ -24,7 +25,8 @@
         <div class="presence-copy"><span id="engine-badge" class="eyebrow">EN ESTE IPHONE</span><p id="scene-status" role="status">Aquí contigo.</p><p id="active-tool" class="hint" role="status"></p></div>
       </div>
       <div id="conversation-scroll" class="conversation-scroll" tabindex="0" aria-label="Historial de conversación">
-        <div id="empty-conversation" class="empty-conversation"><h1>¿Qué resolvemos<span> hoy?</span></h1><p>Tu mundo, mi siguiente misión.</p><p class="hint">Escribe, dicta o trae un archivo.</p></div>
+        <p id="history-loading" class="hint" role="status">Recuperando tu conversación…</p>
+        <div id="empty-conversation" class="empty-conversation" hidden><h1>¿Qué resolvemos<span> hoy?</span></h1><p>Tu mundo, mi siguiente misión.</p><p class="hint">Escribe, dicta o trae un archivo.</p></div>
         <div id="engine-help"><p id="engine-status" class="engine-status hint" role="status">Comprobando el motor local…</p><button id="health-action" type="button" hidden></button></div>
         <div id="cards" class="conversation" role="log" aria-label="Conversación" aria-live="polite" aria-relevant="additions"></div>
         <div id="requests" aria-label="Revisiones y preguntas de Capri"></div>
@@ -37,6 +39,7 @@
         <div class="actions composer-actions"><label class="attach-control"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 14 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9"/></svg><span>Adjuntar</span><input id="chat-files" aria-label="Adjuntar archivos" type="file" multiple accept="audio/*,text/plain,text/markdown,application/pdf,image/*,.m4a,.txt,.md" /></label><button id="dictate" type="button" aria-pressed="false">Dictar</button><button id="send" type="submit" class="primary">Enviar</button><button id="stop" type="button" hidden>Detener</button></div><p id="voice-status" class="hint" role="status"></p>
       </form>
     </section>
+    <section id="panel-agents" class="panel" aria-label="Sesiones de la laptop" hidden><div id="laptop-root"></div></section>
     <section id="panel-inbox" class="panel" aria-label="Bandeja de trabajos" hidden>
       <div class="section-heading"><span class="eyebrow">ARCHIVO</span><span>GUARDADOS EN IPHONE</span></div><h2>Trabajos y evidencia</h2><p class="hint">Conserva instrucciones, audio y transcripciones sin conexión. Guardar aquí no significa enviar ni sincronizar.</p>
       <details><summary>Crear un trabajo manualmente</summary><form id="work-form" class="surface"><label>Título<input id="work-title" required maxlength="120" placeholder="Reunión de operaciones" /></label><label>Tipo<select id="work-kind"><option value="task">Solicitud</option><option value="meeting">Reunión</option></select></label><label>Instrucciones<textarea id="work-instruction" required maxlength="8000" rows="3" placeholder="Preparar una minuta con acuerdos y evidencia…"></textarea></label><label>Audio, transcripción o documentos<input id="work-files" type="file" multiple accept="audio/*,text/plain,text/markdown,application/pdf,image/*,.m4a,.txt,.md" /></label><p class="hint">Hasta 10 archivos; 25 MiB por archivo y 50 MiB por trabajo. Puedes importar desde Compartir de Notas de Voz cuando la extensión esté disponible, o desde Archivos.</p><button class="primary" type="submit">Guardar en este iPhone</button></form></details>

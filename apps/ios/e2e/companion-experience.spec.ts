@@ -62,9 +62,11 @@ test('personal package starts with the shared animated rig and real draggable tr
   const first = await canvas.evaluate((c: HTMLCanvasElement) => c.toDataURL());
   await expect.poll(() => canvas.evaluate((c: HTMLCanvasElement) => c.toDataURL())).not.toBe(first);
   const rig = page.locator('#rig-handle'); const before = await rig.boundingBox();
+  const area = await page.locator('#stage').boundingBox();
+  const direction = area!.x + area!.width - before!.x - before!.width >= 70 ? 1 : -1;
   await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2);
-  await page.mouse.down(); await page.mouse.move(before!.x + before!.width / 2 + 70, before!.y + before!.height / 2, { steps: 8 }); await page.mouse.up();
-  const after = await rig.boundingBox(); expect(after!.x - before!.x).toBeGreaterThan(40);
+  await page.mouse.down(); await page.mouse.move(before!.x + before!.width / 2 + direction * 70, before!.y + before!.height / 2, { steps: 8 }); await page.mouse.up();
+  const after = await rig.boundingBox(); expect(Math.abs(after!.x - before!.x)).toBeGreaterThan(40);
   await rig.focus(); await page.keyboard.press('ArrowLeft');
   expect((await rig.boundingBox())!.x).toBeLessThan(after!.x - 10);
   await page.reload(); await expect(rig).toHaveAttribute('data-ready', 'true', { timeout: 15000 });
@@ -114,4 +116,48 @@ test('corrupt personal override falls back once to verified bundled art without 
   await expect.poll(() => page.locator('#capri').evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL())).not.toBe(frame);
   expect(fixture.packagedReads()).toBe(initial + 1); // No retry loop while animation proceeds.
   expect(errors).toEqual([]);
+});
+
+test('PC teleport choreography reaches the conversation edge and a greeting does not disable roaming', async ({ page }) => {
+  test.slow();
+  // Install before the app creates performance.now-based roam deadlines.
+  await page.clock.install();
+  await personalBuild(page);
+  await page.locator('#prompt').fill('Una respuesta para seguir leyendo.'); await page.locator('#send').click();
+  await expect(page.locator('.chat-card')).toHaveCount(2);
+  await page.locator('#rig-handle').focus(); await page.keyboard.press('Enter');
+  await expect(page.locator('#rig-handle')).toHaveAttribute('data-pose', 'hop');
+  await expect(page.locator('#roam')).toHaveAttribute('aria-pressed', 'true');
+  await page.clock.fastForward(19000); await page.clock.runFor(1100);
+  const first = await page.locator('#rig-handle').boundingBox();
+  await page.clock.fastForward(19000); await page.clock.runFor(1100);
+  const next = await page.locator('#rig-handle').boundingBox();
+  await test.info().attach('roam-positions', { body: JSON.stringify({ first, next }), contentType: 'application/json' });
+  // Adjacent safe perches may share a ledge. Verify real travel in either axis,
+  // and separately require presence well beyond the old header scene.
+  expect(Math.hypot(next!.x - first!.x, next!.y - first!.y)).toBeGreaterThan(100);
+  const headerScene = await page.locator('.companion-presence').boundingBox();
+  expect(Math.max(first!.y, next!.y)).toBeGreaterThan(headerScene!.y + headerScene!.height + 100);
+  const stage = await page.locator('#stage').boundingBox();
+  for (const box of [first!, next!]) {
+    expect(box.x).toBeGreaterThanOrEqual(stage!.x);
+    expect(box.y).toBeGreaterThanOrEqual(stage!.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(stage!.y + stage!.height + 1);
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const still = await page.locator('#rig-handle').boundingBox();
+  await page.clock.fastForward(40000);
+  expect(await page.locator('#rig-handle').boundingBox()).toEqual(still);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.evaluate(() => {
+    const bridge = (globalThis as any).__TAURI_INTERNALS__;
+    const invoke = bridge.invoke;
+    bridge.invoke = (command: string, args: unknown) => command.endsWith('agent_step') ? new Promise(() => {}) : invoke(command, args);
+  });
+  await page.locator('#prompt').fill('Sigo pensando mientras me saludas.'); await page.locator('#send').click();
+  await page.locator('#rig-handle').focus(); await page.keyboard.press('Enter');
+  await expect(page.locator('#rig-handle')).toHaveAttribute('data-pose', 'hop');
+  await page.clock.fastForward(3000); await page.clock.runFor(1100);
+  await expect(page.locator('#rig-handle')).toHaveAttribute('data-pose', 'gaze');
+  await expect(page.locator('#stop')).toBeVisible();
 });

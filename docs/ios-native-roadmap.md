@@ -8,7 +8,7 @@ Corte: **28 de octubre de 2026, America/Monterrey**. Continuar exclusivamente en
 
 **La entrega ccedf29 fue instalada y rechazada por el usuario.** CI 40638610963 sí compiló y verificó la IPA integrada, pero el diseño, el primer arranque sin el arte y la funcionalidad observada no cumplieron. El retrabajo actual se mide contra esa experiencia real; no se convierte un conteo de tests en porcentaje de calidad aceptada. Evidencia y hash exactos en L26 del registro.
 
-La siguiente entrega personal incluirá el PNG original dentro de la IPA, conservado en un repositorio de build privado; la fuente pública no contiene el arte. Se está corrigiendo la geometría de movimiento, el compositor/teclado, la lectura durante actividad, las revisiones y el contexto local. El chat del host y una sesión Pi se comprobaron con acceso de sólo lectura; trabajos/minutas aún necesitan cargar el backend nuevo en el host. [Empaquetado personal](ios-personal-art.md).
+La IPA personal 0c20f36 ya incluye el PNG original dentro del paquete, construido en el CI privado 40721079081; la fuente pública no contiene el arte. La geometría de movimiento, el compositor, la lectura durante actividad, las revisiones y el contexto local ya tienen correcciones implementadas y pruebas de navegador. El backend de trabajos/minutas se activó sin reiniciar desktop: WSS real confirmó transferencia, reconexión, deduplicación y minutas sintéticas con seis rangos SRT/citas específicas, preservando historial y sesiones. L29–L31 conservan la evidencia; falta el recorrido desde iPhone y audio real. [Empaquetado personal](ios-personal-art.md).
 
 ## Qué está construido y qué se ha probado
 
@@ -23,7 +23,9 @@ La siguiente entrega personal incluirá el PNG original dentro de la IPA, conser
 
 El [registro de trabajo](../odd/tasks/capri-ios.md) conserva resultados posteriores y el SHA exacto de cada entrega; sus logs históricos no se reinterpretan como validación del candidato actual. La [guía SideStore](ios-sidestore.md) describe la instalación. La entrega ccedf29 posterior está registrada en L26; no es una entrega aceptada y no contiene el retrabajo actual.
 
-La interfaz es conversación primero: Capri reacciona a actividad real, el composer recibe texto, voz y adjuntos, y las preguntas, revisiones, herramientas y resultados aparecen en el mismo hilo. Archivo y Ajustes son secundarios. Se reutilizaron contratos de Composer/MessageList/AskCard/AgentWorkflow y del supervisor de Pi, sin traer servicios Android ni sustituir el rig actual.
+La interfaz es conversación primero: Capri reacciona a actividad real, el composer recibe texto, voz y adjuntos, y las preguntas, revisiones, herramientas y resultados aparecen en el mismo hilo. Sesiones abre las conversaciones y el trabajo de Herdr directamente mediante el panel compartido de PC/Android; Archivo y Ajustes son secundarios. Se reutilizaron contratos de Composer/MessageList/AskCard/AgentWorkflow y del supervisor de Pi, sin traer servicios Android ni sustituir el rig actual.
+
+El retrabajo posterior a 0c20f36 conserva los 100 mensajes entregados por el host principal y abre el historial paginado de cada sesión Herdr con su compositor. La verificación de sólo lectura abrió cinco sesiones reales sin enviar instrucciones. El rig recorre espacios libres del panel mediante teleport/descanso de PC; el saludo conserva actividad en curso. La recuperación del historial precede al primer frame GPU y las mediciones de posición se agrupan por frame. L33–L35 distinguen esa evidencia de la aceptación pendiente en iPhone; el panel de sesiones no anuncia carga binaria de adjuntos hasta tener su puente nativo.
 
 | Unidad escrita | Comportamiento presente en el código | Aceptación pendiente |
 | --- | --- | --- |
@@ -31,7 +33,7 @@ La interfaz es conversación primero: Capri reacciona a actividad real, el compo
 | Agente Apple | agent_step con generación guiada, descubrimiento de esquemas, validación, ejecución/observación, cancelación y revisiones humanas | Compilar la revisión actual e inferencia offline real con herramientas |
 | Conversación y memoria | Una ventana de 120 tarjetas, archivo IndexedDB separado, búsquedas y recuperación de mensajes/recibos con procedencia, exportación y cola de guardado | Pruebas finales de los fixes de crash/revocación y persistencia real en WebKit; política de capacidad a largo plazo |
 | Gentle Dot/Pi | Historial, actividad, preguntas humanas, steering y consulta/envío/detención de sesiones existentes | Host real compatible, continuidad entre motores y desconexión/restauración |
-| Trabajos y reuniones | Blobs/versiones/CAS; transferencia por fragmentos con ACK durable; procesamiento Pi de audio y minutas trazables, recuperación y corrección local | El daemon nuevo no está desplegado; faltan audio real, Pi real y recorrido completo en el teléfono |
+| Trabajos y reuniones | Blobs/versiones/CAS; transferencia por fragmentos con ACK durable; procesamiento Pi de audio y minutas trazables, recuperación y corrección local | WSS y modelo configurado verificados con datos sintéticos; faltan audio real y recorrido completo en el teléfono |
 | Voz y Vision | Dictado local de comandos con assets/permisos/cancelación; OCR y códigos de imágenes/PDF con hash, páginas y cajas | Nueva compilación Swift y prueba real sin red |
 | Credenciales y Compartir | Keychain, pairing, HTTPS/OAuth nativos, Share Extension/App Group e importación deduplicada | Firma/renovación SideStore, bloqueo del teléfono y Notas de Voz reales |
 | Servicios externos | Ajustes por proveedor; OAuth público/PAT/API key; herramientas GitHub/Slack/Gmail/Odoo y MCP remoto | Registro/configuración de clientes reales, autorizaciones de cuentas y operaciones reales revisadas |
@@ -106,7 +108,7 @@ Guías: [OAuth público y rotación](ios-provider-oauth.md), [APIs directas](ios
 
 ## Trabajos, reuniones y aprobaciones
 
-El contrato móvil/daemon está escrito: IDs estables, snapshot de revisión, manifiesto y SHA-256, fragmentos, reanudación y ACK posterior a persistencia durable del host. Una reconexión consulta estado antes de decidir; no repite procesamiento ni escrituras por timeout. El daemon nuevo requiere despliegue y validación separados; los tests no modifican el servicio desktop activo.
+El contrato móvil/daemon está escrito: IDs estables, snapshot de revisión, manifiesto y SHA-256, fragmentos, reanudación y ACK posterior a persistencia durable del host. Una reconexión consulta estado antes de decidir; no repite procesamiento ni escrituras por timeout. El backend se activó y tiene pruebas reales por WSS (L29–L31), incluyendo un solo procesamiento por manifiesto aprobado y resultado durable. El servicio desktop permaneció intacto. La validación desde el teléfono sigue separada de ese harness.
 
 El recorrido requerido y modelado es: Notas de Voz → audio/transcripción Apple opcional → almacenamiento offline → transferencia aprobada → transcriptor de la computadora → contraste de fuentes → minuta frontier → borrador/correcciones/versiones → aprobación → acciones externas exactas. Aceptar la minuta no autoriza todas las comunicaciones derivadas.
 

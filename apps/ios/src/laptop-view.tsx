@@ -1,0 +1,38 @@
+import { useEffect, useMemo, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { OrchestrationPanel } from '@gentle-dot/ui/src/components/OrchestrationPanel.tsx';
+import { useOrchestration } from '@gentle-dot/ui/src/useOrchestration.ts';
+import { createLaptopClient } from './laptop-client.ts';
+import type { DesktopConnection } from './desktop-tools.ts';
+import { AgentVoiceOverrideContext } from '@gentle-dot/ui/src/components/AgentAttachments.tsx';
+import { SharedLinkContext } from '@gentle-dot/ui/src/components/SharedMarkdown.tsx';
+import { useAppleVoice } from './use-apple-voice.ts';
+import { localIdentifier } from './local-identifiers.ts';
+import { openExternalURL } from './device-bridge.ts';
+import '@gentle-dot/ui/src/mobile-navigation.css';
+import './laptop-view.css';
+
+type State = { connection?: DesktopConnection; active: boolean };
+export function mountLaptopView(container: HTMLElement, onConnect: () => void, onPresence: (state: string) => void) {
+  container.classList.add('chat-mobile');
+  const root = createRoot(container);
+  let current: DesktopConnection | undefined;
+  function Laptop({ connection, active }: State) {
+    const client = useMemo(() => connection ? createLaptopClient(connection, { current: () => current }) : undefined,
+      [connection?.url, connection?.token, connection?.deviceId]);
+    const controls = useOrchestration(client, active);
+    const voice = useAppleVoice(active && Boolean(client));
+    const [visiblePane, setVisiblePane] = useState<string>();
+    const session = controls.snapshot?.sessions.find(item => item.paneId === visiblePane);
+    useEffect(() => { if (active) onPresence(controls.error ? 'unknown' : session?.state ?? 'idle'); }, [active, controls.error, session?.state]);
+    const [linkError, setLinkError] = useState('');
+    if (!client) return <section className="laptop-empty"><p className="eyebrow">TU LAPTOP</p><h2>Tus sesiones, aquí.</h2><p>Vincula Gentle Dot para abrir las conversaciones de Herdr, seguir su trabajo y responder cuando te necesiten.</p><button type="button" onClick={onConnect}>Vincular laptop</button></section>;
+    return <AgentVoiceOverrideContext.Provider value={voice}><SharedLinkContext.Provider value={url => {
+      setLinkError(''); void openExternalURL(url).catch(error => setLinkError(error.message));
+    }}>{linkError ? <p role="alert">{linkError}</p> : null}<OrchestrationPanel key={connection?.url} createMessageId={localIdentifier} identityScope={`${connection?.url}|`} onVisibleSession={value => setVisiblePane(value?.paneId)} client={client} controls={controls} active={active} mobile capriMobile /></SharedLinkContext.Provider></AgentVoiceOverrideContext.Provider>;
+  }
+  return {
+    update(state: State) { current = state.connection; root.render(<Laptop {...state} />); },
+    destroy() { current = undefined; root.unmount(); },
+  };
+}

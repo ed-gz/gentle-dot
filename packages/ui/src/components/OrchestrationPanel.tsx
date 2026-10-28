@@ -45,6 +45,7 @@ export function OrchestrationPanel({
 	onVisibleSession,
 	requestedSession,
 	identityScope = "",
+	createMessageId = () => crypto.randomUUID(),
 }: {
 	controls: OrchestrationControls;
 	client: OrchestrationClient;
@@ -56,6 +57,7 @@ export function OrchestrationPanel({
 	requestedSession?: { paneId: string; sessionId?: string; key: number };
 	/** Prevent saved session drafts/receipts from crossing linked hosts. */
 	identityScope?: string;
+	createMessageId?(): string;
 }) {
 	const { snapshot, busy, error, act, refresh } = controls;
 	const [selected, updateSelected] = useState<string>();
@@ -447,7 +449,7 @@ export function OrchestrationPanel({
 						const mode = session.capabilities?.deliveryModes?.includes(deliverAs) ? deliverAs : undefined;
 						const payload = JSON.stringify([text, attachments, mode]);
 						const previous = outboxRef.current.findLast(item => item.identity === identity && item.payload === payload && item.status === "unconfirmed");
-						const messageId = previous?.id ?? crypto.randomUUID();
+						const messageId = previous?.id ?? createMessageId();
 						followConversation.current = true;
 						setOutbox(current => [...current.filter(item => item.id !== messageId), { id: messageId, identity: identity!, text, payload, createdAt: Date.now(), status: "sending", attachmentNames: attachments?.map(file => file.name), baseline: previous?.baseline ?? new Set(conversation?.messages.map(message => message.id)) }]);
 						const sent = await act({ action: "prompt", paneId: session.paneId, sessionId: session.sessionId!, text,

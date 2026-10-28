@@ -38,7 +38,9 @@ for (const supported of [false, true]) test(`${supported ? 'capable host confirm
       }
     });
   });
-  await page.goto('/'); await expect(page.locator('#send')).toBeEnabled();
+  const started = Date.now();
+  await page.goto('/'); await expect(page.locator('#send')).toBeEnabled({ timeout: 15000 });
+  await test.info().attach('startup-ready', { body: JSON.stringify({ milliseconds: Date.now() - started }), contentType: 'application/json' });
   await page.evaluate(async () => {
     const { createWork } = await import('/src/work-inbox.ts');
     const item = await createWork({ title: 'Material local', kind: 'meeting', instruction: 'Conservar evidencia exacta.', files: [new File(['audio-original'], 'meeting.m4a', { type: 'audio/mp4' })] });

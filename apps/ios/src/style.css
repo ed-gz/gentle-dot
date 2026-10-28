@@ -34,8 +34,6 @@ svg { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; s
 .panel { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 20px 2px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .section-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font: .7rem/1.5 var(--mono); color: var(--muted); margin-bottom: 12px; }
 #panel-chat { position: relative; display: flex; flex-direction: column; overflow: hidden; padding-block: 0; }
-.companion-presence { position: relative; flex: none; height: clamp(200px, 31dvh, 286px); }
-#stage { position: absolute; inset: 0; overflow: hidden; }
 .stage-orbit { position: absolute; left: 18%; right: 18%; height: 25px; bottom: 18px; border: 1px solid #bd95fa66; border-radius: 50%; box-shadow: 0 0 28px #ff408e22; transform: rotate(-5deg); pointer-events: none; }
 .stage-coordinate { position: absolute; top: 20px; right: 0; color: var(--violet); font: .65rem/1 var(--mono); letter-spacing: .12em; }
 .rig { position: absolute; width: min(198px, 21.88dvh); height: min(280px, 31dvh); max-width: none; min-height: 0; padding: 0; left: 50%; top: 50%; translate: -50% -50%; border: 0; background: transparent; touch-action: none; cursor: grab; transition: opacity 220ms; }
@@ -44,13 +42,7 @@ svg { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; s
 .rig.absent { opacity: 0; pointer-events: none; }
 #art-placeholder { display: block; padding: 16px; background: var(--panel); font: .85rem/1.5 var(--mono); color: var(--acid); }
 #art-placeholder span { display: block; margin-top: 8px; color: var(--muted); font: .8rem/1.5 system-ui,sans-serif; }
-.presence-copy { position: absolute; left: 0; bottom: 10px; max-width: 44%; pointer-events: none; }
 #scene-status { font-size: .85rem; margin-top: 2px; }
-.presence-copy #active-tool { font-size: .75rem; margin-block: 4px 0; }
-#panel-chat[data-empty="false"] .companion-presence { height: 94px; }
-#panel-chat[data-empty="false"] #stage { left: 46%; }
-#panel-chat[data-empty="false"] .rig { width: 66px; height: 94px; left: 50%; top: 50%; }
-#panel-chat[data-empty="false"] .presence-copy { top: 14px; bottom: auto; max-width: 46%; }
 #panel-chat[data-empty="false"] .stage-orbit { left: 12%; right: 12%; height: 12px; bottom: 3px; }
 #panel-chat[data-empty="false"] .stage-coordinate { display: none; }
 .conversation-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 4px 16px 0; overscroll-behavior-y: contain; scroll-padding-block: 16px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
@@ -129,19 +121,9 @@ summary { cursor: pointer; padding-block: 10px; min-height: 44px; }
 @media (min-width: 600px) { main { padding-inline: 32px; } .chat-card[data-role="user"] { margin-left: 80px; } }
 @media (max-height: 560px) {
   .masthead { padding-block: 2px; }
-  .companion-presence, #panel-chat[data-empty="false"] .companion-presence { height: 56px; }
-  #stage, #panel-chat[data-empty="false"] #stage { left: 55%; }
-  .rig, #panel-chat[data-empty="false"] .rig { width: 44px; height: 62px; left: 50%; top: 50%; }
-  .presence-copy, #panel-chat[data-empty="false"] .presence-copy { top: 4px; bottom: auto; max-width: 55%; }
-  .presence-copy .eyebrow, .stage-coordinate, .stage-orbit { display: none; }
   .empty-conversation { padding-block: 4px; }
   .empty-conversation h1 { font-size: 1.2rem; }
 }
-:root[data-keyboard="true"] .companion-presence { height: 56px; }
-:root[data-keyboard="true"] #stage { left: 55%; }
-:root[data-keyboard="true"] .rig { width: 44px; height: 62px; left: 50%; top: 50%; }
-:root[data-keyboard="true"] .presence-copy { top: 4px; bottom: auto; max-width: 55%; }
-:root[data-keyboard="true"] .stage-orbit, :root[data-keyboard="true"] .stage-coordinate, :root[data-keyboard="true"] .presence-copy .eyebrow { display: none; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; } }
 :root[data-motion="reduced"] *, :root[data-motion="reduced"] *::before, :root[data-motion="reduced"] *::after { transition: none !important; scroll-behavior: auto !important; }
 
@@ -154,21 +136,13 @@ main { width: 100%; min-width: 0; }
 .navigation .brand { flex: 1 1 120px; }
 .navigation button, .panel, .surface { min-width: 0; }
 .navigation button span { overflow-wrap: anywhere; }
-/* Let enlarged text establish the presence rail's height; it never paints over the thread. */
-#panel-chat[data-empty="false"] .companion-presence { display: grid; grid-template-columns: 46% 54%; min-height: 94px; height: auto; }
-#panel-chat[data-empty="false"] #stage { position: relative; inset: auto; grid-column: 2; grid-row: 1; min-height: 94px; }
-#panel-chat[data-empty="false"] .presence-copy { position: static; grid-column: 1; grid-row: 1; max-width: none; align-self: center; padding-block: 8px; }
 #active-tool { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .navigation .brand { flex: 1 0 auto; min-width: max-content; }
 .navigation .brand > span { overflow-wrap: normal; white-space: nowrap; }
 .composer textarea { min-height: calc(1.5em + 22px); line-height: 1.5; }
 .composer-actions { position: sticky; bottom: 0; padding-block: 4px; background: var(--bg); z-index: 1; }
 @media (max-height: 560px) {
-  #panel-chat[data-empty="false"] .companion-presence { min-height: 56px; }
-  #panel-chat[data-empty="false"] #stage { min-height: 56px; }
 }
-:root[data-keyboard="true"] #panel-chat[data-empty="false"] .companion-presence,
-:root[data-keyboard="true"] #panel-chat[data-empty="false"] #stage { min-height: 56px; }
 
 /* At large Dynamic Type equivalents, secondary identity yields space to reading and input. */
 :root[data-large-text="true"] .brand-mark { display: none; }
@@ -178,18 +152,6 @@ main { width: 100%; min-width: 0; }
 :root[data-large-text="true"] .attach-control { min-width: 44px; justify-content: center; }
 :root[data-large-text="true"] .composer { max-height: none; overflow: visible; }
 :root[data-large-text="true"] .composer-actions { position: static; }
-:root[data-large-text="true"] .companion-presence,
-:root[data-large-text="true"] #panel-chat[data-empty="false"] .companion-presence { display: grid; grid-template-columns: 65% 35%; height: auto; min-height: 60px; }
-:root[data-large-text="true"] #stage,
-:root[data-large-text="true"] #panel-chat[data-empty="false"] #stage { position: relative; inset: auto; grid-column: 2; grid-row: 1; min-height: 60px; }
-:root[data-large-text="true"] .rig,
-:root[data-large-text="true"] #panel-chat[data-empty="false"] .rig { width: 44px; height: 62px; }
-:root[data-large-text="true"] .presence-copy,
-:root[data-large-text="true"] #panel-chat[data-empty="false"] .presence-copy { position: static; grid-column: 1; grid-row: 1; max-width: none; align-self: center; padding-block: 4px; }
-:root[data-large-text="true"] .presence-copy .eyebrow,
-:root[data-large-text="true"] #active-tool,
-:root[data-large-text="true"] .stage-coordinate,
-:root[data-large-text="true"] .stage-orbit { display: none; }
 :root[data-large-text="true"] #voice-status,
 :root[data-large-text="true"] #attachment-context { max-height: 18dvh; overflow-y: auto; }
 

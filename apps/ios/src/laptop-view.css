@@ -1,0 +1,53 @@
+/* The same session surface as PC/Android, sized to the iPhone's visual viewport. */
+#panel-agents { --reading-width: 100%; --surface-2: #211b2b; --line: #403347; --muted: #bcb3c8; --text: #f2edf7; --accent: #baff67; --bg: #111019; --surface: #19141f; --chat-font-size: 1rem; --red: #ff858f; --green: #baff67; min-height: 0; overflow: auto; }
+#laptop-root { min-height: 100%; }
+#panel-agents .orchestration { margin: 0; padding: 0; }
+#panel-agents .agent-detail { display: flex; flex-direction: column; height: calc(var(--app-height, 100dvh) - 96px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); min-height: 220px; }
+#panel-agents .agent-detail-navigation { flex: none; }
+#panel-agents .agent-detail-scroll { flex: 1; min-height: 0; overflow: auto; }
+#panel-agents .agent-reply { flex: none; }
+#panel-agents .agent-session { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
+#panel-agents .agent-detail .agent-message-user { background: #251b2c; border: 0; border-radius: 12px 12px 3px 12px; }
+#panel-agents button:not(.primary) { box-shadow: none; }
+.laptop-empty { margin-block: 20px; max-width: 32rem; }
+.laptop-empty p { line-height: 1.6; }
+
+#panel-agents { flex: 1; padding-block: 12px; }
+#panel-agents:has(.agent-detail) { overflow: hidden; display: flex; }
+#panel-agents:has(.agent-detail) #laptop-root { flex: 1; min-height: 0; }
+#panel-agents .orchestration-with-session { height: 100%; display: flex; flex-direction: column; }
+#panel-agents .agent-detail { flex: 1; height: auto; min-height: 0; }
+#panel-agents .agent-detail-scroll { overscroll-behavior: contain; }
+#panel-agents .agent-reply .composer { display: flex; align-items: end; max-height: none; overflow: visible; border: 0; box-shadow: none; }
+#panel-agents .agent-reply .composer textarea { width: 0; flex: 1; min-height: 48px; max-height: 120px; margin: 0; }
+#panel-agents .agent-reply .composer svg { width: 24px; height: 24px; }
+#panel-agents .agent-reply .composer label { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
+#panel-agents .agent-reply .composer button { background: var(--accent); color: var(--bg); border: 0; border-radius: 50%; }
+#panel-agents .agent-reply .composer button[aria-label*=dictado], #panel-agents .agent-reply .composer button[aria-label*=voz] { background: transparent; color: var(--text); }
+
+#panel-agents .voice-meter { display: none; } /* Apple bridge does not report audio levels. */
+
+#panel-agents .agent-message-content, #panel-agents .agent-reply textarea { font-size: 1rem; }
+
+/* In a short landscape view, the session's own Back control takes the header's
+   place. Returning to the list restores app navigation and its large text. */
+@media (min-width: 600px) and (max-height: 560px) {
+  main:has(#panel-agents:not([hidden]) .agent-detail) .masthead { display: none; }
+}
+
+#panel-agents .agent-session { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 4px 12px; padding: 16px 0; text-align: left; }
+#panel-agents .capri-session-type { grid-column: 1; grid-row: 1 / span 3; color: var(--accent); }
+#panel-agents .agent-session-top, #panel-agents .capri-session-project, #panel-agents .agent-preview { grid-column: 2; }
+#panel-agents .agent-session-top { display: flex; flex-direction: column; gap: 4px; }
+#panel-agents .capri-session-project { font-size: .8rem; color: var(--muted); }
+#panel-agents .agent-preview { font-size: .85rem; }
+#panel-agents .session-refresh, #panel-agents .session-create-button { border: 0; background: transparent; }
+#panel-agents .agent-reply { padding-inline: 0; padding-bottom: 0; }
+#panel-agents .agent-detail-navigation, #panel-agents .agent-detail-scroll, #panel-agents .agent-session-work { padding-inline: 0; }
+#panel-agents .composer-mic { background: transparent !important; color: var(--text) !important; }
+@media (min-width: 600px) and (max-height: 560px) {
+  #panel-agents .session-mobile-controls-trigger small { display: none; }
+  #panel-agents .agent-detail-navigation { padding-block: 0; }
+}
+
+#panel-agents .agent-reply .composer textarea { min-height: max(48px, calc(1.5em + 22px)); height: auto; }

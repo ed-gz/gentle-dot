@@ -88,9 +88,15 @@ test('real shell archives messages before its 120-card window prunes and retriev
   });
   await page.goto('/'); await page.locator('[data-panel="settings"]').click();
   await page.getByText('Conexión manual', { exact: true }).click();
+  await page.evaluate(() => {
+    const state = globalThis as any; state.stageReads = 0;
+    const stage = document.querySelector('#stage')!; const measure = stage.getBoundingClientRect.bind(stage);
+    stage.getBoundingClientRect = () => { state.stageReads++; return measure(); };
+  });
   await page.locator('#url').fill('wss://archive.example/ws'); await page.locator('#token').fill('fixture-only');
   await page.locator('#connection button[type="submit"]').click();
   await expect(page.locator('#cards .chat-card')).toHaveCount(120);
+  expect(await page.evaluate(() => (globalThis as any).stageReads)).toBeLessThan(40);
   await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation-archive.ts')).conversationArchive.stats()).entries)).toBe(205);
   await page.reload(); await expect(page.locator('#cards .chat-card')).toHaveCount(120);
   const recalled = await page.evaluate(async () => {
@@ -256,10 +262,15 @@ test('a newer saved window after archive quota failure survives reload with both
   await expect(page.locator('#cards')).toContainText('Texto final conservado en la ventana más nueva.');
   await expect(page.locator('#cards')).toContainText('Mensaje nuevo durante la cuota.');
   await expect(page.locator('#prompt')).toHaveValue('Borrador después de cuota');
+  // The recovered checkpoint commits before the first rig frame, but an archive
+  // read can overlap software GPU warmup. Keep the exact receipt assertion and
+  // allow the same startup budget as the existing native-availability fixtures.
+  const started = Date.now();
   await expect.poll(() => page.evaluate(async () => {
     const records = (await (await import('/src/conversation-archive.ts')).conversationArchive.page()).entries;
     return records.find(entry => entry.id === 'quota-stream')?.activities?.[0]?.detail;
-  })).toBe('{"receipt":"saved-after-quota"}');
+  }), { timeout: 15000 }).toBe('{"receipt":"saved-after-quota"}');
+  await test.info().attach('recovered-receipt-read', { body: JSON.stringify({ milliseconds: Date.now() - started }), contentType: 'application/json' });
   const stale = await page.evaluate(async () => {
     const { conversationArchive } = await import('/src/conversation-archive.ts');
     try { await conversationArchive.upsert([], undefined, [], 1); return 'accepted'; } catch (error: any) { return error.message; }
@@ -284,7 +295,7 @@ test('a newer archived window preserves unarchived legacy IDs before pruning mig
     persistence.setRevision(recovery.revision); persistence.seed(recovery.preserved);
     await persistence.persist({ entries: recovery.entries, draft: '' });
     return { visible: recovery.entries.length, preserved: recovery.preserved.length, count: (await archive.stats()).entries,
-      old: (await archive.search('legacy-0')).entries[0]?.text, existing: (await archive.search('archived-0')).entries[0]?.text, blocked: persistence.status().blocked };
+      old: (await archive.search('legacy-0')).entries[0]?.text, existing: (await archive.search('archived-0')).entries[0]?.text, blocked: persistence.status().blocked, error: persistence.status().archiveError };
   });
-  expect(result).toEqual({ visible: 120, preserved: 239, count: 239, old: 'legacy-0', existing: 'archived-0', blocked: false });
+  expect(result).toEqual({ visible: 120, preserved: 239, count: 239, old: 'legacy-0', existing: 'archived-0', blocked: false, error: undefined });
 });

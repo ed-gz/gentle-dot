@@ -1,5 +1,7 @@
 import { localIdentifier } from './local-identifiers.ts';
 import { createEngine, frameAt } from '@gentle-dot/ui/src/capri2d/engine.ts';
+import { RoamDirector, type RoamPosition } from '@gentle-dot/ui/src/capri2d/roam.ts';
+import { occupiedPhoneSpace, phonePerches, phonePositionFree } from './companion-space.ts';
 import { RigDirector, type RigIntent } from '@gentle-dot/ui/src/capri2d/director.ts';
 import { RigFx } from '@gentle-dot/ui/src/capri2d/fx.ts';
 import type { ServerMessage } from '@gentle-dot/protocol';
@@ -35,6 +37,8 @@ import { buildInfo, buildLabel } from './build-info.ts';
 import { mountPairingInput } from './pairing-input.ts';
 import './style.css';
 
+import './companion-presence.css';
+
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 element('build-info').textContent = buildLabel();
 element('build-info').title = buildInfo.sourceCommit ?? '';
@@ -57,7 +61,13 @@ let panel = 'chat';
 let absent = false;
 let roaming = true;
 let position = { x: 0, y: 0 };
-let destination = { x: 0, y: 0 };
+const roamDirector = new RoamDirector();
+let travel: { started: number; target: RoamPosition; moved: boolean } | undefined;
+let perched: Pick<RigIntent, 'resting' | 'direction'> = {};
+let measuredAt = -Infinity;
+let safePerches: [number, number][] = [];
+stage.dataset.companionLayer = 'true';
+document.querySelector('main')!.append(stage);
 let lastTime = 0;
 let nextRoam = 0;
 let gestureTimer: ReturnType<typeof setTimeout> | undefined;
@@ -73,25 +83,59 @@ function place(x: number, y: number) {
 }
 let typing = false;
 let attention = false;
+let conversationRestored = false;
 function presenceIntent(): RigIntent {
+  if (travel) return { travelling: true, direction: travel.target.direction };
   if (attention) return { ...intent, question: 'review' };
   if (typing && !intent.working && !intent.dragging && !intent.gesture) return { ...intent, resting: 'sit', watching: true };
-  return intent;
+  return Object.keys(intent).length ? { direction: perched.direction, ...intent } : perched;
+}
+function layoutCompanion() {
+  const main = document.querySelector('main')!.getBoundingClientRect();
+  const active = element(`panel-${panel}`);
+  const area = active.getBoundingClientRect();
+  const top = Math.max(document.querySelector('.masthead')!.getBoundingClientRect().bottom, area.top);
+  const input = active.querySelector('#composer, .agent-reply');
+  const bottom = input?.getBoundingClientRect().top ?? Math.min(area.bottom, main.bottom) - 12;
+  Object.assign(stage.style, { left: `${area.left}px`, top: `${top}px`, width: `${area.width}px`, height: `${Math.max(0, bottom - top)}px` });
+  stage.hidden = !['chat', 'agents'].includes(panel);
+  document.documentElement.dataset.companionSize = panel === 'chat' && element('panel-chat').dataset.empty === 'true' ? 'hero' : 'compact';
+  measuredAt = -Infinity;
+  place(position.x, position.y);
 }
 function animate(now: number) {
-  if (!engine || document.hidden || !['companion', 'chat'].includes(panel) || absent) return;
-  if (roaming && panel === 'chat' && !isReduced() && !typing && !attention && !intent.working && !intent.gesture && !drag) {
-    if (now >= nextRoam) {
-      const bounds = movementBounds();
-      destination = { x: (Math.random() * 2 - 1) * bounds.x, y: 0 };
-      nextRoam = now + 6000;
+  // Let the persisted transcript reach the DOM before the first GPU frame.
+  // Software renderers can block unrelated IndexedDB callbacks during warmup.
+  if (!conversationRestored || !engine || document.hidden || !['agents', 'chat'].includes(panel) || absent) return;
+  if (intent.outcome && now - intent.outcome.at > 2400) { const { outcome: _outcome, ...rest } = intent; intent = rest; revision++; }
+  if (now - measuredAt >= 1000) {
+    layoutCompanion(); measuredAt = now;
+    const area = stage.getBoundingClientRect();
+    const occupied = occupiedPhoneSpace(element(`panel-${panel}`), area);
+    safePerches = phonePerches({ x: 0, y: 0, width: area.width, height: area.height },
+      { width: rig.offsetWidth, height: rig.offsetHeight }, occupied);
+    rig.style.visibility = '';
+    if (roaming && !drag && !travel) {
+      const here = { x: position.x + (area.width - rig.offsetWidth) / 2, y: position.y + (area.height - rig.offsetHeight) / 2, width: rig.offsetWidth, height: rig.offsetHeight };
+      // Newly loaded controls take precedence over a perch from the old view.
+      // Relocate immediately, without spending a teleport blocking a button.
+      if (!phonePositionFree(here, occupied) && !safePerches.length) rig.style.visibility = 'hidden';
+      if (!phonePositionFree(here, occupied) && safePerches[0]) place(safePerches[0][0] - (area.width - rig.offsetWidth) / 2, safePerches[0][1] - (area.height - rig.offsetHeight) / 2);
     }
-    const step = Math.min(.05, (now - (lastTime || now)) / 1000) * 28;
-    const distance = Math.hypot(destination.x - position.x, destination.y - position.y);
-    if (distance > 1) {
-      intent.direction = destination.x >= position.x ? 1 : -1;
-      place(position.x + (destination.x - position.x) / distance * Math.min(step, distance), position.y + (destination.y - position.y) / distance * Math.min(step, distance));
+  }
+  if (roaming && !drag && !travel && now >= nextRoam) {
+    const region = { x: 0, y: 0, width: stage.clientWidth, height: stage.clientHeight };
+    const next = roamDirector.step({ laptop: region, region, x: 0, y: 0, width: rig.offsetWidth, height: rig.offsetHeight, herdr: false, safePerches }, now,
+      { composer: typing, question: attention, paused: isReduced() || Boolean(intent.working || intent.gesture || intent.outcome) });
+    if (next) { travel = { started: now, target: next, moved: false }; nextRoam = now + 18000; revision++; }
+  }
+  if (travel) {
+    // The PC teleport is transparent on frames 6–7 at 24 fps. Relocate there.
+    if (!travel.moved && now - travel.started >= 250) {
+      place(travel.target.x - (stage.clientWidth - rig.offsetWidth) / 2, travel.target.y - (stage.clientHeight - rig.offsetHeight) / 2);
+      travel.moved = true;
     }
+    if (now - travel.started >= 900) { perched = { resting: travel.target.resting, direction: travel.target.direction }; travel = undefined; revision++; }
   }
   lastTime = now;
   director.update(presenceIntent(), now);
@@ -106,18 +150,25 @@ function animate(now: number) {
   if (!isReduced()) fx?.draw(now);
   if (!isReduced()) frame = requestAnimationFrame(animate);
 }
-function redraw() { document.documentElement.dataset.motion = isReduced() ? 'reduced' : 'full'; revision++; cancelAnimationFrame(frame); lastTime = 0; animate(performance.now()); }
-function setIntent(next: RigIntent) { intent = next; redraw(); }
+function redraw() { document.documentElement.dataset.motion = isReduced() ? 'reduced' : 'full'; revision++; cancelAnimationFrame(frame); lastTime = 0; frame = requestAnimationFrame(animate); }
+function setIntent(next: RigIntent) { intent = next; if (next.gesture || next.dragging || next.question || next.working) travel = undefined; redraw(); }
 function gesture(name: string) {
   clearTimeout(gestureTimer);
-  setIntent({ gesture: { name, at: performance.now() } });
-  gestureTimer = setTimeout(() => setIntent({}), 2500);
+  const greeting = { name, at: performance.now() };
+  const { outcome: _outcome, dragging: _dragging, ...context } = intent;
+  setIntent({ ...context, gesture: greeting });
+  gestureTimer = setTimeout(() => {
+    // A greeting must neither forget ongoing work nor erase a newer engine event.
+    if (intent.gesture !== greeting) return;
+    const { gesture: _gesture, ...current } = intent;
+    setIntent(current);
+  }, 2500);
 }
 function startRig() {
   cancelAnimationFrame(frame); engine?.dispose(); engine = undefined;
   if (!image) return;
   try {
-    engine = createEngine(canvas, image, { maskReadback: false }); lastFrame = -1; rig.dataset.ready = 'true'; element('art-placeholder').hidden = true; place(position.x, position.y); redraw();
+    engine = createEngine(canvas, image, { maskReadback: false }); layoutCompanion(); lastFrame = -1; rig.dataset.ready = 'true'; element('art-placeholder').hidden = true; place(position.x, position.y); redraw();
     element('art-status').textContent = 'Tu Capri está aquí. Arrástrala, salúdala o déjala chillear.';
   }
   catch { rig.dataset.ready = 'false'; element('art-placeholder').hidden = false; element('art-placeholder').textContent = 'No se pudo iniciar el personaje 2D. Vuelve a abrir Capri.'; element('art-status').textContent = 'WebGL no está disponible. La conversación sigue activa.'; }
@@ -174,7 +225,7 @@ let drag: { id: number; x: number; y: number; start: typeof position; moved: boo
 let suppressClick = false;
 rig.addEventListener('pointerdown', event => {
   if (!image || event.button !== 0) return;
-  roaming = false; element('roam').setAttribute('aria-pressed', 'false');
+  travel = undefined;
   drag = { id: event.pointerId, x: event.clientX, y: event.clientY, start: { ...position }, moved: false };
   rig.setPointerCapture(event.pointerId);
 });
@@ -182,7 +233,7 @@ rig.addEventListener('pointermove', event => {
   if (!drag || drag.id !== event.pointerId) return;
   const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
   if (Math.hypot(dx, dy) > 5) drag.moved = true;
-  if (drag.moved) { place(drag.start.x + dx, drag.start.y + dy); setIntent({ dragging: true }); }
+  if (drag.moved) { roamDirector.dragged(performance.now()); place(drag.start.x + dx, drag.start.y + dy); setIntent({ dragging: true }); }
 });
 function release() { if (!drag) return; suppressClick = drag.moved; drag = undefined; setIntent({}); }
 rig.addEventListener('pointerup', release); rig.addEventListener('pointercancel', release); rig.addEventListener('lostpointercapture', release);
@@ -190,19 +241,22 @@ rig.addEventListener('click', () => { if (suppressClick) { suppressClick = false
 rig.addEventListener('keydown', event => {
   const steps: Record<string, [number, number]> = { ArrowLeft: [-20, 0], ArrowRight: [20, 0], ArrowUp: [0, -20], ArrowDown: [0, 20] };
   const step = steps[event.key]; if (!step || !image) return;
-  event.preventDefault(); roaming = false; element('roam').setAttribute('aria-pressed', 'false'); place(position.x + step[0], position.y + step[1]);
+  event.preventDefault(); roamDirector.dragged(performance.now()); place(position.x + step[0], position.y + step[1]);
 });
-new ResizeObserver(() => place(position.x, position.y)).observe(stage);
+new ResizeObserver(() => { place(position.x, position.y); measuredAt = -Infinity; }).observe(stage);
+window.addEventListener('resize', () => { layoutCompanion(); redraw(); });
 mountPhoneViewport(element('composer'));
 element('roam').setAttribute('aria-pressed', String(roaming));
 
 function showPanel(next: string) {
   panel = next;
+  updateLaptopView();
+  if (next !== 'chat' && (voiceSession || voiceStarting)) void cancelDictation();
   for (const section of document.querySelectorAll<HTMLElement>('.panel')) section.hidden = section.id !== `panel-${next}`;
   for (const button of document.querySelectorAll<HTMLElement>('[data-panel]')) {
     if (button.dataset.panel === next) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
   }
-  place(position.x, position.y); redraw();
+  travel = undefined; nextRoam = 0; layoutCompanion(); redraw();
   if (next === 'inbox') { void inbox.refresh(); void memoryView.refresh(); }
 }
 for (const button of document.querySelectorAll<HTMLElement>('[data-panel]')) button.addEventListener('click', () => showPanel(button.dataset.panel!));
@@ -218,6 +272,21 @@ let attachedWork: string | undefined;
 let connectionEpoch = 0;
 let manualToSave: { url: string; token: string } | undefined;
 let runtimeConnection: { url: string; token: string } | undefined;
+let laptop: ReturnType<typeof import('./laptop-view.tsx')['mountLaptopView']> | undefined;
+let laptopLoading = false;
+new MutationObserver(() => { measuredAt = -Infinity; if (panel === 'agents') redraw(); }).observe(element('laptop-root'), { childList: true, subtree: true });
+function updateLaptopView() {
+  if (laptop) { laptop.update({ connection: runtimeConnection, active: panel === 'agents' }); return; }
+  if (panel !== 'agents' || laptopLoading) return;
+  laptopLoading = true; element('laptop-root').textContent = 'Abriendo tus sesiones…';
+  void import('./laptop-view.tsx').then(({ mountLaptopView }) => {
+    laptop = mountLaptopView(element('laptop-root'), () => showPanel('settings'), state => {
+      if (panel === 'agents') setIntent(state === 'working' ? { working: true } : state === 'blocked' ? { alert: true } : {});
+    });
+    updateLaptopView();
+  }).catch(() => { element('laptop-root').textContent = 'No se pudo abrir el panel. Vuelve a entrar a Sesiones para reintentar.'; })
+    .finally(() => { laptopLoading = false; });
+}
 const conversationView = createConversationView({ container: element('cards'), empty: element('empty-conversation'), scroller: element('conversation-scroll'), newMessages: element<HTMLButtonElement>('new-messages') });
 const reviews = createConversationRequests(element('requests'), { append: conversationView.updateExtra });
 let availability: Availability = { available: false, status: 'checking', supportsSpanish: false };
@@ -252,6 +321,9 @@ function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(persis
 function renderChat() {
   element('panel-chat').dataset.empty = String(entries.length === 0);
   conversationView.render(entries);
+  element('empty-conversation').hidden = entries.length > 0 || !conversationReady;
+  element('history-loading').hidden = conversationReady || entries.length > 0;
+  measuredAt = -Infinity; redraw();
 }
 
 function add(entry: ChatEntry) { if (!entry.activities) entry.activities = entries.find(prior => prior.id === entry.id)?.activities; persistence.enqueue(entries); persistence.enqueue([entry]); entries = updateEntry(entries, entry); renderChat(); scheduleSave(); }
@@ -295,7 +367,7 @@ function handleMessage(message: ServerMessage) {
   if (message.type === 'history') {
     remoteConversation = message.conversationId ?? remoteConversation;
     persistence.enqueue(entries);
-    entries = reconcileHostHistory(entries, remoteId(''), message.messages.slice(-60), Date.now(), beforePrune => persistence.enqueue(beforePrune));
+    entries = reconcileHostHistory(entries, remoteId(''), message.messages, Date.now(), beforePrune => persistence.enqueue(beforePrune));
     renderChat(); scheduleSave();
   }
   if (message.type === 'interrupted') {
@@ -358,6 +430,7 @@ const linked = createLinkedChat({
       void secretSet('daemon-manual', new URL(credential.url.replace('wss:', 'https:')).origin, credential.token).catch(() => notice('Conectado; no se pudo conservar el acceso en Keychain.'));
     }
     if (value === 'rejected') { connectionEpoch++; manualToSave = undefined; runtimeConnection = undefined; }
+    updateLaptopView();
     linkedStatus = value; reviews.connection(value === 'ready');
     element('status').textContent = { offline: 'Sin conexión', connecting: 'Conectando…', ready: 'Vinculado a Gentle Dot', rejected: 'Acceso rechazado. Revisa token y versión.' }[value];
     element('connection-badge').textContent = value === 'ready' ? 'VINCULADO' : 'LOCAL';
@@ -390,8 +463,20 @@ function sizeDraft() { prompt.style.height = 'auto'; prompt.style.height = `${Ma
 let draftWidth = 0, draftLayoutFrame = 0;
 new ResizeObserver(() => { if (draftWidth !== prompt.clientWidth) { draftWidth = prompt.clientWidth; cancelAnimationFrame(draftLayoutFrame); draftLayoutFrame = requestAnimationFrame(sizeDraft); } }).observe(prompt);
 prompt.addEventListener('input', () => { draftEdited = true; sizeDraft(); scheduleSave(); });
-prompt.addEventListener('focus', () => { typing = true; redraw(); });
-prompt.addEventListener('blur', () => { typing = false; redraw(); });
+document.addEventListener('focusin', event => {
+  if (event.target instanceof HTMLTextAreaElement) { typing = true; travel = undefined; redraw(); }
+});
+document.addEventListener('focusout', event => {
+  if (event.target instanceof HTMLTextAreaElement) { typing = false; redraw(); }
+});
+window.addEventListener('gentle-dot-companion-activity', event => {
+  if (panel !== 'agents') return;
+  const kind = (event as CustomEvent<{ kind: string }>).detail?.kind;
+  if (kind === 'response') setIntent({ talking: true });
+  if (kind === 'failed') setIntent({ outcome: { kind: 'error', at: performance.now() } });
+  if (kind === 'submitted') setIntent({ outcome: { kind: 'done', at: performance.now() } });
+  if (kind === 'sending') setIntent({ working: true, thinking: true });
+});
 new MutationObserver(() => {
   const next = !!element('requests').querySelector('.actions button:not(:disabled)');
   if (next === attention) return;
@@ -484,14 +569,14 @@ element<HTMLFormElement>('connection').addEventListener('submit', async event =>
     const nextHost = validDaemonUrl(element<HTMLInputElement>('url').value);
     const token = element<HTMLInputElement>('token').value;
     connectionEpoch++;
-    linked.connect(nextHost, token); runtimeConnection = { url: nextHost, token };
+    runtimeConnection = { url: nextHost, token }; linked.connect(nextHost, token);
     manualToSave = { url: nextHost, token };
     host = nextHost;
     element<HTMLInputElement>('token').value = '';
     settings.url = host; saveSettings(settings);
   } catch (error) { element('status').textContent = errorText(error); }
 });
-element('disconnect').addEventListener('click', () => { connectionEpoch++; manualToSave = undefined; linked.disconnect(); runtimeConnection = undefined; element<HTMLInputElement>('token').value = ''; if (isTauri() && host) void secretDelete('daemon-manual', new URL(host.replace('wss:', 'https:')).origin).catch(() => {}); });
+element('disconnect').addEventListener('click', () => { connectionEpoch++; manualToSave = undefined; runtimeConnection = undefined; linked.disconnect(); element<HTMLInputElement>('token').value = ''; if (isTauri() && host) void secretDelete('daemon-manual', new URL(host.replace('wss:', 'https:')).origin).catch(() => {}); });
 element('check-local').addEventListener('click', () => void checkModel());
 element<HTMLInputElement>('url').value = settings.url;
 const connectionSettings = mountConnectionSettings();
@@ -527,11 +612,13 @@ async function restoreConversation() {
     if (element('chat-notice').textContent === recoveryMessage) element('chat-notice').textContent = '';
     renderChat(); sizeDraft(); await persist();
   } catch {
+    element('history-loading').hidden = true;
     // Never overwrite an unread stored timeline with the partial in-memory state.
     element('chat-notice').textContent = recoveryMessage;
     retry.hidden = false;
   } finally {
     conversationLoading = false; retry.disabled = false; updateControls();
+    conversationRestored = true; redraw();
   }
 }
 element('retry-conversation').addEventListener('click', () => void restoreConversation());

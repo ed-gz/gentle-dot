@@ -1,0 +1,30 @@
+/* Capri inhabits the app viewport; only her hit target intercepts touches. */
+#stage[data-companion-layer] { position: fixed; z-index: 2; overflow: hidden; pointer-events: none; }
+#stage[data-companion-layer] .rig { pointer-events: auto; width: 86px; height: 122px; left: 50%; top: 50%; }
+#stage[data-companion-layer] .stage-orbit, #stage[data-companion-layer] .stage-coordinate { display: none; }
+:root[data-companion-size="hero"] #stage[data-companion-layer] .rig { width: min(198px, 25dvh); height: min(280px, 35dvh); }
+#panel-chat .companion-presence { position: relative; flex: none; height: min(340px, 40dvh); min-height: 0; }
+#panel-chat[data-empty="false"] .companion-presence { display: block; height: auto; min-height: 42px; }
+#panel-chat .presence-copy, #panel-chat[data-empty="false"] .presence-copy { position: static; max-width: 100%; padding: 4px 0; }
+#panel-chat .presence-copy .eyebrow { display: none; }
+#panel-chat #cards { padding-right: 94px; }
+#panel-chat .chat-card { border: 0; background: transparent; border-radius: 0; padding: 0; }
+#panel-chat .chat-card[data-role="user"] { margin-left: 16px; padding: 12px; border-radius: 14px 14px 3px 14px; background: #211e2c; }
+#panel-chat .chat-card[data-role="notice"] { color: var(--muted); }
+#panel-chat .composer { border-top: 1px solid #51415e; box-shadow: none; }
+#panel-chat .composer-topline > label { display: none; }
+#panel-chat .composer-topline { justify-content: flex-end; }
+#panel-chat .composer-actions button:not(.primary), #panel-chat .attach-control { border: 0; background: transparent; }
+#panel-agents .agent-conversation { padding-right: 94px; }
+@media (max-height: 560px) {
+  #panel-chat .companion-presence { position: relative; flex: none; height: 80px; }
+  :root[data-companion-size] #stage[data-companion-layer] .rig { width: 44px; height: 62px; }
+  #panel-chat #cards, #panel-agents .agent-conversation { padding-right: 52px; }
+}
+:root[data-large-text="true"] #stage[data-companion-layer] .rig,
+:root[data-keyboard="true"] #stage[data-companion-layer] .rig { width: 44px; height: 62px; }
+:root[data-large-text="true"] #panel-chat #cards, :root[data-large-text="true"] #panel-agents .agent-conversation,
+:root[data-keyboard="true"] #panel-chat #cards, :root[data-keyboard="true"] #panel-agents .agent-conversation { padding-right: 52px; }
+:root[data-large-text="true"] #panel-chat .companion-presence { min-height: 36px; height: auto; }
+
+#panel-chat .presence-copy { pointer-events: none; }
