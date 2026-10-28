@@ -176,7 +176,9 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
         if (!fresh || canonicalJSON(fresh.inputSchema) !== schemaJSON || fresh.description !== remote.description) throw new Error('La herramienta cambió después de revisarla. Descúbrela y aprueba de nuevo.');
         context.signal.throwIfAborted(); await current();
         const requestId = localIdentifier();
-        const fingerprint = await service.hash(canonicalJSON({ connectionId, endpoint: connection.endpoint, tool: remote.name, schema: remote.inputSchema, arguments: args }));
+        // Schema and credential revisions invalidate approvals, but cannot erase
+        // uncertainty about the same operation's previous network outcome.
+        const fingerprint = await service.hash(canonicalJSON({ connectionId, endpoint: connection.endpoint, tool: remote.name, arguments: args }));
         const time = Date.now();
         await service.begin({ requestId, fingerprint, connectionId, connectionRevision: connection.revision, endpoint: connection.endpoint, toolName: remote.name, schemaJSON, argumentsJSON, state: 'executing', createdAt: time, updatedAt: time });
         try {

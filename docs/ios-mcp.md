@@ -65,18 +65,26 @@ respuesta del servidor y puede contener `isError: true` si falló la herramienta
 No significa por sí mismo que una operación de negocio tuvo éxito.
 
 Un fallo de transporte, respuesta inválida o pérdida de confirmación conserva
-`uncertain`; un reinicio no cambia `executing` a exitoso. Una huella que siga
-`executing` o `uncertain` bloquea otra llamada, incluso después de una aprobación
-nueva. No hay reenvío automático de mutaciones ni recuperación SSE mediante replay.
+`uncertain`; un reinicio no cambia `executing` a exitoso. La identidad estable de
+la operación es conexión, endpoint, nombre de herramienta y argumentos canónicos.
+Si sigue `executing` o `uncertain`, bloquea otra llamada incluso después de una
+aprobación nueva, un esquema distinto o una rotación de token/revisión. El esquema
+y revisión siguen vinculados a la aprobación y evidencia; no reinician la protección
+contra duplicados. IndexedDB versión 2 añade un índice compuesto a los registros
+existentes sin borrarlos, incluyendo huellas antiguas que incorporaban el esquema.
+La comprobación consulta claves del índice sin cargar los resultados guardados.
+No hay reenvío automático de mutaciones ni recuperación SSE mediante replay.
 Las sesiones caducadas exigen volver a descubrir las herramientas, sin repetir la
 operación anterior. El registro admite hasta 1000 ejecuciones y conserva resultados
 de hasta 2 MiB. `listRemoteExecutions` permite mostrar la evidencia; todavía no hay
 una resolución automática de resultados inciertos, que requieren contrastar con
 el servicio.
 
-Las pruebas Node verifican negociación, sesiones, paginación, validación,
-aprobaciones, cambios durante revisión y fallos sin replay. Las pruebas de navegador
-verifican transacciones reales de IndexedDB, concurrencia y restauración de estados.
+Nueve pruebas Node verifican negociación, sesiones, paginación, validación,
+aprobaciones, cambios durante revisión y fallos sin replay. Cuatro pruebas de
+navegador verifican transacciones reales de IndexedDB, concurrencia, restauración
+y migración de un journal versión 1. Cambiar esquema o credenciales mantiene el
+bloqueo; argumentos distintos siguen creando una operación nueva revisable.
 Son fixtures de protocolo, no evidencia de autenticación contra un proveedor real
 ni de ejecución de URLSession en el iPhone instalado.
 

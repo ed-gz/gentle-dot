@@ -7,6 +7,7 @@ export type ExternalConnection = { id: string; kind: 'mcp' | 'https-api'; label:
 export type ConnectionInput = Pick<ExternalConnection, 'kind' | 'label' | 'endpoint' | 'provider' | 'apiMode' | 'database' | 'uid'> & { id?: string; enabled?: boolean };
 export type RemoteExecution = { requestId: string; fingerprint: string; connectionId: string; connectionRevision: number; endpoint: string; toolName: string; schemaJSON: string; argumentsJSON: string; state: 'executing' | 'succeeded' | 'uncertain'; createdAt: number; updatedAt: number; resultJSON?: string };
 const DATABASE = 'capri-ios-external-connections';
+const OPERATION_STATE = 'operation-state';
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export function validEndpoint(input: string): string {
   if (typeof input !== 'string' || input.length > 2048 || /[\u0000-\u0020\\#]/.test(input)) throw new Error('Usa un endpoint HTTPS sin credenciales.');
@@ -45,12 +46,18 @@ async function database(): Promise<IDBDatabase> {
     if (!globalThis.indexedDB) { reject(new Error('El almacenamiento de conexiones no está disponible.')); return; }
     let settled = false;
     const timer = setTimeout(() => { settled = true; reject(new Error('El almacenamiento de conexiones no respondió.')); }, 8000);
-    const open = indexedDB.open(DATABASE, 1);
+    const open = indexedDB.open(DATABASE, 2);
     open.onupgradeneeded = () => {
       if (settled) { open.transaction?.abort(); return; }
-      open.result.createObjectStore('connections', { keyPath: 'id' });
-      const executions = open.result.createObjectStore('executions', { keyPath: 'requestId' });
-      executions.createIndex('fingerprint', 'fingerprint');
+      const db = open.result;
+      if (!db.objectStoreNames.contains('connections')) db.createObjectStore('connections', { keyPath: 'id' });
+      const executions = db.objectStoreNames.contains('executions')
+        ? open.transaction!.objectStore('executions') : db.createObjectStore('executions', { keyPath: 'requestId' });
+      if (!executions.indexNames.contains('fingerprint')) executions.createIndex('fingerprint', 'fingerprint');
+      // The index is populated for existing records during upgrade. Approval
+      // binds schema/revision; replay protection binds the actual operation.
+      if (!executions.indexNames.contains(OPERATION_STATE)) executions.createIndex(OPERATION_STATE,
+        ['connectionId', 'endpoint', 'toolName', 'argumentsJSON', 'state']);
     };
     open.onerror = () => { clearTimeout(timer); reject(new Error('No se pudo abrir el almacenamiento de conexiones.')); };
     open.onblocked = () => { clearTimeout(timer); settled = true; reject(new Error('Cierra otras ventanas de Capri para abrir las conexiones.')); };
@@ -141,14 +148,20 @@ export async function beginRemoteExecution(value: RemoteExecution): Promise<void
     const connection = tx.objectStore('connections').get(value.connectionId);
     connection.onsuccess = () => {
       if (connection.result?.revision !== value.connectionRevision || connection.result?.endpoint !== value.endpoint || !connection.result?.enabled) { fail(new Error('La conexión cambió antes de ejecutar.')); return; }
-      const store = tx.objectStore('executions'); const related = store.index('fingerprint').getAll(value.fingerprint);
-      related.onsuccess = () => {
-        if (related.result.some((entry: RemoteExecution) => entry.state !== 'succeeded')) { fail(new Error('Esta operación ya está ejecutándose o quedó incierta. Verifica el servicio antes de repetir.')); return; }
-        const count = store.count(); count.onsuccess = () => {
-          if (count.result >= 1000) { fail(new Error('El registro de ejecuciones está lleno; conserva su evidencia antes de continuar.')); return; }
-          store.add(value); done();
+      const store = tx.objectStore('executions'); let checked = 0;
+      for (const state of ['executing', 'uncertain']) {
+        // Count indexed keys rather than loading potentially large saved results.
+        // An older schema-dependent fingerprint cannot bypass this stable key.
+        const pending = store.index(OPERATION_STATE).count([value.connectionId, value.endpoint, value.toolName, value.argumentsJSON, state]);
+        pending.onsuccess = () => {
+          if (pending.result > 0) { fail(new Error('Esta operación ya está ejecutándose o quedó incierta. Verifica el servicio antes de repetir.')); return; }
+          if (++checked !== 2) return;
+          const count = store.count(); count.onsuccess = () => {
+            if (count.result >= 1000) { fail(new Error('El registro de ejecuciones está lleno; conserva su evidencia antes de continuar.')); return; }
+            store.add(value); done();
+          };
         };
-      };
+      }
     };
   });
 }

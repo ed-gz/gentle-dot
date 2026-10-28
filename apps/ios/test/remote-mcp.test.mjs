@@ -9,10 +9,10 @@ const base = () => ({ id, kind: 'mcp', label: 'Servidor propio', endpoint: 'http
 const schema = () => ({ type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 100 } }, required: ['text'], additionalProperties: false });
 const remote = () => ({ name: 'custom.send', description: 'Envía al servicio configurado', inputSchema: schema() });
 function fixture() {
-  const calls = []; const journal = []; let connection = base(); let changedSchema = false; let failCall = false;
+  const calls = []; const journal = []; let connection = base(); let changedSchema = false; let failCall = false; let token = 'secret-stays-in-headers';
   const services = {
     getConnection: async () => connection,
-    token: async () => 'secret-stays-in-headers',
+    token: async () => token,
     hash: async text => createHash('sha256').update(text).digest('hex'),
     begin: async value => { if (journal.some(entry => entry.fingerprint === value.fingerprint && entry.state !== 'succeeded')) throw new Error('uncertain replay blocked'); journal.push({ ...value }); },
     finish: async (requestId, state, resultJSON) => { const entry = journal.find(item => item.requestId === requestId); assert.equal(entry.state, 'executing'); entry.state = state; entry.resultJSON = resultJSON; },
@@ -26,7 +26,11 @@ function fixture() {
       return { status: 200, headers: { 'content-type': 'application/json', ...(rpc.method === 'initialize' ? { 'mcp-session-id': 'session-123' } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }) };
     },
   };
-  return { services, calls, journal, changeSchema: () => { changedSchema = true; }, changeConnection: () => { connection = { ...connection, revision: 2 }; }, failCall: () => { failCall = true; } };
+  return { services, calls, journal, changeSchema: () => { changedSchema = true; },
+    changeConnection: () => {
+      connection = { ...connection, revision: connection.revision + 1, credentialAccount: '00000000-0000-4000-8000-000000000002' };
+      token = 'test-next';
+    }, failCall: () => { failCall = true; }, recover: () => { failCall = false; } };
 }
 const context = askApproval => ({ signal: new AbortController().signal, askApproval });
 
@@ -77,6 +81,21 @@ test('lost remote response persists uncertainty and blocks replay even after ano
   assert.equal(f.journal[0].state, 'uncertain');
   await assert.rejects(tool.execute({ text: 'Hola' }, context(async () => true)), /replay blocked/);
   assert.equal(f.calls.filter(call => call.rpc.method === 'tools/call').length, 1);
+});
+test('changed schema and rotated credentials cannot replay uncertainty; different arguments remain a new operation', async () => {
+  for (const change of ['changeSchema', 'changeConnection']) {
+    const f = fixture(); const [original] = await discoverMCPTools(id, f.services); f.failCall();
+    await assert.rejects(original.execute({ text: 'Incierto' }, context(async () => true)), /sin confirmar/);
+    const previousFingerprint = f.journal[0].fingerprint;
+    f[change](); f.recover();
+    const [fresh] = await discoverMCPTools(id, f.services);
+    await assert.rejects(fresh.execute({ text: 'Incierto' }, context(async () => true)), /replay blocked/);
+    assert.equal(f.calls.filter(call => call.rpc.method === 'tools/call').length, 1);
+    const result = await fresh.execute({ text: 'Otra operación' }, context(async () => true));
+    assert.equal(result.confirmed, true); assert.equal(f.journal.length, 2);
+    assert.notEqual(f.journal[1].fingerprint, previousFingerprint);
+    if (change === 'changeConnection') assert.equal(f.journal[1].connectionRevision, 2);
+  }
 });
 test('finite SSE accepts correlated results but never executes server requests or redirects', () => {
   const result = { content: [{ type: 'text', text: 'Listo' }] };

@@ -86,3 +86,58 @@ test('credential rotation preserves refresh metadata and a losing CAS removes on
   expect(result.stored).not.toContain('fixture-access');
   expect(result.stored).not.toContain('fixture-refresh');
 });
+
+test('version-one journal migrates without losing uncertainty after schema and credential changes', async ({ page }) => {
+  // Keep the application from opening v2 before this fixture creates the actual v1 database.
+  await page.route('**/src/main.ts*', route => route.fulfill({ contentType: 'application/javascript', body: '' }));
+  await page.addInitScript(() => {
+    (globalThis as any).isTauri = true;
+    (globalThis as any).__TAURI_INTERNALS__ = { invoke: async () => ({ ok: true, persisted: true }) };
+  });
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const id = crypto.randomUUID();
+    const connection = { id, kind: 'mcp', label: 'Migración', endpoint: 'https://custom.example/mcp', revision: 1, enabled: true,
+      credentialAccount: crypto.randomUUID(), createdAt: 1, updatedAt: 1 };
+    const historical = ['uncertain', 'executing', 'succeeded'].map((state, index) => ({
+      requestId: crypto.randomUUID(), fingerprint: String(index).repeat(64), connectionId: id, connectionRevision: 1,
+      endpoint: connection.endpoint, toolName: 'send', schemaJSON: '{"description":"old schema"}', argumentsJSON: JSON.stringify({ text: state }),
+      state, createdAt: 1, updatedAt: 1, ...(state === 'succeeded' ? { resultJSON: '{"accepted":true}' } : {}),
+    }));
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.open('capri-ios-external-connections', 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore('connections', { keyPath: 'id' }).put(connection);
+        const executions = request.result.createObjectStore('executions', { keyPath: 'requestId' });
+        executions.createIndex('fingerprint', 'fingerprint');
+        historical.forEach(record => executions.put(record));
+      };
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => { request.result.close(); resolve(); };
+    });
+    const path = '/src/external-connections.ts'; const store = await import(path);
+    const migrated = await store.listRemoteExecutions();
+    const rotated = await store.saveConnectionCredentials({ id, kind: 'mcp', label: connection.label, endpoint: connection.endpoint }, { accessToken: 'fixture-rotated' }, 1);
+    const next = (record: any, text?: string) => ({ ...record, requestId: crypto.randomUUID(), fingerprint: 'f'.repeat(64),
+      connectionRevision: rotated.revision, schemaJSON: '{"description":"changed schema"}', state: 'executing',
+      ...(text ? { argumentsJSON: JSON.stringify({ text }) } : {}), createdAt: 2, updatedAt: 2 });
+    const blocked = [];
+    for (const state of ['uncertain', 'executing']) {
+      try { await store.beginRemoteExecution(next(historical.find(record => record.state === state))); blocked.push(false); }
+      catch { blocked.push(true); }
+    }
+    const distinct = next(historical[0], 'different approved operation');
+    const attempts = await Promise.allSettled([store.beginRemoteExecution(distinct), store.beginRemoteExecution({ ...distinct, requestId: crypto.randomUUID() })]);
+    await store.beginRemoteExecution(next(historical[2]));
+    return { historical, migrated, blocked, rotated: rotated.revision === 2 && rotated.credentialAccount !== connection.credentialAccount,
+      attempts: attempts.map(result => result.status), records: await store.listRemoteExecutions(), uncertain: next(historical[0]) };
+  });
+  expect(result.migrated).toEqual(expect.arrayContaining(result.historical));
+  expect(result.blocked).toEqual([true, true]); expect(result.rotated).toBe(true);
+  expect(result.attempts.sort()).toEqual(['fulfilled', 'rejected']); expect(result.records).toHaveLength(5);
+  await page.reload();
+  expect(await page.evaluate(async entry => {
+    const path = '/src/external-connections.ts'; const store = await import(path);
+    try { await store.beginRemoteExecution(entry); return false; } catch { return true; }
+  }, result.uncertain)).toBe(true);
+});
