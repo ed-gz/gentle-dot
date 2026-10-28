@@ -2,9 +2,11 @@
 
 La ruta de fase 1 es **GitHub Actions/macOS → IPA sin firma → SideStore con Apple ID gratuito**. No hace falta la membresía Apple Developer de US$99/año para este uso personal. Sí hacen falta firma de desarrollo gratuita, emparejamiento USB inicial y renovar la firma antes de siete días. Esto no es distribución por App Store ni TestFlight.
 
-**Estado al 27 de octubre de 2026:** fase 1 instalada y validada en iPhone; código de fase 2 confirmado y publicado en `1ff5d38`, pendiente de aceptación nativa, instalación y prueba offline. El run histórico `40600744611` no valida los cambios nuevos. Continuar exclusivamente en `/home/egarza/gentle-dot-capri`. El [roadmap nativo](ios-native-roadmap.md) detalla el alcance completo y los gates; el [registro](../odd/tasks/capri-ios.md) conserva la evidencia y el seguimiento de CI.
+**Estado al 27 de octubre de 2026:** fase 1 instalada y validada en iPhone; código de fase 2 publicado en `1ff5d38`, Swift y empaquetado verificados en CI; instalación y conversación offline en iPhone pendientes. El run histórico `40600744611` no valida los cambios nuevos. Continuar exclusivamente en `/home/egarza/gentle-dot-capri`. El [roadmap nativo](ios-native-roadmap.md) detalla el alcance completo y los gates; el [registro](../odd/tasks/capri-ios.md) conserva la evidencia y el seguimiento de CI.
 
 ## Obtener el IPA
+
+Entrega actual: [run 40627109957](https://github.com/ed-gz/gentle-dot/actions/runs/40627109957), Xcode 26.3/SDK 26.2. [Descarga por Tailscale](https://egarza-dell.tailb707be.ts.net/ios/capri-phase2-1ff5d38.ipa) disponible en la tailnet existente; importar ese archivo en SideStore. La IPA anterior se conserva. Archivo de 1 898 318 bytes, SHA-256 `ed8d66009e191312d0c7043774684385771dbaf9ec52349b58394c8681e5a8ef`. La versión interna continúa en 0.1.0; el SHA y el nombre identifican esta entrega. Compilar e inspeccionar la IPA no demuestra que Apple Intelligence responda en el dispositivo.
 
 1. Confirma el SHA publicado de `fix/android-capri-motion-mobile`: Actions no compila cambios que sólo existen localmente. En GitHub, abre **Actions → Capri unsigned iOS (SideStore) → Run workflow** y selecciona esa rama. El workflow debe existir en la rama por defecto para poder despacharse sobre la rama de trabajo. No solicita certificados, equipo Apple ni secretos.
 2. Descarga el artefacto `Capri-unsigned-iphone` y extrae `Capri-unsigned.ipa`. El ZIP exterior de Actions no es el IPA.

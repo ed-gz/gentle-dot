@@ -7,7 +7,7 @@ Corte de requisitos: **27 de octubre de 2026, America/Monterrey**. Trabajar excl
 ## Próxima entrega verificable
 
 1. Conservar la evidencia local ya obtenida: 52/52 Node, 15/15 navegador, 2/2 Rust, typecheck y build frontend. La suite incluye arte restaurado, texto al 200 %, viewport pequeño y landscape; repetir ante nuevos cambios relevantes.
-2. Revisar el bridge Swift y ejecutar el workflow con un SDK que importe Foundation Models; conservar SHA, run, versión de Xcode y hash del IPA.
+2. Conservar la IPA ya verificada en run 40627109957, código 1ff5d38, Xcode 26.3/SDK 26.2; SHA-256 y entrega en el registro L18. Repetir el gate ante cambios nativos.
 3. Instalar esa misma IPA mediante la ruta SideStore validada y demostrar conversación real con modo avión, Wi-Fi apagado, sin token y con laptop apagada.
 4. Validar continuidad al pasar entre Apple y Gentle Dot. Después avanzar a Keychain/pairing, voz, visión, importación nativa y sincronización durable.
 
@@ -21,12 +21,12 @@ La fase 1 tiene evidencia heredada en iPhone 17e, con iOS 27.2 informado por el 
 | --- | --- | --- |
 | Personaje y shell | Cuatro secciones; motor, rig y FX 2D compartidos; arrastre, saludo, descanso, paseo y visibilidad; preferencias de movimiento | QA completo de layout/accesibilidad y comportamiento en WKWebView real |
 | Conversación | IndexedDB, borrador, orígenes Apple/Gentle Dot, contexto acotado y recuperación de pendientes | Inferencia Apple real; sesión real de Pi; suspensión, restauración y continuidad en teléfono |
-| Apple local | Plugin Swift/Rust/Tauri con disponibilidad, respuesta, cancelación y reset | Compilar Swift en CI e inferir sin red en el iPhone |
+| Apple local | Plugin Swift/Rust/Tauri con disponibilidad, respuesta, cancelación y reset; Swift/IPA verificados en CI | Instalar e inferir sin red en el iPhone |
 | Enlace | Handshake validado, historial, deltas, finales, aborto y reconexión | No existe ACK durable de trabajo; autorizaciones del host se revisan en laptop |
 | Trabajos | Archivos locales, revisiones, versiones, eliminación y estados de aprobación | Share Extension, transferencia, procesamiento, ejecución externa y confirmación durable |
 | Voz, visión, conectores y superficies nativas | Sin implementación aceptada | Requieren unidades propias; la existencia de frameworks no demuestra integración |
 
-Evidencia recibida con el handoff: 42/42 tests Node, typecheck iOS, Cargo check offline, 2/2 tests Rust y 4/4 tests Playwright de bandeja. Shell quedó en 4/5: el caso de arte falló inicialmente al recargar y no llegó a sus comprobaciones posteriores de layout. Dos fixes de historial/streams se aplicaron después de la última suite completa. Estos resultados describen ese corte. La continuación ya verifica 52/52 Node, 15/15 Playwright, 2/2 Rust, TypeScript y build frontend; el registro L12–L16 conserva diagnóstico y límites. El bloqueo técnico de Git quedó resuelto al aplicarse acceso completo; las unidades están confirmadas y el código 1ff5d38 se publicó para CI. La repetición de navegador con API Tauri 2.2.0 pasó 15/15 en 34.1 s. Swift/IPA/dispositivo conservan gates separados.
+Evidencia recibida con el handoff: 42/42 tests Node, typecheck iOS, Cargo check offline, 2/2 tests Rust y 4/4 tests Playwright de bandeja. Shell quedó en 4/5: el caso de arte falló inicialmente al recargar y no llegó a sus comprobaciones posteriores de layout. Dos fixes de historial/streams se aplicaron después de la última suite completa. Estos resultados describen ese corte. La continuación ya verifica 52/52 Node, 15/15 Playwright, 2/2 Rust, TypeScript y build frontend; el registro L12–L16 conserva diagnóstico y límites. El bloqueo técnico de Git quedó resuelto al aplicarse acceso completo; las unidades están confirmadas y el código 1ff5d38 se publicó para CI. La repetición de navegador con API Tauri 2.2.0 pasó 15/15 en 34.1 s. Swift e IPA ya pasan en run 40627109957 (L18); instalación e inferencia en dispositivo siguen pendientes.
 
 ## Reglas del producto
 
