@@ -232,7 +232,7 @@ for mode in ('good','missing','tampered','manifest','generic','generic_leak'):
   except (ValueError,KeyError): pass
   else: raise AssertionError('unsafe or mismatched widget artwork accepted: '+mode)
 `;
-    const result = spawnSync('python3', ['-c', driver, verifier, directory, fingerprint], { encoding: 'utf8' });
+    const result = spawnSync('python3', ['-B', '-c', driver, verifier, directory, fingerprint], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
