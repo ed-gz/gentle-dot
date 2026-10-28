@@ -26,6 +26,10 @@ transport. Grant `device-bridge:default` only to the packaged main window.
 | `pair_device` | `origin, code, deviceName` | `connection, persisted` |
 | `unpair_device` | `origin, token?` | — |
 | `https_request` | `url, method, headers, body?` | `status, body, headers` |
+| `session_upload_begin` | `url, token, paneId, sessionId, uploadId?, name, size, sha256` | `id` (private staging UUID) |
+| `session_upload_write` | `id, offset, data` (base64 chunk ≤256 KiB) | `written` |
+| `session_upload_send` | `id` | `status, body, headers`, after the HTTP response |
+| `session_upload_cancel` | `id` | — (idempotent cleanup/cancel) |
 | `oauth_authorize` | `authorizationUrl, callbackScheme` | `callbackUrl` |
 | `oauth_cancel` | `{}` | — |
 | `open_external_url` | `url` (HTTPS, explicit account-setup UI only) | — |
@@ -64,6 +68,21 @@ Responses must be UTF-8. Only content type, ETag, Retry-After, Link and selected
 limit/request ID response headers cross the bridge. HTTP errors remain HTTP status
 responses; only a transport failure has `ok: false`. The caller binds credentials
 to the configured origin, handles provider semantics, and controls action approval.
+
+Session attachments require the separate `device-bridge:session-attachments` set,
+granted only to the packaged main window. One transfer holds at most 25 MiB in a
+protected, backup-excluded temporary file. Its exact HTTPS `/upload` destination,
+credential, session identity, size and SHA-256 are fixed at begin. Ordered chunks
+are independently hashed; incomplete or changed content never starts HTTP. A
+[file-backed URLSession upload](https://developer.apple.com/documentation/foundation/urlsession/uploadtask(with:fromfile:))
+uses the same bounded response and no-redirect policy, with a 120-second timeout.
+Suspension/cancellation stops the request, and completion removes the temporary
+source. Abandoned staging expires and is purged on the next process's first begin.
+Cancellation cannot retract bytes the host already received; no prompt is issued
+by this native API. A host upload receipt only identifies an attachment staged for
+a separately submitted instruction. Session draft durability belongs to the UI,
+not this temporary transport. Native fixtures run in `check-native-sdk.sh`; Linux
+Cargo checks alone do not validate Swift execution or iPhone background behavior.
 
 `nativeSHA256Bytes` streams binary hashing through CryptoKit when WebCrypto is
 unavailable in WKWebView. It passes 256 KiB chunks, never a complete base64-encoded

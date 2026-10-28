@@ -532,6 +532,110 @@ Denies the secret_set command without any pre-configured scope.
 <tr>
 <td>
 
+`device-bridge:allow-session-upload-begin`
+
+</td>
+<td>
+
+Enables the session_upload_begin command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-session-upload-begin`
+
+</td>
+<td>
+
+Denies the session_upload_begin command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-session-upload-cancel`
+
+</td>
+<td>
+
+Enables the session_upload_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-session-upload-cancel`
+
+</td>
+<td>
+
+Denies the session_upload_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-session-upload-send`
+
+</td>
+<td>
+
+Enables the session_upload_send command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-session-upload-send`
+
+</td>
+<td>
+
+Denies the session_upload_send command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-session-upload-write`
+
+</td>
+<td>
+
+Enables the session_upload_write command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-session-upload-write`
+
+</td>
+<td>
+
+Denies the session_upload_write command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `device-bridge:allow-share-ack`
 
 </td>
@@ -629,6 +733,19 @@ Enables the unpair_device command without any pre-configured scope.
 <td>
 
 Denies the unpair_device command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:session-attachments`
+
+</td>
+<td>
+
+Stage verified files and upload them to the human-selected laptop session.
 
 </td>
 </tr>

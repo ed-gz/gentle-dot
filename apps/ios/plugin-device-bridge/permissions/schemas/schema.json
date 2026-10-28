@@ -485,6 +485,46 @@
           "const": "deny-secret-set"
         },
         {
+          "description": "Enables the session_upload_begin command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-session-upload-begin"
+        },
+        {
+          "description": "Denies the session_upload_begin command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-session-upload-begin"
+        },
+        {
+          "description": "Enables the session_upload_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-session-upload-cancel"
+        },
+        {
+          "description": "Denies the session_upload_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-session-upload-cancel"
+        },
+        {
+          "description": "Enables the session_upload_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-session-upload-send"
+        },
+        {
+          "description": "Denies the session_upload_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-session-upload-send"
+        },
+        {
+          "description": "Enables the session_upload_write command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-session-upload-write"
+        },
+        {
+          "description": "Denies the session_upload_write command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-session-upload-write"
+        },
+        {
           "description": "Enables the share_ack command without any pre-configured scope.",
           "type": "string",
           "const": "allow-share-ack"
@@ -528,6 +568,11 @@
           "description": "Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure hashes, locally shared files, and explicit document export.",
           "type": "string",
           "const": "default"
+        },
+        {
+          "description": "Stage verified files and upload them to the human-selected laptop session.",
+          "type": "string",
+          "const": "session-attachments"
         }
       ]
     }

@@ -20,9 +20,13 @@ final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDelegat
     private var response: HTTPURLResponse?
     private var finished = false
     private var session: URLSession?
+    private let queue = OperationQueue()
     private let completion: (Result<HTTPOutput, Error>) -> Void
 
-    private init(completion: @escaping (Result<HTTPOutput, Error>) -> Void) { self.completion = completion }
+    private init(completion: @escaping (Result<HTTPOutput, Error>) -> Void) {
+        self.completion = completion
+        queue.maxConcurrentOperationCount = 1
+    }
 
     static func validated(_ input: HTTPInput) throws -> URLRequest {
         guard input.url.utf8.count <= 8192, let components = URLComponents(string: input.url),
@@ -55,29 +59,39 @@ final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDelegat
     }
     static func run(_ input: HTTPInput, timeout: TimeInterval = 30, completion: @escaping (Result<HTTPOutput, Error>) -> Void) {
         do {
-            var request = try validated(input)
-            request.timeoutInterval = timeout
+            let request = try validated(input)
             let delegate = BoundedHTTP(completion: completion)
-            let config = URLSessionConfiguration.ephemeral
-            config.httpCookieStorage = nil
-            config.urlCredentialStorage = nil
-            config.urlCache = nil
-            config.httpShouldSetCookies = false
-            config.timeoutIntervalForRequest = timeout
-            config.timeoutIntervalForResource = timeout
-            // A serial delegate queue ensures exactly one completion even when cancellation races.
-            let queue = OperationQueue(); queue.maxConcurrentOperationCount = 1
-            let session = URLSession(configuration: config, delegate: delegate, delegateQueue: queue)
-            delegate.session = session
-            session.dataTask(with: request).resume()
+            delegate.start(request, file: nil, timeout: timeout)
         } catch { completion(.failure(error)) }
+    }
+    /// File-backed uploads use the same bounded response and redirect policy.
+    /// The caller owns this immutable sandbox file until completion, including cancellation.
+    static func upload(_ request: URLRequest, file: URL, completion: @escaping (Result<HTTPOutput, Error>) -> Void) -> BoundedHTTP {
+        let delegate = BoundedHTTP(completion: completion)
+        delegate.start(request, file: file, timeout: 120)
+        return delegate
+    }
+    private func start(_ input: URLRequest, file: URL?, timeout: TimeInterval) {
+        var request = input; request.timeoutInterval = timeout
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieStorage = nil; config.urlCredentialStorage = nil; config.urlCache = nil
+        config.httpShouldSetCookies = false
+        config.timeoutIntervalForRequest = timeout; config.timeoutIntervalForResource = timeout
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: queue)
+        self.session = session
+        if let file = file { session.uploadTask(with: request, fromFile: file).resume() }
+        else { session.dataTask(with: request).resume() }
+    }
+    func cancel() {
+        // All terminal transitions share the delegate queue, including caller cancellation.
+        queue.addOperation { self.finish(.failure(DeviceFailure.cancelled)) }
     }
     private func finish(_ result: Result<HTTPOutput, Error>) {
         guard !finished else { return }
         finished = true
-        completion(result)
         session?.invalidateAndCancel()
         session = nil
+        completion(result)
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {

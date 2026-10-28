@@ -1,0 +1,4 @@
+[[set]]
+identifier = "session-attachments"
+description = "Stage verified files and upload them to the human-selected laptop session."
+permissions = ["allow-session-upload-begin", "allow-session-upload-write", "allow-session-upload-send", "allow-session-upload-cancel"]

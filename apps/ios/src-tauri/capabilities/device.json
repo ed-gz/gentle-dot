@@ -2,5 +2,5 @@
   "identifier": "iphone-device",
   "description": "Local voice, document recognition, secure credentials and shared imports in Capri's packaged main window.",
   "windows": ["main"],
-  "permissions": ["perception:default", "device-bridge:default"]
+  "permissions": ["perception:default", "device-bridge:default", "device-bridge:session-attachments"]
 }

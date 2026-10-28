@@ -19,6 +19,13 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 "$verification/app-group-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-device-bridge/ios/Sources/KeychainStore.swift \
+  plugin-device-bridge/ios/Sources/BoundedHTTP.swift \
+  plugin-device-bridge/ios/Sources/SessionUpload.swift \
+  test/native/SessionUploadTests.swift -o "$verification/session-upload-tests"
+"$verification/session-upload-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/Documents.swift \
   test/native/PairingCodeVisionTests.swift -o "$verification/pairing-qr-tests"
 "$verification/pairing-qr-tests"
@@ -32,4 +39,5 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
   plugin-device-bridge/ios/Sources/SharedInbox.swift \
   plugin-device-bridge/ios/Sources/StreamingHash.swift \
+  plugin-device-bridge/ios/Sources/SessionUpload.swift \
   plugin-device-bridge/ios/Sources/DocumentExport.swift

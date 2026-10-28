@@ -49,9 +49,17 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     private var authInvoke: Invoke?
     private let hashes = StreamingHash()
     private let exports = DocumentExportStore()
+    private let uploads = SessionUploadStore()
+    private var uploadObservers: [NSObjectProtocol] = []
     private var documentExporter: DocumentExporter?
 
-    @objc override func load(webview: WKWebView) { self.webview = webview }
+    @objc override func load(webview: WKWebView) {
+        self.webview = webview
+        uploads.setSuspended(UIApplication.shared.applicationState != .active)
+        uploadObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.uploads.setSuspended(true) })
+        uploadObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.uploads.setSuspended(false) })
+    }
+    deinit { for observer in uploadObservers { NotificationCenter.default.removeObserver(observer) } }
     private func fail(_ invoke: Invoke, _ error: Error) {
         var reply = BridgeReply(ok: false)
         switch error {
@@ -94,6 +102,28 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
                 }
             }
         } catch { fail(invoke, error) }
+    }
+    @objc func sessionUploadBegin(_ invoke: Invoke) {
+        work(invoke) { BridgeReply(id: try self.uploads.begin(invoke.parseArgs(SessionUploadInput.self))) }
+    }
+    @objc func sessionUploadWrite(_ invoke: Invoke) {
+        work(invoke) { BridgeReply(written: try self.uploads.write(invoke.parseArgs(SessionUploadChunk.self))) }
+    }
+    @objc func sessionUploadSend(_ invoke: Invoke) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let args = try invoke.parseArgs(IDInput.self)
+                try self.uploads.send(args.id) { result in
+                    switch result {
+                    case .success(let response): invoke.resolve(BridgeReply(status: response.status, body: response.body, headers: response.headers))
+                    case .failure(let error): self.fail(invoke, error)
+                    }
+                }
+            } catch { self.fail(invoke, error) }
+        }
+    }
+    @objc func sessionUploadCancel(_ invoke: Invoke) {
+        work(invoke) { let args = try invoke.parseArgs(IDInput.self); self.uploads.cancel(args.id); return BridgeReply() }
     }
     private static func privateOrigin(_ input: String) throws -> String {
         guard let url = URLComponents(string: input), url.scheme == "https", let host = url.host,
