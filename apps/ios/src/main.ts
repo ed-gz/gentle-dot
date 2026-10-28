@@ -784,10 +784,38 @@ let voiceStarting = false;
 let voiceController: AbortController | undefined;
 let voiceGeneration = 0;
 let voiceTimer: ReturnType<typeof setTimeout> | undefined;
+let voicePreviewTimer: ReturnType<typeof setInterval> | undefined;
+function stopVoicePreview() { clearInterval(voicePreviewTimer); voicePreviewTimer = undefined; }
+function showVoicePreview(id: string, generation: number) {
+  stopVoicePreview();
+  let polling = false;
+  const refresh = async () => {
+    if (polling || generation !== voiceGeneration || voiceSession !== id || document.hidden) return;
+    polling = true;
+    try {
+      const state = await checkVoice();
+      if (generation !== voiceGeneration || voiceSession !== id || state.sessionId?.toLowerCase() !== id.toLowerCase()) return;
+      if (!state.recording && state.readyToTranscribe) {
+        // Finish the same native session once; stopVoice either yields a full
+        // transcript or reports the capture failure without using the preview.
+        stopVoicePreview();
+        element<HTMLButtonElement>('dictate').click();
+        return;
+      }
+      element('voice-status').textContent = state.previewIssue
+        ? `● Grabando. ${state.previewIssue} Toca el micrófono para terminar.`
+        : state.partial ? `● ${state.partial} · texto provisional. Toca el micrófono para terminar.`
+        : '● Grabando. Toca el micrófono otra vez para transcribir.';
+    } catch { /* The final transcript does not depend on preview polling. */ }
+    finally { polling = false; }
+  };
+  voicePreviewTimer = setInterval(() => void refresh(), 500);
+  void refresh();
+}
 async function cancelDictation(reason: 'navigation' | 'manual' = 'navigation') {
   const wasActive = voiceStarting || Boolean(voiceSession);
   const owner = voiceOwner; voiceOwner = undefined;
-  voiceGeneration++; voiceController?.abort(); voiceSession = undefined; clearTimeout(voiceTimer);
+  voiceGeneration++; voiceController?.abort(); voiceSession = undefined; clearTimeout(voiceTimer); stopVoicePreview();
   voiceStarting = false;
   const control = element<HTMLButtonElement>('dictate');
   control.disabled = false; control.setAttribute('aria-pressed', 'false'); control.setAttribute('aria-label', 'Dictar');
@@ -805,7 +833,7 @@ element('dictate').addEventListener('click', async () => {
   const control = element<HTMLButtonElement>('dictate'); control.setAttribute('aria-label', 'Cancelar dictado');
   try {
     if (voiceSession) {
-      const id = voiceSession; voiceSession = undefined; clearTimeout(voiceTimer);
+      const id = voiceSession; voiceSession = undefined; clearTimeout(voiceTimer); stopVoicePreview();
       element('voice-status').textContent = 'Transcribiendo en este iPhone…';
       const transcript = await stopVoice(id);
       if (current !== voiceGeneration) return;
@@ -831,6 +859,7 @@ element('dictate').addEventListener('click', async () => {
       if (current !== voiceGeneration) return;
       voiceSession = session.sessionId;
       element('voice-status').textContent = '● Grabando. Toca el micrófono otra vez para transcribir.';
+      showVoicePreview(session.sessionId, current);
       setIntent({ alert: true });
       voiceTimer = setTimeout(() => control.click(), session.maxDurationSeconds * 1000 - 500);
     }

@@ -29,6 +29,11 @@ test('voice availability requires downloaded assets and never infers microphone 
   assert.equal(parseVoiceAvailability({ available: false, status: 'os_unsupported' }).microphonePermission, 'undetermined');
   assert.equal(parseVoiceAvailability({ available: false, status: 'assets_required', microphonePermission: 'denied' }).microphonePermission, 'denied');
   assert.throws(() => parseVoiceAvailability({ available: true }));
+  const preview = parseVoiceAvailability({ available: true, status: 'available', assetsInstalled: true,
+    sessionId: '01234567-89ab-cdef-0123-456789abcdef', partial: 'texto provisional', previewIssue: 'Vista previa interrumpida.' });
+  assert.equal(preview.partial, 'texto provisional'); assert.equal(preview.previewIssue, 'Vista previa interrumpida.');
+  assert.throws(() => parseVoiceAvailability({ status: 'available', partial: 'x'.repeat(4_801) }));
+  assert.throws(() => parseVoiceAvailability({ status: 'available', previewIssue: 1 }));
 });
 
 test('voice session accepts only bounded native recordings and valid request identity', () => {

@@ -97,6 +97,30 @@ test('main history and individual Herdr sessions are directly visible with earli
   }
 });
 
+test('session dictation exits recording on native interruption and preserves its draft', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '12345678-1234-1234-1234-123456789012';
+    state.voiceInterrupted = false; state.voiceStops = 0;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice') && state.voiceInterrupted) return { available: true, status: 'available', assetsInstalled: true,
+        microphonePermission: 'granted', recording: false, readyToTranscribe: true, sessionId: id, previewIssue: 'Audio interrumpido.' };
+      if (command.endsWith('start_voice')) { state.voiceInterrupted = true; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('stop_voice')) { state.voiceStops++; return { ok: false, message: 'Audio interrumpido.' }; }
+      return previous(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const draft = page.getByRole('textbox', { name: 'Continuar esta sesión' });
+  await draft.fill('Conservado');
+  await page.getByRole('button', { name: /dictar/i }).click();
+  await expect(page.getByText(/Audio interrumpido/)).toBeVisible();
+  await expect(draft).toHaveValue('Conservado');
+  expect(await page.evaluate(() => (globalThis as any).voiceStops)).toBe(1);
+});
+
 test('session dictation uses Apple and leaves a reviewable draft without desktop transcription', async ({ page }) => {
   await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
@@ -106,6 +130,31 @@ test('session dictation uses Apple and leaves a reviewable draft without desktop
   const commands = await page.evaluate(() => (globalThis as any).sessionCalls.map((c: any) => c.command));
   expect(commands.some((c: string) => c.endsWith('stop_voice'))).toBe(true);
   expect(commands.some((c: string) => /voice_native|voice_transcribe|native_voice/.test(c))).toBe(false);
+});
+
+test('session dictation displays provisional text without adding it to the draft', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
+    state.voicePreview = 'Borrador hablado'; state.previewRecording = false;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('start_voice')) state.previewRecording = true;
+      if (command.endsWith('stop_voice')) state.previewRecording = false;
+      if (command.endsWith('check_voice') && state.previewRecording) return { available: true, status: 'available', assetsInstalled: true,
+        microphonePermission: 'granted', recording: true, sessionId: '12345678-1234-1234-1234-123456789012', partial: state.voicePreview };
+      return original(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('textbox', { name: 'Continuar esta sesión' }).fill('Anterior');
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.locator('.agent-reply .voice-partial')).toHaveText('Borrador hablado');
+  await page.evaluate(() => (globalThis as any).voicePreview = 'Hipótesis nueva');
+  await expect(page.locator('.agent-reply .voice-partial')).toHaveText('Hipótesis nueva');
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Anterior Revisa la evidencia.');
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toEqual([]);
 });
 
 test('first session dictation prepares Apple voice after a microphone tap', async ({ page }) => {

@@ -26,6 +26,9 @@ export interface VoiceAvailability {
   readyToTranscribe: boolean;
   busy: boolean;
   sessionId?: string;
+  /** Provisional text is display-only and must never be sent as a final transcript. */
+  partial?: string;
+  previewIssue?: string;
 }
 export interface VoiceSession { sessionId: string; maxDurationSeconds: number }
 export interface VoiceSegment { text: string; startSeconds: number; endSeconds: number }
@@ -107,6 +110,8 @@ export function parseVoiceAvailability(value: unknown): VoiceAvailability {
     microphonePermission: permission === 'granted' || permission === 'denied' ? permission : 'undetermined',
     recording: reply.recording === true, readyToTranscribe: reply.readyToTranscribe === true, busy: reply.busy === true,
     ...(reply.sessionId !== undefined ? { sessionId: sessionId(reply.sessionId) } : {}),
+    ...(reply.partial !== undefined ? { partial: string(reply.partial, 4_800, true) } : {}),
+    ...(reply.previewIssue !== undefined ? { previewIssue: string(reply.previewIssue, 500) } : {}),
   };
 }
 export function parseVoiceSession(value: unknown): VoiceSession {

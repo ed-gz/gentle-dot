@@ -24,6 +24,8 @@ struct VoiceReply: Encodable {
     var busy: Bool? = nil
     var sessionId: String? = nil
     var maxDurationSeconds: Int? = nil
+    var partial: String? = nil
+    var previewIssue: String? = nil
     var text: String? = nil
     var segments: [VoiceSegment]? = nil
     var durationSeconds: Double? = nil
@@ -63,6 +65,12 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     private var recordedKind: VoiceTranscriberKind?
     private var recordedFormat: AVAudioFormat?
     private var owners = VoiceOwners()
+    private var liveCapture: LiveVoiceCapture?
+    private var previewAnalyzer: SpeechAnalyzer?
+    private var previewAnalysisTask: Task<Void, Never>?
+    private var previewResultsTask: Task<Void, Never>?
+    private var liveTranscript = LiveTranscript()
+    private var previewIssue: String?
     private let maximumDuration: TimeInterval = 90
 
     private static var temporaryDirectory: URL {
@@ -112,13 +120,81 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     // Use the shipping initializer, with the same configuration for asset
     // preparation, capture-format selection and final local transcription.
     // SpeechTranscriber runs on device; there is no offlineTranscription preset
-    // in the released SDK. Final-only results retain audio timing attributes.
-    private func makeTranscriber(for locale: Locale, kind: VoiceTranscriberKind) -> VoiceTranscriber {
+    // in the released SDK. Both final and provisional results retain timing attributes.
+    private func makeTranscriber(for locale: Locale, kind: VoiceTranscriberKind, incremental: Bool = false) -> VoiceTranscriber {
         switch kind {
         case .speech:
-            return .speech(SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange]))
+            let reporting: Set<SpeechTranscriber.ReportingOption> = incremental ? [.volatileResults] : []
+            return .speech(SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: reporting, attributeOptions: [.audioTimeRange]))
         case .dictation:
-            return .dictation(DictationTranscriber(locale: locale, contentHints: [], transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange]))
+            let reporting: Set<DictationTranscriber.ReportingOption> = incremental ? [.volatileResults] : []
+            return .dictation(DictationTranscriber(locale: locale, contentHints: [], transcriptionOptions: [], reportingOptions: reporting, attributeOptions: [.audioTimeRange]))
+        }
+    }
+
+    private func showPreview(_ text: AttributedString, range: CMTimeRange, final: Bool, session: String) {
+        guard sessionID == session, previewIssue == nil else { return }
+        let start = CMTimeGetSeconds(range.start), end = CMTimeGetSeconds(CMTimeRangeGetEnd(range))
+        if !liveTranscript.update(text: String(text.characters), start: start, end: end, final: final) {
+            previewIssue = "La vista previa se interrumpió. El audio completo se transcribirá al terminar."
+            previewResultsTask?.cancel()
+            if let analyzer = previewAnalyzer { Task { await analyzer.cancelAndFinishNow() } }
+        }
+    }
+
+    private func beginPreview(_ module: VoiceTranscriber, capture: LiveVoiceCapture, session: String) {
+        let analyzer = SpeechAnalyzer(modules: [module.module])
+        previewAnalyzer = analyzer
+        previewResultsTask = Task { @MainActor [weak self] in
+            do {
+                switch module {
+                case .speech(let transcriber):
+                    for try await result in transcriber.results {
+                        guard !Task.isCancelled else { break }
+                        self?.showPreview(result.text, range: result.range, final: result.isFinal, session: session)
+                    }
+                case .dictation(let transcriber):
+                    for try await result in transcriber.results {
+                        guard !Task.isCancelled else { break }
+                        self?.showPreview(result.text, range: result.range, final: result.isFinal, session: session)
+                    }
+                }
+            } catch {
+                if !Task.isCancelled, self?.sessionID == session {
+                    self?.previewIssue = "La vista previa se interrumpió. El audio completo se transcribirá al terminar."
+                }
+            }
+        }
+        previewAnalysisTask = Task { @MainActor [weak self] in
+            do {
+                if let end = try await analyzer.analyzeSequence(capture.inputs) {
+                    try await analyzer.finalizeAndFinish(through: end)
+                } else { await analyzer.cancelAndFinishNow() }
+            } catch {
+                await analyzer.cancelAndFinishNow()
+                if !Task.isCancelled, self?.sessionID == session {
+                    self?.previewIssue = "La vista previa se interrumpió. El audio completo se transcribirá al terminar."
+                }
+            }
+        }
+    }
+
+    private func endPreview() async -> Bool {
+        previewAnalysisTask?.cancel(); previewAnalysisTask = nil
+        previewResultsTask?.cancel(); previewResultsTask = nil
+        let analyzer = previewAnalyzer; previewAnalyzer = nil
+        guard let analyzer else { return true }
+        // Never begin the final analyzer while an old one may still be active.
+        // If Apple doesn't finish cancellation, fail visibly instead of hanging
+        // indefinitely or pretending that a concurrent retry is safe.
+        return await withCheckedContinuation { continuation in
+            var settled = false
+            let finish: (Bool) -> Void = { result in
+                guard !settled else { return }
+                settled = true; continuation.resume(returning: result)
+            }
+            Task { @MainActor in await analyzer.cancelAndFinishNow(); finish(true) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { finish(false) }
         }
     }
 
@@ -128,6 +204,13 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         case .granted: permission = "granted"
         case .denied: permission = "denied"
         default: permission = "undetermined"
+        }
+        if let id = sessionID, let locale = recordedLocale {
+            let recording = (recorder?.isRecording ?? false) || (liveCapture?.recording ?? false)
+            return VoiceReply(ok: true, available: true, status: "available", locale: locale.identifier(.bcp47),
+                assetsInstalled: true, microphonePermission: permission, recording: recording,
+                readyToTranscribe: !recording, busy: busy, sessionId: id, maxDurationSeconds: Int(maximumDuration),
+                partial: liveTranscript.text, previewIssue: previewIssue)
         }
         guard let selected = await preferredTranscriber() else {
             return VoiceReply(available: false, status: "unsupported_language", microphonePermission: permission)
@@ -171,6 +254,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         guard UIApplication.shared.applicationState == .active else { return .failure("not_foreground", "Abre Capri para dictar.") }
         if let ownerID, !owners.claim(ownerID) { return .failure("cancelled", "Ese dictado fue cancelado o sustituido.") }
         busy = true
+        generation += 1
         let epoch = generation
         var started = false
         defer { busy = false; if let ownerID { owners.finishAttempt(ownerID, succeeded: started) } }
@@ -196,25 +280,57 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             let audio = AVAudioSession.sharedInstance()
             try audio.setCategory(.record, mode: .measurement)
             try audio.setActive(true)
-            let capture = try AVAudioRecorder(url: url, settings: [
-                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: format.sampleRate,
-                AVNumberOfChannelsKey: format.channelCount, AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
-            ])
-            capture.delegate = self
-            guard capture.prepareToRecord(), capture.record(forDuration: maximumDuration) else {
-                throw NSError(domain: "CapriVoice", code: 1)
+            liveTranscript = LiveTranscript(); previewIssue = nil
+            let preview = makeTranscriber(for: selected.locale, kind: selected.kind, incremental: true)
+            let previewFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [preview.module])
+            guard epoch == generation, !Task.isCancelled else {
+                deactivateAudio()
+                return .failure("cancelled", "Dictado cancelado.")
+            }
+            var live: LiveVoiceCapture?
+            if let previewFormat {
+                do {
+                    let candidate = try LiveVoiceCapture(url: url, analyzerFormat: previewFormat) { [weak self] message in
+                        guard self?.generation == epoch else { return }
+                        self?.previewIssue = message
+                    }
+                    do { try await candidate.start(); live = candidate }
+                    catch { await candidate.cancel() }
+                } catch { /* Existing recorder remains the fallback before capture starts. */ }
+            }
+            guard epoch == generation, !Task.isCancelled else {
+                if let live { await live.cancel() }
+                deactivateAudio()
+                return .failure("cancelled", "Dictado cancelado.")
+            }
+            if let live {
+                liveCapture = live
+            } else {
+                try? FileManager.default.removeItem(at: url)
+                previewIssue = "La vista previa no está disponible. El audio se transcribirá al terminar."
+                let capture = try AVAudioRecorder(url: url, settings: [
+                    AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: format.sampleRate,
+                    AVNumberOfChannelsKey: format.channelCount, AVLinearPCMBitDepthKey: 16,
+                    AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
+                ])
+                capture.delegate = self
+                guard capture.prepareToRecord(), capture.record(forDuration: maximumDuration) else {
+                    throw NSError(domain: "CapriVoice", code: 1)
+                }
+                recorder = capture
             }
             try FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
-            recorder = capture
             recordingURL = url
             sessionID = id
             recordedLocale = selected.locale
             recordedKind = selected.kind
             recordedFormat = format
+            if let live { beginPreview(preview, capture: live, session: id) }
             started = true
             return VoiceReply(ok: true, sessionId: id, maxDurationSeconds: Int(maximumDuration))
         } catch {
+            if let live = liveCapture { liveCapture = nil; await live.cancel() }
+            recorder?.stop(); recorder = nil
             try? FileManager.default.removeItem(at: url)
             deactivateAudio()
             return .failure("capture_failed", "No pude iniciar el micrófono. Intenta de nuevo.")
@@ -228,12 +344,35 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         let epoch = generation
         recorder?.stop()
         recorder = nil
-        deactivateAudio()
         defer {
             busy = false
             analyzer = nil
             if sessionID == id { clearCapture() }
         }
+        if let live = liveCapture {
+            do { try await live.stop() }
+            catch {
+                liveCapture = nil
+                _ = await endPreview(); deactivateAudio()
+                return .failure("capture_incomplete", "No pude conservar todo el audio. Vuelve a dictarlo.")
+            }
+            guard epoch == generation, !Task.isCancelled else {
+                _ = await endPreview(); deactivateAudio()
+                return .failure("cancelled", "Dictado cancelado.")
+            }
+            liveCapture = nil
+        }
+        // Free the provisional analyzer before starting the independently
+        // verified final transcription from the complete recording.
+        guard await endPreview() else {
+            deactivateAudio()
+            return .failure("transcription_timeout", "No pude terminar la vista previa. Intenta dictar de nuevo.")
+        }
+        guard epoch == generation, !Task.isCancelled else {
+            deactivateAudio()
+            return .failure("cancelled", "Dictado cancelado.")
+        }
+        deactivateAudio()
         let module = makeTranscriber(for: locale, kind: kind)
         let analysis = SpeechAnalyzer(modules: [module.module])
         analyzer = analysis
@@ -321,8 +460,16 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         recorder?.stop()
         recorder = nil
         if let analysis = analyzer { Task { await analysis.cancelAndFinishNow() } }
+        let live = liveCapture; liveCapture = nil
+        // The live capture owns its file until its asynchronous writer drains.
+        // Do not unlink or replace it while a queued write is still running.
+        if live != nil { recordingURL = nil }
+        previewAnalysisTask?.cancel(); previewAnalysisTask = nil
+        previewResultsTask?.cancel(); previewResultsTask = nil
+        if let preview = previewAnalyzer { previewAnalyzer = nil; Task { await preview.cancelAndFinishNow() } }
         clearCapture()
         deactivateAudio()
+        if let live { Task { await live.cancel() } }
     }
 
     func cancel(ownerID: String) {
@@ -338,6 +485,8 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         recordedLocale = nil
         recordedKind = nil
         recordedFormat = nil
+        liveTranscript = LiveTranscript()
+        previewIssue = nil
         owners.clear()
     }
 

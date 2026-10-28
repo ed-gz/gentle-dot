@@ -29,6 +29,12 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 "$verification/inference-journal-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-local-intelligence/ios/Sources/AgentCheckpointJournal.swift \
+  plugin-local-intelligence/ios/Sources/AgentCheckpointRunner.swift \
+  test/native/AgentCheckpointJournalTests.swift -o "$verification/agent-checkpoint-tests"
+"$verification/agent-checkpoint-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-local-intelligence/ios/Sources/InferenceStartGate.swift \
   test/native/InferenceStartGateTests.swift -o "$verification/inference-start-gate-tests"
 "$verification/inference-start-gate-tests"
@@ -59,6 +65,26 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/VoiceOwners.swift \
   test/native/VoiceOwnersTests.swift -o "$verification/voice-owner-tests"
 "$verification/voice-owner-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/LiveAudioBuffer.swift \
+  test/native/LiveAudioBufferTests.swift -o "$verification/live-audio-buffer-tests"
+"$verification/live-audio-buffer-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/LiveTranscript.swift \
+  test/native/LiveTranscriptTests.swift -o "$verification/live-transcript-tests"
+"$verification/live-transcript-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/LiveVoiceDrain.swift \
+  test/native/LiveVoiceDrainTests.swift -o "$verification/live-voice-drain-tests"
+"$verification/live-voice-drain-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/LiveCaptureLifecycle.swift \
+  test/native/LiveCaptureLifecycleTests.swift -o "$verification/live-capture-lifecycle-tests"
+"$verification/live-capture-lifecycle-tests"
 xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
   "$verification/AgentTypes.swift" \
@@ -68,6 +94,11 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-local-intelligence/ios/Sources/CompletionNotifications.swift \
   plugin-perception/ios/Sources/VoiceAudio.swift \
   plugin-perception/ios/Sources/VoiceOwners.swift \
+  plugin-perception/ios/Sources/LiveAudioBuffer.swift \
+  plugin-perception/ios/Sources/LiveTranscript.swift \
+  plugin-perception/ios/Sources/LiveVoiceDrain.swift \
+  plugin-perception/ios/Sources/LiveCaptureLifecycle.swift \
+  plugin-perception/ios/Sources/LiveVoiceCapture.swift \
   plugin-perception/ios/Sources/Voice.swift \
   plugin-perception/ios/Sources/Documents.swift \
   plugin-device-bridge/ios/Sources/BoundedHTTP.swift \

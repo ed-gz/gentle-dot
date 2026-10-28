@@ -252,6 +252,81 @@ test('voice fixture prepares assets on microphone tap and appends dictation with
   expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['prepare', 'start', 'stop']);
 });
 
+test('provisional live dictation stays separate from the draft until one final result', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    let recording = false;
+    const id = '01234567-89ab-cdef-0123-456789abcdef';
+    state.voicePartial = 'Primera hipótesis';
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true,
+        microphonePermission: 'granted', ...(recording ? { recording: true, sessionId: id, partial: state.voicePartial } : {}) };
+      if (command.endsWith('start_voice')) { recording = true; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('stop_voice')) { recording = false; return { ok: true, sessionId: args.sessionId, text: 'Texto final.', locale: 'es-MX', durationSeconds: 2,
+        source: 'apple-speech-analyzer', segments: [{ text: 'Texto final.', startSeconds: 0.1, endSeconds: 1.8 }] }; }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.locator('#prompt').fill('Borrador original');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#voice-status')).toContainText('Primera hipótesis');
+  await expect(page.locator('#prompt')).toHaveValue('Borrador original');
+  await page.evaluate(() => (globalThis as any).voicePartial = 'Hipótesis corregida');
+  await expect(page.locator('#voice-status')).toContainText('Hipótesis corregida');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#prompt')).toHaveValue('Borrador original\nTexto final.');
+  await expect(page.locator('#voice-status')).not.toContainText('Hipótesis corregida');
+  expect(await page.evaluate(() => (globalThis as any).nativePrompts)).toEqual([]);
+});
+
+test('interrupted native capture exits recording and reports the loss without a draft', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '01234567-89ab-cdef-0123-456789abcdef';
+    state.interruptedVoice = false; state.voiceStops = 0;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true,
+        microphonePermission: 'granted', ...(state.interruptedVoice ? { recording: false, readyToTranscribe: true, sessionId: id, previewIssue: 'Audio interrumpido.' } : {}) };
+      if (command.endsWith('start_voice')) { state.interruptedVoice = true; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('stop_voice')) { state.voiceStops++; return { ok: false, message: 'Audio interrumpido.' }; }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/'); await page.locator('#prompt').fill('Conservado'); await page.locator('#dictate').click();
+  await expect(page.locator('#voice-status')).toContainText('Audio interrumpido');
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
+  await expect(page.locator('#prompt')).toHaveValue('Conservado');
+  expect(await page.evaluate(() => (globalThis as any).voiceStops)).toBe(1);
+});
+
+test('a late provisional result cannot overwrite a completed dictation', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    let recording = false;
+    const id = '01234567-89ab-cdef-0123-456789abcdef';
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice') && recording) return await new Promise(resolve => { state.finishOldPreview = resolve; });
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
+      if (command.endsWith('start_voice')) { recording = true; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('stop_voice')) { recording = false; return { ok: true, sessionId: args.sessionId, text: 'Final correcto.', locale: 'es-MX', durationSeconds: 2,
+        source: 'apple-speech-analyzer', segments: [{ text: 'Final correcto.', startSeconds: 0.1, endSeconds: 1.8 }] }; }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/'); await page.locator('#dictate').click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishOldPreview)).toBe('function');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#prompt')).toHaveValue('Final correcto.');
+  await page.evaluate(() => (globalThis as any).finishOldPreview({ available: true, status: 'available', assetsInstalled: true,
+    recording: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', partial: 'resultado viejo' }));
+  await expect(page.locator('#voice-status')).toContainText('Transcripción añadida');
+  await expect(page.locator('#prompt')).toHaveValue('Final correcto.');
+});
+
 test('a temporary hidden web view during the microphone permission does not cancel the pending capture', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {

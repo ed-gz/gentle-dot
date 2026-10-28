@@ -17,6 +17,7 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
   const [availability, setAvailability] = useState<VoiceAvailability>();
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [elapsed, setElapsed] = useState(0);
+  const [partial, setPartial] = useState('');
   const [note, setNote] = useState<string>();
   const [draft, setDraft] = useState<VoiceControls['draft']>();
   const owner = useRef({ epoch: 0, session: '', ownerId: '', pending: false, enabled });
@@ -25,7 +26,7 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
     const state = owner.current;
     const ownerId = state.ownerId;
     state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false;
-    setPhase('idle'); setElapsed(0); setDraft(undefined); setNote(undefined);
+    setPhase('idle'); setElapsed(0); setPartial(''); setDraft(undefined); setNote(undefined);
     if (ownerId) void cancelVoice(ownerId).catch(() => {});
   }, []);
   useEffect(() => {
@@ -45,7 +46,7 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
     const state = owner.current;
     if (!state.session || state.pending) return;
     const id = state.session, epoch = state.epoch;
-    state.pending = true; setPhase('transcribing');
+    state.pending = true; setPartial(''); setPhase('transcribing');
     void stopVoice(id).then(value => {
       if (state.epoch === epoch && state.enabled) { setNote(undefined); setDraft({ id: epoch, text: value.text }); }
     }).catch(error => { if (state.epoch === epoch) setNote(error.message); }).finally(() => {
@@ -57,6 +58,31 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
     const started = performance.now();
     const timer = setInterval(() => { const seconds = Math.floor((performance.now() - started) / 1000); setElapsed(seconds); if (seconds >= 85) stop(); }, 250);
     return () => clearInterval(timer);
+  }, [phase, stop]);
+  useEffect(() => {
+    if (phase !== 'recording') return;
+    const state = owner.current, id = state.session, epoch = state.epoch;
+    let live = true, polling = false;
+    const refresh = async () => {
+      if (!live || polling || document.hidden) return;
+      polling = true;
+      try {
+        const value = await checkVoice();
+        if (!live || state.epoch !== epoch || state.session !== id || value.sessionId?.toLowerCase() !== id.toLowerCase()) return;
+        if (!value.recording && value.readyToTranscribe) {
+          // A stopped native capture must not continue to appear as recording.
+          // stop() is owner/epoch scoped and will surface any loss of audio.
+          stop();
+          return;
+        }
+        // A lost preview is no longer a faithful representation of the audio.
+        setPartial(value.previewIssue ? '' : value.partial ?? '');
+        if (value.previewIssue) setNote(value.previewIssue);
+      } catch { /* A failed preview never replaces the final transcript. */ }
+      finally { polling = false; }
+    };
+    const timer = setInterval(() => void refresh(), 500); void refresh();
+    return () => { live = false; clearInterval(timer); };
   }, [phase, stop]);
   const start = useCallback(() => {
     const state = owner.current;
@@ -80,7 +106,7 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
     })().catch(error => { if (state.epoch === epoch) { state.ownerId = ''; setNote(error.message); } }).finally(() => { if (state.epoch === epoch) state.pending = false; });
   }, [availability]);
   return { mic: availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
-    phase, elapsed, level: 0, partial: '', note, draft, start, stop, cancel,
+    phase, elapsed, level: 0, partial, note, draft, start, stop, cancel,
     draftTaken: id => setDraft(value => value?.id === id ? undefined : value),
     speaking: false, muted: true, stopSpeaking() {}, setMuted() {}, typed() {}, sent() {}, sendOnStop: false, setSendOnStop() {} };
 }
