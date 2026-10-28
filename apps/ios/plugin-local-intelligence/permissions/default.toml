@@ -1,0 +1,3 @@
+[default]
+description = "Check and use Capri's local model, cancel a response, and clear its in-memory conversation."
+permissions = ["allow-check-availability", "allow-respond", "allow-reset", "allow-cancel"]
