@@ -31,8 +31,10 @@ export const DEFAULT_RIG = {
  sparkle:1,grade:1,sil:[.08,.06,.11] as [number,number,number],silAmount:0,
  misreg:[-2.6,2.2] as [number,number],alpha:1,
 };
-/** SpriteRenderer GPU setup/draw, with explicit resource ownership and native mask readback. */
-export function createEngine(canvas: HTMLCanvasElement, image: HTMLImageElement) {
+export interface EngineOptions { maskReadback?: boolean }
+/** Native hit testing reads rendered alpha by default. In-app callers that use
+ * their own touch bounds can explicitly omit this synchronous GPU readback. */
+export function createEngine(canvas: HTMLCanvasElement, image: HTMLImageElement, options: EngineOptions = {}) {
  const gl=canvas.getContext('webgl',{alpha:true,premultipliedAlpha:true,antialias:false,preserveDrawingBuffer:true});
  if (!gl) throw new Error('WebGL unavailable');
  const program=gl.createProgram()!;
@@ -62,7 +64,7 @@ export function createEngine(canvas: HTMLCanvasElement, image: HTMLImageElement)
   gl.uniform3f(u.uRim!,.48,.24,1);gl.uniform1f(u.uPx!,532/204);
  } catch(error) {dispose();throw error;}
  canvas.width=144;canvas.height=204;gl.viewport(0,0,144,204);
- const pixels=new Uint8Array(144*204*4);
+ const pixels=options.maskReadback === false ? undefined : new Uint8Array(144*204*4);
  return {
   draw(pose: Pose, frame: number) {
    const s={...DEFAULT_RIG,...resolvePose(pose,0),seed:frame,glitchSeed:frame};
@@ -73,10 +75,11 @@ export function createEngine(canvas: HTMLCanvasElement, image: HTMLImageElement)
    gl.uniform4f(u.uSil!,...s.sil,s.silAmount);
    gl.uniform4f(u.uBody!,s.bob,s.tilt*Math.PI/180,s.sx,s.sy);
    gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+   if (!pixels) return [];
    gl.readPixels(0,0,144,204,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
    return alphaMask(pixels,144,204);
   },
-  inputRectangles:()=>alphaInputRectangles(pixels,144,204),
+  inputRectangles:()=>pixels ? alphaInputRectangles(pixels,144,204) : [],
   dispose,
  };
 }

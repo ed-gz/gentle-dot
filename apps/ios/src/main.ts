@@ -117,7 +117,7 @@ function startRig() {
   cancelAnimationFrame(frame); engine?.dispose(); engine = undefined;
   if (!image) return;
   try {
-    engine = createEngine(canvas, image); lastFrame = -1; rig.dataset.ready = 'true'; element('art-placeholder').hidden = true; place(position.x, position.y); redraw();
+    engine = createEngine(canvas, image, { maskReadback: false }); lastFrame = -1; rig.dataset.ready = 'true'; element('art-placeholder').hidden = true; place(position.x, position.y); redraw();
     element('art-status').textContent = 'Tu Capri está aquí. Arrástrala, salúdala o déjala chillear.';
   }
   catch { rig.dataset.ready = 'false'; element('art-placeholder').hidden = false; element('art-placeholder').textContent = 'No se pudo iniciar el personaje 2D. Vuelve a abrir Capri.'; element('art-status').textContent = 'WebGL no está disponible. La conversación sigue activa.'; }

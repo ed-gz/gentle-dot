@@ -40,7 +40,7 @@ it("clamps one-shot sheets and preserves cues", () => {
  expect(sampleSheet(sheet, 99).index).toBe(1);
  expect(() => sampleSheet({ keys: [] }, 0)).toThrow();
 });
-it("binds the entire reference shader rig including smear, echo, grading and body-space mask transforms", () => {
+it.each([true, false])("binds the reference rig and preserves rendering with mask readback %s", maskReadback => {
  const calls: Record<string,ReturnType<typeof vi.fn>>={};
  const gl=new Proxy({}, {get(_target,key:string){
   if(key.toUpperCase()===key)return 1;
@@ -48,23 +48,35 @@ it("binds the entire reference shader rig including smear, echo, grading and bod
    if(key==='getUniformLocation')return args[1];
    if(key==='getShaderParameter'||key==='getProgramParameter')return true;
    if(key==='getAttribLocation')return 0;
+   if(key==='readPixels')(args[6] as Uint8Array)[3]=255;
    if(key.startsWith('create'))return {};
    return undefined;
   });
   return calls[key];
  }}) as WebGLRenderingContext;
  const canvas={getContext:()=>gl,width:0,height:0} as unknown as HTMLCanvasElement;
- const engine=createEngine(canvas,{} as HTMLImageElement);
- engine.draw({armL:.5,armR:1.2,longR:2.3,smear:[-18,0],echo:[14,0],sx:.94,sy:1.1,tilt:8,bob:-16},7);
+ // Omitted options exercise the existing desktop default, not just an explicit true.
+ const engine=maskReadback ? createEngine(canvas,{} as HTMLImageElement) : createEngine(canvas,{} as HTMLImageElement,{maskReadback:false});
+ const mask=engine.draw({armL:.5,armR:1.2,longR:2.3,smear:[-18,0],echo:[14,0],sx:.94,sy:1.1,tilt:8,bob:-16},7);
  const bound=new Set(['uniform1i','uniform1f','uniform2f','uniform3f','uniform4f'].flatMap(method=>calls[method]!.mock.calls.map(args=>args[0])));
  expect([...bound].sort()).toEqual([...UNIFORMS].sort());
  expect(calls.uniform1f).toHaveBeenCalledWith('uLongR',2.3);
  expect(calls.uniform2f).toHaveBeenCalledWith('uSmear',-18,0);
  expect(calls.uniform2f).toHaveBeenCalledWith('uEcho',14,0);
  expect(calls.uniform4f).toHaveBeenCalledWith('uBody',-16,8*Math.PI/180,.94,1.1);
- expect(calls.readPixels).toHaveBeenCalledOnce();
+ if(maskReadback) {
+  expect(mask).toHaveLength(816); expect(mask[33*24]).toBe(1);
+  expect(engine.inputRectangles()).toEqual([[0,203,1,1]]);
+  expect(calls.readPixels).toHaveBeenCalledOnce(); // Input rectangles reuse the readback.
+ } else {
+  expect(mask).toEqual([]); expect(engine.inputRectangles()).toEqual([]);
+  expect(calls.readPixels).toBeUndefined();
+ }
  expect(canvas).toMatchObject({width:144,height:204});
  engine.draw({mask:1,alpha:0},120);
  expect(calls.uniform1f).toHaveBeenCalledWith('uMask',1);
+ expect(calls.drawArrays).toHaveBeenCalledTimes(2);
+ if(maskReadback) expect(calls.readPixels).toHaveBeenCalledTimes(2);
+ else expect(calls.readPixels).toBeUndefined();
  engine.dispose();expect(calls.deleteTexture).toHaveBeenCalledOnce();expect(calls.deleteShader).toHaveBeenCalledTimes(2);
 });
