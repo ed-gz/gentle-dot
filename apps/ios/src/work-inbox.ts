@@ -344,7 +344,7 @@ export function createWork(input: WorkInput): Promise<WorkItem> { return insertW
 
 /** Share Extension acknowledgement must wait for this promise's durable IDB transaction. */
 export async function createImportedWork(sourceId: string, input: WorkInput): Promise<WorkItem> {
-  if (!/^share:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(sourceId)) throw new Error('El identificador de la importación no es válido.');
+  if (!/^(?:share|document):[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(sourceId)) throw new Error('El identificador de la importación no es válido.');
   const safe = validateWorkInput(input);
   const digest = async (bytes: ArrayBuffer) => {
     if (!globalThis.crypto?.subtle) return (await import('./device-bridge.ts')).nativeSHA256Bytes(new Uint8Array(bytes));

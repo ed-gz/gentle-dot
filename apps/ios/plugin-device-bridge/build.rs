@@ -27,6 +27,10 @@ fn main() {
         "export_write",
         "export_present",
         "export_cancel",
+        "documents_pick",
+        "documents_list",
+        "documents_read",
+        "documents_ack",
     ])
     .ios_path("ios")
     .build();

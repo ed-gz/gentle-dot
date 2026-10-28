@@ -72,17 +72,17 @@ enum SharedInbox {
         guard value.files.reduce(0, { $0 + $1.size }) <= maxTotal else { throw ShareFailure.invalid }
         return value
     }
-    static func list() throws -> [SharedManifest] {
-        let root = try root()
+    static func list(root suppliedRoot: URL? = nil) throws -> [SharedManifest] {
+        let root = try suppliedRoot ?? root()
         return try locked(root) {
             let directories = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
             // A damaged published item is reported instead of silently disappearing.
             return try directories.filter { validID($0.lastPathComponent) }.map(readManifest).sorted { $0.createdAt < $1.createdAt }
         }
     }
-    static func read(_ id: String, _ fileID: String, _ offset: Int, _ length: Int) throws -> Data {
+    static func read(_ id: String, _ fileID: String, _ offset: Int, _ length: Int, root suppliedRoot: URL? = nil) throws -> Data {
         guard validID(id), validID(fileID), offset >= 0, length > 0, length <= 256 * 1024 else { throw ShareFailure.invalid }
-        let root = try root()
+        let root = try suppliedRoot ?? root()
         return try locked(root) {
             let directory = root.appendingPathComponent(id, isDirectory: true)
             let manifest = try readManifest(directory)
@@ -104,16 +104,16 @@ enum SharedInbox {
             return data
         }
     }
-    static func acknowledge(_ id: String) throws {
+    static func acknowledge(_ id: String, root suppliedRoot: URL? = nil) throws {
         guard validID(id) else { throw ShareFailure.invalid }
-        let root = try root()
+        let root = try suppliedRoot ?? root()
         try locked(root) {
             let directory = root.appendingPathComponent(id, isDirectory: true)
             if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
         }
     }
-    static func makeStaging() throws -> URL {
-        let root = try root()
+    static func makeStaging(root suppliedRoot: URL? = nil) throws -> URL {
+        let root = try suppliedRoot ?? root()
         return try locked(root) {
             // Interrupted extension processes cannot acknowledge or publish their staging area.
             // Reclaim only old, unpublished copies; the originating app keeps the originals.
@@ -154,10 +154,10 @@ enum SharedInbox {
         return SharedFile(id: id, name: safeName.isEmpty ? "adjunto" : safeName, mime: String(mime.prefix(128)), size: bytes,
             sha256: digest.finalize().map { String(format: "%02x", $0) }.joined())
     }
-    static func publish(_ staging: URL, title: String, notes: String, files: [SharedFile]) throws -> SharedManifest {
+    static func publish(_ staging: URL, title: String, notes: String, files: [SharedFile], root suppliedRoot: URL? = nil) throws -> SharedManifest {
         guard !files.isEmpty, files.count <= 10, files.reduce(0, { $0 + $1.size }) <= maxTotal,
               !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.count <= 120, notes.count <= 8000 else { throw ShareFailure.limit }
-        let root = try root()
+        let root = try suppliedRoot ?? root()
         guard staging.deletingLastPathComponent().standardizedFileURL == root.standardizedFileURL,
               staging.lastPathComponent.hasPrefix(".pending-") else { throw ShareFailure.invalid }
         let manifest = SharedManifest(schemaVersion: 1, id: UUID().uuidString.lowercased(),

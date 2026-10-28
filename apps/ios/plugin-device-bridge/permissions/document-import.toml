@@ -1,0 +1,4 @@
+[[set]]
+identifier = "document-import"
+description = "Present Apple's document picker and recover only the files explicitly imported into Capri."
+permissions = ["allow-documents-pick", "allow-documents-list", "allow-documents-read", "allow-documents-ack"]

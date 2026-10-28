@@ -40,4 +40,5 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-device-bridge/ios/Sources/SharedInbox.swift \
   plugin-device-bridge/ios/Sources/StreamingHash.swift \
   plugin-device-bridge/ios/Sources/SessionUpload.swift \
-  plugin-device-bridge/ios/Sources/DocumentExport.swift
+  plugin-device-bridge/ios/Sources/DocumentExport.swift \
+  plugin-device-bridge/ios/Sources/DocumentImport.swift

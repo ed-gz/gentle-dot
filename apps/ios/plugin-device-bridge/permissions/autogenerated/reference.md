@@ -194,6 +194,110 @@ Denies the crypto_sha256 command without any pre-configured scope.
 <tr>
 <td>
 
+`device-bridge:allow-documents-ack`
+
+</td>
+<td>
+
+Enables the documents_ack command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-documents-ack`
+
+</td>
+<td>
+
+Denies the documents_ack command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-documents-list`
+
+</td>
+<td>
+
+Enables the documents_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-documents-list`
+
+</td>
+<td>
+
+Denies the documents_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-documents-pick`
+
+</td>
+<td>
+
+Enables the documents_pick command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-documents-pick`
+
+</td>
+<td>
+
+Denies the documents_pick command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-documents-read`
+
+</td>
+<td>
+
+Enables the documents_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-documents-read`
+
+</td>
+<td>
+
+Denies the documents_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `device-bridge:allow-export-begin`
 
 </td>
@@ -733,6 +837,19 @@ Enables the unpair_device command without any pre-configured scope.
 <td>
 
 Denies the unpair_device command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:document-import`
+
+</td>
+<td>
+
+Present Apple's document picker and recover only the files explicitly imported into Capri.
 
 </td>
 </tr>

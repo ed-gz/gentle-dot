@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-documents-ack"
+description = "Enables the documents_ack command without any pre-configured scope."
+commands.allow = ["documents_ack"]
+
+[[permission]]
+identifier = "deny-documents-ack"
+description = "Denies the documents_ack command without any pre-configured scope."
+commands.deny = ["documents_ack"]

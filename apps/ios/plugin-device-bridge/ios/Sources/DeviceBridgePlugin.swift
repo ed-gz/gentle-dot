@@ -52,6 +52,7 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     private let uploads = SessionUploadStore()
     private var uploadObservers: [NSObjectProtocol] = []
     private var documentExporter: DocumentExporter?
+    private var documentImporter: DocumentImporter?
 
     @objc override func load(webview: WKWebView) {
         self.webview = webview
@@ -280,6 +281,43 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
                 else { self.exports.cancel(args.id) }
                 invoke.resolve(BridgeReply())
             } catch { self.fail(invoke, error) }
+        }
+    }
+    @objc func documentsPick(_ invoke: Invoke) {
+        DispatchQueue.main.async {
+            do {
+                guard self.documentImporter == nil, self.documentExporter == nil, self.authSession == nil,
+                      let presenter = self.webview?.window?.rootViewController else {
+                    throw DeviceFailure.unavailable("Cierra el selector abierto antes de adjuntar.")
+                }
+                let importer = DocumentImporter { result in
+                    self.documentImporter = nil
+                    switch result {
+                    case .success(let item): invoke.resolve(BridgeReply(items: item.map { [$0] } ?? [], cancelled: item == nil))
+                    case .failure(let error): self.fail(invoke, error)
+                    }
+                }
+                self.documentImporter = importer
+                do { try importer.present(from: presenter) }
+                catch { self.documentImporter = nil; throw error }
+            } catch { self.fail(invoke, error) }
+        }
+    }
+    @objc func documentsList(_ invoke: Invoke) {
+        work(invoke) { BridgeReply(items: try SharedInbox.list(root: DocumentImportStore.root())) }
+    }
+    @objc func documentsRead(_ invoke: Invoke) {
+        work(invoke) {
+            let args = try invoke.parseArgs(ReadInput.self)
+            return BridgeReply(data: try SharedInbox.read(args.id, args.fileId, args.offset, args.length,
+                root: DocumentImportStore.root()).base64EncodedString())
+        }
+    }
+    @objc func documentsAck(_ invoke: Invoke) {
+        work(invoke) {
+            let args = try invoke.parseArgs(IDInput.self)
+            try SharedInbox.acknowledge(args.id, root: DocumentImportStore.root())
+            return BridgeReply(persisted: true)
         }
     }
     @objc func oauthAuthorize(_ invoke: Invoke) {

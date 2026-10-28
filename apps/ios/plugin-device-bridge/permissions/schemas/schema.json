@@ -355,6 +355,46 @@
           "const": "deny-crypto-sha256"
         },
         {
+          "description": "Enables the documents_ack command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-documents-ack"
+        },
+        {
+          "description": "Denies the documents_ack command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-documents-ack"
+        },
+        {
+          "description": "Enables the documents_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-documents-list"
+        },
+        {
+          "description": "Denies the documents_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-documents-list"
+        },
+        {
+          "description": "Enables the documents_pick command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-documents-pick"
+        },
+        {
+          "description": "Denies the documents_pick command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-documents-pick"
+        },
+        {
+          "description": "Enables the documents_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-documents-read"
+        },
+        {
+          "description": "Denies the documents_read command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-documents-read"
+        },
+        {
           "description": "Enables the export_begin command without any pre-configured scope.",
           "type": "string",
           "const": "allow-export-begin"
@@ -568,6 +608,11 @@
           "description": "Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure hashes, locally shared files, and explicit document export.",
           "type": "string",
           "const": "default"
+        },
+        {
+          "description": "Present Apple's document picker and recover only the files explicitly imported into Capri.",
+          "type": "string",
+          "const": "document-import"
         },
         {
           "description": "Stage verified files and upload them to the human-selected laptop session.",
