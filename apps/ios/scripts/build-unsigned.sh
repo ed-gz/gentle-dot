@@ -3,7 +3,8 @@
 # The Xcode "Build Rust Code" phase runs `tauri ios xcode-script`, which connects
 # to an options server that only `tauri ios build` starts; raw xcodebuild always
 # panics on the missing -server-addr file (tauri-apps/tauri#13547). Build through
-# the CLI and disable signing in the generated project (SideStore signs on device).
+# the CLI and disable Apple signing in Xcode. After building, ad-hoc seals carry
+# App Group entitlements for SideStore to discover before personal re-signing.
 set -euo pipefail
 [[ "$(uname -s)" == Darwin ]] || { printf 'Xcode/macOS required\n' >&2; exit 1; }
 cd "$(dirname "$0")/.."
@@ -48,45 +49,71 @@ if len(candidates) != 1:
 print(candidates[0])
 PY
 )
-python3 - "$ipa" "$verification/executable" <<'PY'
-from pathlib import Path
-import plistlib
-import sys
-import zipfile
-
-with zipfile.ZipFile(sys.argv[1]) as archive:
-    if archive.testzip() is not None:
-        raise SystemExit('Unsigned IPA has a corrupt entry')
-    plists = [name for name in archive.namelist()
-              if name.startswith('Payload/') and name.count('/') == 2
-              and name.endswith('.app/Info.plist')]
-    if len(plists) != 1:
-        raise SystemExit('Unsigned IPA must contain one application')
-    info = plistlib.loads(archive.read(plists[0]))
-    if info.get('CFBundleIdentifier') != 'dev.gentledot.capri' or info.get('DTPlatformName') != 'iphoneos':
-        raise SystemExit('Unsigned IPA is not the Capri device app')
-    if not info.get('NSMicrophoneUsageDescription'):
-        raise SystemExit('Unsigned IPA is missing its microphone purpose')
-    extensions = [name for name in archive.namelist() if name.endswith('.appex/Info.plist')]
-    if len(extensions) != 1:
-        raise SystemExit('Unsigned IPA must embed one Share Extension')
-    extension = plistlib.loads(archive.read(extensions[0]))
-    if extension.get('CFBundleIdentifier') != 'dev.gentledot.capri.share' or extension.get('NSExtension', {}).get('NSExtensionPointIdentifier') != 'com.apple.share-services':
-        raise SystemExit('Unsigned IPA has an invalid Share Extension')
-    executable = info.get('CFBundleExecutable', '')
-    if not executable or '/' in executable or executable in ('.', '..'):
-        raise SystemExit('Unsigned IPA has an invalid executable name')
-    app = plists[0].rsplit('/', 1)[0]
-    Path(sys.argv[2]).write_bytes(archive.read(f'{app}/{executable}'))
-PY
-archs=$(xcrun lipo -archs "$verification/executable")
-[[ " $archs " == *' arm64 '* ]] || { printf 'Expected an arm64 iPhone executable\n' >&2; exit 1; }
-xcrun otool -L "$verification/executable" > "$verification/frameworks.txt"
+group=${CAPRI_APP_GROUP:-group.dev.gentledot.capri}
+python3 scripts/verify-ipa.py "$ipa" --group "$group" --extract "$verification/payload" --manifest "$verification/manifest.json"
+app=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["app"])' "$verification/manifest.json")
+extension=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["extension"])' "$verification/manifest.json")
+app_executable=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["appExecutable"])' "$verification/manifest.json")
+extension_executable=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["extensionExecutable"])' "$verification/manifest.json")
+for executable in "$app_executable" "$extension_executable"; do
+  archs=$(xcrun lipo -archs "$verification/payload/$executable")
+  [[ " $archs " == *' arm64 '* ]] || { printf 'Expected an arm64 iPhone executable\n' >&2; exit 1; }
+done
+xcrun otool -L "$verification/payload/$app_executable" > "$verification/frameworks.txt"
 for framework in FoundationModels Speech Vision; do
   grep -q "$framework.framework/" "$verification/frameworks.txt" || {
     printf 'IPA does not link the %s engine\n' "$framework" >&2; exit 1;
   }
 done
-cp "$ipa" out/Capri-unsigned.ipa
+# Read the generated target paths, not guessed bundle/product names. XcodeGen
+# writes these plists even when CODE_SIGNING_ALLOWED is disabled for compilation.
+ruby -ryaml -rfileutils - "$verification" <<'RUBY'
+spec_path = File.expand_path('src-tauri/gen/apple/project.yml')
+spec = YAML.safe_load(File.read(spec_path), permitted_classes: [], permitted_symbols: [], aliases: true)
+apps = spec.fetch('targets').select { |_name, target| target['type'] == 'application' && target['platform'] == 'iOS' }
+raise 'Expected one generated application entitlement source.' unless apps.length == 1
+extension = spec.fetch('targets').fetch('CapriShare')
+raise 'Expected the generated iOS Share Extension.' unless extension['type'] == 'app-extension' && extension['platform'] == 'iOS'
+{ 'app' => apps.values.first, 'extension' => extension }.each do |label, target|
+  path = target.fetch('entitlements').fetch('path')
+  raise 'Invalid entitlement source path.' unless path.is_a?(String) && !path.empty?
+  source = File.expand_path(path, File.dirname(spec_path))
+  raise 'Missing generated entitlement plist.' unless File.file?(source)
+  FileUtils.cp(source, File.join(ARGV.fetch(0), "#{label}.entitlements"))
+end
+RUBY
+python3 - "$verification" "$group" <<'PY'
+from pathlib import Path
+import plistlib, sys
+for label in ('app', 'extension'):
+    source = plistlib.loads((Path(sys.argv[1]) / f'{label}.entitlements').read_bytes())
+    if source.get('com.apple.security.application-groups') != [sys.argv[2]]:
+        raise SystemExit(f'{label} generated App Group entitlements do not match the configured group')
+PY
+# Seal nested code first, then the containing app. '-' is an ad-hoc identity:
+# no certificate, provisioning profile, Apple account, or timestamp service.
+codesign --force --sign - --timestamp=none --generate-entitlement-der --entitlements "$verification/extension.entitlements" "$verification/payload/$extension"
+codesign --verify --strict "$verification/payload/$extension"
+codesign --force --sign - --timestamp=none --generate-entitlement-der --entitlements "$verification/app.entitlements" "$verification/payload/$app"
+codesign --verify --strict "$verification/payload/$app"
+for label in app extension; do
+  if [[ "$label" == app ]]; then bundle=$app; else bundle=$extension; fi
+  codesign --display --entitlements :- "$verification/payload/$bundle" > "$verification/$label.embedded.plist"
+done
+python3 - "$verification" <<'PY'
+from pathlib import Path
+import plistlib, sys
+root = Path(sys.argv[1])
+for label in ('app', 'extension'):
+    expected = plistlib.loads((root / f'{label}.entitlements').read_bytes())
+    embedded = plistlib.loads((root / f'{label}.embedded.plist').read_bytes())
+    if embedded != expected:
+        raise SystemExit(f'{label} sealed entitlements differ from the generated source')
+PY
+ditto -c -k --keepParent "$verification/payload/Payload" "$verification/candidate.ipa"
+# Inspect the final ZIP and its embedded Mach-O signatures independently. A
+# successful signing command alone cannot publish an unsigned/stale executable.
+python3 scripts/verify-ipa.py "$verification/candidate.ipa" --group "$group" --sealed
+mv "$verification/candidate.ipa" out/Capri-unsigned.ipa
 shasum -a 256 out/Capri-unsigned.ipa
-printf 'Unsigned IPA: apps/ios/out/Capri-unsigned.ipa\n'
+printf 'IPA with ad-hoc entitlement seals; SideStore personal signing still required: apps/ios/out/Capri-unsigned.ipa\n'
