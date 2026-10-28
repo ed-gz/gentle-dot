@@ -1,3 +1,6 @@
+import { localIdentifier } from './local-identifiers.ts';
+import { canonicalWorkManifest, parseWorkSyncManifest, parseWorkResult, type WorkSyncManifest, type WorkSyncReceipt, type WorkResult } from '@gentle-dot/protocol';
+export type WorkTransfer = { host: string; transferId: string; manifest: WorkSyncManifest; manifestHash: string; receipt?: WorkSyncReceipt };
 export type WorkStatus = 'local' | 'prepared' | 'approved' | 'sending' | 'sent' | 'uncertain' | 'failed';
 export type WorkItem = {
   id: string;
@@ -11,6 +14,9 @@ export type WorkItem = {
   files: { id: string; name: string; type: string; size: number }[];
   versions: { id: string; text: string; createdAt: number }[];
   error?: string;
+  transfer?: WorkTransfer;
+  result?: WorkResult;
+  source?: { id: string; hash: string };
 };
 export type WorkInput = {
   title: string;
@@ -91,6 +97,9 @@ function nextRevision(item: WorkItem, now: number): WorkItem {
     status: item.status, revision: item.revision + 1,
     files: item.files.map(file => ({ id: file.id, name: file.name, type: file.type, size: file.size })),
     versions: item.versions.map(version => ({ id: version.id, text: version.text, createdAt: version.createdAt })),
+    ...(item.transfer ? { transfer: structuredClone(item.transfer) } : {}),
+    ...(item.result ? { result: structuredClone(item.result) } : {}),
+    ...(item.source ? { source: { id: item.source.id, hash: item.source.hash } } : {}),
   };
 }
 
@@ -108,6 +117,7 @@ export function transitionWorkItem(item: WorkItem, nextStatus: WorkStatus, now =
   }
   const next = nextRevision(item, now);
   next.status = nextStatus;
+  if (nextStatus === 'local' || nextStatus === 'prepared') delete next.transfer;
   return next;
 }
 
@@ -116,6 +126,7 @@ export function reviseWorkItem(item: WorkItem, instruction: string, now = Date.n
   const next = nextRevision(item, now);
   next.instruction = textWithin(instruction, WORK_LIMITS.instruction, 'Instrucción');
   next.status = 'local';
+  delete next.transfer;
   return next;
 }
 
@@ -127,6 +138,7 @@ export function addWorkVersionItem(item: WorkItem, text: string, versionId: stri
   const next = nextRevision(item, now);
   next.versions.push({ id: versionId, text: content, createdAt: now });
   next.status = 'local';
+  delete next.transfer;
   return next;
 }
 
@@ -232,19 +244,93 @@ export function listWork(): Promise<WorkItem[]> {
   });
 }
 
-export async function createWork(input: WorkInput): Promise<WorkItem> {
+export function readWork(id: string): Promise<WorkItem> {
+  return transact('readonly', (transaction, result, fail) => {
+    whenReady<WorkItem | undefined>(transaction.objectStore(ITEMS).get(id), value => result(requireItem(value)), fail);
+  });
+}
+
+/** Freeze the approved bytes/revision before the first network operation. */
+export function beginWorkTransfer(id: string, expectedRevision: number, transfer: WorkTransfer): Promise<WorkItem> {
+  return updateWork(id, expectedRevision, item => {
+    if (item.status !== 'approved') throw new Error('Revisa y aprueba esta versión antes de transferirla.');
+    const manifest = parseWorkSyncManifest(transfer.manifest);
+    if (!manifest || manifest.workId !== item.id || manifest.revision !== item.revision || manifest.title !== item.title || manifest.instruction !== item.instruction || manifest.kind !== item.kind || !/^[a-f0-9]{64}$/.test(transfer.manifestHash) || !/^[a-zA-Z0-9_-]{1,128}$/.test(transfer.transferId) || !transfer.host || transfer.host.length > 500) throw new Error('La transferencia no corresponde a la versión aprobada.');
+    const next = transitionWorkItem(item, 'sending');
+    next.transfer = { host: transfer.host, transferId: transfer.transferId, manifest: JSON.parse(canonicalWorkManifest(manifest)), manifestHash: transfer.manifestHash };
+    return next;
+  });
+}
+
+/** A late reply can settle only its immutable transfer, never a newly edited or retried item. */
+export async function settleWorkTransfer(id: string, transferId: string, outcome: WorkSyncReceipt | string): Promise<WorkItem> {
+  const current = await readWork(id);
+  return updateWork(id, current.revision, item => {
+    const transfer = item.transfer;
+    if (!transfer || transfer.transferId !== transferId || !['sending', 'uncertain', 'sent'].includes(item.status)) throw new Error('La confirmación pertenece a otra revisión del trabajo.');
+    if (item.status === 'sent') return item;
+    const next = nextRevision(item, Date.now());
+    if (typeof outcome === 'string') { next.status = 'uncertain'; next.error = outcome.slice(0, 500); return next; }
+    if (outcome.transferId !== transferId || outcome.workId !== item.id || outcome.revision !== transfer.manifest.revision || outcome.manifestHash !== transfer.manifestHash || !Number.isSafeInteger(outcome.committedAt) || outcome.committedAt < 0) throw new Error('La confirmación del host no coincide con el contenido aprobado.');
+    next.status = 'sent'; next.transfer!.receipt = { ...outcome }; return next;
+  });
+}
+
+/** Receiving a draft is not approving its contents or any suggested external action. */
+export async function saveWorkResult(id: string, transferId: string, value: WorkResult): Promise<WorkItem> {
+  const result = parseWorkResult(value); if (!result) throw new Error('La minuta recibida no es válida.');
+  const current = await readWork(id);
+  return updateWork(id, current.revision, item => {
+    if (item.status !== 'sent' || !item.transfer?.receipt || item.transfer.transferId !== transferId || item.transfer.manifestHash !== result.manifestHash) throw new Error('La minuta no corresponde a esta transferencia confirmada.');
+    if (item.result && JSON.stringify(item.result) === JSON.stringify(result)) return item;
+    const next = nextRevision(item, Date.now()); next.result = result; return next;
+  });
+}
+
+/** A correction starts a new local revision, retaining the source receipt/evidence in the draft text. */
+export async function createWorkFromResult(id: string, expectedRevision: number): Promise<WorkItem> {
+  return transact('readwrite', (transaction, result, fail) => {
+    const store = transaction.objectStore(ITEMS);
+    whenReady<WorkItem | undefined>(store.get(id), value => {
+      const source = requireItem(value); assertWorkRevision(source, expectedRevision);
+      if (!source.result || !source.transfer?.receipt) throw new Error('Primero recupera la minuta del host.');
+      whenReady(store.count(), count => {
+        if (count >= WORK_LIMITS.items) throw new Error('La bandeja admite 100 trabajos. Elimina uno antes de crear otro.');
+        const now = Date.now(); const nextId = localIdentifier();
+        const draft = JSON.stringify({ sourceWorkId: id, receipt: source.transfer!.receipt, result: source.result }, null, 2);
+        if (draft.length > WORK_LIMITS.versionText) throw new Error('La minuta supera el límite de una versión editable. Conserva el original y prepara una corrección separada.');
+        const next: WorkItem = { id: nextId, title: source.title, kind: source.kind, instruction: source.instruction, createdAt: now, updatedAt: now, revision: 1, status: 'local', files: source.files.map(file => ({ ...file })), versions: [{ id: localIdentifier(), text: draft, createdAt: now }], result: structuredClone(source.result) };
+        let pending = source.files.length;
+        const finish = () => { store.add(next); result(next); };
+        if (!pending) { finish(); return; }
+        for (const file of source.files) whenReady<Blob | undefined>(transaction.objectStore(FILES).get([id, file.id]), blob => {
+          if (!(blob instanceof Blob) || blob.size !== file.size) throw new Error('Falta un adjunto original para conservar la trazabilidad.');
+          transaction.objectStore(FILES).add(blob, [nextId, file.id]); if (--pending === 0) finish();
+        }, fail);
+      }, fail);
+    }, fail);
+  });
+}
+
+async function insertWork(input: WorkInput, source?: WorkItem['source']): Promise<WorkItem> {
   const safe = validateWorkInput(input);
   const now = Date.now();
   const item: WorkItem = {
-    id: crypto.randomUUID(), title: safe.title, kind: safe.kind, instruction: safe.instruction,
+    id: localIdentifier(), title: safe.title, kind: safe.kind, instruction: safe.instruction,
     createdAt: now, updatedAt: now, status: 'local', revision: 1,
-    files: safe.files.map(file => ({ id: crypto.randomUUID(), name: file.name, type: file.type, size: file.size })),
+    files: safe.files.map(file => ({ id: localIdentifier(), name: file.name, type: file.type, size: file.size })),
     versions: [],
+    ...(source ? { source } : {}),
   };
   return transact('readwrite', (transaction, result, fail) => {
     const store = transaction.objectStore(ITEMS);
-    whenReady(store.count(), count => {
-      if (count >= WORK_LIMITS.items) throw new Error('La bandeja admite 100 trabajos. Elimina uno antes de crear otro.');
+    whenReady<WorkItem[]>(store.getAll(), items => {
+      const existing = source ? items.find(item => item.source?.id === source.id) : undefined;
+      if (existing) {
+        if (existing.source!.hash !== source!.hash) throw new Error('El mismo identificador de importación contiene datos diferentes. Conserva ambos originales antes de reintentar.');
+        result(existing); return;
+      }
+      if (items.length >= WORK_LIMITS.items) throw new Error('La bandeja admite 100 trabajos. Elimina uno antes de crear otro.');
       store.add(item);
       for (let i = 0; i < safe.files.length; i++) {
         transaction.objectStore(FILES).add(safe.files[i], [item.id, item.files[i]!.id]);
@@ -252,6 +338,23 @@ export async function createWork(input: WorkInput): Promise<WorkItem> {
       result(item);
     }, fail);
   });
+}
+
+export function createWork(input: WorkInput): Promise<WorkItem> { return insertWork(input); }
+
+/** Share Extension acknowledgement must wait for this promise's durable IDB transaction. */
+export async function createImportedWork(sourceId: string, input: WorkInput): Promise<WorkItem> {
+  if (!/^share:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(sourceId)) throw new Error('El identificador de la importación no es válido.');
+  const safe = validateWorkInput(input);
+  const digest = async (bytes: ArrayBuffer) => {
+    if (!globalThis.crypto?.subtle) return (await import('./device-bridge.ts')).nativeSHA256Bytes(new Uint8Array(bytes));
+    return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  };
+  const files = [];
+  for (const file of safe.files) files.push({ name: file.name, type: file.type, size: file.size, hash: await digest(await file.arrayBuffer()) });
+  const content = JSON.stringify({ title: safe.title, kind: safe.kind, instruction: safe.instruction, files });
+  const hash = await digest(new TextEncoder().encode(content).buffer);
+  return insertWork(safe, { id: sourceId.toLowerCase(), hash });
 }
 
 export function readWorkFile(workId: string, fileId: string): Promise<Blob | undefined> {
@@ -268,7 +371,7 @@ export function reviseWork(id: string, expectedRevision: number, instruction: st
 }
 
 export function addWorkVersion(id: string, expectedRevision: number, text: string): Promise<WorkItem> {
-  return updateWork(id, expectedRevision, item => addWorkVersionItem(item, text, crypto.randomUUID()));
+  return updateWork(id, expectedRevision, item => addWorkVersionItem(item, text, localIdentifier()));
 }
 
 /** Call only after the relevant user action or explicit daemon acknowledgement; never on socket open. */

@@ -57,6 +57,11 @@ export class MobileAccess {
 		const digest = hash(token);
 		return this.devices.some((d) => d.hash === digest);
 	}
+	/** Stable namespace resolved exclusively from an authenticated device key. */
+	deviceIdForToken(token: string): string | undefined {
+		const digest = hash(token);
+		return this.devices.find((device) => device.hash === digest)?.id;
+	}
 	canApprove(token: string): boolean {
 		const digest = hash(token);
 		return this.devices.some((d) => d.hash === digest && d.approvalAccess === true);

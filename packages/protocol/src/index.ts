@@ -1,3 +1,5 @@
+import { parseWorkSyncRequest, type WorkSyncRequest, type WorkSyncReply } from "./work-sync.ts";
+export * from "./work-sync.ts";
 export { DEFAULT_COMPANION_MODE, isCompanionMode } from "./companion-theme.ts";
 export type { CompanionActivityKind, CompanionMode, CompanionThemeManifest } from "./companion-theme.ts";
 
@@ -344,6 +346,7 @@ export function parseProfileRoles(value: unknown): ProfileRoles | undefined {
 }
 
 export type ClientMessage =
+	| WorkSyncRequest
 	| { type: "hello"; token: string; protocol: number }
 	/** `text` may be empty when files are attached. */
 	| { type: "send"; text: string; requestId?: string; attachments?: AttachmentRef[] }
@@ -402,6 +405,7 @@ export type ClientMessage =
 	| { type: "pin_approve"; requestId: string; pin: string };
 
 export type ServerPayload =
+	| WorkSyncReply
 	| {
 			type: "ready";
 			agentState: AgentState;
@@ -614,6 +618,7 @@ export function parseClientMessage(raw: string): ClientMessage | undefined {
 	}
 	if (typeof value !== "object" || value === null) return undefined;
 	const m = value as Record<string, unknown>;
+	if (m.type === "work_sync") return parseWorkSyncRequest(m);
 	switch (m.type) {
 		case "hello":
 			return isString(m.token) && typeof m.protocol === "number"

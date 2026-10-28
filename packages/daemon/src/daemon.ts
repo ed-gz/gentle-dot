@@ -1,3 +1,6 @@
+import { createMeetingProcessor, createPiMeetingGenerator } from "./work-meeting.ts";
+import { WorkSyncStore } from "./work-sync.ts";
+import type { WorkSyncRequest, WorkSyncReply } from "@gentle-dot/protocol";
 import { ComposerGeometry } from "./orchestration/composer-geometry.ts";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
@@ -1194,6 +1197,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		}
 		handleHttp(req, res, options.uiDir, bridge);
 	});
+	const workSync = new WorkSyncStore(join(options.dataDir, "work-inbox"), vps ? undefined : createMeetingProcessor({
+		...(app ? { voice: new LocalVoice(app) } : {}), generate: createPiMeetingGenerator(agentHome, supervisor),
+	}));
 	const clientKeys = new WeakMap<WebSocket, string>();
 	const wss = new WebSocketServer({ noServer: true, maxPayload: 3 * 1024 * 1024 });
 	const hasApprovalClient = () =>
@@ -1223,6 +1229,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 					mobilePresence.configure(key, req.headers["x-gentle-presence"] === "off" ? false : req.headers["x-gentle-presence"] === "on" ? true : undefined);
 					return key;
 				},
+				(key, message) => workSync.handle(mobile.deviceIdForToken(key) ?? "desktop", message),
 			),
 		);
 	});
@@ -1252,6 +1259,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		await Promise.all([orchestrator?.close(), browser?.close()]);
 		for (const client of wss.clients) client.terminate();
 		wss.close();
+		await workSync.close();
 		// Stops waiting approvals and the connectors' servers (stdio ones are processes of the daemon).
 		await proxy.close();
 		await serverClosed;
@@ -1385,6 +1393,7 @@ function acceptClient(
 	onAuth: (key: string) => void,
 	onDisconnect: () => void,
 	mobileKey: (key: string) => string | undefined,
+	syncWork: (key: string, message: WorkSyncRequest) => Promise<WorkSyncReply>,
 ): void {
 	let seq = 0;
 	let clientKey: string | undefined;
@@ -1424,6 +1433,10 @@ function acceptClient(
 				code: "bad_message",
 				message: "The app sent a message the assistant did not understand.",
 			});
+			return;
+		}
+		if (message.type === "work_sync" && clientKey !== undefined) {
+			void syncWork(clientKey, message).then(reply => client.send(reply));
 			return;
 		}
 		void bridge.handle(client, message as ClientMessage);
