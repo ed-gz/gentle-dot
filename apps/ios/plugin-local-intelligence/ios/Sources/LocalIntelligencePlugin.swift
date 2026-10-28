@@ -82,18 +82,38 @@ final class LocalIntelligencePlugin: Plugin {
     private var pending: Invoke?
     private var cancellationRequested = false
     private var lifecycleObserver: NSObjectProtocol?
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     @objc override func load(webview: WKWebView) {
         lifecycleObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.cancelCurrent(message: "Respuesta pausada al salir de Capri. Vuelve a intentarlo al regresar.")
+            guard let self = self, self.backgroundTask == .invalid else { return }
+            self.cancelCurrent(message: "iOS no concedió tiempo para completar la respuesta fuera de Capri. Tu conversación se conserva.")
         }
     }
 
     deinit {
         if let observer = lifecycleObserver { NotificationCenter.default.removeObserver(observer) }
         task?.cancel()
+        let identifier = backgroundTask
+        if identifier != .invalid { DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(identifier) } }
+    }
+
+    // A finite lease for the inference already requested in the foreground.
+    // This is not an always-on agent or permission to start new background work.
+    private func beginInferenceLease() {
+        endInferenceLease()
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Completar respuesta de Capri") { [weak self] in
+            guard let self = self else { return }
+            self.cancelCurrent(message: "iOS terminó el tiempo disponible para esta respuesta. Tu conversación se conserva.")
+            self.endInferenceLease()
+        }
+    }
+    private func endInferenceLease() {
+        let identifier = backgroundTask
+        backgroundTask = .invalid
+        if identifier != .invalid { UIApplication.shared.endBackgroundTask(identifier) }
     }
 
     private func availability() -> Availability {
@@ -165,9 +185,10 @@ final class LocalIntelligencePlugin: Plugin {
             let session = LanguageModelSession(instructions: agentInstructions)
             pending = invoke
             cancellationRequested = false
+            beginInferenceLease()
             task = Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                defer { self.task = nil; self.pending = nil; self.cancellationRequested = false }
+                defer { self.task = nil; self.pending = nil; self.cancellationRequested = false; self.endInferenceLease() }
                 do {
                     try Task.checkCancellation()
                     let response = try await session.respond(to: prompt, generating: GeneratedDecision.self,
@@ -220,9 +241,10 @@ final class LocalIntelligencePlugin: Plugin {
             conversation = local
             pending = invoke
             cancellationRequested = false
+            beginInferenceLease()
             task = Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                defer { self.task = nil; self.pending = nil; self.cancellationRequested = false }
+                defer { self.task = nil; self.pending = nil; self.cancellationRequested = false; self.endInferenceLease() }
                 do {
                     try Task.checkCancellation()
                     let response = try await local.session.respond(
@@ -272,6 +294,7 @@ final class LocalIntelligencePlugin: Plugin {
         task?.cancel()
         pending?.resolve(Reply(ok: false, error: "cancelled", message: message))
         pending = nil
+        endInferenceLease()
     }
 
     @objc func cancel(_ invoke: Invoke) {

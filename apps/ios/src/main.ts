@@ -1,4 +1,5 @@
 import { localIdentifier } from './local-identifiers.ts';
+import { waitForForeground } from './foreground.ts';
 import { createEngine, frameAt } from '@gentle-dot/ui/src/capri2d/engine.ts';
 import { RoamDirector, type RoamPosition } from '@gentle-dot/ui/src/capri2d/roam.ts';
 import { occupiedPhoneSpace, phonePerches, phonePositionFree } from './companion-space.ts';
@@ -509,7 +510,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
       // Rebuild a bounded context from the visible timeline, also after app restarts.
       await resetLocal();
       if (generation !== localGeneration) return;
-      const runner = createAgentRunner({ tools: [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: operation => {
+      const runner = createAgentRunner({ waitUntilActive: waitForForeground, tools: [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: operation => {
         if (!linked.ready()) return undefined;
         if (!linked.supportsWorkSync()) throw new Error('Actualiza Gentle Dot en la laptop para transferir trabajos. La conversación sigue disponible y el trabajo local se conserva.');
         if (operation === 'process' && !linked.supportsMeetingDrafts()) throw new Error('Este Gentle Dot no tiene disponible el procesamiento de reuniones. El material confirmado se conserva.');
@@ -588,10 +589,10 @@ const memoryView = mountMemoryView({ status: persistence.status, pending: persis
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) release();
   cancelAnimationFrame(frame); fx?.clear(); persist();
-  if (document.hidden) { void cancelDictation(); director.update(intent, performance.now(), true); linked.suspend(); if (localBusy) void stopLocal(); }
+  if (document.hidden) { void cancelDictation(); director.update(intent, performance.now(), true); linked.suspend(); }
   else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); }
 });
-window.addEventListener('pagehide', () => { connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); if (localBusy) void stopLocal(); });
+window.addEventListener('pagehide', () => { connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
 window.addEventListener('pageshow', event => { if (event.persisted) { redraw(); linked.resume(); } });
 let conversationLoading = false;
 const recoveryMessage = 'No se pudo recuperar la conversación local. Tu borrador sigue aquí; reintenta antes de enviar para proteger el historial guardado.';
