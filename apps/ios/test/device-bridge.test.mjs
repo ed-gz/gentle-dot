@@ -104,6 +104,8 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
     const { targets } = JSON.parse(parsed.stdout);
     assert.equal(targets.capri_iOS.preBuildScripts[0].name, 'Build Rust Code');
     assert.equal(targets.capri_iOS.info.properties.NSMicrophoneUsageDescription, 'Usar voz');
+    assert.match(targets.capri_iOS.info.properties.NSCameraUsageDescription, /cuando eliges capturar.*adjuntarlo/);
+    assert.equal(targets.capri_iOS.info.properties.NSPhotoLibraryUsageDescription, undefined);
     assert.equal(targets.capri_iOS.entitlements.properties['test.existing'], true);
     assert.equal(targets.capri_iOS.dependencies.filter(item => item.target === 'CapriShare').length, 1);
     assert.equal(targets.capri_iOS.info.properties.CFBundleURLTypes.length, 1);
@@ -112,12 +114,16 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
     assert.deepEqual(targets.CapriShare.entitlements.properties['com.apple.security.application-groups'], targets.capri_iOS.entitlements.properties['com.apple.security.application-groups']);
     assert.match(targets.CapriShare.info.properties.NSExtension.NSExtensionAttributes.NSExtensionActivationRule, /public.audio/);
     assert.doesNotMatch(readFileSync(path, 'utf8'), /TRUEPREDICATE/);
+    targets.capri_iOS.info.properties.NSCameraUsageDescription = 'Propósito de cámara personalizado';
+    writeFileSync(path, JSON.stringify({ name: 'capri', targets }));
     for (let i = 0; i < 2; i++) {
       const result = spawnSync('ruby', [script, path, '--spec-only'], { encoding: 'utf8', env: { ...process.env, CAPRI_GOOGLE_CLIENT_ID: '123-example.apps.googleusercontent.com' } });
       assert.equal(result.status, 0, result.stderr);
     }
     const google = spawnSync('ruby', ['-ryaml', '-rjson', '-e', 'puts JSON.generate(YAML.safe_load(File.read(ARGV[0]), aliases: true))', path], { encoding: 'utf8' });
     const info = JSON.parse(google.stdout).targets.capri_iOS.info.properties;
+    assert.equal(info.NSCameraUsageDescription, 'Propósito de cámara personalizado');
+    assert.equal(info.NSMicrophoneUsageDescription, 'Usar voz');
     assert.equal(info.CapriGoogleClientID, '123-example.apps.googleusercontent.com');
     assert.equal(info.CFBundleURLTypes.length, 2);
     assert.deepEqual(info.CFBundleURLTypes.find(item => item.CFBundleURLName === 'dev.gentledot.capri.google').CFBundleURLSchemes, ['com.googleusercontent.apps.123-example']);
