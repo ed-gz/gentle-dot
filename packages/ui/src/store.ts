@@ -235,6 +235,9 @@ function reduceServer(state: DotState, message: ServerMessage): DotState {
 	// Additive daemon delivery metadata; older hosts omit it. Chat data still reduces normally.
 	const presenceSuppressed = (message as ServerMessage & {mobileNotificationSuppressed?: boolean}).mobileNotificationSuppressed === true;
 	switch (message.type) {
+		case "work_sync_reply":
+			// Durable receipts belong to their transfer dispatcher.
+			return state;
 		case "ready": {
 			const { pin: _pin, ...rest } = state;
 			const { issue: _issue, ...connectors } = state.connectors;

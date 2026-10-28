@@ -44,6 +44,7 @@ export function OrchestrationPanel({
 	requestsVisible = true,
 	onVisibleSession,
 	requestedSession,
+	identityScope = "",
 }: {
 	controls: OrchestrationControls;
 	client: OrchestrationClient;
@@ -53,6 +54,8 @@ export function OrchestrationPanel({
 	requestsVisible?: boolean;
 	onVisibleSession?(identity: { paneId: string; sessionId?: string } | undefined): void;
 	requestedSession?: { paneId: string; sessionId?: string; key: number };
+	/** Prevent saved session drafts/receipts from crossing linked hosts. */
+	identityScope?: string;
 }) {
 	const { snapshot, busy, error, act, refresh } = controls;
 	const [selected, updateSelected] = useState<string>();
@@ -87,7 +90,7 @@ export function OrchestrationPanel({
 	// by the daemon; keep refresh/retry available after QUESTION_CHANGED or a refusal.
 	const answerConnected = snapshot?.available === true;
 	const connected = answerConnected && !error;
-	const identity = session?.sessionId ? `${session.paneId}:${session.sessionId}` : undefined;
+	const identity = session?.sessionId ? `${identityScope}${session.paneId}:${session.sessionId}` : undefined;
 	useCompanionResponse(conversationMessages.findLast(message => message.role === "assistant")?.id, identity, active, ".agent-message-assistant");
 	const clientEpoch = useRef({ client, epoch: 0 });
 	if (clientEpoch.current.client !== client) clientEpoch.current = { client, epoch: clientEpoch.current.epoch + 1 };
@@ -367,6 +370,11 @@ export function OrchestrationPanel({
 						{conversationError}
 					</p>
 				) : null}
+				{!conversation && !conversationError ? <p className="muted" role="status">{
+					session.connected && session.sessionId && (session.capabilities?.inspect ?? session.managed)
+						? "Cargando el historial de esta sesión…"
+						: "Esta terminal no ofrece un historial de agente conectado. Su estado sigue disponible en Detalles y actividad."
+				}</p> : null}
 
 				{conversation ? (
 					<section
@@ -641,6 +649,8 @@ export function OrchestrationPanel({
 						<button
 							type="button"
 							className="agent-session"
+							data-pane-id={entry.paneId}
+							data-session-id={entry.sessionId}
 							aria-label={`${entry.label || "Sesión sin nombre"} · ${entry.connected ? STATES[entry.state] : "Sin conexión"}`}
 							aria-pressed={selected === entry.paneId}
 							onClick={() => setSelected(selected === entry.paneId ? undefined : entry.paneId)}

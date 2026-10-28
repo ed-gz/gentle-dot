@@ -22,6 +22,7 @@ main['info']['properties'] ||= {}
 main_info = main['info']['properties']
 main_info['CapriAppGroup'] = group
 main_info['NSMicrophoneUsageDescription'] ||= 'Capri usa el micrófono cuando dictas una instrucción. La transcripción se realiza en este iPhone.'
+main_info['NSLocalNetworkUsageDescription'] ||= 'Capri se conecta a la laptop que vinculas para consultar tus sesiones y transferir los trabajos que autorizas.'
 # WKWebView's existing file picker can open UIImagePickerController's camera.
 # This declaration does not request access before the person chooses capture.
 main_info['NSCameraUsageDescription'] ||= 'Capri usa la cámara cuando eliges leer el QR de tu laptop o capturar una foto o un video para adjuntarlo a una conversación o un trabajo.'

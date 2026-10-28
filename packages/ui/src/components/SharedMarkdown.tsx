@@ -70,14 +70,18 @@ function uniqueAttachments(client: SharedFileClient | undefined) {
 	};
 }
 
+export const SharedLinkContext = createContext<(url: string) => void>(openExternal);
+
 /** Private file links are authenticated cards; ordinary Markdown remains ordinary content. */
 export function SharedMarkdown({
 	children,
-	openUrl = openExternal,
+	openUrl,
 }: {
 	children: string;
 	openUrl?: (url: string) => void;
 }) {
+	const platformOpen = useContext(SharedLinkContext);
+	const openLink = openUrl ?? platformOpen;
 	const client = useContext(SharedFileContext);
 	const attachments = useMemo(() => uniqueAttachments(client), [client]);
 	const components = useMemo<Components>(
@@ -122,7 +126,7 @@ export function SharedMarkdown({
 							external
 								? (event) => {
 										event.preventDefault();
-										openUrl(href);
+										openLink(href);
 									}
 								: undefined
 						}
@@ -140,7 +144,7 @@ export function SharedMarkdown({
 				);
 			},
 		}),
-		[client, openUrl],
+		[client, openLink],
 	);
 	return (
 		<Markdown remarkPlugins={[remarkGfm, attachments]} components={components}>

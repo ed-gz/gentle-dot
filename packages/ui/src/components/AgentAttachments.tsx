@@ -1,13 +1,17 @@
 import type { AttachmentRef } from "@gentle-dot/protocol";
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { OrchestrationClient } from "../orchestration.ts";
 import { useAttachments } from "../useAttachments.ts";
 import { AgentVoiceContext, useAgentVoice } from "../useAgentVoice.ts";
 import { Composer } from "./Composer.tsx";
 import "../agent-attachments.css";
+import type { VoiceControls } from "../useVoice.ts";
+
+/** Platforms can supply their own transcriber without initializing desktop capture. */
+export const AgentVoiceOverrideContext = createContext<VoiceControls | undefined>(undefined);
 
 /** Files belong to client + pane + session; availability only cancels capture/pre-dispatch work. */
-export function AgentAttachments(props: {
+interface AgentAttachmentsProps {
  client: OrchestrationClient;
  paneId: string;
  sessionId: string;
@@ -18,7 +22,16 @@ export function AgentAttachments(props: {
  busy?: boolean;
  images: boolean;
  filesEnabled?: boolean;
-}) {
+}
+export function AgentAttachments(props: AgentAttachmentsProps) {
+ const voice = useContext(AgentVoiceOverrideContext);
+ return voice ? <AgentAttachmentsBody {...props} voice={voice} /> : <DesktopAgentAttachments {...props} />;
+}
+function DesktopAgentAttachments(props: AgentAttachmentsProps) {
+ const voice = useAgentVoice(!props.disabled && !props.busy);
+ return <AgentAttachmentsBody {...props} voice={voice} />;
+}
+function AgentAttachmentsBody(props: AgentAttachmentsProps & { voice: VoiceControls }) {
  const { client, paneId, sessionId, text, onText, onSend, disabled, busy = false, filesEnabled = true } = props;
  const context = useContext(AgentVoiceContext);
  const disconnected = disabled || Boolean(context && context.state.connection !== "open");
@@ -31,7 +44,7 @@ export function AgentAttachments(props: {
   ? (file: File, options: { uploadId?: string }) => client.uploadAttachment!(paneId, sessionId, file, options.uploadId, controller.current.signal)
   : undefined, [client, paneId, sessionId, filesEnabled]);
  const attachments = useAttachments(uploader);
- const voice = useAgentVoice(!disconnected && !busy);
+ const voice = props.voice;
  useEffect(() => () => voice.cancel(), [client, paneId, sessionId, voice.cancel]);
  const guardedAttachments = attachments ? { ...attachments, upload: async () => {
   if (controller.current.signal.aborted && !attachments.uploading) controller.current = new AbortController();

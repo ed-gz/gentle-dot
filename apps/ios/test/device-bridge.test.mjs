@@ -104,6 +104,7 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
     const { targets } = JSON.parse(parsed.stdout);
     assert.equal(targets.capri_iOS.preBuildScripts[0].name, 'Build Rust Code');
     assert.equal(targets.capri_iOS.info.properties.NSMicrophoneUsageDescription, 'Usar voz');
+    assert.match(targets.capri_iOS.info.properties.NSLocalNetworkUsageDescription, /laptop que vinculas.*sesiones.*autorizas/);
     assert.match(targets.capri_iOS.info.properties.NSCameraUsageDescription, /cuando eliges.*QR.*capturar.*adjuntarlo/);
     assert.equal(targets.capri_iOS.info.properties.NSPhotoLibraryUsageDescription, undefined);
     assert.equal(targets.capri_iOS.entitlements.properties['test.existing'], true);

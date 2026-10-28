@@ -11,6 +11,9 @@ function apply(state: DotState, ...payloads: ServerPayload[]): DotState {
 }
 
 describe("reduce", () => {
+	it("leaves durable transfer receipts to their dispatcher without losing chat state", () => {
+		expect(apply(initialState, { type: "work_sync_reply", requestId: "r", transferId: "t", state: "missing" })).toBe(initialState);
+	});
 	it("applies live voice capability without changing accounts", () => {
 		const local = apply(initialState, { type: "voice_capability", voice: { transcribe: true, speak: false, local: true } });
 		expect(local.voice).toEqual({ transcribe: true, speak: false, local: true });

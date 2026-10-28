@@ -381,7 +381,8 @@ export interface AgentWork {
 }
 
 /** Access keys stay in the header; mutations are never retried automatically. */
-export function createOrchestrationClient(info: ConnectionInfo): OrchestrationClient {
+export function createOrchestrationClient(info: ConnectionInfo, transport: { fetch?: typeof fetch; terminalMood?: boolean } = {}): OrchestrationClient {
+	const requestFetch = transport.fetch ?? globalThis.fetch;
 	const endpoint = `${uploadBase(info.url)}/orchestration`;
 	async function request(
 		action?:
@@ -401,7 +402,7 @@ export function createOrchestrationClient(info: ConnectionInfo): OrchestrationCl
 			: action && "action" in action && (action.action === "create" || action.action === "duplicate")
 				? 40_000
 				: 15_000;
-		const response = await fetch(path, {
+		const response = await requestFetch(path, {
 			method: action ? "POST" : "GET",
 			headers: {
 				Authorization: `Bearer ${info.token}`,
@@ -424,7 +425,7 @@ export function createOrchestrationClient(info: ConnectionInfo): OrchestrationCl
 		return body;
 	}
 	return {
-		terminalMood: createTerminalMoodClient(info),
+		terminalMood: transport.terminalMood === false ? undefined : createTerminalMoodClient(info),
 		async snapshot(signal) {
 			const body = await request(undefined, signal);
 			if (
@@ -448,7 +449,7 @@ export function createOrchestrationClient(info: ConnectionInfo): OrchestrationCl
 			await request(action);
 		},
 		async uploadAttachment(paneId, sessionId, file, uploadId, signal) {
-			const response = await fetch(`${uploadBase(info.url)}/upload`, {
+			const response = await requestFetch(`${uploadBase(info.url)}/upload`, {
 				method: "POST", body: file, signal,
 				headers: { Authorization: `Bearer ${info.token}`, "X-File-Name": encodeURIComponent(file.name),
 					"X-Agent-Pane": paneId, "X-Agent-Session": sessionId, ...(uploadId ? { "X-Upload-Id": uploadId } : {}) },
