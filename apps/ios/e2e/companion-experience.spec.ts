@@ -132,6 +132,30 @@ test('corrupt personal override falls back once to verified bundled art without 
   expect(errors).toEqual([]);
 });
 
+test('a local answer arriving during a greeting does not cut off the human gesture', async ({ page }) => {
+  test.slow();
+  await page.clock.install();
+  await personalBuild(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, bridge = state.__TAURI_INTERNALS__, original = bridge.invoke;
+    bridge.invoke = (command: string, args: unknown) => command.endsWith('agent_step')
+      ? new Promise(resolve => { state.resolveGreetingTestStep = resolve; }) : original(command, args);
+  });
+  await page.locator('#prompt').fill('Termina mientras saludas.'); await page.locator('#send').click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).resolveGreetingTestStep)).toBe('function');
+  await page.locator('#rig-handle').focus(); await page.keyboard.press('Enter');
+  await page.clock.runFor(150);
+  await expect(page.locator('#rig-handle')).toHaveAttribute('data-pose', 'hop');
+  await page.evaluate(() => (globalThis as any).resolveGreetingTestStep({ ok: true, decision: {
+    kind: 'answer', text: 'Respuesta durante el saludo.', toolName: '', argumentsJSON: '{}',
+  } }));
+  await expect(page.locator('.chat-text').last()).toContainText('Respuesta durante el saludo.');
+  await page.clock.runFor(150);
+  await expect(page.locator('#rig-handle')).toHaveAttribute('data-pose', 'hop');
+  await page.clock.runFor(2800);
+  await expect(page.locator('#rig-handle')).not.toHaveAttribute('data-pose', 'hop');
+});
+
 test('PC teleport choreography reaches the conversation edge and a greeting does not disable roaming', async ({ page }) => {
   test.slow();
   // Install before the app creates performance.now-based roam deadlines.

@@ -84,6 +84,7 @@ document.querySelector('main')!.append(stage);
 let lastTime = 0;
 let nextRoam = 0;
 let gestureTimer: ReturnType<typeof setTimeout> | undefined;
+let humanGesture: RigIntent['gesture'];
 const isReduced = () => reduced.matches || settings.motion !== 'full';
 try { fx = new RigFx(element<HTMLCanvasElement>('fx')); } catch { /* Optional procedural effects. */ }
 
@@ -100,9 +101,12 @@ let conversationRestored = false;
 let manuallyPlaced = false;
 function presenceIntent(): RigIntent {
   if (travel) return { travelling: true, direction: travel.target.direction };
-  if (attention) return { ...intent, question: 'review' };
-  if (typing && !intent.working && !intent.dragging && !intent.gesture) return { ...intent, resting: 'sit', watching: true };
-  return Object.keys(intent).length ? { direction: perched.direction, ...intent } : perched;
+  // Work events can arrive during a greeting. Retain the latest real state,
+  // but let the explicit gesture finish before showing an outcome animation.
+  const visible = humanGesture ? { ...intent, outcome: undefined, gesture: humanGesture } : intent;
+  if (attention) return { ...visible, question: 'review' };
+  if (typing && !visible.working && !visible.dragging && !visible.gesture) return { ...visible, resting: 'sit', watching: true };
+  return Object.keys(visible).length ? { direction: perched.direction, ...visible } : perched;
 }
 function layoutCompanion() {
   const main = document.querySelector('main')!.getBoundingClientRect();
@@ -142,7 +146,7 @@ function animate(now: number) {
   if (roaming && !drag && !travel && now >= nextRoam) {
     const region = { x: 0, y: 0, width: stage.clientWidth, height: stage.clientHeight };
     const next = roamDirector.step({ laptop: region, region, x: 0, y: 0, width: rig.offsetWidth, height: rig.offsetHeight, herdr: false, safePerches }, now,
-      { composer: typing, question: attention, paused: isReduced() || Boolean(intent.working || intent.gesture || intent.outcome) });
+      { composer: typing, question: attention, paused: isReduced() || Boolean(intent.working || humanGesture || intent.outcome) });
     if (next) { manuallyPlaced = false; travel = { started: now, target: next, moved: false }; nextRoam = now + 18000; revision++; }
   }
   if (travel) {
@@ -171,13 +175,10 @@ function setIntent(next: RigIntent) { intent = next; if (next.gesture || next.dr
 function gesture(name: string) {
   clearTimeout(gestureTimer);
   const greeting = { name, at: performance.now() };
-  const { outcome: _outcome, dragging: _dragging, ...context } = intent;
-  setIntent({ ...context, gesture: greeting });
+  humanGesture = greeting; travel = undefined; redraw();
   gestureTimer = setTimeout(() => {
-    // A greeting must neither forget ongoing work nor erase a newer engine event.
-    if (intent.gesture !== greeting) return;
-    const { gesture: _gesture, ...current } = intent;
-    setIntent(current);
+    if (humanGesture !== greeting) return;
+    humanGesture = undefined; redraw();
   }, 2500);
 }
 async function startRig() {
