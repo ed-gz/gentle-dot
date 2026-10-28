@@ -2,7 +2,13 @@
 
 Capri es una asistente personal de TI con el personaje 2D de PC y una conversación continua entre Apple en el iPhone y Pi/Gentle Dot en la laptop. **El candidato actual incorpora herramientas, dictado/OCR, credenciales, conexiones, trabajos durables y archivo de conversación; todavía no está aceptado en el iPhone.** Código, fixtures, compilación nativa e instalación son evidencias diferentes.
 
-Corte: **27 de octubre de 2026, America/Monterrey**. Continuar exclusivamente en `/home/egarza/gentle-dot-capri`, rama `fix/android-capri-motion-mobile`. El origin sigue siendo `https://github.com/ed-gz/gentle-dot.git`; el checkout viejo no es una base alternativa. Android/T47 permanece abandonado y el servicio desktop no se ha desplegado ni reiniciado como efecto de esta entrega.
+Corte: **28 de octubre de 2026, America/Monterrey**. Continuar exclusivamente en `/home/egarza/gentle-dot-capri`, rama `fix/android-capri-motion-mobile`. El origin sigue siendo `https://github.com/ed-gz/gentle-dot.git`; el checkout viejo no es una base alternativa. Android/T47 permanece abandonado y el servicio desktop no se ha desplegado ni reiniciado como efecto de esta entrega.
+
+## Estado de aceptación actual
+
+**La entrega ccedf29 fue instalada y rechazada por el usuario.** CI 40638610963 sí compiló y verificó la IPA integrada, pero el diseño, el primer arranque sin el arte y la funcionalidad observada no cumplieron. El retrabajo actual se mide contra esa experiencia real; no se convierte un conteo de tests en porcentaje de calidad aceptada. Evidencia y hash exactos en L26 del registro.
+
+La siguiente entrega personal incluirá el PNG original dentro de la IPA, conservado en un repositorio de build privado; la fuente pública no contiene el arte. Se está corrigiendo la geometría de movimiento, el compositor/teclado, la lectura durante actividad, las revisiones y el contexto local. El chat del host y una sesión Pi se comprobaron con acceso de sólo lectura; trabajos/minutas aún necesitan cargar el backend nuevo en el host. [Empaquetado personal](ios-personal-art.md).
 
 ## Qué está construido y qué se ha probado
 
@@ -15,7 +21,7 @@ Corte: **27 de octubre de 2026, America/Monterrey**. Continuar exclusivamente en
 | CI completo, run 40634400355 / SHA 60827d9 | PASS de preflight, Swift/Rust, app, Share Extension y empaquetado; IPA de 2 254 373 bytes comprobada localmente, evidencia en L23 | No está instalada y precede a los arreglos finales de recuperación y a la exportación nativa; se conserva como evidencia de compilación, no como entrega recomendada |
 | Candidato 7e01cbe | 170/170 Node y 48/48 navegador, TypeScript, build de producción y Cargo offline pasan; incluye recuperación, migración y exportación nativa a Archivos | El selector UIKit nuevo requiere su siguiente CI y prueba en iPhone; fixtures no validan cuentas o inferencia reales |
 
-El [registro de trabajo](../odd/tasks/capri-ios.md) conserva resultados posteriores y el SHA exacto de cada entrega; sus logs históricos no se reinterpretan como validación del candidato actual. La [guía SideStore](ios-sidestore.md) describe la instalación. La IPA antigua continúa siendo el artefacto disponible hasta que se registre uno nuevo con hash propio.
+El [registro de trabajo](../odd/tasks/capri-ios.md) conserva resultados posteriores y el SHA exacto de cada entrega; sus logs históricos no se reinterpretan como validación del candidato actual. La [guía SideStore](ios-sidestore.md) describe la instalación. La entrega ccedf29 posterior está registrada en L26; no es una entrega aceptada y no contiene el retrabajo actual.
 
 La interfaz es conversación primero: Capri reacciona a actividad real, el composer recibe texto, voz y adjuntos, y las preguntas, revisiones, herramientas y resultados aparecen en el mismo hilo. Archivo y Ajustes son secundarios. Se reutilizaron contratos de Composer/MessageList/AskCard/AgentWorkflow y del supervisor de Pi, sin traer servicios Android ni sustituir el rig actual.
 
@@ -44,7 +50,7 @@ El usuario autorizó continuar y operar el repositorio sin nuevas preguntas de p
 
 ## Contratos y límites actuales
 
-El arte personal 240 × 420 permanece fuera del bundle y del repositorio. Arte, conversación, archivo y trabajos usan IndexedDB; no añade cifrado propio de Capri. URL del daemon y movimiento se recuerdan en localStorage. La app nativa conserva credenciales por cuenta/host en Keychain; el preview web no proporciona esa persistencia segura y mantiene el token manual sólo en memoria.
+El arte personal 240 × 420 permanece fuera del Git público. El build personal nuevo lo incluirá offline en su bundle con SHA256 verificado; la entrega ccedf29 todavía requería importarlo manualmente. Arte, conversación, archivo y trabajos usan IndexedDB; no añade cifrado propio de Capri. URL del daemon y movimiento se recuerdan en localStorage. La app nativa conserva credenciales por cuenta/host en Keychain; el preview web no proporciona esa persistencia segura y mantiene el token manual sólo en memoria.
 
 | Dato | Límite del código | Consecuencia |
 | --- | --- | --- |
