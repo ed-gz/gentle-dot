@@ -1,8 +1,8 @@
 /* One message surface, with secondary actions inside the thumb's reach. The
    system owns the Files sheet; this layer owns only the conversation controls. */
 #panel-chat #composer { border: 0; padding: 8px 0 4px; background: transparent; }
-#composer .composer-topline { min-height: 36px; }
-#composer .engine-details summary { min-height: 36px; padding-inline: 12px; }
+#composer .composer-topline { min-height: 44px; }
+#composer .engine-details summary { min-height: 44px; padding-inline: 12px; }
 #composer .compose-surface {
   min-width: 0; padding: 8px;
   background: color-mix(in srgb, var(--panel) 94%, var(--violet));

@@ -13,6 +13,30 @@
 #panel-chat .chat-card { border: 0; background: transparent; border-radius: 0; padding: 0; }
 #panel-chat .chat-card[data-role="user"] { margin-left: 16px; padding: 12px; border-radius: 14px 14px 3px 14px; background: #211e2c; }
 #panel-chat .chat-card[data-role="notice"] { color: var(--muted); }
+/* Activity is real agent output: status is written in text as well as color. */
+#panel-chat .tool-trace { border: 0; margin-top: 12px; font-size: .875rem; }
+#panel-chat .tool-trace > summary {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 10px 12px;
+  list-style: none; color: var(--ink); font-weight: 600; background: var(--panel);
+  border-left: 2px solid var(--violet); border-radius: 0 12px 12px 0;
+}
+#panel-chat .tool-trace > summary::-webkit-details-marker { display: none; }
+#panel-chat .tool-trace > summary::before {
+  content: ''; flex: none; width: 7px; height: 7px; border-right: 2px solid var(--violet);
+  border-bottom: 2px solid var(--violet); transform: rotate(-45deg);
+}
+#panel-chat .tool-trace[open] > summary::before { transform: rotate(45deg); }
+#panel-chat .tool-trace > ul { list-style: none; margin: 4px 0 0 12px; padding: 0; border-left: 1px solid var(--line); }
+#panel-chat .tool-trace li { position: relative; padding: 12px 0 8px 20px; }
+#panel-chat .tool-trace li::before {
+  content: ''; position: absolute; left: -5px; top: 18px; width: 9px; height: 9px;
+  border: 2px solid var(--bg); border-radius: 50%; background: var(--pink);
+}
+#panel-chat .tool-trace li[data-status="running"]::before { background: var(--violet); }
+#panel-chat .tool-trace li[data-status="done"]::before { background: var(--acid); }
+#panel-chat .tool-trace li > span { color: var(--ink); font-size: 1rem; line-height: 1.5; }
+#panel-chat .tool-trace li details > summary { min-height: 44px; color: var(--violet); font-size: .875rem; }
+#panel-chat .tool-trace pre { padding: 10px; border-radius: 8px; background: var(--panel); color: var(--ink); }
 #panel-chat .composer { border-top: 1px solid #51415e; box-shadow: none; }
 #panel-chat .composer-topline > label { display: none; }
 #panel-chat .composer-topline { justify-content: flex-end; }
