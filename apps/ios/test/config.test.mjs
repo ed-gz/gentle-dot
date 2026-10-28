@@ -66,7 +66,7 @@ test('non-macOS host fails early, before builds or dependency changes', { skip: 
 
 // Exercise packaging/failure propagation with fixture command binaries. This
 // proves the script's artifact contract, not Swift compilation or inference.
-function unsignedBuildFixture(mode) {
+function unsignedBuildFixture(mode, live = false) {
   const dir = mkdtempSync(join(tmpdir(), 'capri-unsigned-'));
   for (const path of ['scripts', 'bin', 'out', 'src-tauri/target']) mkdirSync(join(dir, path), { recursive: true });
   for (const file of ['build-unsigned.sh', 'verify-ipa.py']) copyFileSync(new URL(`../scripts/${file}`, import.meta.url), join(dir, 'scripts', file));
@@ -81,7 +81,7 @@ function unsignedBuildFixture(mode) {
   command('pnpm', 'exit 0');
   // The real Ruby parser still resolves generated source paths. Only XcodeGen
   // setup is stubbed here; its behavior has separate device-bridge fixtures.
-  command('ruby', 'if [[ "$*" == scripts/configure-share-extension.rb ]]; then exit 0; else exec /usr/bin/ruby "$@"; fi');
+  command('ruby', 'if [[ "$*" == scripts/configure-share-extension.rb* || "$*" == scripts/configure-live-activity.rb* ]]; then exit 0; else exec /usr/bin/ruby "$@"; fi');
   command('cargo', String.raw`
     if [[ "$*" == 'tauri ios init --ci' ]]; then
       mkdir -p src-tauri/gen/apple/Capri.xcodeproj
@@ -89,12 +89,16 @@ function unsignedBuildFixture(mode) {
       python3 - <<'PY'
 import os, pathlib, plistlib
 root = pathlib.Path('src-tauri/gen/apple')
-(root/'project.yml').write_text('targets:\n  AppProduct:\n    type: application\n    platform: iOS\n    entitlements:\n      path: AppProduct/AppProduct.entitlements\n  CapriShare:\n    type: app-extension\n    platform: iOS\n    entitlements:\n      path: CapriShare/CapriShare.entitlements\n')
-for product in ('AppProduct', 'CapriShare'):
+project = 'targets:\n  AppProduct:\n    type: application\n    platform: iOS\n    entitlements:\n      path: AppProduct/AppProduct.entitlements\n  CapriShare:\n    type: app-extension\n    platform: iOS\n    entitlements:\n      path: CapriShare/CapriShare.entitlements\n'
+live = os.environ['CAPRI_LIVE_ACTIVITY'] == '1'
+if live: project += '  CapriLive:\n    type: app-extension\n    platform: iOS\n    entitlements:\n      path: CapriLive/CapriLive.entitlements\n'
+(root/'project.yml').write_text(project)
+for product in (('AppProduct', 'CapriShare', 'CapriLive') if live else ('AppProduct', 'CapriShare')):
     directory = root/product
     directory.mkdir()
     group = 'group.wrong.fixture' if os.environ['CAPRI_BUILD_FIXTURE'] == 'source_group' and product == 'CapriShare' else 'group.dev.gentledot.capri'
-    (directory/(product+'.entitlements')).write_bytes(plistlib.dumps({'com.apple.security.application-groups': [group]}))
+    entitlements = {} if product == 'CapriLive' else {'com.apple.security.application-groups': [group]}
+    (directory/(product+'.entitlements')).write_bytes(plistlib.dumps(entitlements))
 PY
     elif [[ "$*" == 'tauri ios build '* ]]; then
       printf '%s\n' "$*" >> build-calls.txt
@@ -107,19 +111,24 @@ path = pathlib.Path('src-tauri/gen/apple/build/arm64/Capri.ipa')
 path.parent.mkdir(parents=True, exist_ok=True)
 info = {'CFBundleIdentifier': 'wrong.app' if mode == 'identity' else 'dev.gentledot.capri',
         'DTPlatformName': 'iphoneos', 'CFBundleExecutable': 'Capri', 'NSMicrophoneUsageDescription': 'Dictado local', 'CapriAppGroup': 'group.dev.gentledot.capri'}
+if os.environ['CAPRI_LIVE_ACTIVITY'] == '1': info['NSSupportsLiveActivities'] = True
 with zipfile.ZipFile(path, 'w') as archive:
     archive.writestr('Payload/Capri.app/Info.plist', plistlib.dumps(info))
     archive.writestr('Payload/Capri.app/Capri', struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 0, 0, 0, 0))
     if mode != 'share':
         archive.writestr('Payload/Capri.app/PlugIns/CapriShare.appex/Info.plist', plistlib.dumps({'CFBundleIdentifier': 'dev.gentledot.capri.share', 'CFBundleExecutable': 'CapriShare', 'DTPlatformName': 'iphoneos', 'CapriAppGroup': 'group.dev.gentledot.capri', 'NSExtension': {'NSExtensionPointIdentifier': 'com.apple.share-services'}}))
         archive.writestr('Payload/Capri.app/PlugIns/CapriShare.appex/CapriShare', struct.pack('<8I', 0xfeedfacf, 0x1000007 if mode == 'share_arch' else 0x100000c, 0, 2, 0, 0, 0, 0))
+    if os.environ['CAPRI_LIVE_ACTIVITY'] == '1' and mode != 'widget_missing':
+        widget = {'CFBundleIdentifier': 'dev.gentledot.capri.live' if mode != 'widget_identity' else 'wrong.widget', 'CFBundleExecutable': 'CapriLive', 'DTPlatformName': 'iphoneos', 'NSExtension': {'NSExtensionPointIdentifier': 'com.apple.widgetkit-extension'}}
+        archive.writestr('Payload/Capri.app/PlugIns/CapriLive.appex/Info.plist', plistlib.dumps(widget))
+        archive.writestr('Payload/Capri.app/PlugIns/CapriLive.appex/CapriLive', struct.pack('<8I', 0xfeedfacf, 0x1000007 if mode == 'widget_arch' else 0x100000c, 0, 2, 0, 0, 0, 0))
     if mode == 'zip_path': archive.writestr('../outside', b'unsafe')
 PY
     fi`);
   command('xcrun', String.raw`
     if [[ "$1" == lipo ]]; then printf 'arm64\n';
     elif [[ "$CAPRI_BUILD_FIXTURE" == engine ]]; then printf 'UIKit.framework/UIKit\n';
-    else printf 'FoundationModels.framework/FoundationModels\nSpeech.framework/Speech\nVision.framework/Vision\n'; fi`);
+    else printf 'FoundationModels.framework/FoundationModels\nSpeech.framework/Speech\nVision.framework/Vision\nActivityKit.framework/ActivityKit\nWidgetKit.framework/WidgetKit\n'; fi`);
   // Deliberately simulated signatures: these contain a real-shaped Mach-O
   // entitlement blob so the independent parser sees actual executable bytes.
   // They do not claim to test Apple's cryptographic signing implementation.
@@ -140,6 +149,7 @@ if '--sign' in args:
     (bundle/'.fixture-source.plist').write_bytes(source)
     if mode == 'unsigned_extension' and bundle.suffix == '.appex': raise SystemExit(0)
     if mode == 'sealed_group' and bundle.suffix == '.appex': source = plistlib.dumps({'com.apple.security.application-groups':['group.wrong.fixture']})
+    if mode == 'widget_group' and bundle.name == 'CapriLive.appex': source = plistlib.dumps({'unexpected': True})
     blob = struct.pack('>II', 0xfade7171, len(source)+8)+source
     signature = struct.pack('>IIIII', 0xfade0cc0, len(blob)+20, 1, 5, 20)+blob
     executable.write_bytes(struct.pack('<8I', 0xfeedfacf, 0x100000c, 0, 2, 1, 16, 0, 0)+struct.pack('<IIII', 0x1d, 16, 48, len(signature))+signature)
@@ -148,7 +158,7 @@ elif '--verify' in args:
 elif '--display' in args:
     # Simulate a lying display command for these modes: final ZIP verification
     # still has to reject the missing/wrong actual embedded entitlement blob.
-    if mode in ('unsigned_extension','sealed_group'): sys.stdout.buffer.write((bundle/'.fixture-source.plist').read_bytes())
+    if mode in ('unsigned_extension','sealed_group','widget_group'): sys.stdout.buffer.write((bundle/'.fixture-source.plist').read_bytes())
     else:
         binary = executable.read_bytes()
         offset, size = struct.unpack_from('<II', binary, 40)
@@ -172,10 +182,10 @@ PY`);
       cwd: dir, encoding: 'utf8',
       // These are generic packaging fixtures; a private CI job's artwork
       // requirement is exercised separately with its own PNG/resource fixtures.
-      env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, CAPRI_BUILD_FIXTURE: mode, CAPRI_APP_GROUP: 'group.dev.gentledot.capri', CAPRI_PERSONAL_ART_SHA256: '' },
+      env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, CAPRI_BUILD_FIXTURE: mode, CAPRI_APP_GROUP: 'group.dev.gentledot.capri', CAPRI_PERSONAL_ART_SHA256: '', CAPRI_LIVE_ACTIVITY: live ? '1' : '0' },
     });
     const published = existsSync(join(dir, 'out/Capri-unsigned.ipa'));
-    const verified = published ? spawnSync('python3', [join(dir, 'scripts/verify-ipa.py'), join(dir, 'out/Capri-unsigned.ipa'), '--sealed'], { encoding: 'utf8' }) : undefined;
+    const verified = published ? spawnSync('python3', [join(dir, 'scripts/verify-ipa.py'), join(dir, 'out/Capri-unsigned.ipa'), '--sealed', ...(live ? ['--live-activity'] : [])], { encoding: 'utf8' }) : undefined;
     return { ...result, published, verified,
       signing: existsSync(join(dir, 'sign-calls.jsonl')) ? readFileSync(join(dir, 'sign-calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [],
       calls: readFileSync(join(dir, 'build-calls.txt'), 'utf8').trim().split('\n') };
@@ -207,6 +217,22 @@ test('unsigned packaging publishes a newly built device IPA after inspecting it'
   assert.match(seals[0].at(-1), /CapriShare\.appex$/);
   assert.match(seals[1].at(-1), /Capri\.app$/);
   assert.equal(result.signing.filter(args => args.includes('--verify')).length, 2);
+});
+
+test('optional Live Activity packaging seals and verifies both extensions', () => {
+  const result = unsignedBuildFixture('success', true);
+  assert.equal(result.status, 0, result.stderr); assert.equal(result.published, true);
+  assert.equal(result.verified.status, 0, result.verified.stderr);
+  const manifest = JSON.parse(result.verified.stdout);
+  assert.match(manifest.widget, /CapriLive\.appex$/);
+  const signed = result.signing.filter(args => args.includes('--sign')).map(args => args.at(-1));
+  assert.equal(signed.length, 3); assert.match(signed[0], /CapriLive\.appex$/); assert.match(signed[1], /CapriShare\.appex$/); assert.match(signed[2], /Capri\.app$/);
+});
+test('optional Live Activity rejects a missing, wrong, wrong-architecture or over-entitled widget', () => {
+  for (const mode of ['widget_missing', 'widget_identity', 'widget_arch', 'widget_group']) {
+    const result = unsignedBuildFixture(mode, true);
+    assert.notEqual(result.status, 0, mode); assert.equal(result.published, false, mode);
+  }
 });
 
 test('unsigned packaging rejects a different application', () => {

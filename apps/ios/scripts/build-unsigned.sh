@@ -16,6 +16,11 @@ group=${CAPRI_APP_GROUP:-group.dev.gentledot.capri}
 # macOS ships Bash 3.2: expanding an empty array under nounset fails there.
 # The verifier always has a group, so this array is never empty in either mode.
 verification_args=(--group "$group")
+case "${CAPRI_LIVE_ACTIVITY:-0}" in
+  0) ;;
+  1) verification_args+=(--live-activity) ;;
+  *) printf 'CAPRI_LIVE_ACTIVITY must be 0 or 1.\n' >&2; exit 1 ;;
+esac
 if [[ -n "${CAPRI_PERSONAL_ART_SHA256:-}" ]]; then
   node scripts/personal-art.mjs verify public/personal-art "$CAPRI_PERSONAL_ART_SHA256"
   verification_args+=(--personal-art-sha256 "$CAPRI_PERSONAL_ART_SHA256")
@@ -29,7 +34,12 @@ if [[ -n "${CAPRI_PERSONAL_ART_SHA256:-}" ]]; then
 fi
 cargo tauri icon src-tauri/icons/app.svg --output src-tauri/icons
 cargo tauri ios init --ci
-ruby scripts/configure-share-extension.rb
+if [[ "${CAPRI_LIVE_ACTIVITY:-0}" == 1 ]]; then
+  ruby scripts/configure-share-extension.rb --spec-only
+  ruby scripts/configure-live-activity.rb
+else
+  ruby scripts/configure-share-extension.rb
+fi
 if [[ -n "${CAPRI_PERSONAL_ART_SHA256:-}" ]]; then
   ruby scripts/configure-personal-art.rb
 fi
@@ -71,7 +81,13 @@ app=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["app"])' "
 extension=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["extension"])' "$verification/manifest.json")
 app_executable=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["appExecutable"])' "$verification/manifest.json")
 extension_executable=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["extensionExecutable"])' "$verification/manifest.json")
-for executable in "$app_executable" "$extension_executable"; do
+executables=("$app_executable" "$extension_executable")
+if [[ "${CAPRI_LIVE_ACTIVITY:-0}" == 1 ]]; then
+  widget=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["widget"])' "$verification/manifest.json")
+  widget_executable=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["widgetExecutable"])' "$verification/manifest.json")
+  executables+=("$widget_executable")
+fi
+for executable in "${executables[@]}"; do
   archs=$(xcrun lipo -archs "$verification/payload/$executable")
   [[ " $archs " == *' arm64 '* ]] || { printf 'Expected an arm64 iPhone executable\n' >&2; exit 1; }
 done
@@ -81,6 +97,14 @@ for framework in FoundationModels Speech Vision; do
     printf 'IPA does not link the %s engine\n' "$framework" >&2; exit 1;
   }
 done
+if [[ "${CAPRI_LIVE_ACTIVITY:-0}" == 1 ]]; then
+  xcrun otool -L "$verification/payload/$widget_executable" > "$verification/widget-frameworks.txt"
+  for framework in ActivityKit WidgetKit; do
+    grep -q "$framework.framework/" "$verification/widget-frameworks.txt" || {
+      printf 'Live Activity does not link %s\n' "$framework" >&2; exit 1;
+    }
+  done
+fi
 # Read the generated target paths, not guessed bundle/product names. XcodeGen
 # writes these plists even when CODE_SIGNING_ALLOWED is disabled for compilation.
 ruby -ryaml -rfileutils - "$verification" <<'RUBY'
@@ -97,6 +121,13 @@ raise 'Expected the generated iOS Share Extension.' unless extension['type'] == 
   raise 'Missing generated entitlement plist.' unless File.file?(source)
   FileUtils.cp(source, File.join(ARGV.fetch(0), "#{label}.entitlements"))
 end
+if ENV.fetch('CAPRI_LIVE_ACTIVITY', '0') == '1'
+  widget = spec.fetch('targets').fetch('CapriLive')
+  raise 'Expected the generated iOS Widget Extension.' unless widget['type'] == 'app-extension' && widget['platform'] == 'iOS'
+  source = File.expand_path(widget.fetch('entitlements').fetch('path'), File.dirname(spec_path))
+  raise 'Missing generated widget entitlement plist.' unless File.file?(source)
+  FileUtils.cp(source, File.join(ARGV.fetch(0), 'widget.entitlements'))
+end
 RUBY
 python3 - "$verification" "$group" <<'PY'
 from pathlib import Path
@@ -105,22 +136,32 @@ for label in ('app', 'extension'):
     source = plistlib.loads((Path(sys.argv[1]) / f'{label}.entitlements').read_bytes())
     if source.get('com.apple.security.application-groups') != [sys.argv[2]]:
         raise SystemExit(f'{label} generated App Group entitlements do not match the configured group')
+widget = Path(sys.argv[1]) / 'widget.entitlements'
+if widget.exists() and plistlib.loads(widget.read_bytes()) != {}:
+    raise SystemExit('Live Activity must not have additional entitlements')
 PY
 # Seal nested code first, then the containing app. '-' is an ad-hoc identity:
 # no certificate, provisioning profile, Apple account, or timestamp service.
+if [[ "${CAPRI_LIVE_ACTIVITY:-0}" == 1 ]]; then
+  codesign --force --sign - --timestamp=none --generate-entitlement-der --entitlements "$verification/widget.entitlements" "$verification/payload/$widget"
+  codesign --verify --strict "$verification/payload/$widget"
+fi
 codesign --force --sign - --timestamp=none --generate-entitlement-der --entitlements "$verification/extension.entitlements" "$verification/payload/$extension"
 codesign --verify --strict "$verification/payload/$extension"
 codesign --force --sign - --timestamp=none --generate-entitlement-der --entitlements "$verification/app.entitlements" "$verification/payload/$app"
 codesign --verify --strict "$verification/payload/$app"
-for label in app extension; do
-  if [[ "$label" == app ]]; then bundle=$app; else bundle=$extension; fi
+labels=(app extension)
+if [[ "${CAPRI_LIVE_ACTIVITY:-0}" == 1 ]]; then labels+=(widget); fi
+for label in "${labels[@]}"; do
+  if [[ "$label" == app ]]; then bundle=$app; elif [[ "$label" == extension ]]; then bundle=$extension; else bundle=$widget; fi
   codesign --display --entitlements :- "$verification/payload/$bundle" > "$verification/$label.embedded.plist"
 done
 python3 - "$verification" <<'PY'
 from pathlib import Path
 import plistlib, sys
 root = Path(sys.argv[1])
-for label in ('app', 'extension'):
+labels = ['app', 'extension'] + (['widget'] if (root / 'widget.entitlements').exists() else [])
+for label in labels:
     expected = plistlib.loads((root / f'{label}.entitlements').read_bytes())
     embedded = plistlib.loads((root / f'{label}.embedded.plist').read_bytes())
     if embedded != expected:

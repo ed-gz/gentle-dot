@@ -61,7 +61,7 @@ def embedded_entitlements(data):
     return entitlements[0]
 
 
-def inspect(path, group, sealed=False, extract=None, personal_art_sha256=None):
+def inspect(path, group, sealed=False, extract=None, personal_art_sha256=None, live_activity=False):
     require(re.fullmatch(r'group\.[A-Za-z0-9.-]{3,200}', group), 'Invalid expected App Group')
     with zipfile.ZipFile(path) as archive:
         require(archive.testzip() is None, 'IPA has a corrupt entry')
@@ -77,15 +77,31 @@ def inspect(path, group, sealed=False, extract=None, personal_art_sha256=None):
         require(len(app_plists) == 1, 'IPA must contain one application')
         app = app_plists[0].rsplit('/', 1)[0]
         extensions = [name for name in names if name.endswith('.appex/Info.plist')]
-        require(len(extensions) == 1 and extensions[0].startswith(app + '/PlugIns/'), 'IPA must embed one Share Extension')
-        extension = extensions[0].rsplit('/', 1)[0]
-        info, extension_info = (plistlib.loads(archive.read(name)) for name in (app_plists[0], extensions[0]))
+        require(len(extensions) == (2 if live_activity else 1) and all(name.startswith(app + '/PlugIns/') for name in extensions), 'IPA must embed the expected extensions' if live_activity else 'IPA must embed one Share Extension')
+        shares = [name for name in extensions if name.endswith('/CapriShare.appex/Info.plist')]
+        widgets = [name for name in extensions if name.endswith('/CapriLive.appex/Info.plist')]
+        require(len(shares) == 1 and len(widgets) == (1 if live_activity else 0), 'IPA has unexpected extension identities')
+        extension = shares[0].rsplit('/', 1)[0]
+        info, extension_info = (plistlib.loads(archive.read(name)) for name in (app_plists[0], shares[0]))
         require(info.get('CFBundleIdentifier') == 'dev.gentledot.capri' and info.get('DTPlatformName') == 'iphoneos', 'IPA is not the Capri device app')
         require(bool(info.get('NSMicrophoneUsageDescription')), 'IPA is missing its microphone purpose')
         require(extension_info.get('CFBundleIdentifier') == 'dev.gentledot.capri.share'
                 and extension_info.get('DTPlatformName') == 'iphoneos'
                 and extension_info.get('NSExtension', {}).get('NSExtensionPointIdentifier') == 'com.apple.share-services', 'IPA has an invalid Share Extension')
         result = {'app': app, 'extension': extension, 'group': group}
+        if live_activity:
+            widget = widgets[0].rsplit('/', 1)[0]
+            widget_info = plistlib.loads(archive.read(widgets[0]))
+            require(info.get('NSSupportsLiveActivities') is True and widget_info.get('CFBundleIdentifier') == 'dev.gentledot.capri.live'
+                    and widget_info.get('DTPlatformName') == 'iphoneos' and widget_info.get('NSExtension', {}).get('NSExtensionPointIdentifier') == 'com.apple.widgetkit-extension', 'IPA has an invalid Live Activity extension')
+            executable = widget_info.get('CFBundleExecutable', '')
+            require(isinstance(executable, str) and executable and '/' not in executable and '\\' not in executable and executable not in ('.', '..'), 'Invalid widget executable')
+            member = widget + '/' + executable
+            binary = archive.read(member)
+            require(len(binary) >= 32 and struct.unpack_from('<II', binary) == (0xFEEDFACF, 0x0100000C), 'Expected an arm64 iPhone widget executable')
+            if sealed:
+                require(embedded_entitlements(binary) == {}, 'Unexpected Live Activity entitlements')
+            result['widget'], result['widgetExecutable'] = widget, member
         if personal_art_sha256 is not None:
             require(re.fullmatch(r'[a-f0-9]{64}', personal_art_sha256), 'Invalid expected personal artwork fingerprint')
             prefix = app + '/personal-art/'
@@ -131,12 +147,13 @@ if __name__ == '__main__':
     parser.add_argument('ipa')
     parser.add_argument('--group', default='group.dev.gentledot.capri')
     parser.add_argument('--sealed', action='store_true')
+    parser.add_argument('--live-activity', action='store_true')
     parser.add_argument('--extract')
     parser.add_argument('--manifest')
     parser.add_argument('--personal-art-sha256')
     arguments = parser.parse_args()
     try:
-        result = inspect(arguments.ipa, arguments.group, arguments.sealed, arguments.extract, arguments.personal_art_sha256)
+        result = inspect(arguments.ipa, arguments.group, arguments.sealed, arguments.extract, arguments.personal_art_sha256, arguments.live_activity)
         if arguments.manifest:
             Path(arguments.manifest).write_text(json.dumps(result))
         print(json.dumps(result))
