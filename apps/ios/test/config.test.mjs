@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -60,4 +62,87 @@ test('non-macOS host fails early, before builds or dependency changes', { skip: 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Xcode\/macOS required/);
   assert.equal(result.stdout, '');
+});
+
+// Exercise packaging/failure propagation with fixture command binaries. This
+// proves the script's artifact contract, not Swift compilation or inference.
+function unsignedBuildFixture(mode) {
+  const dir = mkdtempSync(join(tmpdir(), 'capri-unsigned-'));
+  for (const path of ['scripts', 'bin', 'out', 'src-tauri/target']) mkdirSync(join(dir, path), { recursive: true });
+  copyFileSync(new URL('../scripts/build-unsigned.sh', import.meta.url), join(dir, 'scripts/build-unsigned.sh'));
+  writeFileSync(join(dir, 'out/Capri-unsigned.ipa'), 'previous published result');
+  writeFileSync(join(dir, 'src-tauri/target/stale.ipa'), 'old product from a different build');
+  const command = (name, body) => {
+    const path = join(dir, 'bin', name);
+    writeFileSync(path, `#!/usr/bin/env bash\nset -eu\n${body}\n`);
+    chmodSync(path, 0o755);
+  };
+  command('uname', 'printf "Darwin\\n"');
+  command('pnpm', 'exit 0');
+  command('cargo', `
+    if [[ "$*" == 'tauri ios init --ci' ]]; then
+      mkdir -p src-tauri/gen/apple/Capri.xcodeproj
+      printf 'buildSettings = {\\n};\\n' > src-tauri/gen/apple/Capri.xcodeproj/project.pbxproj
+    elif [[ "$*" == 'tauri ios build '* ]]; then
+      printf '%s\\n' "$*" >> build-calls.txt
+      [[ "$CAPRI_BUILD_FIXTURE" != failure ]] || exit 42
+      [[ "$CAPRI_BUILD_FIXTURE" != stale ]] || exit 0
+      python3 - <<'PY'
+import os, pathlib, plistlib, zipfile
+path = pathlib.Path('src-tauri/gen/apple/build/arm64/Capri.ipa')
+path.parent.mkdir(parents=True, exist_ok=True)
+info = {'CFBundleIdentifier': 'wrong.app' if os.environ['CAPRI_BUILD_FIXTURE'] == 'identity' else 'dev.gentledot.capri',
+        'DTPlatformName': 'iphoneos', 'CFBundleExecutable': 'Capri'}
+with zipfile.ZipFile(path, 'w') as archive:
+    archive.writestr('Payload/Capri.app/Info.plist', plistlib.dumps(info))
+    archive.writestr('Payload/Capri.app/Capri', b'fixture native executable')
+PY
+    fi`);
+  command('xcrun', `
+    if [[ "$1" == lipo ]]; then printf 'arm64\\n';
+    elif [[ "$CAPRI_BUILD_FIXTURE" == engine ]]; then printf 'UIKit.framework/UIKit\\n';
+    else printf 'FoundationModels.framework/FoundationModels\\n'; fi`);
+  try {
+    const result = spawnSync('bash', [join(dir, 'scripts/build-unsigned.sh')], {
+      cwd: dir, encoding: 'utf8',
+      env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, CAPRI_BUILD_FIXTURE: mode },
+    });
+    return { ...result, published: existsSync(join(dir, 'out/Capri-unsigned.ipa')),
+      calls: readFileSync(join(dir, 'build-calls.txt'), 'utf8').trim().split('\n') };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('unsigned packaging propagates a native build failure without publishing a residual IPA', () => {
+  const result = unsignedBuildFixture('failure');
+  assert.equal(result.status, 42, result.stderr);
+  assert.equal(result.published, false);
+  assert.equal(result.calls.length, 1);
+});
+
+test('unsigned packaging rejects stale artifacts even when the build returns success', () => {
+  const result = unsignedBuildFixture('stale');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Expected one new unsigned IPA/);
+  assert.equal(result.published, false);
+});
+
+test('unsigned packaging publishes a newly built device IPA after inspecting it', () => {
+  const result = unsignedBuildFixture('success');
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.published, true);
+  assert.equal(result.calls.length, 1);
+});
+
+test('unsigned packaging rejects a different application', () => {
+  const result = unsignedBuildFixture('identity');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /not the Capri device app/);
+  assert.equal(result.published, false);
+});
+
+test('unsigned packaging rejects an executable missing Foundation Models linkage', () => {
+  const result = unsignedBuildFixture('engine');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /does not link the Foundation Models engine/);
+  assert.equal(result.published, false);
 });
