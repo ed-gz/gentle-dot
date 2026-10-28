@@ -31,7 +31,7 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
 }
 type HostHistoryEntry = { id: string; role: 'user' | 'assistant'; text: string; activities?: ChatActivity[] };
 /** Reconcile the host's durable snapshot IDs with its separate live-event IDs. */
-export function reconcileHostHistory(entries: ChatEntry[], prefix: string, history: HostHistoryEntry[], at = Date.now()): ChatEntry[] {
+export function reconcileHostHistory(entries: ChatEntry[], prefix: string, history: HostHistoryEntry[], at = Date.now(), beforePrune?: (entries: ChatEntry[]) => void): ChatEntry[] {
   const remote = entries.map((entry, index) => ({ entry, index })).filter(({ entry }) =>
     entry.engine === 'gentle' && entry.id.startsWith(prefix) && entry.role !== 'notice');
   const used = new Set<string>();
@@ -95,7 +95,9 @@ export function reconcileHostHistory(entries: ChatEntry[], prefix: string, histo
   const merged = entries.flatMap((entry, index) => [
     ...before.get(index) ?? [], ...(removed.has(index) ? [] : [replacements.get(index) ?? entry]),
   ]);
-  return cleanEntries([...merged, ...tail]);
+  const complete = [...merged, ...tail];
+  beforePrune?.(complete);
+  return cleanEntries(complete);
 }
 export function localPrompt(entries: ChatEntry[], instruction: string): string {
   if (typeof instruction !== 'string' || Array.from(instruction).length > 4000) {
