@@ -109,7 +109,7 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
   try {
     const path = join(dir, 'project.yml');
     writeFileSync(path, JSON.stringify({ name: 'capri', targets: { capri_iOS: { type: 'application', platform: 'iOS',
-      sources: [{ path: 'Sources' }], info: { path: 'capri_iOS/Info.plist', properties: { CFBundleVersion: '42', NSMicrophoneUsageDescription: 'Usar voz' } },
+      sources: [{ path: 'Sources' }], info: { path: 'capri_iOS/Info.plist', properties: { CFBundleVersion: '42', NSMicrophoneUsageDescription: 'Usar voz', UIBackgroundModes: ['fetch'], BGTaskSchedulerPermittedIdentifiers: ['other.existing.job'] } },
       entitlements: { path: 'capri_iOS/capri_iOS.entitlements', properties: { 'test.existing': true } },
       dependencies: [{ sdk: 'WebKit.framework' }], preBuildScripts: [{ name: 'Build Rust Code', script: 'cargo tauri ios xcode-script' }] } } }));
     const script = new URL('../scripts/configure-share-extension.rb', import.meta.url).pathname;
@@ -125,6 +125,10 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
     assert.match(targets.capri_iOS.info.properties.NSLocalNetworkUsageDescription, /laptop que vinculas.*sesiones.*autorizas/);
     assert.match(targets.capri_iOS.info.properties.NSCameraUsageDescription, /cuando eliges.*QR.*capturar.*adjuntarlo/);
     assert.equal(targets.capri_iOS.info.properties.NSPhotoLibraryUsageDescription, undefined);
+    assert.deepEqual(targets.capri_iOS.info.properties.UIBackgroundModes, ['fetch', 'processing']);
+    assert.deepEqual(targets.capri_iOS.info.properties.BGTaskSchedulerPermittedIdentifiers, ['other.existing.job', '$(PRODUCT_BUNDLE_IDENTIFIER).capri-inference.*']);
+    assert.equal(targets.capri_iOS.entitlements.properties['com.apple.developer.background-tasks.continued-processing.gpu'], undefined);
+    assert.equal(targets.capri_iOS.entitlements.properties['com.apple.developer.background-tasks.continued-processing.inference'], undefined);
     assert.equal(targets.capri_iOS.entitlements.properties['test.existing'], true);
     assert.equal(targets.capri_iOS.dependencies.filter(item => item.target === 'CapriShare').length, 1);
     assert.equal(targets.capri_iOS.info.properties.CFBundleURLTypes.length, 2);
@@ -144,6 +148,8 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
     const info = JSON.parse(google.stdout).targets.capri_iOS.info.properties;
     assert.equal(info.NSCameraUsageDescription, 'Propósito de cámara personalizado');
     assert.equal(info.NSMicrophoneUsageDescription, 'Usar voz');
+    assert.deepEqual(info.UIBackgroundModes, ['fetch', 'processing']);
+    assert.deepEqual(info.BGTaskSchedulerPermittedIdentifiers, ['other.existing.job', '$(PRODUCT_BUNDLE_IDENTIFIER).capri-inference.*']);
     assert.equal(info.CapriGoogleClientID, '123-example.apps.googleusercontent.com');
     assert.equal(info.CFBundleURLTypes.length, 3);
     assert.deepEqual(info.CFBundleURLTypes.find(item => item.CFBundleURLName === 'dev.gentledot.capri.google').CFBundleURLSchemes, ['com.googleusercontent.apps.123-example']);
@@ -151,5 +157,24 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
     const invalid = spawnSync('ruby', [script, path, '--spec-only'], { encoding: 'utf8', env: { ...process.env, CAPRI_GOOGLE_CLIENT_ID: 'not a client id' } });
     assert.notEqual(invalid.status, 0);
     assert.equal(readFileSync(path, 'utf8'), before);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('background task configuration rejects malformed existing plist arrays without rewriting the project', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'capri-background-config-'));
+  try {
+    const path = join(dir, 'project.yml');
+    const script = new URL('../scripts/configure-share-extension.rb', import.meta.url).pathname;
+    for (const invalid of [
+      { UIBackgroundModes: 'processing' },
+      { UIBackgroundModes: [42] },
+      { BGTaskSchedulerPermittedIdentifiers: 'unexpected' },
+      { BGTaskSchedulerPermittedIdentifiers: [false] },
+    ]) {
+      const original = JSON.stringify({ targets: { capri_iOS: { type: 'application', platform: 'iOS', info: { properties: invalid } } } });
+      writeFileSync(path, original);
+      const result = spawnSync('ruby', [script, path, '--spec-only'], { encoding: 'utf8' });
+      assert.notEqual(result.status, 0); assert.equal(readFileSync(path, 'utf8'), original);
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

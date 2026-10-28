@@ -61,7 +61,16 @@ def embedded_entitlements(data):
     return entitlements[0]
 
 
-def inspect(path, group, sealed=False, extract=None, personal_art_sha256=None, live_activity=False):
+def verify_continued_inference(info):
+    bundle = info.get('CFBundleIdentifier')
+    modes, identifiers = info.get('UIBackgroundModes'), info.get('BGTaskSchedulerPermittedIdentifiers')
+    require(isinstance(bundle, str) and isinstance(modes, list) and 'processing' in modes,
+            'IPA is missing background processing configuration')
+    require(isinstance(identifiers, list) and f'{bundle}.capri-inference.*' in identifiers,
+            'IPA continued-inference identifier does not match the app bundle')
+
+
+def inspect(path, group, sealed=False, extract=None, personal_art_sha256=None, live_activity=False, continued_inference=False):
     require(re.fullmatch(r'group\.[A-Za-z0-9.-]{3,200}', group), 'Invalid expected App Group')
     with zipfile.ZipFile(path) as archive:
         require(archive.testzip() is None, 'IPA has a corrupt entry')
@@ -84,6 +93,8 @@ def inspect(path, group, sealed=False, extract=None, personal_art_sha256=None, l
         extension = shares[0].rsplit('/', 1)[0]
         info, extension_info = (plistlib.loads(archive.read(name)) for name in (app_plists[0], shares[0]))
         require(info.get('CFBundleIdentifier') == 'dev.gentledot.capri' and info.get('DTPlatformName') == 'iphoneos', 'IPA is not the Capri device app')
+        if continued_inference:
+            verify_continued_inference(info)
         require(bool(info.get('NSMicrophoneUsageDescription')), 'IPA is missing its microphone purpose')
         require(extension_info.get('CFBundleIdentifier') == 'dev.gentledot.capri.share'
                 and extension_info.get('DTPlatformName') == 'iphoneos'
@@ -162,12 +173,13 @@ if __name__ == '__main__':
     parser.add_argument('--group', default='group.dev.gentledot.capri')
     parser.add_argument('--sealed', action='store_true')
     parser.add_argument('--live-activity', action='store_true')
+    parser.add_argument('--continued-inference', action='store_true')
     parser.add_argument('--extract')
     parser.add_argument('--manifest')
     parser.add_argument('--personal-art-sha256')
     arguments = parser.parse_args()
     try:
-        result = inspect(arguments.ipa, arguments.group, arguments.sealed, arguments.extract, arguments.personal_art_sha256, arguments.live_activity)
+        result = inspect(arguments.ipa, arguments.group, arguments.sealed, arguments.extract, arguments.personal_art_sha256, arguments.live_activity, arguments.continued_inference)
         if arguments.manifest:
             Path(arguments.manifest).write_text(json.dumps(result))
         print(json.dumps(result))

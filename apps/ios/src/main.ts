@@ -12,6 +12,7 @@ import { createLinkedChat, type LinkedStatus } from './linked-chat.ts';
 import { checkLocalIntelligence, availabilityMessage, agentStep, cancelLocal, resetLocal, type Availability } from './local-intelligence.ts';
 import { listInferenceResults, acknowledgeInference, recoverInferenceResults, withInferenceDeadline } from './inference-recovery.ts';
 import { mountCompletionNotifications } from './completion-notifications.ts';
+import { mountContinuedInferenceSettings } from './continued-inference-settings.ts';
 import { createLiveActivityCoordinator } from './live-activity-coordinator.ts';
 import { mountLiveActivitySettings } from './live-activity-settings.ts';
 import type { ActivityPhase, ActivityEnd } from './live-activity.ts';
@@ -317,6 +318,7 @@ function updateLaptopView() {
 const conversationView = createConversationView({ container: element('cards'), empty: element('empty-conversation'), scroller: element('conversation-scroll'), newMessages: element<HTMLButtonElement>('new-messages') });
 const reviews = createConversationRequests(element('requests'), { append: conversationView.updateExtra });
 const completionNotifications = mountCompletionNotifications(element('completion-notifications'));
+const continuedInference = mountContinuedInferenceSettings(element('continued-inference-settings'));
 let lockScreenSettings: ReturnType<typeof mountLiveActivitySettings> | undefined;
 const lockScreenActivity = createLiveActivityCoordinator({ onChange: state => lockScreenSettings?.render(state) });
 lockScreenSettings = mountLiveActivitySettings(element('live-activity-settings'), lockScreenActivity);
@@ -583,6 +585,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
     const request = localPrompt(entries, text);
     if (Array.from(request).length > 4000) { element('chat-notice').textContent = 'Reduce el mensaje para dejar espacio al contexto local.'; return; }
     const generation = ++localGeneration;
+    const allowBackground = continuedInference.enabled();
     const id = localIdentifier(); localBusy = true; localTurnId = id; localRecoveryReady = false;
     const controller = new AbortController(); localController = controller;
     const context = createAgentContext(entries, { ...(attachedWork ? { attachedWork } : {}) });
@@ -605,7 +608,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
         if (!linked.supportsWorkSync()) throw new Error('Actualiza Gentle Dot en la laptop para transferir trabajos. La conversación sigue disponible y el trabajo local se conserva.');
         if (operation === 'process' && !linked.supportsMeetingDrafts()) throw new Error('Este Gentle Dot no tiene disponible el procesamiento de reuniones. El material confirmado se conserva.');
         return createWorkDispatcher(linked.exchange, host);
-      } }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))], step: prompt => agentStep(prompt, id), onTrace(trace) {
+      } }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))], step: prompt => agentStep(prompt, id, allowBackground), onTrace(trace) {
         const entry = entries.find(item => item.id === id) ?? turnEntry;
         const activities = [...entry.activities ?? []]; const at = activities.findIndex(item => item.id === trace.id);
         const activity = { id: trace.id, kind: 'other' as const, title: trace.label, status: trace.status, detail: trace.detail };

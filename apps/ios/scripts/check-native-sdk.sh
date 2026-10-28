@@ -29,6 +29,11 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 "$verification/inference-journal-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-local-intelligence/ios/Sources/InferenceStartGate.swift \
+  test/native/InferenceStartGateTests.swift -o "$verification/inference-start-gate-tests"
+"$verification/inference-start-gate-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
   test/native/AppGroupResolverTests.swift -o "$verification/app-group-tests"
 "$verification/app-group-tests"
@@ -48,6 +53,8 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
   "$verification/AgentTypes.swift" \
   plugin-local-intelligence/ios/Sources/InferenceJournal.swift \
+  plugin-local-intelligence/ios/Sources/InferenceStartGate.swift \
+  plugin-local-intelligence/ios/Sources/ContinuedInferenceLease.swift \
   plugin-local-intelligence/ios/Sources/CompletionNotifications.swift \
   plugin-perception/ios/Sources/Voice.swift \
   plugin-perception/ios/Sources/Documents.swift \

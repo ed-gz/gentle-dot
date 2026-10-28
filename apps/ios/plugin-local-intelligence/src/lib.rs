@@ -66,6 +66,7 @@ async fn agent_step<R: Runtime>(
     app: AppHandle<R>,
     prompt: String,
     turn_id: Option<String>,
+    allow_background: Option<bool>,
 ) -> Result<Value, String> {
     if !valid_agent_prompt(&prompt) {
         return Ok(json!({"ok": false, "error": "invalid_prompt",
@@ -77,7 +78,7 @@ async fn agent_step<R: Runtime>(
     native_call(
         app,
         "agentStep",
-        json!({"prompt": prompt, "turnId": turn_id}),
+        json!({"prompt": prompt, "turnId": turn_id, "allowBackground": allow_background.unwrap_or(false)}),
     )
     .await
 }

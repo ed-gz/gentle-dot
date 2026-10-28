@@ -26,6 +26,18 @@ main_info['NSLocalNetworkUsageDescription'] ||= 'Capri se conecta a la laptop qu
 # WKWebView's existing file picker can open UIImagePickerController's camera.
 # This declaration does not request access before the person chooses capture.
 main_info['NSCameraUsageDescription'] ||= 'Capri usa la cámara cuando eliges leer el QR de tu laptop o capturar una foto o un video para adjuntarlo a una conversación o un trabajo.'
+# The continued-processing request is user initiated in the foreground. Keep
+# existing modes and IDs, and declare a wildcard for a unique run suffix. Xcode
+# resolves the bundle identifier during build; a re-signer may change the app
+# ID afterward, so native code must check the final values and fall back if the
+# signed bundle and permitted prefix no longer match.
+background_modes = main_info['UIBackgroundModes'] ||= []
+raise 'Expected UIBackgroundModes array of strings.' unless background_modes.is_a?(Array) && background_modes.all? { |item| item.is_a?(String) }
+background_modes << 'processing' unless background_modes.include?('processing')
+task_identifiers = main_info['BGTaskSchedulerPermittedIdentifiers'] ||= []
+raise 'Expected BGTaskSchedulerPermittedIdentifiers array of strings.' unless task_identifiers.is_a?(Array) && task_identifiers.all? { |item| item.is_a?(String) }
+inference_identifier = '$(PRODUCT_BUNDLE_IDENTIFIER).capri-inference.*'
+task_identifiers << inference_identifier unless task_identifiers.include?(inference_identifier)
 schemes = main_info['CFBundleURLTypes'] ||= []
 raise 'Expected CFBundleURLTypes array.' unless schemes.is_a?(Array)
 unless schemes.any? { |entry| Array(entry['CFBundleURLSchemes']).include?('capri-auth') }

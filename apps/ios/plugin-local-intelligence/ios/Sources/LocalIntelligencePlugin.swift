@@ -5,7 +5,7 @@ import WebKit
 // A build without this SDK must fail instead of shipping a UI-only local engine.
 import FoundationModels
 
-private struct PromptArgs: Decodable { let prompt: String; let turnId: String? }
+private struct PromptArgs: Decodable { let prompt: String; let turnId: String?; let allowBackground: Bool? }
 private struct JournalArgs: Decodable { let turnId: String; let revision: String? }
 private struct CancelArgs: Decodable { let turnId: String? }
 private struct NotificationArgs: Decodable { let enabled: Bool }
@@ -92,14 +92,15 @@ final class LocalIntelligencePlugin: Plugin {
         let service = CompletionNotifications(); notificationService = service; return service
     }
     private var activeJournalID: String?
+    private var continuedTurns = InferenceTurnGate()
     private var lifecycleObserver: NSObjectProtocol?
-    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private let inferenceLease = ContinuedInferenceLease()
 
     @objc override func load(webview: WKWebView) {
         lifecycleObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            guard let self = self, self.backgroundTask == .invalid else { return }
+            guard let self = self, !self.inferenceLease.holdsRuntime else { return }
             self.cancelCurrent(message: "iOS no concedió tiempo para completar la respuesta fuera de Capri. Tu conversación se conserva.")
         }
     }
@@ -107,25 +108,18 @@ final class LocalIntelligencePlugin: Plugin {
     deinit {
         if let observer = lifecycleObserver { NotificationCenter.default.removeObserver(observer) }
         task?.cancel()
-        let identifier = backgroundTask
-        if identifier != .invalid { DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(identifier) } }
+        let lease = inferenceLease
+        DispatchQueue.main.async { lease.finish(success: false) }
     }
 
-    // A finite lease for the inference already requested in the foreground.
-    // This is not an always-on agent or permission to start new background work.
+    // The system may extend this single foreground-initiated model step. Neither
+    // the WebView agent nor external tools are run under this native lease.
     private func beginInferenceLease() {
-        endInferenceLease()
-        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Completar respuesta de Capri") { [weak self] in
-            guard let self = self else { return }
-            self.cancelCurrent(message: "iOS terminó el tiempo disponible para esta respuesta. Tu conversación se conserva.")
-            self.endInferenceLease()
+        inferenceLease.begin { [weak self] in
+            self?.cancelCurrent(message: "iOS terminó el tiempo disponible para esta respuesta. Tu conversación se conserva.")
         }
     }
-    private func endInferenceLease() {
-        let identifier = backgroundTask
-        backgroundTask = .invalid
-        if identifier != .invalid { UIApplication.shared.endBackgroundTask(identifier) }
-    }
+    private func endInferenceLease(success: Bool = false) { inferenceLease.finish(success: success) }
 
     private func availability() -> Availability {
         if #available(iOS 26.0, *) {
@@ -167,10 +161,10 @@ final class LocalIntelligencePlugin: Plugin {
             invoke.resolve(Reply(ok: false, error: "invalid_prompt", message: "El contexto del paso no es válido."))
             return
         }
-        DispatchQueue.main.async { self.startAgent(prompt: args.prompt, turnID: args.turnId, invoke: invoke) }
+        DispatchQueue.main.async { self.startAgent(prompt: args.prompt, turnID: args.turnId, allowBackground: args.allowBackground == true, invoke: invoke) }
     }
 
-    private func startAgent(prompt: String, turnID: String?, invoke: Invoke) {
+    private func startAgent(prompt: String, turnID: String?, allowBackground: Bool, invoke: Invoke) {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               prompt.unicodeScalars.count <= 8_000 else {
             invoke.resolve(Reply(ok: false, error: "invalid_prompt", message: "El contexto del paso debe contener entre 1 y 8000 caracteres."))
@@ -199,6 +193,10 @@ final class LocalIntelligencePlugin: Plugin {
                 catch { invoke.resolve(journalFailure()); return }
             }
             activeJournalID = turnID
+            // The gesture starts one user request, even if its WebView runner
+            // later asks for multiple model steps. Avoid a system activity for
+            // each automatic continuation of the same instruction.
+            let requestContinued = allowBackground && continuedTurns.take(turnID)
             // Each step reconstructs bounded context supplied by the conversation. Never
             // duplicate a transcript, retain a cancelled step or share the legacy session.
             conversation = nil
@@ -208,8 +206,10 @@ final class LocalIntelligencePlugin: Plugin {
             beginInferenceLease()
             task = Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                defer { self.task = nil; self.pending = nil; self.activeJournalID = nil; self.cancellationRequested = false; self.endInferenceLease() }
+                var stepSucceeded = false
+                defer { self.task = nil; self.pending = nil; self.activeJournalID = nil; self.cancellationRequested = false; self.endInferenceLease(success: stepSucceeded) }
                 do {
+                    if requestContinued { await self.inferenceLease.waitForStart() }
                     try Task.checkCancellation()
                     let response = try await session.respond(to: prompt, generating: GeneratedDecision.self,
                         options: GenerationOptions(maximumResponseTokens: 768))
@@ -230,6 +230,10 @@ final class LocalIntelligencePlugin: Plugin {
                     }
                     let reply = self.resolveAgent(Reply(ok: true, decision: AgentDecision(kind: isTool ? "tool" : "answer",
                         text: value.text, toolName: value.toolName, argumentsJSON: value.argumentsJSON)))
+                    // The system activity represents only this model step, not
+                    // the user's whole request. Tool decisions are not durable;
+                    // if the app is killed, the journal remains interrupted.
+                    stepSucceeded = reply.ok
                     if reply.ok, !isTool, let id = self.activeJournalID {
                         // Hold the existing finite lease until the system accepts or rejects scheduling.
                         await self.completionNotifications.notifyCompleted(id: id)
