@@ -1,0 +1,9 @@
+.session-control-review{position:relative;padding:.2rem 1rem;}
+.session-control-review-trigger{border:0;background:transparent;color:#b5ff66;padding:.5rem 0;}
+.session-control-review-list{display:grid;gap:.5rem;padding:.6rem 0;color:#ded7e9;}
+.session-control-review-list button{display:flex;justify-content:space-between;gap:1rem;text-align:left;background:#211a29;color:#f7f1ff;border:0;border-radius:.6rem;padding:.7rem;}
+.session-control-review-list button span{color:#c4b8cf;font-size:.8rem;}
+
+.session-control-review-dialog::backdrop{background:#08060bcc;}
+.session-control-review-dialog{border:0;width:min(100%,36rem);max-height:85dvh;overflow:auto;border-radius:1rem;background:#211a29;color:#f7f1ff;padding:1rem;}
+.session-control-review-dialog h2{font-size:1.1rem;}.session-control-review-dialog pre{max-height:45dvh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:.85rem;}.session-control-review-dialog div{display:flex;justify-content:flex-end;gap:.6rem;}.session-control-review-dialog button{border:0;border-radius:.6rem;background:#b5ff66;color:#111;padding:.7rem 1rem;}.session-control-review-dialog button:first-child{background:#45374c;color:#fff;}

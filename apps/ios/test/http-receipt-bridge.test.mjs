@@ -13,3 +13,8 @@ test('invalid or rejected native receipts cannot be treated as evidence',async()
  await assert.rejects(httpsReceiptCancelBeforeStart(id,owner,async()=>({ok:true,receiptState:'terminal'})),/no quedó confirmada/);
  await assert.rejects(httpsReceiptState(id,owner,async()=>({ok:false,error:'storage'})));
 });
+
+test('a lost receipt callback times out without implying terminal state',async()=>{
+ const {boundedReceiptState}=await import('../src/device-bridge.ts');
+ assert.equal(await boundedReceiptState(id,owner,async()=>new Promise(()=>{}),10),undefined);
+});

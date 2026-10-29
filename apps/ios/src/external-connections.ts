@@ -1,4 +1,4 @@
-import { secretGet, secretSet, secretDelete, httpsReceiptState } from './device-bridge.ts';
+import { secretGet, secretSet, secretDelete, httpsReceiptState, boundedReceiptState } from './device-bridge.ts';
 import { localIdentifier } from './local-identifiers.ts';
 
 export type Provider = 'github' | 'slack' | 'gmail' | 'odoo';
@@ -228,7 +228,7 @@ export async function getRemoteExecution(id:string):Promise<RemoteExecution | nu
  * not proof of non-dispatch: native storage might have been lost or restored. */
 export async function recoverRemoteExecution(expected: RemoteExecution, bridge = {state:httpsReceiptState}):Promise<RemoteExecution> {
   if (!expected || expected.state !== 'executing' || expected.nativeReceipt !== 1 || typeof expected.owner !== 'string' || !uuid.test(expected.owner)) throw new Error('La operación anterior no tiene comprobante nativo; permanece bloqueada.');
-  const state=await bridge.state(expected.requestId,expected.owner);
+  const state=await boundedReceiptState(expected.requestId,expected.owner,bridge.state);
   if(state!=='terminal') throw new Error('El transporte no tiene comprobante terminal verificable; permanece bloqueado.');
   return transaction<RemoteExecution>(['executions'],'readwrite',(tx,done,fail)=>{
     const store=tx.objectStore('executions'),read=store.get(expected.requestId);

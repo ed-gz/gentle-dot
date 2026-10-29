@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { OrchestrationPanel } from '@gentle-dot/ui/src/components/OrchestrationPanel.tsx';
 import { useOrchestration } from '@gentle-dot/ui/src/useOrchestration.ts';
+import { SessionControlReview } from './session-control-review.tsx';
 import { createLaptopClient } from './laptop-client.ts';
 import type { DesktopConnection } from './desktop-tools.ts';
 import { AgentVoiceOverrideContext, AgentAttachmentDraftContext, AgentTextDraftContext } from '@gentle-dot/ui/src/components/AgentAttachments.tsx';
@@ -24,6 +25,7 @@ export function mountLaptopView(container: HTMLElement, onConnect: () => void, o
     const client = useMemo(() => connection ? createLaptopClient(connection, { current: () => current }) : undefined,
       [connection?.url, connection?.token, connection?.deviceId]);
     const controls = useOrchestration(client, active);
+    const currentConnection = useCallback(() => current, []);
     const attachmentDrafts = useMemo(() => connection ? (paneId: string, sessionId: string) => sessionAttachmentDraft(connection.url, paneId, sessionId) : undefined, [connection?.url]);
     const textDrafts = useMemo(() => connection ? (paneId: string, sessionId: string) => sessionVoiceDraftProvider(connection.url, paneId, sessionId) : undefined, [connection?.url]);
     const [visiblePane, setVisiblePane] = useState<string>();
@@ -34,7 +36,7 @@ export function mountLaptopView(container: HTMLElement, onConnect: () => void, o
     if (!client) return <section className="laptop-empty"><p className="eyebrow">TU LAPTOP</p><h2>Tus sesiones, aquí.</h2><p>Vincula Gentle Dot para abrir las conversaciones de Herdr, seguir su trabajo y responder cuando te necesiten.</p><button type="button" onClick={onConnect}>Vincular laptop</button></section>;
     return <AgentTextDraftContext.Provider value={textDrafts}><AgentAttachmentDraftContext.Provider value={attachmentDrafts}><AgentVoiceOverrideContext.Provider value={voice}><SharedLinkContext.Provider value={url => {
       setLinkError(''); void openExternalURL(url).catch(error => setLinkError(error.message));
-    }}>{linkError ? <p role="alert">{linkError}</p> : null}{active && session && voice.retryPending ? <button type="button" className="voice-discard-pending" disabled={voice.discarding} onClick={voice.discardPending}>{voice.discarding ? 'Descartando…' : 'Descartar audio pendiente'}</button> : null}<OrchestrationPanel key={connection?.url} createMessageId={localIdentifier} identityScope={`${connection?.url}|`} onVisibleSession={value => setVisiblePane(value?.paneId)} client={client} controls={controls} active={active} mobile capriMobile hashDeliveryArchive={nativeSHA256Bytes} exportDeliveryArchive={async (bytes, sha256) => (await exportNativeFile(new Blob([bytes as BlobPart], { type: 'application/json' }), `capri-envios-${Date.now()}.json`, { expectedSHA256: sha256 })).status === 'exported'} /></SharedLinkContext.Provider></AgentVoiceOverrideContext.Provider></AgentAttachmentDraftContext.Provider></AgentTextDraftContext.Provider>;
+    }}>{linkError ? <p role="alert">{linkError}</p> : null}{active && connection ? <SessionControlReview connection={connection} current={currentConnection} active={active} busy={controls.busy} /> : null}{active && session && voice.retryPending ? <button type="button" className="voice-discard-pending" disabled={voice.discarding} onClick={voice.discardPending}>{voice.discarding ? 'Descartando…' : 'Descartar audio pendiente'}</button> : null}<OrchestrationPanel key={connection?.url} createMessageId={localIdentifier} identityScope={`${connection?.url}|`} onVisibleSession={value => setVisiblePane(value?.paneId)} client={client} controls={controls} active={active} mobile capriMobile hashDeliveryArchive={nativeSHA256Bytes} exportDeliveryArchive={async (bytes, sha256) => (await exportNativeFile(new Blob([bytes as BlobPart], { type: 'application/json' }), `capri-envios-${Date.now()}.json`, { expectedSHA256: sha256 })).status === 'exported'} /></SharedLinkContext.Provider></AgentVoiceOverrideContext.Provider></AgentAttachmentDraftContext.Provider></AgentTextDraftContext.Provider>;
   }
   return {
     update(state: State) { current = state.connection; root.render(<Laptop {...state} />); },

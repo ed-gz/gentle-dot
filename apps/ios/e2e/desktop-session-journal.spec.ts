@@ -61,7 +61,7 @@ test('the agent cannot resend an uncertain instruction after reload without huma
     const {createDesktopSessionClient}=await import(/* @vite-ignore */ desktopUrl);
     const connection={url:'wss://example.test/ws',token:'synthetic-token',deviceId:'test-device'};
     let receipt:unknown;
-    const client=createDesktopSessionClient({getConnection:()=>connection,request:async (request:{body?:string}) => {
+    const client=createDesktopSessionClient({getConnection:()=>connection,receiptState:async()=> 'terminal',request:async (request:{body?:string}) => {
       const payload=request.body?JSON.parse(request.body):undefined;
       const session={paneId:'p',sessionId:'s',label:'Prueba',state:'idle',connected:true,capabilities:{inspect:true,prompt:true,abort:true,deliveryReceipts:true}};
       if (!payload) return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[session]})};
@@ -102,7 +102,7 @@ test('historical attempts do not block or require scanning when reserving new wo
     const item={id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',owner,host,paneId:'p',sessionId:'s',instanceId:'i',text:'Nuevo',deliverAs:'steer',state:'prepared',createdAt:1};
     try { await store.begin({...item,key:module.sessionOperationKey(host,'p','s',item.text)}); }
     finally { IDBObjectStore.prototype.getAll=getAll; }
-    const openAgain=indexedDB.open('journal-volume',1);
+    const openAgain=indexedDB.open('journal-volume');
     const verify:IDBDatabase=await new Promise((resolve,reject)=>{openAgain.onsuccess=()=>resolve(openAgain.result);openAgain.onerror=()=>reject(openAgain.error);});
     const count:number=await new Promise((resolve,reject)=>{const tx=verify.transaction('attempts','readonly'), request=tx.objectStore('attempts').count();request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
     verify.close(); return {count,state:(await store.find(module.sessionOperationKey(host,'p','s',item.text)))?.state};
@@ -156,4 +156,20 @@ test('a second window cannot close a dispatching send even if its original windo
   },{desktopUrl:`/@fs${process.cwd()}/apps/ios/src/desktop-tools.ts`,id:attempt.id});
   expect(await check()).toEqual({blocked:true,approvals:0,state:'dispatching'});await page.close();
   expect(await check()).toEqual({blocked:true,approvals:0,state:'dispatching'});await other.close();
+});
+
+test('session recovery requires the exact terminal native receipt and never trusts missing or legacy entries',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async({journalUrl,controlUrl})=>{
+  const j=await import(/* @vite-ignore */ journalUrl),c=await import(/* @vite-ignore */ controlUrl),store=j.createSessionJournal('receipt-recovery-fixture');
+  const host='https://example.test/orchestration',make=(text:string,tracked:boolean)=>({id:crypto.randomUUID(),owner:crypto.randomUUID(),key:j.sessionOperationKey(host,'p','s',text),host,paneId:'p',sessionId:'s',instanceId:'i',text,deliverAs:'followUp',state:'prepared',createdAt:1,...(tracked?{nativeReceipt:1}:{})});
+  const a=make('nuevo',true);await store.begin(a);await store.dispatching(a.id);const current=await store.find(a.key);let active=false,missing=false;
+  try{await c.recoverSessionControl(store,current,async()=> 'active');}catch{active=true;}try{await c.recoverSessionControl(store,current,async()=> 'missing');}catch{missing=true;}
+  const recovered=await c.recoverSessionControl(store,current,async()=> 'terminal');await store.reviewed(recovered);let late=false;try{await store.delivered(a.id,'i');}catch{late=true;}
+  const legacy=make('legado',false);await store.begin(legacy);await store.dispatching(legacy.id);let legacyBlocked=false;try{await c.recoverSessionControl(store,await store.find(legacy.key),async()=> 'terminal');}catch{legacyBlocked=true;}
+  const stale=make('carrera',true);await store.begin(stale);await store.dispatching(stale.id);const before=await store.find(stale.key);let raceBlocked=false;
+  try{await c.recoverSessionControl(store,before,async()=>{await store.unconfirmed(stale.id);return 'terminal';});}catch{raceBlocked=true;}
+  return {active,missing,recovered:recovered.state,late,legacyBlocked,legacyState:(await store.find(legacy.key))?.state,raceBlocked};
+ },{journalUrl,controlUrl:`/@fs${process.cwd()}/apps/ios/src/desktop-control-journal.ts`});
+ expect(result).toEqual({active:true,missing:true,recovered:'unconfirmed',late:true,legacyBlocked:true,legacyState:'dispatching',raceBlocked:true});
 });

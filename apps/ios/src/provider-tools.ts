@@ -1,7 +1,7 @@
 import type { Tool, ToolContext, ToolDefinition } from './agent-tools.ts';
 import { validateOperation, type Operation, type AttachmentRef } from './external-actions.ts';
 import { getConnection, beginRemoteExecution, finishRemoteExecution, type ExternalConnection } from './external-connections.ts';
-import { httpsRequest, httpsReceiptState, nativeSHA256Bytes, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
+import { httpsRequest, httpsReceiptState, boundedReceiptState, nativeSHA256Bytes, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { readWork, readWorkFile } from './work-inbox.ts';
 import { canonicalJSON } from './remote-mcp.ts';
 import { localIdentifier } from './local-identifiers.ts';
@@ -175,7 +175,7 @@ export async function createProviderTools(connectionId: string, overrides: Parti
         }
         await service.finish(requestId, 'succeeded', canonicalJSON(result)); return { requestId, confirmed: true, result };
       } catch {
-        if (await service.receiptState(requestId,owner).catch(()=>undefined) === 'terminal') await service.finish(requestId, 'uncertain').catch(() => {});
+        if (await boundedReceiptState(requestId,owner,service.receiptState) === 'terminal') await service.finish(requestId, 'uncertain').catch(() => {});
         throw new Error('El envío quedó sin confirmar. Conservé el registro y no lo repetiré automáticamente. Revisa el servicio.');
       }
     } };

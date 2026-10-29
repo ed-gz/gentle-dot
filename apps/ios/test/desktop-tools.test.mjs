@@ -17,14 +17,18 @@ function memoryJournal() {
     async dispatching(id) { get(id).state='dispatching'; },
     async cancelBeforeDispatch(expected) { const item=get(expected.id); if (item.owner!==expected.owner) throw new Error('Dueño distinto'); item.state='cancelled'; pending.delete(item.key); },
     async unconfirmed(id) { get(id).state='unconfirmed'; },
+    async recoverUnconfirmed(expected) { const item=get(expected.id); if (JSON.stringify(item)!==JSON.stringify(expected)) throw new Error('Envío cambió'); item.state='unconfirmed'; },
     async delivered(id, instanceId) { const item=get(id); if (item.instanceId !== instanceId) throw new Error('Instancia distinta'); item.state='delivered'; pending.delete(item.key); },
+    async confirmControlDelivery() { return false; },
+    async getPending(host,id) { const item=records.get(id);return item && item.host===host && pending.get(item.key)===id ? structuredClone(item) : null; },
+    async page(host,offset,limit) { const items=await this.list(host);return {items:items.slice(offset,offset+limit),total:items.length}; },
     async list(host) { return [...pending.values()].map(id => structuredClone(get(id))).filter(item => item.host===host); },
     async reviewed(expected) { const item=get(expected.id); if (JSON.stringify(item)!==JSON.stringify(expected)) throw new Error('Envío cambió'); item.state='reviewed'; pending.delete(item.key); },
   };
 }
 function fixture(overrides = {}) {
   const calls = []; let receipt; let current = conn;
-  const client = createDesktopSessionClient({ journal: overrides.journal ?? memoryJournal(), controlJournal: overrides.controlJournal ?? memoryJournal(), getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: overrides.journal ?? memoryJournal(), controlJournal: overrides.controlJournal ?? memoryJournal(), receiptState: overrides.receiptState ?? (async () => 'terminal'), getConnection: () => current, request: async request => {
     calls.push(request); const payload = request.body ? JSON.parse(request.body) : undefined;
     let value;
     if (!payload) value = { available: true, sessions: [session], approvals: [{ secret: 'do-not-project' }] };
@@ -48,7 +52,7 @@ test('session tools reuse existing sessions and expose no create/answer/permissi
 test('a late session inventory cannot be attributed to a newly selected laptop', async () => {
   let current = conn;
   let resolveRequest;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => current, request: () => new Promise(resolve => { resolveRequest = resolve; }) });
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => current, request: () => new Promise(resolve => { resolveRequest = resolve; }) });
   const listing = client.list();
   current = { ...conn, url: 'wss://other.example.ts.net/ws', deviceId: 'other-device' };
   resolveRequest({ status: 200, body: JSON.stringify({ available: true, sessions: [session] }), headers: {} });
@@ -98,7 +102,7 @@ test('a replacement Pi process cannot confirm a prior send', async () => {
 });
 test('a connection changed during post-ack inspection stays unconfirmed', async () => {
   let current = conn, sends = 0;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => current, request: async request => {
     const payload = request.body ? JSON.parse(request.body) : undefined;
     if (!payload) return { status:200, headers:{}, body:JSON.stringify({available:true,sessions:[session]}) };
     if (payload.action === 'prompt') { sends++; return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:target.sessionId,instanceId:'instance-1'})}; }
@@ -187,7 +191,7 @@ test('cancellation before transport closes the reservation without calling promp
 });
 test('cancellation after transport starts preserves uncertainty and prevents replay', async () => {
   const journal=memoryJournal(), controller=new AbortController(); let sends=0;
-  const client=createDesktopSessionClient({journal,getConnection:()=>conn,request:async request => {
+  const client=createDesktopSessionClient({journal,controlJournal:memoryJournal(),receiptState:async()=> 'terminal',getConnection:()=>conn,request:async request => {
     const payload=request.body?JSON.parse(request.body):undefined;
     if (!payload) return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[session]})};
     if (payload.action==='prompt') { sends++; controller.abort(); throw new Error('interrupted'); }
@@ -217,7 +221,7 @@ test('concurrent identical approvals reserve at most one dispatch', async () => 
 test('a session prompt whose connection changes in flight remains uncertain and is not retried', async () => {
   let current = conn;
   let sends = 0;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => current, request: async request => {
     const payload = request.body ? JSON.parse(request.body) : undefined;
     if (!payload) return { status: 200, headers: {}, body: JSON.stringify({ available: true, sessions: [session] }) };
     if (payload.action === 'inspect') return { status: 200, headers: {}, body: JSON.stringify(page()) };
@@ -232,7 +236,7 @@ test('a session prompt whose connection changes in flight remains uncertain and 
 test('a late stop acknowledgement after switching laptops stays unconfirmed', async () => {
   let current = conn;
   let stops = 0;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => current, request: async request => {
     const payload = JSON.parse(request.body);
     if (payload.action === 'inspect') return { status: 200, headers: {}, body: JSON.stringify(page()) };
     stops++;
@@ -273,7 +277,7 @@ test('cancellation during the post-approval reread prevents the pending mutation
 
 test('agent session read adapts valid large history while preserving cursor and reuses the safe limit', async () => {
   const calls = [];
-  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => conn, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => conn, request: async request => {
     const payload = JSON.parse(request.body); calls.push(payload);
     if (payload.limit === 50) throw new DeviceBridgeError('size_limit', 'native limit');
     return { status: 200, headers: {}, body: JSON.stringify({ ...page(),
@@ -290,7 +294,7 @@ test('agent session read adapts valid large history while preserving cursor and 
 test('agent session read never retries network failure, cancellation or a changed connection', async () => {
   let current = conn, calls = 0;
   const controller = new AbortController();
-  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => current, request: async () => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => current, request: async () => {
     calls++;
     if (calls === 1) throw new Error('offline');
     if (calls === 2) { controller.abort(); throw new DeviceBridgeError('size_limit', 'large'); }
@@ -304,7 +308,7 @@ test('agent session read never retries network failure, cancellation or a change
 
 test('agent session read does not retry malformed or oversized individual messages', async () => {
   let calls = 0;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => conn, request: async () => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => conn, request: async () => {
     calls++;
     return { status: 200, headers: {}, body: JSON.stringify({ ...page(), messages: [{ id: 'm', role: 'assistant', content: 'x'.repeat(32001) }] }) };
   } });
@@ -313,7 +317,7 @@ test('agent session read does not retry malformed or oversized individual messag
 
 test('agent session read also adapts when the JavaScript response limit is exceeded', async () => {
   const limits = [];
-  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => conn, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => conn, request: async request => {
     const payload = JSON.parse(request.body); limits.push(payload.limit);
     return { status: 200, headers: {}, body: JSON.stringify({ ...page(),
       messages: Array.from({ length: payload.limit }, (_, index) => ({ id: `m${index}`, role: 'assistant', content: 'x'.repeat(25000) })) }) };
@@ -324,7 +328,7 @@ test('agent session read also adapts when the JavaScript response limit is excee
 
 test('an oversized response to a session mutation remains uncertain and is never replayed', async () => {
   let sends = 0;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => conn, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => conn, request: async request => {
     const payload = request.body && JSON.parse(request.body);
     if (payload?.action === 'prompt') { sends++; throw new DeviceBridgeError('size_limit', 'large'); }
     return { status: 200, headers: {}, body: JSON.stringify(payload ? page() : { available: true, sessions: [session] }) };
@@ -346,4 +350,25 @@ test('human-only answer binds the reviewed revision and refuses a changed revisi
  }});
  change=true;await assert.rejects(client.answerFromHuman({...target,requestId:'q1',confirmed:true},context(async()=>true)),/permiso cambió/);assert.equal(sent,undefined);
  change=false;reads=0;assert.equal((await client.answerFromHuman({...target,requestId:'q1',confirmed:true},context(async()=>true))).accepted,true);assert.equal(sent.expectedQuestionRevision,revision);
+});
+
+test('session transport error stays dispatching until the exact native terminal callback', async () => {
+ let state='active';const journal=memoryJournal();const f=fixture({journal,failSend:true,receiptState:async()=>state});
+ const first=await f.client.send({...target,text:'Instrucción exacta'},context(async()=>true));assert.equal(first.status,'uncertain');
+ const request=f.calls.find(call=>call.body&&JSON.parse(call.body).action==='prompt');assert.equal(request.receiptId,first.clientMessageId);assert.match(request.receiptOwner,/^[a-f0-9-]{36}$/);
+ const pending=(await f.client.listDeliveries()).items[0];assert.equal(pending.state,'dispatching');
+ await assert.rejects(f.client.resolveDelivery({clientMessageId:first.clientMessageId},context(async()=>true)),/permanece bloqueado/);
+ state='terminal';let reviewed;const result=await f.client.resolveDelivery({clientMessageId:first.clientMessageId},context(async value=>{reviewed=JSON.parse(value.details);return true;}));
+ assert.equal(result.reviewed,true);assert.match(reviewed.warning,/podría seguir en curso/);
+});
+
+test('agent timeout frees the caller without treating the native request as finished', async () => {
+ const journal=memoryJournal(),controlJournal=memoryJournal();let sends=0;
+ const client=createDesktopSessionClient({journal,controlJournal,controlTimeoutMs:15,receiptState:async()=> 'active',getConnection:()=>conn,request:async request=>{
+  const payload=request.body?JSON.parse(request.body):null;if(!payload)return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[session]})};
+  if(payload.action==='prompt'){sends++;return new Promise(()=>{});}return {status:200,headers:{},body:JSON.stringify(page())};
+ }});
+ const first=await client.send({...target,text:'Pendiente'},context(async()=>true));assert.equal(first.status,'uncertain');assert.equal(sends,1);
+ const pending=(await client.listDeliveries()).items[0];assert.equal(pending.state,'dispatching');
+ const second=await client.send({...target,text:'Pendiente'},context(async()=>true));assert.equal(second.status,'unconfirmed');assert.equal(sends,1);
 });

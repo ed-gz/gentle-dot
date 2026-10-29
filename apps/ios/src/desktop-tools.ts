@@ -1,6 +1,6 @@
-import { createControlJournal, runSessionControl } from './desktop-control-journal.ts';
+import { createControlJournal, runSessionControl, recoverSessionControl, promptDigest } from './desktop-control-journal.ts';
 import { localIdentifier } from './local-identifiers.ts';
-import { DeviceBridgeError, httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
+import { DeviceBridgeError, httpsRequest, httpsReceiptState, boundedReceiptState, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import type { Tool, ToolContext } from './agent-tools.ts';
 import { createSessionJournal, sessionOperationKey, type SessionAttempt, type SessionJournal } from './desktop-session-journal.ts';
 
@@ -8,7 +8,7 @@ export type DesktopConnection = { url: string; token: string; deviceId?: string 
 export type DesktopSession = { paneId: string; sessionId: string; label: string; state: string; connected: boolean; capabilities: { inspect: boolean; prompt: boolean; abort: boolean; deliveryReceipts: boolean } };
 export type DesktopDelivery = { id: string; status: 'accepted' | 'queued' | 'delivered' | 'unconfirmed'; acceptedAt: string; deliveredAt?: string; evidence?: 'correlated-v1'; preview: string; deliverAs: 'steer' | 'followUp' };
 export type DesktopPage = { sessionId: string; instanceId: string; questionRevision?: string; messages: { id: string; role: string; text: string }[]; deliveries: DesktopDelivery[]; question?: { id: string; kind: string; title: string; message: string; expiresAt: string; action?: string; fingerprint?: string; requiresConfirmation: boolean; options?: { id: string; label: string; description?: string; effect?: string; consequence?: string }[] }; history: { hasEarlier: boolean; before?: string } };
-export type DesktopDependencies = { getConnection: () => DesktopConnection | undefined; request?: (request: HTTPSRequest) => Promise<HTTPSResponse>; journal?: SessionJournal; controlJournal?: SessionJournal };
+export type DesktopDependencies = { getConnection: () => DesktopConnection | undefined; request?: (request: HTTPSRequest) => Promise<HTTPSResponse>; journal?: SessionJournal; controlJournal?: SessionJournal; receiptState?: typeof httpsReceiptState; controlTimeoutMs?: number };
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 class DesktopPageTooLarge extends Error {}
 const string = (value: unknown, max: number, required = true): value is string => typeof value === 'string' && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value) && (!required || Boolean(value.trim()));
@@ -72,6 +72,7 @@ export function parseDesktopPage(value: unknown, sessionId: string): DesktopPage
 
 export function createDesktopSessionClient(dependencies: DesktopDependencies) {
   const request = dependencies.request ?? httpsRequest;
+  const receiptState = dependencies.receiptState ?? httpsReceiptState;
   const journal = dependencies.journal ?? createSessionJournal();
   const controlJournal = dependencies.controlJournal ?? createControlJournal();
   function connection(): DesktopConnection { const value = dependencies.getConnection(); if (!value) throw new Error('Vincula la laptop para consultar sus sesiones de Pi.'); endpoint(value); return { ...value }; }
@@ -79,10 +80,10 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
     const current = dependencies.getConnection();
     if (!current || current.url !== expected.url || current.token !== expected.token || current.deviceId !== expected.deviceId) throw new Error('La conexión cambió desde la revisión. Vuelve a aprobar en el host actual.');
   }
-  async function rpc(conn: DesktopConnection, payload?: object): Promise<unknown> {
+  async function rpc(conn: DesktopConnection, payload?: object, receipt?: {receiptId:string;receiptOwner:string}): Promise<unknown> {
     unchanged(conn);
     let reply: HTTPSResponse;
-    try { reply = await request({ url: endpoint(conn), method: payload ? 'POST' : 'GET', headers: { Authorization: `Bearer ${conn.token}`, 'Content-Type': 'application/json' }, ...(payload ? { body: JSON.stringify(payload) } : {}) }); }
+    try { reply = await request({ url: endpoint(conn), method: payload ? 'POST' : 'GET', headers: { Authorization: `Bearer ${conn.token}`, 'Content-Type': 'application/json' }, ...(payload ? { body: JSON.stringify(payload) } : {}), ...receipt }); }
     catch (error) {
       unchanged(conn);
       if (error instanceof DeviceBridgeError && error.code === 'size_limit') throw new DesktopPageTooLarge('Respuesta del host demasiado grande.');
@@ -120,6 +121,16 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
     if (!context.askApproval || !await context.askApproval({ title, details: JSON.stringify({ host: endpoint(conn), ...payload }, null, 2), operation: 'desktop-session' })) throw new Error('La acción sobre la sesión no fue aprobada.');
     context.signal.throwIfAborted(); unchanged(conn);
   }
+  async function pairedPrompt(conn:DesktopConnection, item:SessionAttempt, target:SessionJournal):Promise<SessionAttempt | null> {
+    let paired=await target.getPending(endpoint(conn),item.id);unchanged(conn);
+    if(!paired)return null;
+    const control=item.control?.kind==='prompt'?item:paired.control?.kind==='prompt'?paired:undefined;
+    const send=control===item?paired:item;
+    if(!control || control.owner!==send.owner || control.host!==send.host || control.paneId!==send.paneId || control.sessionId!==send.sessionId || control.instanceId!==send.instanceId || control.control?.payload.text!==send.text) throw new Error('Los registros vinculados no coinciden; permanecen bloqueados.');
+    if(paired.state==='dispatching') paired=await recoverSessionControl(target,paired,receiptState);
+    if(paired.state!=='unconfirmed') throw new Error('El envío vinculado sigue en curso o sin comprobante.');
+    return paired;
+  }
   return {
     async list(): Promise<DesktopSession[]> { return parseDesktopSessions(await rpc(connection())); },
     async read(args: unknown, signal?: AbortSignal): Promise<DesktopPage> {
@@ -142,7 +153,7 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       await authorize(context, conn, `Enviar a ${session.label || 'sesión de Pi'}`, payload);
       const fresh = await inspect(conn, target, 1); if (fresh.instanceId !== before.instanceId) throw new Error('Pi se reinició desde la revisión. La instrucción no se envió.');
       context.signal.throwIfAborted();
-      const attempt: SessionAttempt = { id:clientMessageId, owner:localIdentifier(), key, host, ...(conn.deviceId ? {deviceId:conn.deviceId} : {}), ...target, instanceId:before.instanceId, text, deliverAs, state:'prepared', createdAt:Date.now() };
+      const attempt: SessionAttempt = { id:clientMessageId, owner:localIdentifier(), key, host, ...(conn.deviceId ? {deviceId:conn.deviceId} : {}), ...target, instanceId:before.instanceId, text, deliverAs, state:'prepared', createdAt:Date.now(), nativeReceipt:1 };
       try { await journal.begin(attempt); }
       catch (error) {
         // A commit callback can be lost after reservation. No transport has
@@ -158,11 +169,20 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
         try { await journal.cancelBeforeDispatch(attempt); } catch { throw new Error('No se inició el transporte, pero el registro local no confirmó la cancelación. Revisa los envíos pendientes.'); }
         throw error;
       }
-      const markUnconfirmed = async () => { try { await journal.unconfirmed(clientMessageId); } catch { /* The durable dispatching record continues to block replay. */ } };
-      let ack: unknown;
-      try { ack = await rpc(conn, payload); }
-      catch { await markUnconfirmed(); return { status: 'uncertain', ...target, clientMessageId, message: 'El host no confirmó la recepción. Consulta session_read y busca este clientMessageId en deliveries; no repitas automáticamente.' }; }
-      if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== before.instanceId) { await markUnconfirmed(); return { status: 'uncertain', ...target, clientMessageId, message: 'La confirmación no corresponde a esta sesión. No se considera entregado ni completado.' }; }
+      const markUnconfirmed = async () => { try { if (await boundedReceiptState(clientMessageId,attempt.owner,receiptState) === 'terminal') await journal.recoverUnconfirmed({...attempt,state:'dispatching'}); } catch { /* The durable dispatching record continues to block replay. */ } };
+      let ack: unknown, started = false;
+      try {
+        const operationDigest=await promptDigest(text);
+        ack=await runSessionControl(controlJournal,{kind:'prompt',host,...target,instanceId:before.instanceId,payload:{...payload,operationDigest},...(conn.deviceId?{deviceId:conn.deviceId}:{})},
+          ()=>{context.signal.throwIfAborted();unchanged(conn);},async receipt=>{
+            started=true;const value=await rpc(conn,payload,receipt);
+            if (!object(value) || value.accepted!==true || value.sessionId!==target.sessionId || value.instanceId!==before.instanceId) throw new Error('Confirmación inválida.');
+            return value;
+          },receiptState,{id:clientMessageId,owner:attempt.owner},dependencies.controlTimeoutMs ?? 35000,true);
+      } catch {
+        if(!started) {try{await journal.cancelBeforeDispatch(attempt);}catch{} throw new Error('No se inició el envío; la sesión tiene una operación pendiente o no pudo verificarse el almacenamiento.');}
+        await markUnconfirmed();return {status:'uncertain',...target,clientMessageId,message:'El host no confirmó la recepción. Consulta session_read y busca este clientMessageId en deliveries; no repitas automáticamente.'};
+      }
       let receipt: DesktopDelivery | undefined;
       try {
         const observed = await inspect(conn, target, 1);
@@ -173,7 +193,7 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
         // Accepted is weaker than consumed; preserve that distinction.
       }
       if (receipt?.status === 'delivered') {
-        try { await journal.delivered(clientMessageId, before.instanceId); }
+        try { await journal.delivered(clientMessageId, before.instanceId); await controlJournal.delivered(clientMessageId, before.instanceId); }
         catch { return { status:'unconfirmed', ...target, clientMessageId, completed:false, message:'La sesión mostró evidencia correlacionada, pero no se pudo guardar su resolución. Revisa el envío antes de reintentar.' }; }
       } else await markUnconfirmed();
       return { status: receipt?.status ?? 'accepted', ...target, clientMessageId, ...(receipt ? { receipt } : {}), completed: false, message: receipt?.status === 'delivered' ? 'La sesión confirmó la entrega con identidad correlacionada. Esto no confirma que el trabajo haya terminado.' : 'La recepción no confirma que Pi haya consumido la instrucción. Revisa la sesión antes de reintentar.' };
@@ -182,20 +202,24 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       if (!object(args) || Object.keys(args).some(key => !['offset','limit'].includes(key))) throw new Error('Rango de envíos no válido.');
       const offset=args.offset ?? 0, limit=args.limit ?? 10;
       if (!Number.isSafeInteger(offset) || Number(offset)<0 || Number(offset)>2000 || !Number.isSafeInteger(limit) || Number(limit)<1 || Number(limit)>20) throw new Error('Rango de envíos no válido.');
-      const conn=connection(); const records=await journal.list(endpoint(conn)); unchanged(conn);
-      const items=records.slice(Number(offset),Number(offset)+Number(limit)).map(item => ({...item,key:undefined,owner:undefined,text:item.text.slice(0,1000),textTruncated:item.text.length>1000}));
-      return {items,total:records.length,offset:Number(offset),...(Number(offset)+items.length<records.length ? {nextOffset:Number(offset)+items.length} : {})};
+      const conn=connection(); const page=await journal.page(endpoint(conn),Number(offset),Number(limit)); unchanged(conn);
+      const items=page.items.map(item => ({...item,key:undefined,owner:undefined,text:item.text.slice(0,1000),textTruncated:item.text.length>1000}));
+      return {items,total:page.total,offset:Number(offset),...(Number(offset)+items.length<page.total ? {nextOffset:Number(offset)+items.length} : {})};
     },
     async resolveDelivery(args: unknown, context: ToolContext) {
       if (!object(args) || Object.keys(args).some(key => key !== 'clientMessageId')) throw new Error('Indica el envío exacto que revisaste.');
       const id=field(args.clientMessageId, 96, 'Envío'); const conn=connection();
-      const item=(await journal.list(endpoint(conn))).find(entry => entry.id === id); unchanged(conn);
+      let item=await journal.getPending(endpoint(conn),id); unchanged(conn);
+      if (item?.state === 'dispatching') item=await recoverSessionControl(journal,item,receiptState);
+      unchanged(conn);
       if (!item) throw new Error('El envío pendiente ya cambió o pertenece a otro host.');
       if (item.state !== 'unconfirmed') throw new Error('El envío sigue en curso o perdió su comprobante de transporte; permanece bloqueado.');
+      const paired=await pairedPrompt(conn,item,controlJournal);unchanged(conn);
       const {key:_key, owner:_owner, ...review} = item;
       await authorize(context, conn, 'Cerrar aviso tras revisar el historial', { action:'review-delivery-without-resending', attempt:review, warning:'La solicitud anterior podría seguir en curso o haber sido recibida. Cerrar este aviso permite proponer un nuevo envío; no verifica, cancela ni reenvía la solicitud anterior.' });
       context.signal.throwIfAborted(); unchanged(conn);
       await journal.reviewed(item);
+      if(paired) await controlJournal.reviewed(paired);
       return { clientMessageId:id, reviewed:true, resent:false, message:'Aviso cerrado tras tu revisión. No se afirmó la entrega ni se reenvió el mensaje.' };
     },
     async listControls(args: unknown = {}) {
@@ -208,12 +232,14 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
     },
     async resolveControl(args: unknown, context: ToolContext) {
       if(!object(args)||Object.keys(args).some(key=>key!=='id')) throw new Error('Indica la acción exacta.');
-      const id=field(args.id,96,'Acción'),conn=connection();const item=await controlJournal.getPending(endpoint(conn),id);unchanged(conn);
+      const id=field(args.id,96,'Acción'),conn=connection();let item=await controlJournal.getPending(endpoint(conn),id);unchanged(conn);
+      if(item?.state==='dispatching') item=await recoverSessionControl(controlJournal,item,receiptState);unchanged(conn);
       if(!item || !item.control) throw new Error('La acción cambió o pertenece a otro host.');
       if(item.state!=='unconfirmed') throw new Error('La acción sigue en curso o perdió su comprobante de transporte; permanece bloqueada.');
+      const paired=item.control.kind==='prompt' ? await pairedPrompt(conn,item,journal) : null;unchanged(conn);
       const {key:_key,owner:_owner,...review}=item;
       await authorize(context,conn,'Cerrar aviso de control tras revisar la sesión',{action:'review-session-control',attempt:review,warning:'El host podría seguir procesando la acción anterior. Cerrar el aviso permite proponer otra; no verifica, cancela ni reenvía la anterior.'});
-      context.signal.throwIfAborted();unchanged(conn);await controlJournal.reviewed(item);
+      context.signal.throwIfAborted();unchanged(conn);if(paired) await journal.reviewed(paired);await controlJournal.reviewed(item);
       return {id,reviewed:true,resent:false,confirmed:false};
     },
     async abort(args: unknown, context: ToolContext) {
@@ -223,11 +249,11 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       const fresh = await inspect(conn, target, 1); if (fresh.instanceId !== before.instanceId) throw new Error('Pi cambió desde la revisión. No se detuvo otra instancia.');
       context.signal.throwIfAborted();
       return runSessionControl(controlJournal, {kind:'abort',host:endpoint(conn),...target,instanceId:before.instanceId,payload,...(conn.deviceId?{deviceId:conn.deviceId}:{})},
-        ()=>{context.signal.throwIfAborted();unchanged(conn);}, async()=>{
-          const ack=await rpc(conn,payload);
+        ()=>{context.signal.throwIfAborted();unchanged(conn);}, async receipt=>{
+          const ack=await rpc(conn,payload,receipt);
           if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== before.instanceId) throw new Error('Confirmación inválida.');
           return { accepted:true,...target,completed:false };
-        });
+        },receiptState,undefined,dependencies.controlTimeoutMs ?? 35000);
     },
     /** Deliberately not a model tool. Call only from a human question/permission component. */
     async answerFromHuman(args: { paneId: string; sessionId: string; requestId: string; confirmed?: boolean; optionId?: string; text?: string; cancelled?: boolean }, context: ToolContext) {
@@ -242,11 +268,11 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       if (fresh.instanceId !== page.instanceId || fresh.questionRevision !== page.questionRevision || JSON.stringify(fresh.question) !== JSON.stringify(question)) throw new Error('El permiso cambió después de revisarlo.');
       context.signal.throwIfAborted();
       return runSessionControl(controlJournal, {kind:'answer',host:endpoint(conn),...target,instanceId:page.instanceId,payload:{...payload,question},...(conn.deviceId?{deviceId:conn.deviceId}:{})},
-        ()=>{context.signal.throwIfAborted();unchanged(conn);}, async()=>{
-          const ack=await rpc(conn,payload);
+        ()=>{context.signal.throwIfAborted();unchanged(conn);}, async receipt=>{
+          const ack=await rpc(conn,payload,receipt);
           if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== page.instanceId) throw new Error('Confirmación inválida.');
           return {accepted:true,...target,requestId:question.id};
-        });
+        },receiptState,undefined,dependencies.controlTimeoutMs ?? 35000);
     },
   };
 }

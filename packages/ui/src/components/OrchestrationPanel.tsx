@@ -560,7 +560,7 @@ export function OrchestrationPanel({
 						) : null}
 						{(capriMobile ? !conversation.messages.some(message => message.role === "user" || message.role === "assistant" || message.role === "tool") : conversationMessages.length === 0) && !outbox.some(item => item.identity === identity && !["delivered", "dismissed"].includes(item.status)) ? <p className="muted">Todavía no hay mensajes.</p> : null}
 						<SessionTurns messages={conversation.messages} pending={outbox.filter(item => item.identity === identity)}
-							onRetry={item => void retryDelivery(item)} onDiscard={item => setOutbox(current => current.map(entry => entry === item ? {...entry, status:"dismissed"} : entry))}
+							onRetry={capriMobile ? undefined : item => void retryDelivery(item)} onDiscard={capriMobile ? undefined : item => setOutbox(current => current.map(entry => entry === item ? {...entry, status:"dismissed"} : entry))}
 							retryDisabled={!active || !connected || !session.connected || busy} waiting={conversation.status === "waiting"} chronological={mobile && capriMobile} />
 					</section>
 				) : null}
@@ -925,8 +925,8 @@ export function SessionTurns({ messages, pending = [], onRetry, onDiscard, retry
 				{superseded ? <details className="session-delivery-superseded"><summary>Sin confirmar · {pendingText.slice(0, 80)}</summary><p>{pendingText}</p></details> : <p>{pendingText}</p>}
 				<small>{pendingItem.status === "queued" && waiting ? "Enviado a la cola; revisa la pregunta pendiente." : DELIVERY_STATUS[pendingItem.status]}</small>
 				<div className="session-delivery-actions">
-					<button type="button" disabled={retryDisabled || pendingItem.status !== "unconfirmed"} onClick={() => onRetry?.(pendingItem)}>Reintentar</button>
-					<button type="button" disabled={pendingItem.status === "sending"} onClick={() => onDiscard?.(pendingItem)}>Descartar</button>
+					{onRetry ? <button type="button" disabled={retryDisabled || pendingItem.status !== "unconfirmed"} onClick={() => onRetry(pendingItem)}>Reintentar</button> : null}
+					{onDiscard ? <button type="button" disabled={pendingItem.status === "sending"} onClick={() => onDiscard(pendingItem)}>Descartar</button> : null}
 				</div>
 			</article> : null}
 			{chronological ? <ChronologicalMessages messages={turn} pendingIds={pendingById} /> : <>

@@ -1,8 +1,8 @@
 import { createOrchestrationClient, type AgentApproval, type OrchestrationClient } from '@gentle-dot/ui/src/orchestration.ts';
-import { DeviceBridgeError, httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
+import { DeviceBridgeError, httpsRequest, httpsReceiptState, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { validDaemonUrl } from './local-state.ts';
 import type { DesktopConnection } from './desktop-tools.ts';
-import { createControlJournal, runSessionControl } from './desktop-control-journal.ts';
+import { createControlJournal, runSessionControl, promptDigest } from './desktop-control-journal.ts';
 import { uploadSessionFile } from './session-upload.ts';
 
 /** Reuse the desktop session contract through the phone's authenticated native
@@ -10,6 +10,8 @@ import { uploadSessionFile } from './session-upload.ts';
 export function createLaptopClient(connection: DesktopConnection, options: {
   current: () => DesktopConnection | undefined;
   request?: (request: HTTPSRequest) => Promise<HTTPSResponse>;
+  receiptState?: typeof httpsReceiptState;
+  controlTimeoutMs?: number;
 }): OrchestrationClient {
   const url = new URL(validDaemonUrl(connection.url));
   if (url.pathname !== '/ws' || !connection.token || /\s/.test(connection.token)) throw new Error('Vincula una laptop válida.');
@@ -94,6 +96,14 @@ export function createLaptopClient(connection: DesktopConnection, options: {
         const part = block as unknown as { type?: unknown; text?: unknown } | null;
         return !part || (part.type !== 'image' && (part.type !== 'text' || typeof part.text !== 'string' || part.text.length > 200_000));
       }))) throw new Error('El historial no corresponde a esta sesión.');
+    // Reconcile only explicit, uniquely attributable Pi delivery evidence.
+    const instanceId=(value as typeof value & {instanceId?:unknown}).instanceId;
+    if(typeof instanceId==='string' && instanceId) for(const receipt of (value.deliveries ?? []).filter(item=>item.status==='delivered' && item.evidence==='correlated-v1').slice(-20)) {
+      if(receipt.status==='delivered' && receipt.evidence==='correlated-v1') {
+        current();try {await controlJournal.confirmControlDelivery(`${origin}/orchestration`,paneId,sessionId,instanceId,receipt.id);} catch { /* Keep the local notice when storage cannot be confirmed. */ }
+        current();
+      }
+    }
     // Older adapters use Pi's `toolResult` role. The shared session view uses
     // `tool`; accepting the former without translating it silently hides real
     // history. Keep identity, text, error flags and ordering unchanged.
@@ -110,7 +120,7 @@ export function createLaptopClient(connection: DesktopConnection, options: {
   // Promise.race here: cancellation of JS does not stop URLSession natively.
   const act = client.act, controlJournal = createControlJournal();
   client.act = async action => {
-    if (action.action !== 'abort' && action.action !== 'answer') return act(action);
+    if (action.action !== 'abort' && action.action !== 'answer' && action.action !== 'prompt') return act(action);
     current();
     const page = await client.inspect(action.paneId, action.sessionId, undefined, {limit:1});
     const instanceId=(page as typeof page & {instanceId?:unknown}).instanceId;
@@ -132,14 +142,16 @@ export function createLaptopClient(connection: DesktopConnection, options: {
       }
       review=structuredClone(reviewedApproval);
     }
-    const payload={...structuredClone(wireAction),...(review?{reviewedApproval:review}:{})} as unknown as Record<string,unknown>;
-    await runSessionControl(controlJournal,{kind:action.action,host:`${origin}/orchestration`,paneId:action.paneId,sessionId:action.sessionId,instanceId,payload,...(captured.deviceId?{deviceId:captured.deviceId}:{})},current,async()=>{
+    const operationDigest=action.action==='prompt' ? await promptDigest(action.text) : undefined;
+    current();
+    const payload={...structuredClone(wireAction),...(review?{reviewedApproval:review}:{}),...(operationDigest?{operationDigest}:{})} as unknown as Record<string,unknown>;
+    await runSessionControl(controlJournal,{kind:action.action,host:`${origin}/orchestration`,paneId:action.paneId,sessionId:action.sessionId,instanceId,payload,...(captured.deviceId?{deviceId:captured.deviceId}:{})},current,async receipt=>{
       current();
-      const reply=await request({url:`${origin}/orchestration`,method:'POST',headers:{Authorization:`Bearer ${captured.token}`,'Content-Type':'application/json'},body:JSON.stringify(wireAction)});
+      const reply=await request({...receipt,url:`${origin}/orchestration`,method:'POST',headers:{Authorization:`Bearer ${captured.token}`,'Content-Type':'application/json'},body:JSON.stringify(wireAction)});
       current();
       let ack:unknown;try{ack=JSON.parse(reply.body);}catch{throw new Error('Respuesta inválida.');}
       if(reply.status<200||reply.status>=300||!ack||typeof ack!=='object'||!('accepted' in ack)||ack.accepted!==true||!('sessionId' in ack)||ack.sessionId!==action.sessionId||!('instanceId' in ack)||ack.instanceId!==instanceId) throw new Error('Confirmación no correlacionada.');
-    });
+    },options.receiptState ?? httpsReceiptState,undefined,options.controlTimeoutMs ?? 35000,action.action === 'prompt');
   };
   client.uploadAttachment = (paneId, sessionId, file, uploadId, signal) => {
     current();

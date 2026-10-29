@@ -71,7 +71,7 @@ test('legacy image blocks retain the surrounding history without exposing inline
   await assert.rejects(client.inspect('p', 's'), /historial no corresponde/i);
 });
 
-test('iOS requests text-only session history but leaves mutations unchanged and tolerates older hosts', async () => {
+test('iOS reads older histories and refuses unverified prompt instances', async () => {
   const requests = [];
   const client = createLaptopClient(connection, { current: () => connection, request: async request => {
     const body = JSON.parse(request.body); requests.push(body);
@@ -82,15 +82,15 @@ test('iOS requests text-only session history but leaves mutations unchanged and 
   assert.deepEqual(requests[0], { action: 'inspect', paneId: 'p', sessionId: 's', before: 'cursor', limit: 25, historyContent: 'text-only-v1' });
   assert.equal(history.messages[0].content[0].text, '[Imagen adjunta no disponible en esta vista]');
   assert.doesNotMatch(JSON.stringify(history), /old-host-bytes/);
-  await client.act({ action: 'prompt', paneId: 'p', sessionId: 's', text: 'continúa' });
-  assert.deepEqual(requests[1], { action: 'prompt', paneId: 'p', sessionId: 's', text: 'continúa' });
+  await assert.rejects(client.act({ action: 'prompt', paneId: 'p', sessionId: 's', text: 'continúa' }), /identificar la instancia/);
+  assert.equal(requests.some(body => body.action === 'prompt'), false);
 });
 
 test('a large history page is retried at a smaller size with the same cursor, never replaying mutations', async () => {
   const calls = [];
   const client = createLaptopClient(connection, { current: () => connection, request: async request => {
     const body = request.body && JSON.parse(request.body); calls.push(body);
-    if (body?.action === 'prompt') throw new DeviceBridgeError('size_limit', 'Límite de respuesta.');
+    if (body?.action === 'close') throw new DeviceBridgeError('size_limit', 'Límite de respuesta.');
     if (body?.limit > 12) throw new DeviceBridgeError('size_limit', 'Límite de respuesta.');
     return reply({ sessionId: 's', messages: [{ id: 'one', role: 'assistant', content: [{ type: 'text', text: 'Historia' }] }], history: { supported: true, hasEarlier: true, before: 'previous' } });
   } });
@@ -101,7 +101,7 @@ test('a large history page is retried at a smaller size with the same cursor, ne
   await client.inspect('p', 's');
   assert.equal(calls[0].limit, 12, 'subsequent polls reuse the proven page size');
   calls.length = 0;
-  await assert.rejects(client.act({ action: 'prompt', paneId: 'p', sessionId: 's', text: 'hola' }), /Límite/);
+  await assert.rejects(client.act({ action: 'close', paneId: 'p', sessionId: 's' }), /Límite/);
   assert.equal(calls.length, 1);
 });
 

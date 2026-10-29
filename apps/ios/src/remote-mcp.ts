@@ -1,4 +1,4 @@
-import { httpsRequest, httpsReceiptState, nativeSHA256, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
+import { httpsRequest, httpsReceiptState, boundedReceiptState, nativeSHA256, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { getConnection, connectionToken, beginRemoteExecution, finishRemoteExecution, type ExternalConnection, type RemoteExecution } from './external-connections.ts';
 import { localIdentifier } from './local-identifiers.ts';
 import { prepareMCPAccess } from './mcp-oauth-store.ts';
@@ -269,7 +269,7 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
           return { requestId, confirmed: true, toolFailed: result.isError === true, result, outputValidation, untrustedContent: true,
             ...(outputValidation === 'unverified' ? { outputWarning: 'El servidor respondió, pero su salida estructurada no pudo verificarse contra el esquema. No la presentes como validada.' } : {}) };
         } catch {
-          if (await service.receiptState(requestId,owner).catch(()=>undefined) === 'terminal') await service.finish(requestId, 'uncertain').catch(() => {});
+          if (await boundedReceiptState(requestId,owner,service.receiptState) === 'terminal') await service.finish(requestId, 'uncertain').catch(() => {});
           throw new Error('La operación MCP quedó sin confirmar. Conservé su registro y no la repetiré automáticamente.');
         }
       },

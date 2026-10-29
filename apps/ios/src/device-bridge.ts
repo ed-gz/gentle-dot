@@ -55,6 +55,12 @@ export async function httpsReceiptState(id: string, owner: string, call: DeviceI
   if (!['missing','active','terminal','cancelledBeforeStart'].includes(String(reply.receiptState))) throw new Error('Comprobante nativo inválido.');
   return reply.receiptState as HTTPReceiptState;
 }
+/** A lost bridge callback must never freeze the UI or imply a terminal task. */
+export async function boundedReceiptState(id:string,owner:string,read:typeof httpsReceiptState = httpsReceiptState,timeoutMs=2500):Promise<HTTPReceiptState|undefined> {
+  let timer:ReturnType<typeof setTimeout>|undefined;
+  try { return await Promise.race([read(id,owner),new Promise<undefined>(resolve=>{timer=setTimeout(()=>resolve(undefined),timeoutMs);})]); }
+  catch { return undefined; } finally { if(timer) clearTimeout(timer); }
+}
 export async function httpsReceiptCancelBeforeStart(id: string, owner: string, call: DeviceInvoker = deviceInvoke): Promise<void> {
   receiptIdentity(id, owner);
   const reply = requireNative(await call<NativeReply & {receiptState?: unknown}>('https_receipt_cancel_before_start',{id,owner}));
