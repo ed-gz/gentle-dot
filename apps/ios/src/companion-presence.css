@@ -1,9 +1,6 @@
 /* Capri inhabits the app viewport; only her hit target intercepts touches. */
 #stage[data-companion-layer] { position: fixed; z-index: 2; overflow: hidden; pointer-events: none; }
 #stage[data-companion-layer] .rig { pointer-events: auto; width: 86px; height: 122px; left: 50%; top: 50%; }
-/* Space outside scrollable content keeps Capri present without narrowing text
-   or covering a control when the visible panel has no other free space. */
-.companion-shelf { flex: none; height: 96px; pointer-events: none; }
 :root[data-companion-size="rail"] #stage[data-companion-layer] .rig { width: 60px; height: 86px; }
 /* Loading/error copy belongs in Settings, never over a session's touch target. */
 #stage[data-companion-layer] .rig:not([data-ready="true"]) { visibility: hidden; pointer-events: none; }
@@ -47,15 +44,17 @@
 #panel-chat .composer-actions button:not(.primary), #panel-chat .attach-control { border: 0; background: transparent; }
 #panel-agents .agent-conversation { padding-right: 0; }
 @media (max-height: 560px) {
-  .companion-shelf { height: 76px; }
   #panel-chat .companion-presence { position: relative; flex: none; height: 80px; }
   :root[data-companion-size] #stage[data-companion-layer] .rig { width: 44px; height: 62px; }
 }
 :root[data-large-text="true"] #stage[data-companion-layer] .rig,
 :root[data-keyboard="true"] #stage[data-companion-layer] .rig { width: 44px; height: 62px; }
-:root[data-large-text="true"] .companion-shelf,
-:root[data-keyboard="true"] .companion-shelf { height: 76px; }
 :root[data-large-text="true"] #panel-chat .companion-presence { min-height: 36px; height: auto; }
+
+/* A dense view can have no free full-size perch. Keep Capri visible in the
+   reserved navigation slot instead of hiding her or covering controls. */
+:root[data-companion-size] #stage[data-companion-layer] .rig.docked { width: 44px; height: 44px; }
+#stage[data-companion-layer] .rig.docked canvas { inset: auto; left: 10px; top: 1px; width: 24px; height: 42px; }
 
 #panel-chat .presence-copy { pointer-events: none; }
 #panel-chat .presence-copy .engine-details { pointer-events: auto; }

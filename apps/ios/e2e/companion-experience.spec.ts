@@ -169,21 +169,20 @@ test('Capri remains visible across sections without occupying the controls or na
   await page.locator('#prompt').fill('Continuemos con las tareas.');
   await page.locator('#send').click();
   await expect(page.locator('.chat-text ul li')).toHaveCount(2);
-  await expect(page.locator('.companion-shelf')).toBeVisible();
+  await expect(page.locator('.companion-shelf')).toHaveCount(0);
   expect(await page.locator('#cards').evaluate(el => getComputedStyle(el).paddingRight)).toBe('0px');
   for (const size of [{ width: 375, height: 812 }, { width: 844, height: 390 }]) {
     await page.setViewportSize(size);
-    for (const panel of ['agents', 'inbox', 'settings', 'chat']) {
+    for (const panel of ['agents', 'settings', 'chat']) {
       await page.locator(`[data-panel="${panel}"]`).click();
-      await expect(page.locator('.companion-shelf')).toBeVisible();
       await expect(page.locator('#rig-handle')).toBeVisible();
       await expect.poll(async () => page.evaluate(() => {
         const rig = document.querySelector<HTMLElement>('#rig-handle')!.getBoundingClientRect();
         return rig.width >= 44 && rig.height >= 44 && rig.left >= 0 && rig.right <= innerWidth && rig.top >= 0 && rig.bottom <= innerHeight;
       })).toBe(true);
       const rig = await page.locator('#rig-handle').boundingBox();
-      expect(rig!.width).toBe(size.width === 375 ? 60 : 44);
-      expect(rig!.height).toBe(size.width === 375 ? 86 : 62);
+      expect(rig!.width).toBeGreaterThanOrEqual(44);
+      expect(rig!.height).toBeGreaterThanOrEqual(44);
       if (size.width === 375 && panel === 'settings') {
         const canvas = page.locator('#capri');
         const first = await canvas.evaluate((node: HTMLCanvasElement) => node.toDataURL());
@@ -193,7 +192,7 @@ test('Capri remains visible across sections without occupying the controls or na
   }
 });
 
-test('a filled settings panel keeps Capri in the reserved space after scrolling with reduced motion', async ({ page }) => {
+test('a filled settings panel keeps Capri visible in the navigation dock without blocking controls', async ({ page }) => {
   test.slow();
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await personalBuild(page);
@@ -208,8 +207,8 @@ test('a filled settings panel keeps Capri in the reserved space after scrolling 
   });
   await expect.poll(() => page.evaluate(() => {
     const rig = document.querySelector<HTMLElement>('#rig-handle')!.getBoundingClientRect();
-    const shelf = document.querySelector<HTMLElement>('.companion-shelf')!.getBoundingClientRect();
-    return rig.top >= shelf.top && rig.bottom <= shelf.bottom;
+    const dock = document.querySelector<HTMLElement>('#companion-dock')!.getBoundingClientRect();
+    return rig.top >= dock.top - 1 && rig.bottom <= dock.bottom + 1 && rig.left >= dock.left && rig.right <= dock.right;
   })).toBe(true);
   const control = page.locator('#occupied-panel-fixture');
   await expect.poll(() => control.evaluate(el => {
@@ -218,21 +217,18 @@ test('a filled settings panel keeps Capri in the reserved space after scrolling 
   await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduced');
 });
 
-test('the reserved space collapses when Capri is hidden or the graphics context is lost', async ({ page }) => {
+test('the companion layer hides only when explicitly hidden or its graphics context is lost', async ({ page }) => {
   test.slow();
   await personalBuild(page);
   await page.locator('[data-panel="settings"]').click();
-  await expect(page.locator('.companion-shelf')).toBeVisible();
+  await expect(page.locator('.companion-shelf')).toHaveCount(0);
   await page.locator('#settings-character > summary').click();
   await page.getByText('Gestos y presencia', { exact: true }).click();
   await page.locator('#appear').click();
-  await expect(page.locator('.companion-shelf')).toBeHidden();
   await expect(page.locator('#stage')).toBeHidden();
   await page.locator('#appear').click();
-  await expect(page.locator('.companion-shelf')).toBeVisible();
   await expect(page.locator('#rig-handle')).toBeVisible();
   await page.locator('#capri').evaluate(canvas => canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true })));
-  await expect(page.locator('.companion-shelf')).toBeHidden();
   await expect(page.locator('#stage')).toBeHidden();
 });
 

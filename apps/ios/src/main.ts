@@ -85,12 +85,9 @@ let measuredAt = -Infinity;
 let safePerches: [number, number][] = [];
 stage.dataset.companionLayer = 'true';
 const mainElement = document.querySelector('main')!;
-// Keep a permanent safe place for Capri on secondary screens, even when a
-// scrolled session, work list or settings form occupies all other space.
-const companionShelf = document.createElement('div');
-companionShelf.className = 'companion-shelf'; companionShelf.hidden = true;
-companionShelf.setAttribute('aria-hidden', 'true');
-mainElement.insertBefore(companionShelf, element('panel-chat'));
+// The small dock in the navigation is the last-resort safe position when all
+// free space is occupied. It does not reserve a blank strip above the content.
+const companionDock = element('companion-dock');
 mainElement.append(stage);
 let lastTime = 0;
 let nextRoam = 0;
@@ -110,7 +107,7 @@ const isReduced = () => reduced.matches || settings.motion !== 'full';
 try { fx = new RigFx(element<HTMLCanvasElement>('fx')); } catch { /* Optional procedural effects. */ }
 
 function movementBounds() {
-  return companionBounds({ width: stage.clientWidth, height: stage.clientHeight }, { width: rig.offsetWidth, height: rig.offsetHeight });
+  return companionBounds({ width: stage.clientWidth, height: stage.clientHeight }, { width: rig.offsetWidth, height: rig.offsetHeight }, rig.classList.contains('docked') ? 0 : 4);
 }
 function place(x: number, y: number) {
   position = constrainCompanion({ x, y }, movementBounds());
@@ -132,13 +129,12 @@ function presenceIntent(): RigIntent {
 function layoutCompanion() {
   const main = document.querySelector('main')!.getBoundingClientRect();
   const emptyChat = panel === 'chat' && element('panel-chat').dataset.empty === 'true';
-  companionShelf.hidden = emptyChat || absent || !engine;
   const active = element(`panel-${panel}`);
   const area = active.getBoundingClientRect();
-  const top = Math.max(document.querySelector('.masthead')!.getBoundingClientRect().bottom,
-    companionShelf.hidden ? area.top : companionShelf.getBoundingClientRect().top);
+  const masthead = document.querySelector('.masthead')!.getBoundingClientRect();
+  const top = masthead.top;
   const input = active.querySelector('#composer, .agent-reply');
-  const bottom = input?.getBoundingClientRect().top ?? Math.min(area.bottom, main.bottom) - 12;
+  const bottom = Math.max(masthead.bottom, input?.getBoundingClientRect().top ?? Math.min(area.bottom, main.bottom) - 12);
   Object.assign(stage.style, { left: `${area.left}px`, top: `${top}px`, width: `${area.width}px`, height: `${Math.max(0, bottom - top)}px` });
   stage.hidden = absent || !engine || !['chat', 'agents', 'inbox', 'settings'].includes(panel);
   document.documentElement.dataset.companionSize = emptyChat ? 'hero' : 'rail';
@@ -155,19 +151,32 @@ function animate(now: number) {
   if (now - measuredAt >= 1000) {
     layoutCompanion(); measuredAt = now;
     const area = stage.getBoundingClientRect();
-    const occupied = occupiedPhoneSpace(element(`panel-${panel}`), area);
+    const occupied = [
+      ...occupiedPhoneSpace(element(`panel-${panel}`), area),
+      ...occupiedPhoneSpace(document.querySelector<HTMLElement>('.masthead')!, area),
+    ];
+    // Evaluate normal-size perches even if the previous frame used the dock.
+    // A dense page should never make the character vanish just because there
+    // is no free full-size rectangle.
+    const wasDocked = rig.classList.contains('docked');
+    rig.classList.remove('docked');
     safePerches = phonePerches({ x: 0, y: 0, width: area.width, height: area.height },
       { width: rig.offsetWidth, height: rig.offsetHeight }, occupied);
     rig.style.visibility = '';
-    if ((!manuallyPlaced || !companionShelf.hidden) && !drag && !travel) {
+    if (!safePerches.length) {
+      rig.classList.add('docked');
+      travel = undefined;
+      const dock = companionDock.getBoundingClientRect();
+      place(dock.left + dock.width / 2 - area.left - area.width / 2,
+        dock.top + dock.height / 2 - area.top - area.height / 2);
+    } else if (!drag && !travel) {
       const here = { x: position.x + (area.width - rig.offsetWidth) / 2, y: position.y + (area.height - rig.offsetHeight) / 2, width: rig.offsetWidth, height: rig.offsetHeight };
       // A manual placement or resting pose must not cover controls introduced
       // later. Preserve it when safe, otherwise choose the closest free perch.
-      if (!phonePositionFree(here, occupied)) {
+      if (wasDocked || !phonePositionFree(here, occupied)) {
         const closest = safePerches.reduce<[number, number] | undefined>((best, candidate) =>
           !best || Math.hypot(candidate[0] - here.x, candidate[1] - here.y) < Math.hypot(best[0] - here.x, best[1] - here.y) ? candidate : best, undefined);
-        if (!closest) rig.style.visibility = 'hidden';
-        else place(closest[0] - (area.width - rig.offsetWidth) / 2, closest[1] - (area.height - rig.offsetHeight) / 2);
+        if (closest) place(closest[0] - (area.width - rig.offsetWidth) / 2, closest[1] - (area.height - rig.offsetHeight) / 2);
       }
     }
   }
@@ -362,6 +371,19 @@ let selected: Engine = 'iphone';
 let preference: Engine | 'auto' = 'auto';
 let localController: AbortController | undefined;
 let attachedWork: string | undefined;
+function showAttachedWork(id: string | undefined, label?: string) {
+  attachedWork = id;
+  const button = element<HTMLButtonElement>('view-material');
+  button.hidden = !id;
+  // Do not let a fast navigation/reload outrun the durable conversation
+  // reference. The work itself is saved independently in IndexedDB.
+  button.disabled = Boolean(id);
+  if (label !== undefined) element('attachment-context').textContent = label;
+  else if (!id) element('attachment-context').textContent = '';
+}
+function releaseAttachedWork(id: string | undefined) {
+  if (id && id === attachedWork && conversationReady) element<HTMLButtonElement>('view-material').disabled = false;
+}
 let connectionEpoch = 0;
 const connectionSelection = createConnectionSelectionStore();
 type ManualAttempt = { connection: SelectedConnection & { source: 'manual' }; ticket: number; epoch: number; previous?: SelectedConnection };
@@ -443,6 +465,10 @@ let remoteConversation = 'default';
 let pendingRemote: { id: string; text: string; displayText: string } | undefined;
 let pendingTimer: ReturnType<typeof setTimeout> | undefined;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+const rescueHistory = document.createElement('button');
+rescueHistory.type = 'button'; rescueHistory.id = 'rescue-history'; rescueHistory.textContent = 'Rescatar datos guardados'; rescueHistory.hidden = true;
+element('chat-notice').after(rescueHistory);
+rescueHistory.addEventListener('click', () => { showPanel('inbox'); void inbox.openAll(); });
 let voiceSession: string | undefined;
 let voiceOwner: string | undefined;
 // If the native bridge cannot confirm cancellation, keep the original owner
@@ -460,6 +486,7 @@ let voicePreviewTimer: ReturnType<typeof setInterval> | undefined;
 let voiceRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let persistenceWarning = '';
 const persistence = createConversationPersistence({ onStatus(status) {
+  rescueHistory.hidden = !status.blocked;
   if (status.blocked) {
     persistenceWarning = `No se confirmó el guardado local. ${status.archiveError ?? status.conversationError} ${status.pending} mensajes siguen en memoria. Los envíos están detenidos: abre Archivo para reintentar o exportar antes de cerrar Capri.`;
     element('chat-notice').textContent = persistenceWarning;
@@ -926,6 +953,12 @@ element<HTMLInputElement>('url').value = settings.url;
 const connectionSettings = mountConnectionSettings();
 const inbox = mountInbox(text => { draftEdited = true; prompt.value = text; scheduleSave(); showPanel('chat'); prompt.focus(); });
 const memoryView = mountMemoryView({ status: persistence.status, pending: persistence.pending, visible: () => structuredClone(entries), draft: () => prompt.value, retry: persist });
+element('view-material').addEventListener('click', () => {
+  if (!attachedWork) return;
+  const id = attachedWork;
+  showPanel('inbox');
+  void inbox.openWork(id);
+});
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) release();
@@ -956,17 +989,19 @@ async function restoreConversation() {
     // Capture the restored window before live startup events can cause pruning.
     persistence.seed(recovered.preserved); persistence.enqueue(entries, true);
     entries = entries.reduce((history, entry) => updateEntry(history, entry), saved.entries);
-    if (!draftEdited) { prompt.value = saved.draft; if (!attachedWork) attachedWork = saved.attachedWork; }
-    if (attachedWork) element('attachment-context').textContent = `Material local adjunto · trabajo ${attachedWork}`;
+    if (!draftEdited) { prompt.value = saved.draft; if (!attachedWork) showAttachedWork(saved.attachedWork); }
+    if (attachedWork) showAttachedWork(attachedWork, 'Material guardado en este iPhone');
     conversationReady = true;
     retry.hidden = true;
+    rescueHistory.hidden = !persistence.status().blocked;
     if (element('chat-notice').textContent === recoveryMessage) element('chat-notice').textContent = '';
-    renderChat(); sizeDraft(); await persist(); await recoverLocalInference();
+    renderChat(); sizeDraft(); await persist(); releaseAttachedWork(attachedWork); await recoverLocalInference();
   } catch {
     element('history-loading').hidden = true;
     // Never overwrite an unread stored timeline with the partial in-memory state.
     element('chat-notice').textContent = recoveryMessage;
     retry.hidden = false;
+    rescueHistory.hidden = false;
   } finally {
     conversationLoading = false; retry.disabled = false; updateControls();
     conversationRestored = true; redraw(); maybeStartCompanionIntro();
@@ -1217,10 +1252,9 @@ async function importComposerSelection(event: Event) {
   const files = Array.from(control.files ?? []); if (!files.length) return;
   try {
     const item = await createWork({ title: files[0]!.name.slice(0, 120), kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: prompt.value.trim() || 'Material adjunto a la conversación de Capri.', files });
-    attachedWork = item.id;
-    element('attachment-context').textContent = item.title;
+    showAttachedWork(item.id, item.title);
     element('attachment-context').title = 'Guardado en este iPhone';
-    scheduleSave();
+    await persist(); releaseAttachedWork(item.id);
     control.value = ''; await inbox.refresh();
   } catch (error) { element('chat-notice').textContent = errorText(error); }
 }
@@ -1350,8 +1384,9 @@ function importSharedFiles(): Promise<void> {
       const result = await recoverImportBatch(await listSharedImports(), async item => {
         await importSharedItem(item, async ({ sourceId, files }) => {
           const work = await createImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: item.notes || 'Material compartido con Capri. Pendiente de instrucciones.', files });
-          attachedWork = work.id;
+          showAttachedWork(work.id, work.title);
           notice(`Recibí ${work.title}. Material guardado localmente como trabajo ${work.id}; dime qué hacemos con él.`, 'iphone', `shared:${item.id}`);
+          await persist(); releaseAttachedWork(work.id);
         });
       });
       await inbox.refresh();
@@ -1375,10 +1410,9 @@ function importDocumentFiles(fresh = false): Promise<void> {
             // The source identity must remain stable if native acknowledgement fails
             // and the user edits their message before the next recovery attempt.
             instruction: 'Material adjunto a la conversación de Capri.', files });
-          attachedWork = work.id;
-          element('attachment-context').textContent = `${files.length} archivo${files.length === 1 ? '' : 's'} · ${work.title}`;
+          showAttachedWork(work.id, `${files.length} archivo${files.length === 1 ? '' : 's'} · ${work.title}`);
           notice(`Conservé ${work.title} en este iPhone. Dime qué hacemos con el material.`, 'iphone', `document:${item.id}`);
-          persist();
+          await persist(); releaseAttachedWork(work.id);
         });
       });
       await inbox.refresh();
