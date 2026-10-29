@@ -500,6 +500,12 @@ function handle(rec: Rec) {
 						: { role: "assistant", content: [{ type: "text", text: m.content }] };
 				}),
 			});
+		case "get_entries": {
+			const entries = readFileSync(sessionFile, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as Rec).filter(entry => entry.type !== "session");
+			const index = rec.since === undefined ? -1 : entries.findIndex(entry => entry.id === rec.since);
+			if (rec.since !== undefined && index < 0) return respond(id, "get_entries", undefined, "Entry not found");
+			return respond(id, "get_entries", { entries: entries.slice(index + 1), leafId: lastEntryId ?? null });
+		}
 		case "get_commands":
 			return respond(id, "get_commands", {
 				commands: [

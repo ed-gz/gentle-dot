@@ -182,7 +182,7 @@ test('validates chat/history/ask fields and bounds the UTF-8 payload before UI d
   ready(socket);
   const valid = [
     { type: 'agent_state', state: 'thinking' },
-    { type: 'history', conversationId: 'c1', messages: [{ id: 'h1', role: 'assistant', text: 'Earlier', activities: [] }] },
+    { type: 'history', conversationId: 'c1', branchVerified: true, messages: [{ id: 'h1', role: 'assistant', text: 'Earlier', activities: [], earlier: true, branchUnverified: true }] },
     { type: 'user_message', messageId: 'u1', text: '<script>literal</script>' },
     { type: 'message_delta', messageId: 'm1', delta: 'Partial' },
     { type: 'message_done', messageId: 'm1', text: 'Final', stopped: true },
@@ -195,6 +195,8 @@ test('validates chat/history/ask fields and bounds the UTF-8 payload before UI d
   const count = messages.length;
   [
     { type: 'history', messages: [null] },
+    { type: 'history', branchVerified: false, messages: [] },
+    { type: 'history', messages: [{ id: 'h', role: 'user', text: 'X', activities: [], branchUnverified: 'true' }] },
     { type: 'history', messages: [{ id: 'h', role: 'assistant', text: 'X', activities: 'bad' }] },
     { type: 'message_delta', messageId: 'm', delta: {} },
     { type: 'message_done', messageId: 'm', text: 'X', stopped: 'true' },

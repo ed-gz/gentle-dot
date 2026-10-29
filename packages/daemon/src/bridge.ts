@@ -25,6 +25,7 @@ import {
 	type WorkSyncReply,
 } from "@gentle-dot/protocol";
 import { APPROVAL_WAIT_MS, type AppApproval, type AppLink } from "./app-channel.ts";
+import { lastIndexedPiEntry, pageBranchHistory } from "./branch-history.ts";
 import type { AuthManager } from "./auth.ts";
 import { type ConnectorManager, type ConnectorRefusal, INTEGRITY_UNCHECKED } from "./connectors.ts";
 import {
@@ -753,19 +754,19 @@ export class DotBridge {
 			case "get_history":
 				// Windows ask for history as soon as they connect, often while the agent starts.
 				await this.whenReady();
-				this.deliver(client, {
+				try { this.deliver(client, {
 					type: "history",
 					...(message.requestId !== undefined ? { requestId: message.requestId } : {}),
 					...this.conversationRef(),
 					...(await this.currentHistory()),
-				});
+				}); } catch { this.deliver(client, { type: "error", code: "history_unavailable", message: "No pude verificar la rama actual de la conversación. El historial guardado se conserva." }); }
 				return;
 			case "get_earlier":
-				this.deliver(client, {
+				try { this.deliver(client, {
 					type: "earlier",
 					before: message.before,
-					...this.engine(() => pageHistory(this.chain(), this.pageSize(), message.before)),
-				});
+					...(await this.currentHistory(message.before)),
+				}); } catch { this.deliver(client, { type: "error", code: "history_unavailable", message: "No pude verificar la rama anterior. El historial guardado se conserva." }); }
 				return;
 		}
 	}
@@ -1265,6 +1266,8 @@ export class DotBridge {
 		void this.changeConversation(async () => {
 			if (!(await this.rotator.maybeRotate())) return;
 			this.broadcast({ type: "history", ...this.conversationRef(), ...(await this.currentHistory()) });
+		}).catch(() => {
+			this.broadcast({ type: "error", code: "history_unavailable", message: "La sesión cambió, pero no pude verificar su historial. La conversación anterior se conserva; vuelve a cargarla antes de continuar." });
 		});
 	}
 
@@ -1272,15 +1275,38 @@ export class DotBridge {
 	 * History replaces what a window shows, so it must not be older than the
 	 * messages already sent: read it again when one arrived while loading.
 	 */
-	private async currentHistory(): Promise<HistoryPage> {
-		for (let attempt = 0; ; attempt++) {
+	private async currentHistory(before?: string): Promise<HistoryPage> {
+		for (let attempt = 0; attempt < 3; attempt++) {
 			const seen = this.nextMessage;
 			// The engine writes a message to its session file right after announcing it;
 			// one round trip makes sure everything announced so far is on disk.
 			await this.supervisor.request({ type: "get_state" });
-			const page = this.engine(() => pageHistory(this.chain(), this.pageSize()));
-			if (this.nextMessage === seen || attempt >= 2) return page;
+			const chain = this.chain(); const active = chain.at(-1); const sessionId = this.supervisor.sessionId;
+			if (!active) return { messages: [], hasEarlier: false };
+			const metadata = this.engine(() => chain.map(lastIndexedPiEntry));
+			if (metadata.slice(0, -1).some(value => !value.exists)) throw new Error("Earlier session file missing");
+			const current = metadata.at(-1)!;
+			if (current.legacy) {
+				const page = this.engine(() => metadata.some(value => value.hasFork) ? pageBranchHistory(chain, this.pageSize(), null, before) : pageHistory(chain, this.pageSize(), before));
+				if (this.nextMessage === seen && this.supervisor.sessionFile === active) return page;
+				continue;
+			}
+			if (!sessionId || current.sessionId !== sessionId) throw new Error("Pi session identity changed");
+			const getLeaf = async () => {
+				const response = await this.supervisor.request({ type: "get_entries", ...(current.id ? { since: current.id } : {}) });
+				const data = response.data as { entries?: unknown; leafId?: unknown } | undefined;
+				if (!data || !Array.isArray(data.entries) || (data.leafId !== null && (typeof data.leafId !== 'string' || !data.leafId || data.leafId.length > 512))) throw new Error("Unverifiable Pi leaf");
+				return { leaf: data.leafId as string | null, changed: data.entries.length !== 0 };
+			};
+			const first = await getLeaf();
+			if (first.changed || this.supervisor.sessionFile !== active || this.supervisor.sessionId !== sessionId) continue;
+			const branched = metadata.some(value => value.hasFork) || first.leaf !== (current.id ?? null);
+			const page = this.engine(() => branched
+				? pageBranchHistory(chain, this.pageSize(), first.leaf, before) : pageHistory(chain, this.pageSize(), before));
+			const second = await getLeaf();
+			if (!second.changed && second.leaf === first.leaf && this.nextMessage === seen && this.supervisor.sessionFile === active && this.supervisor.sessionId === sessionId && JSON.stringify(this.chain()) === JSON.stringify(chain)) return branched ? { ...page, branchVerified: true } : page;
 		}
+		throw new Error("Pi branch changed while reading");
 	}
 
 	/** The open chat's session files, oldest first. */

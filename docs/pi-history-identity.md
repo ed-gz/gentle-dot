@@ -2,6 +2,8 @@
 
 El archivo del iPhone puede conservar dos registros de un mismo turno: uno recibido en vivo y otro recuperado del historial. Todavía no existe un vínculo durable que pruebe que son la misma fuente. No se debe unir ni borrar registros por texto o por posición.
 
+El lector del daemon puede proyectar la rama actual de Pi consultando dos veces `get_entries` y comprobando el `leafId` y la sesión. En un árbol ramificado, los IDs de página incluyen una huella de las entradas exactas; un cursor de otra rama se rechaza. Las sesiones anteriores a una rotación no registraron su leaf: sus mensajes permanecen disponibles como históricos con `branchUnverified`, no como prueba de la rama que estaba activa. Si la fuente, la rama o la respuesta RPC son ambiguas, el daemon devuelve un error y el teléfono conserva su historial previo. Esto no correlaciona los mensajes vivos con el historial ni elimina duplicados, y requiere actualizar daemon y cliente para verse en el dispositivo.
+
 ## Evidencia comprobada
 
 - El bridge genera IDs en vivo por instancia; desde `5e924c2` no reutiliza la misma secuencia tras reiniciarse. Los IDs históricos se generan por archivo y posición de turno y son distintos.

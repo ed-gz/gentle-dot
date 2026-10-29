@@ -47,11 +47,11 @@ function parse(raw: unknown): ServerMessage | undefined {
     case 'agent_state': valid = state(message.state); break;
     case 'request_accepted': valid = id(message.requestId) && message.requestId.length <= 200; break;
     case 'history':
-      valid = optional(message.conversationId, id) && optional(message.requestId, id) && optional(message.hasEarlier, boolean)
+      valid = optional(message.conversationId, id) && optional(message.requestId, id) && optional(message.hasEarlier, boolean) && optional(message.branchVerified, value => value === true)
         && Array.isArray(message.messages) && message.messages.length <= 2000 && message.messages.every(entry => record(entry)
           && id(entry.id) && oneOf(entry.role, ['user', 'assistant']) && string(entry.text)
           && Array.isArray(entry.activities) && entry.activities.length <= 1000 && entry.activities.every(activity)
-          && optional(entry.attachments, attachments) && optional(entry.earlier, value => value === true));
+          && optional(entry.attachments, attachments) && optional(entry.earlier, value => value === true) && optional(entry.branchUnverified, value => value === true));
       break;
     case 'user_message':
       valid = id(message.messageId) && string(message.text) && optional(message.attachments, attachments); break;

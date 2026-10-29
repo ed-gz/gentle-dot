@@ -80,6 +80,8 @@ export interface HistoryMessage {
 	attachments?: AttachmentInfo[];
 	/** From an earlier session of the same chat, before the daemon last rotated it. */
 	earlier?: true;
+	/** Earlier session did not record the exact leaf when it was rotated. */
+	branchUnverified?: true;
 }
 
 /** Optional parts of the app the daemon turns on. */
@@ -475,8 +477,10 @@ export type ServerPayload =
 			/** Only the most recent messages; `hasEarlier` says whether `get_earlier` has more. */
 			messages: HistoryMessage[];
 			hasEarlier?: boolean;
+			/** Current Pi branch verified; older local cards need separate identity proof. */
+			branchVerified?: true;
 	  }
-	| { type: "earlier"; before: string; messages: HistoryMessage[]; hasEarlier: boolean }
+	| { type: "earlier"; before: string; messages: HistoryMessage[]; hasEarlier: boolean; branchVerified?: true }
 	| { type: "conversations"; conversations: ConversationSummary[]; activeId?: string }
 	| { type: "interrupted" }
 	| ({ type: "queue" } & MessageQueue)

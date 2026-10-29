@@ -1,11 +1,12 @@
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 const CHUNK_BYTES = 64 * 1024;
 // A single attachment can occupy a large JSONL record; never retain the whole session.
 const MAX_RECORD_BYTES = 72 * 1024 * 1024;
 const CACHED_FILES = 8;
 
-type RecordSpan = { start: number; end: number; entry: Record<string, unknown> };
+type RecordSpan = { start: number; end: number; entry: Record<string, unknown>; fingerprint?: string };
 export type TurnSpan = { start: number; role: "user" | "assistant" };
 export type SessionIndex = {
 	identity: string;
@@ -23,6 +24,8 @@ export function* sessionRecords(
 	start = 0,
 	end = statSync(file).size,
 	onBoundary?: (offset: number) => void,
+	onInvalid?: () => void,
+	fingerprint = false,
 ): Generator<RecordSpan> {
 	const fd = openSync(file, "r");
 	let offset = start;
@@ -44,12 +47,17 @@ export function* sessionRecords(
 					parts.push(part);
 					try {
 						const entry: unknown = JSON.parse(Buffer.concat(parts, length).toString("utf8"));
-						if (entry && typeof entry === "object" && !Array.isArray(entry))
-							yield { start: lineStart, end: offset + i + 1, entry: entry as Record<string, unknown> };
+						if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+							const hash = fingerprint ? createHash("sha256") : undefined;
+							if (hash) for (const bytes of parts) hash.update(bytes);
+							yield { start: lineStart, end: offset + i + 1, entry: entry as Record<string, unknown>, ...(hash ? { fingerprint: hash.digest("hex") } : {}) };
+						}
+						else if (length) onInvalid?.();
 					} catch {
 						// The next complete line is still independently readable.
+						if (length) onInvalid?.();
 					}
-				}
+				} else if (length) onInvalid?.();
 				parts = [];
 				length = 0;
 				oversized = false;

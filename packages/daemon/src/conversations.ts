@@ -100,6 +100,8 @@ export function readSessionMessages(file: string): unknown[] {
 export interface HistoryPage {
 	messages: HistoryMessage[];
 	hasEarlier: boolean;
+	/** The current Pi leaf was verified during a tree-aware projection. */
+	branchVerified?: true;
 }
 
 /**
@@ -124,7 +126,7 @@ export function pageHistory(chain: string[], limit: number, before?: string): Hi
 		const stop = Math.min(count, end);
 		const start = Math.max(0, stop - (limit - page.length));
 		const turns = historyFromMessages(readTurnMessages(path, start, stop));
-		const earlier = file < chain.length - 1 ? { earlier: true as const } : {};
+		const earlier = file < chain.length - 1 ? { earlier: true as const, branchUnverified: true as const } : {};
 		page.unshift(...turns.map((turn, i) => ({ ...turn, id: `s${file}-${start + i + 1}`, ...earlier })));
 		if (page.length >= limit) {
 			const more =
