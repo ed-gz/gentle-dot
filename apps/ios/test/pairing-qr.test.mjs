@@ -34,7 +34,7 @@ test('scan forwards original file bytes and validates the Vision result without 
   const calls = [];
   const result = await scanPairingCode(new File(['PNG'], 'qr.png', { type: 'image/png' }), async (command, args) => {
     calls.push(command); assert.equal(Buffer.from(args.request.base64, 'base64').toString(), 'PNG');
-    assert.deepEqual(args.request, { base64: 'UE5H', mimeType: 'image/png', fileName: 'qr.png' }); return reply();
+    assert.match(args.request.requestId, /^[a-f0-9-]{36}$/i); assert.deepEqual({ ...args.request, requestId: undefined }, { requestId: undefined, base64: 'UE5H', mimeType: 'image/png', fileName: 'qr.png' }); return reply();
   });
   assert.deepEqual(calls, ['scan_pairing_code']); assert.equal(result.invitation.origin, origin);
   await assert.rejects(scanPairingCode({ name: 'qr.png', type: 'image/png', size: 3, arrayBuffer: async () => new Uint8Array([1]).buffer }, async () => { throw Error('must not invoke'); }), /cambió/);

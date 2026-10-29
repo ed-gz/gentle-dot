@@ -6,11 +6,11 @@ async function fixture(page: Page, options: { codes?: string[]; hold?: boolean; 
   await page.route('**/pairing-fixture', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><body><form id="fixture"><h2>Vincular laptop</h2><label>Invitación<input id="invitation"></label><button type="submit">Vincular iPhone</button></form></body></html>' }));
   await page.goto('/pairing-fixture');
   await page.evaluate(async ({ codes, hold, native, liveError, cancelFails, cancelHold }) => {
-    const state = globalThis as any; state.isTauri = native; state.qrCommands = []; state.pairSubmits = 0;
+    const state = globalThis as any; state.isTauri = native; state.qrCommands = []; state.qrIdentities = []; state.pairSubmits = 0;
     state.cancelCalls = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('results_list')) return { ok: true, items: [] };
-      state.qrCommands.push(command);
+      state.qrCommands.push(command); if (command.endsWith('|scan_pairing_code')) state.qrIdentities.push(['scan', args.request.requestId]); if (command.endsWith('|cancel_pairing_code')) state.qrIdentities.push(['cancel', args.requestId]);
       if (command.endsWith('|pairing_scan_cancel')) {
         state.cancelCalls++;
         if (state.cancelCalls <= cancelFails) return { ok: false, message: 'Cierre no confirmado.' };
@@ -308,4 +308,30 @@ test('a paired credential that could not be saved can be retried without redeemi
   await expect(page.locator('#pairing-status')).toContainText('Acceso guardado en Keychain');
   await expect(retry).toBeHidden();
   expect(await page.evaluate(() => [(globalThis as any).pairCalls, (globalThis as any).saveCalls])).toEqual([1, 2]);
+});
+
+
+test('failed photo cancellation stays unconfirmed and blocks another scan until closure is confirmed', async ({ page }) => {
+  await fixture(page, { hold: true });
+  await page.evaluate(() => {
+    const state=globalThis as any, original=state.__TAURI_INTERNALS__.invoke; state.photoCancelAttempts=0;
+    state.__TAURI_INTERNALS__.invoke=async(command:string,args:any)=> {
+      if (command.endsWith('|cancel_pairing_code') && ++state.photoCancelAttempts===1) { state.qrIdentities.push(['cancel',args.requestId]); return {ok:false,error:'cancel_failed',message:'Cierre no confirmado'}; }
+      return original(command,args);
+    };
+  });
+  await page.getByLabel('Foto guardada para leer QR').setInputFiles({ name: 'qr.png', mimeType:'image/png', buffer:png });
+  await page.waitForFunction(() => typeof (globalThis as any).finishQR === 'function');
+  await page.getByRole('button',{name:'Cancelar lectura'}).click();
+  await expect(page.locator('.pairing-scan-status')).toContainText('No pude confirmar');
+  await expect(page.getByRole('button',{name:'Escanear QR',exact:true})).toBeDisabled();
+  await page.evaluate(() => (globalThis as any).finishQR());
+  await expect(page.locator('#invitation')).toHaveValue('');
+  await page.getByRole('button',{name:'Reintentar cierre'}).click();
+  await expect(page.getByRole('button',{name:'Escanear QR',exact:true})).toBeEnabled();
+  await expect(page.locator('#invitation')).toHaveValue('');
+  expect(await page.evaluate(() => (globalThis as any).pairSubmits)).toBe(0);
+  const ids=await page.evaluate(() => (globalThis as any).qrIdentities);
+  expect(ids.map((entry:any[])=>entry[0])).toEqual(['scan','cancel','cancel']);
+  expect(ids[0][1]).toMatch(/^[a-f0-9-]{36}$/i); expect(ids[1][1]).toBe(ids[0][1]); expect(ids[2][1]).toBe(ids[0][1]);
 });

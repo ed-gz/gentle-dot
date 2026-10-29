@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { parseInvitation, type Invitation } from './device-pairing.ts';
 import { hashSourceBytes, MAX_DOCUMENT_BYTES, validateDocument } from './perception.ts';
+import { localIdentifier } from './local-identifiers.ts';
 
 export const MAX_PAIRING_IMAGE_BYTES = MAX_DOCUMENT_BYTES;
 export type ScannedInvitation = { invitation: Invitation; link: string };
@@ -47,7 +48,8 @@ export function parseScannedInvitation(value: unknown, expected: ScanSource): Sc
   const invitation = [...invitations.values()][0]!;
   return { invitation, link: `gentledot://pair?${new URLSearchParams({ url: invitation.origin, code: invitation.code, name: invitation.name })}` };
 }
-export async function scanPairingCode(file: File, call: ScanCall = native, signal?: AbortSignal): Promise<ScannedInvitation> {
+export async function scanPairingCode(file: File, call: ScanCall = native, signal?: AbortSignal, requestId = localIdentifier()): Promise<ScannedInvitation> {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(requestId)) throw new Error('Identificador de lectura inválido.');
   signal?.throwIfAborted();
   validatePairingImage(file);
   const buffer = await file.arrayBuffer();
@@ -58,8 +60,12 @@ export async function scanPairingCode(file: File, call: ScanCall = native, signa
   signal?.throwIfAborted();
   const parts: string[] = [];
   for (let offset = 0; offset < bytes.length; offset += 8192) parts.push(String.fromCharCode(...bytes.subarray(offset, offset + 8192)));
-  const result = await call('scan_pairing_code', { request: { base64: btoa(parts.join('')), mimeType: file.type, fileName: file.name } });
+  const result = await call('scan_pairing_code', { request: { requestId, base64: btoa(parts.join('')), mimeType: file.type, fileName: file.name } });
   signal?.throwIfAborted();
   return parseScannedInvitation(result, { name: file.name, type: file.type, size: file.size, sha256 });
 }
-export async function cancelPairingCode(): Promise<void> { await native('cancel_pairing_code'); }
+export async function cancelPairingCode(requestId: string, call: ScanCall = native): Promise<void> {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(requestId)) throw new Error('Identificador de lectura inválido.');
+  const result = await call('cancel_pairing_code', { requestId });
+  if (!result || typeof result !== 'object' || Array.isArray(result) || (result as Record<string, unknown>).ok !== true) throw new Error('No se confirmó el cierre de la lectura.');
+}

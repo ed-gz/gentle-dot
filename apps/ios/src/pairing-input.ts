@@ -2,6 +2,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { cancelPairingCode, scanPairingCode, type ScannedInvitation } from './pairing-qr.ts';
 import { scanPairingCamera, cancelPairingCamera } from './pairing-camera.ts';
 import { parseInvitation } from './device-pairing.ts';
+import { localIdentifier } from './local-identifiers.ts';
 import './pairing-input.css';
 
 type PairingMount = { setSubmitting(value: boolean): void; dispose(): void };
@@ -21,9 +22,9 @@ async function abortable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T
 
 /** Native live camera or photo input. The form remains the sole explicit pairing action. */
 export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement | HTMLTextAreaElement,
-  dependencies: { scan?: (file: File, signal?: AbortSignal) => Promise<ScannedInvitation>; cancel?: () => Promise<void>; liveScan?: (signal?: AbortSignal) => Promise<ScannedInvitation | null>; cancelLive?: () => Promise<void>; native?: boolean } = {}): PairingMount {
+  dependencies: { scan?: (file: File, signal?: AbortSignal, requestId?: string) => Promise<ScannedInvitation>; cancel?: (requestId: string) => Promise<void>; liveScan?: (signal?: AbortSignal) => Promise<ScannedInvitation | null>; cancelLive?: () => Promise<void>; native?: boolean } = {}): PairingMount {
   const previous = mounted.get(form); if (previous) return previous;
-  const scan = dependencies.scan ?? ((file, signal) => scanPairingCode(file, undefined, signal)), cancel = dependencies.cancel ?? cancelPairingCode;
+  const scan = dependencies.scan ?? ((file, signal, requestId) => scanPairingCode(file, undefined, signal, requestId)), cancel = dependencies.cancel ?? cancelPairingCode;
   const liveScan = dependencies.liveScan ?? (signal => scanPairingCamera(undefined, signal)), cancelLive = dependencies.cancelLive ?? cancelPairingCamera;
   const native = dependencies.native ?? isTauri();
   const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
@@ -50,14 +51,14 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
   input.addEventListener('input', clearCandidate);
   const blockSubmit = (event: SubmitEvent) => { if (busy || cancelling || cancellationUncertain || submitting || !valid()) { event.preventDefault(); event.stopImmediatePropagation(); status.textContent = busy || cancelling || cancellationUncertain ? 'Espera a que termine la lectura o confirma su cierre antes de vincular.' : 'Escanea el QR o pega una invitación válida de Gentle Dot.'; } };
   form.addEventListener('submit', blockSubmit, true);
-  let live = false;
+  let live = false, photoRequestId: string | undefined;
   const read = async (file?: File) => {
     if (busy || cancelling || cancellationUncertain || submitting || disposed) return;
-    live = !file;
+    live = !file; photoRequestId = file ? localIdentifier() : undefined;
     const current = ++epoch, original = input.value; const operation = new AbortController(); controller = operation;
     setBusy(true); status.textContent = 'Leyendo el QR en este iPhone…';
     try {
-      const found = await abortable(file ? scan(file, operation.signal) : liveScan(operation.signal), operation.signal);
+      const found = await abortable(file ? scan(file, operation.signal, photoRequestId) : liveScan(operation.signal), operation.signal);
       if (disposed || current !== epoch || input.value !== original) return;
       if (!found) { status.textContent = 'Lectura cancelada. No se vinculó ningún equipo.'; return; }
       input.value = found.link; input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -65,7 +66,7 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
       setBusy(false); submit?.focus();
     } catch (error) {
       if (!disposed && current === epoch) status.textContent = error instanceof Error ? error.message : 'No pude leer el QR. Puedes pegar la invitación.';
-    } finally { if (controller === operation) { controller = undefined; if (!disposed) setBusy(false); } }
+    } finally { if (controller === operation) { controller = undefined; if (!cancelling && !cancellationUncertain) photoRequestId = undefined; if (!disposed) setBusy(false); } }
   };
   picker.addEventListener('change', () => { const file = picker.files?.[0]; picker.value = ''; if (file) void read(file); });
   camera.onclick = () => void read(); photo.onclick = () => picker.click();
@@ -76,8 +77,8 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
     const warning = setTimeout(() => {
       if (!disposed && cancelling) status.textContent = 'No se ha confirmado el cierre de la cámara. Espera o vuelve a abrir Capri antes de escanear.';
     }, 3000);
-    void (live ? cancelLive() : cancel()).then(() => {
-      cancellationUncertain = false;
+    void (live ? cancelLive() : cancel(photoRequestId!)).then(() => {
+      cancellationUncertain = false; photoRequestId = undefined;
       if (!disposed) status.textContent = 'Lectura cancelada. No se vinculó ningún equipo.';
     }).catch(() => {
       if (!disposed) status.textContent = 'No pude confirmar que terminó la lectura. Reintenta el cierre antes de volver a escanear.';
@@ -89,7 +90,7 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
   // background transition; treating WebView visibility as background here
   // would cancel a first-time scan before the user can grant permission.
   const visibility = () => { if (document.hidden && !live) cancelCurrent(); }; document.addEventListener('visibilitychange', visibility);
-  const mount: PairingMount = { setSubmitting(value) { submitting = value; setBusy(busy); }, dispose() { if (disposed) return; disposed = true; epoch++; controller?.abort(); if (busy || cancellationUncertain) void (live ? cancelLive() : cancel()).catch(() => {});
+  const mount: PairingMount = { setSubmitting(value) { submitting = value; setBusy(busy); }, dispose() { if (disposed) return; disposed = true; epoch++; controller?.abort(); if (busy || cancellationUncertain) void (live ? cancelLive() : photoRequestId ? cancel(photoRequestId) : Promise.resolve()).catch(() => {});
     document.removeEventListener('visibilitychange', visibility); input.removeEventListener('input', clearCandidate); form.removeEventListener('submit', blockSubmit, true); region.remove(); mounted.delete(form); } };
   mounted.set(form, mount); return mount;
 }

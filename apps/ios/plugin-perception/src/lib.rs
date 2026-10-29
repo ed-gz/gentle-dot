@@ -114,7 +114,7 @@ fn valid_retained_voice(record: &RetainedVoiceRecord) -> bool {
 }
 
 fn valid_pairing_image(request: &DocumentRequest) -> bool {
-    valid_document(request) && request.mime_type != "application/pdf"
+    valid_recognition_request(request) && request.mime_type != "application/pdf"
 }
 
 #[cfg(target_os = "ios")]
@@ -319,8 +319,14 @@ async fn scan_pairing_code<R: Runtime>(
 }
 
 #[tauri::command]
-async fn cancel_pairing_code<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
-    native_call(app, "cancelPairingCode", json!({})).await
+async fn cancel_pairing_code<R: Runtime>(
+    app: AppHandle<R>,
+    request_id: String,
+) -> Result<Value, String> {
+    if !valid_session_id(&request_id) {
+        return Err("invalid_scan_request".into());
+    }
+    native_call(app, "cancelPairingCode", json!({"requestId": request_id})).await
 }
 
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
@@ -490,6 +496,10 @@ mod tests {
     #[test]
     fn pairing_accepts_only_bounded_image_requests() {
         let mut image = request();
+        assert!(!valid_pairing_image(&image));
+        image.request_id = Some("bad-id".into());
+        assert!(!valid_pairing_image(&image));
+        image.request_id = Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into());
         assert!(valid_pairing_image(&image));
         image.mime_type = "application/pdf".into();
         assert!(valid_document(&image));

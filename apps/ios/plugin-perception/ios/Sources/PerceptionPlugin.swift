@@ -24,6 +24,7 @@ final class PerceptionPlugin: Plugin {
     private var document: DocumentOperation?
     private var documentOwners = DocumentOwnership()
     private var pairingCode: DocumentOperation?
+    private let pairingBarrier = PairingScanBarrier()
     private var observers: [NSObjectProtocol] = []
     private weak var exportWebview: WKWebView?
     private var incompleteExporter: VoiceIncompleteExporter?
@@ -279,7 +280,7 @@ final class PerceptionPlugin: Plugin {
         }
     }
     @objc func scanPairingCode(_ invoke: Invoke) {
-        guard let args = try? invoke.parseArgs(DocumentArgs.self) else {
+        guard let args = try? invoke.parseArgs(DocumentArgs.self), let requestId = args.requestId, UUID(uuidString: requestId) != nil else {
             invoke.resolve(PairingCodeReply(error: "invalid_image")); return
         }
         DispatchQueue.main.async {
@@ -289,6 +290,9 @@ final class PerceptionPlugin: Plugin {
             guard self.pairingCode == nil else {
                 invoke.resolve(PairingCodeReply(error: "busy")); return
             }
+            guard self.pairingBarrier.begin(requestId) else {
+                invoke.resolve(PairingCodeReply(error: "cancelled")); return
+            }
             let operation = DocumentOperation()
             self.pairingCode = operation
             let timeout = DispatchWorkItem { operation.cancel(timeout: true) }
@@ -297,14 +301,26 @@ final class PerceptionPlugin: Plugin {
                 let result = operation.scanPairingCode(args)
                 timeout.cancel()
                 DispatchQueue.main.async {
-                    if self.pairingCode === operation { self.pairingCode = nil }
+                    if self.pairingCode === operation {
+                        self.pairingCode = nil
+                        self.pairingBarrier.finish(requestId)
+                    }
                     invoke.resolve(operation.finalResult(result))
                 }
             }
         }
     }
     @objc func cancelPairingCode(_ invoke: Invoke) {
-        DispatchQueue.main.async { self.pairingCode?.cancel(); invoke.resolve(VoiceReply(ok: true)) }
+        guard let args = try? invoke.parseArgs(DocumentRequestIdArgs.self), UUID(uuidString: args.requestId) != nil else {
+            invoke.resolve(VoiceReply.failure("invalid_scan_request", "No se pudo identificar la lectura.")); return
+        }
+        DispatchQueue.main.async {
+            let shouldCancel = self.pairingBarrier.cancel(args.requestId) { confirmed in
+                if confirmed { invoke.resolve(VoiceReply(ok: true)) }
+                else { invoke.resolve(VoiceReply.failure("cancel_unconfirmed", "No pude confirmar que terminó la lectura.")) }
+            }
+            if shouldCancel { self.pairingCode?.cancel() }
+        }
     }
 }
 

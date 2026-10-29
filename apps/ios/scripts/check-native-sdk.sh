@@ -136,6 +136,13 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 "$verification/document-owner-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/VoiceOwners.swift \
+  plugin-perception/ios/Sources/DocumentOwnership.swift \
+  plugin-perception/ios/Sources/PairingScanBarrier.swift \
+  test/native/PairingScanBarrierTests.swift -o "$verification/pairing-scan-barrier-tests"
+"$verification/pairing-scan-barrier-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/VoiceLocaleSelection.swift \
   test/native/VoiceLocaleSelectionTests.swift -o "$verification/voice-locale-tests"
 "$verification/voice-locale-tests"
@@ -203,6 +210,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/VoiceNativeReceipt.swift \
   plugin-perception/ios/Sources/VoiceOwners.swift \
   plugin-perception/ios/Sources/DocumentOwnership.swift \
+  plugin-perception/ios/Sources/PairingScanBarrier.swift \
   plugin-perception/ios/Sources/VoiceLocaleSelection.swift \
   plugin-perception/ios/Sources/LiveAudioBuffer.swift \
   plugin-perception/ios/Sources/LiveTranscript.swift \
