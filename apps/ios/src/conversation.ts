@@ -9,6 +9,13 @@ const MAX_ENTRIES = 120;
 const MAX_TEXT = 32000;
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, index) => sameValue(item, b[index]));
+  if (!record(a) || !record(b)) return false;
+  const keys = Object.keys(a).sort(), other = Object.keys(b).sort();
+  return keys.length === other.length && keys.every((key, index) => key === other[index] && sameValue(a[key], b[key]));
+}
 function cleanEntry(value: unknown, restoring = false): ChatEntry | undefined {
   if (!record(value) || typeof value.id !== 'string' || !value.id || value.id.length > 4096 || typeof value.text !== 'string'
     || !['user', 'assistant', 'notice'].includes(value.role as string) || !['iphone', 'gentle'].includes(value.engine as string)
@@ -199,6 +206,17 @@ export async function loadConversation(): Promise<Conversation> {
     ...(typeof saved.attachedWork === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(saved.attachedWork) ? { attachedWork: saved.attachedWork } : {}),
     draft: typeof saved.draft === 'string' ? saved.draft.slice(0, 8000) : '',
   };
+}
+/** The unprojected durable base for an experimental journal. Unlike the UI
+ * restore, this never turns pending entries into interrupted ones or drops
+ * malformed fields. Rejecting a damaged base preserves it for recovery. */
+export async function loadConversationBase(): Promise<Conversation | undefined> {
+  const saved: unknown = await access('readonly', store => store.get('current'));
+  if (saved === undefined) return undefined;
+  if (!record(saved)) throw new Error('La conversación guardada requiere revisión. No se modificó.');
+  const base = conversationSnapshot(saved as Conversation);
+  if (!sameValue(base, saved)) throw new Error('La conversación guardada contiene datos que no se pueden conservar. No se modificó.');
+  return base;
 }
 function conversationSnapshot(value: Conversation): Conversation {
   return {

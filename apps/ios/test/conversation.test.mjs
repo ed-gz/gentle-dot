@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, loadConversation, saveConversation } from '../src/conversation.ts';
+import { updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, loadConversation, loadConversationBase, saveConversation } from '../src/conversation.ts';
 
 const entry = (id, changes = {}) => ({ id, role: 'user', text: `Message ${id}`, engine: 'iphone', state: 'complete', at: 1, ...changes });
 const previousIndexedDB = globalThis.indexedDB;
@@ -195,6 +195,16 @@ test('an unrecognized pending journal blocks window writes and preserves the ori
   const read = storage(original, { malformed: true });
   await assert.rejects(saveConversation({ entries: [], draft: 'Otro', revision: 5 }), /reserva de conversación pendiente/);
   assert.deepEqual(read(), original);
+});
+
+test('the journal reads an exact unprojected base and rejects fields it cannot preserve', async () => {
+  const original = { entries: [entry('pending', { role: 'assistant', state: 'pending' })], draft: 'Escrito', revision: 3 };
+  storage(original);
+  assert.deepEqual(await loadConversationBase(), original);
+  assert.equal((await loadConversation()).entries[0].state, 'interrupted');
+  const read = storage({ ...original, customField: 'no descartar' });
+  await assert.rejects(loadConversationBase(), /no se pueden conservar/);
+  assert.equal(read().customField, 'no descartar');
 });
 
 test('transport text survives storage for history reconciliation but stays bounded and out of context', async () => {

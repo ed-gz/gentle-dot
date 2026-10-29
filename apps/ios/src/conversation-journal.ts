@@ -15,6 +15,14 @@ export type ConversationJournal = { schema: 'capri-conversation-journal/v1'; id:
  * still current. Only the most recent receipt is retained. It must not be used
  * to acknowledge native results or delete audio. */
 export type JournalCommit = { id: string; revision: number; alreadyCommitted: boolean };
+/** A deterministic rejection before this begin request can write a new
+ * reservation. Other errors may be uncertain and must retain their ID. */
+export class JournalReservationRejected extends Error {
+  constructor(message: string) { super(message); this.name = 'JournalReservationRejected'; }
+}
+export class JournalReservationConflict extends JournalReservationRejected {
+  constructor(message: string) { super(message); this.name = 'JournalReservationConflict'; }
+}
 const JOURNAL = CONVERSATION_JOURNAL_KEY, COMMITTED = 'conversation-journal:last-committed:v1';
 const LIMIT = 10_000, MAX_BYTES = 64 * 1024 * 1024;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -142,15 +150,20 @@ export function createConversationJournal(options: { databaseName?: string; arch
     /** Reserve the exact base and persist the entire snapshot plus every
      * pending message before performing any archive write. */
     async begin(input: { id: string; baseRevision: number; base?: Conversation; snapshot: Conversation; pending: ChatEntry[]; nextRevision?: number }): Promise<ConversationJournal> {
-      const original = structuredClone(input), snapshot = cleanConversation(original.snapshot);
-      const base = original.base === undefined ? undefined : cleanConversation(original.base);
-      const pending = includeBase(includeVisible(cleanPending(original.pending), snapshot.entries), base, snapshot.entries);
-      // A prior archive commit may have survived a crash while the visible
-      // window remained older. The caller may advance past that recovered
-      // revision, but only while binding the complete, unchanged window base.
-      const revision = original.nextRevision ?? original.baseRevision + 1;
-      const safe = validate({ schema: 'capri-conversation-journal/v1', id: original.id, baseRevision: original.baseRevision,
-        ...(base ? { base } : {}), snapshot, pending, revision });
+      let safe: ConversationJournal;
+      try {
+        const original = structuredClone(input), snapshot = cleanConversation(original.snapshot);
+        const base = original.base === undefined ? undefined : cleanConversation(original.base);
+        const pending = includeBase(includeVisible(cleanPending(original.pending), snapshot.entries), base, snapshot.entries);
+        // A prior archive commit may have survived a crash while the visible
+        // window remained older. The caller may advance past that recovered
+        // revision, but only while binding the complete, unchanged window base.
+        const revision = original.nextRevision ?? original.baseRevision + 1;
+        safe = validate({ schema: 'capri-conversation-journal/v1', id: original.id, baseRevision: original.baseRevision,
+          ...(base ? { base } : {}), snapshot, pending, revision });
+      } catch (error) {
+        throw new JournalReservationRejected(error instanceof Error ? error.message : 'La reserva no es válida; se conservan las copias.');
+      }
       return transaction(name, 'readwrite', (store, done, fail) => {
         const previous = store.get(JOURNAL);
         previous.onsuccess = () => safely(fail, () => {
@@ -163,11 +176,11 @@ export function createConversationJournal(options: { databaseName?: string; arch
                 done(existing);
               }); return;
             }
-            throw new Error('Hay una reserva pendiente; recupérala antes de guardar otra.');
+            throw new JournalReservationConflict('Hay una reserva pendiente; recupérala antes de guardar otra.');
           }
           const current = store.get('current');
           current.onsuccess = () => safely(fail, () => {
-            if (!matchesBase(current.result, safe.base)) throw new Error('La conversación cambió; conserva el borrador y vuelve a cargarla.');
+            if (!matchesBase(current.result, safe.base)) throw new JournalReservationConflict('La conversación cambió; conserva el borrador y vuelve a cargarla.');
             const marker = store.get(COMMITTED);
             marker.onsuccess = () => safely(fail, () => {
               if (marker.result !== undefined && (!object(marker.result) || Object.keys(marker.result).some(key => !['id', 'revision'].includes(key)) || !uuid(marker.result.id) || !natural(marker.result.revision))) throw new Error('La confirmación anterior no es válida; se conserva para revisión.');
