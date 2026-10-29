@@ -6,9 +6,9 @@
 #panel-settings .surface { border: 0; border-radius: 16px; margin: 0; padding: 16px; }
 #panel-settings .settings-pairing { margin-bottom: 16px; }
 .settings-pairing h2 { font-size: 1.1rem; margin-bottom: 8px; }
-.settings-pairing-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.settings-pairing-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .settings-pairing-heading h2 { margin-top: 4px; }
-.connection-state { flex: none; border-radius: 99px; padding: 6px 10px; color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); font-size: .75rem; font-weight: 600; }
+.connection-state { flex: none; max-width: 100%; overflow-wrap: anywhere; border-radius: 99px; padding: 6px 10px; color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); font-size: .75rem; font-weight: 600; }
 .connection-state[data-state="ready"] { color: var(--acid); background: color-mix(in srgb, var(--acid) 12%, transparent); }
 .connection-state[data-state="attention"] { color: var(--pink); background: color-mix(in srgb, var(--pink) 12%, transparent); }
 .settings-pairing .pairing-scan { margin: 0; gap: 12px; }

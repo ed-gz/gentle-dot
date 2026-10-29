@@ -31,6 +31,14 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
   const region = document.createElement('div'); region.className = 'pairing-scan';
   const help = document.createElement('p'); help.className = 'pairing-scan-help';
   help.textContent = 'Abre el QR de Gentle Dot en tu laptop y escanéalo.';
+  const instructions = document.createElement('details'); instructions.className = 'pairing-instructions';
+  const summary = document.createElement('summary'); summary.textContent = '¿Dónde está el QR?';
+  const steps = document.createElement('ol');
+  const first = document.createElement('li'); first.textContent = 'Abre Gentle Dot en la laptop y conecta ambos dispositivos a Tailscale.';
+  const second = document.createElement('li'); second.append('En la terminal de la laptop, dentro de la carpeta del proyecto, ejecuta ');
+  const command = document.createElement('code'); command.textContent = 'pnpm mobile:connect'; second.append(command, '.');
+  const third = document.createElement('li'); third.textContent = 'Escanea el QR y aprueba el acceso en la laptop. El código vence en cinco minutos.';
+  steps.append(first, second, third); instructions.append(summary, steps);
   const controls = document.createElement('div'); controls.className = 'pairing-scan-controls';
   const status = document.createElement('p'); status.className = 'pairing-scan-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const button = (label: string) => { const value = document.createElement('button'); value.type = 'button'; value.textContent = label; return value; };
@@ -38,7 +46,7 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
   camera.className = 'primary'; camera.id = 'pairing-camera';
   const picker = document.createElement('input'); picker.type = 'file'; picker.accept = 'image/png,image/jpeg,image/heic,image/heif,image/webp,image/tiff';
   picker.hidden = true; picker.setAttribute('aria-label', 'Foto guardada para leer QR');
-  controls.append(camera, photo, stop); region.append(help, controls, picker, status);
+  controls.append(camera, photo, stop); region.append(help, controls, instructions, picker, status);
   const heading = form.querySelector('.settings-pairing-heading') ?? form.querySelector('h2');
   if (heading) heading.after(region); else form.prepend(region);
   let epoch = 0, busy = false, cancelling = false, cancellationUncertain = false, submitting = false, disposed = false, controller: AbortController | undefined;

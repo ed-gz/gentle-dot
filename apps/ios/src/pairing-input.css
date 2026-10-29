@@ -3,4 +3,7 @@
 .pairing-scan-controls { display: flex; flex-wrap: wrap; gap: .5rem; }
 .pairing-scan-controls button { min-height: 44px; min-width: 44px; padding: .65rem .9rem; }
 .pairing-scan-status { white-space: pre-line; overflow-wrap: anywhere; }
+.pairing-instructions summary { color: var(--violet); cursor: pointer; }
+.pairing-instructions ol { margin: 0; padding-left: 1.5em; font-size: .875rem; overflow-wrap: anywhere; }
+.pairing-instructions code { color: var(--acid); overflow-wrap: anywhere; }
 .pairing-scan [hidden] { display: none !important; }

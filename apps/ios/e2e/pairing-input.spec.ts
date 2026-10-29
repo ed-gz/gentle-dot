@@ -229,6 +229,10 @@ test('installed settings lead with the camera and keep pasted codes secondary un
   }, link);
   await page.goto('/'); await page.locator('[data-panel="settings"]').click();
   await expect(page.locator('#panel-settings h2').first()).toHaveText('Tu laptop');
+  await expect(page.getByText('pnpm mobile:connect', { exact: true })).toBeHidden();
+  await page.getByText('¿Dónde está el QR?', { exact: true }).click();
+  await expect(page.getByText('pnpm mobile:connect', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as any).pairCalls)).toBe(0);
   await expect(page.locator('#pairing-invitation')).toBeHidden();
   await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
   await expect(page.locator('.pairing-scan-status')).toContainText('Mi laptop');
@@ -334,4 +338,20 @@ test('failed photo cancellation stays unconfirmed and blocks another scan until 
   const ids=await page.evaluate(() => (globalThis as any).qrIdentities);
   expect(ids.map((entry:any[])=>entry[0])).toEqual(['scan','cancel','cancel']);
   expect(ids[0][1]).toMatch(/^[a-f0-9-]{36}$/i); expect(ids[1][1]).toBe(ids[0][1]); expect(ids[2][1]).toBe(ids[0][1]);
+});
+
+test('first-time QR help provides the laptop command without starting pairing', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await fixture(page);
+  await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  const help = page.getByText('¿Dónde está el QR?', { exact: true });
+  await expect(help).toBeVisible();
+  await expect(page.getByText('pnpm mobile:connect', { exact: true })).toBeHidden();
+  await help.focus(); await expect(help).toBeFocused(); await page.keyboard.press('Enter');
+  await expect(page.getByText('pnpm mobile:connect', { exact: true })).toBeVisible();
+  await expect(page.locator('.pairing-instructions')).toContainText('Tailscale');
+  await expect(page.locator('.pairing-instructions')).toContainText('aprueba el acceso');
+  await expect(page.getByRole('button', { name: 'Escanear QR', exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => (globalThis as any).pairSubmits)).toBe(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
