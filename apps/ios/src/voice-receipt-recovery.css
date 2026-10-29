@@ -1,0 +1,5 @@
+.voice-receipt-recovery:not([hidden]) { margin-block: 0 1rem; min-width: 0; }
+.voice-receipt-recovery details + details { margin-top: .5rem; }
+.voice-receipt-recovery .voice-receipt-text { margin-block: 0 .75rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.voice-receipt-recovery [role="status"]:empty { display: none; }
+.voice-receipt-recovery [role="status"]:not(:empty) { margin-top: .5rem; }
