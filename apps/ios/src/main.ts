@@ -68,6 +68,7 @@ import './companion-presence.css';
 import './settings.css';
 import { createFramePacer } from './frame-pacer.ts';
 import { createPresenceTransition, type PresenceSample } from './companion-presence-transition.ts';
+import { beginDictationMirror, nextDictationMirror, releaseDictationMirror, type DictationMirror } from './dictation-mirror.ts';
 import './composer.css';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -661,6 +662,9 @@ let voiceController: AbortController | undefined;
 let voiceGeneration = 0;
 let voiceTimer: ReturnType<typeof setTimeout> | undefined;
 let voicePreviewTimer: ReturnType<typeof setInterval> | undefined;
+// The live transcript the native bridge reports is mirrored into the composer
+// itself, so the final result replaces it in place instead of jumping there.
+let dictationMirror: DictationMirror | undefined;
 let voiceRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let persistenceWarning = '';
 let memoryNeedsRefresh = false;
@@ -1553,7 +1557,16 @@ queueMicrotask(() => void initialize());
 // A recoverable failure does not block sending independently typed text. While
 // audio is active or finalizing, prevent a partial instruction from being sent.
 function voiceInProgress() { return voiceStarting || voiceCancelPending || Boolean(voiceSession && !voiceRetry); }
-function stopVoicePreview() { clearInterval(voicePreviewTimer); voicePreviewTimer = undefined; element('dictate').style.removeProperty('--voice-level'); }
+function stopVoicePreview() {
+  clearInterval(voicePreviewTimer); voicePreviewTimer = undefined; element('dictate').style.removeProperty('--voice-level');
+  // Hand the field back before the final transcript is inserted, so the text is
+  // written once in place instead of appending over its own preview.
+  if (dictationMirror) {
+    const restored = releaseDictationMirror(dictationMirror, prompt.value);
+    dictationMirror = undefined;
+    if (restored !== prompt.value) { prompt.value = restored; draftEdited = true; sizeDraft(); }
+  }
+}
 async function recoverPendingVoice() {
   if (!isTauri() || document.hidden || foregroundPage.isSuspended() || panel !== 'chat' || voiceStarting || uncertainVoiceOwner || voiceCancelPending || (voiceSession && !voiceRetry)) return;
   const cancellation = pendingVoiceCancellation();
@@ -1725,6 +1738,7 @@ incompleteAudioButton.addEventListener('click', () => {
 });
 function showVoicePreview(id: string, generation: number) {
   stopVoicePreview();
+  dictationMirror = beginDictationMirror(prompt.value);
   let polling = false;
   const refresh = async () => {
     if (polling || generation !== voiceGeneration || voiceSession !== id || document.hidden) return;
@@ -1740,10 +1754,23 @@ function showVoicePreview(id: string, generation: number) {
         element<HTMLButtonElement>('dictate').click();
         return;
       }
-      element('voice-status').textContent = state.previewIssue
-        ? state.previewIssue
-        : state.partial ? state.partial
-        : 'Escuchando…';
+      const partial = state.previewIssue ? '' : state.partial ?? '';
+      // The preview belongs in the composer, where the final transcript lands.
+      const mirrored = dictationMirror ? nextDictationMirror(dictationMirror, prompt.value, partial, prompt.maxLength) : undefined;
+      if (partial && mirrored?.kind === 'mirror') {
+        if (prompt.value !== mirrored.text) { prompt.value = mirrored.text; draftEdited = true; sizeDraft(); prompt.setSelectionRange(prompt.value.length, prompt.value.length); }
+        dictationMirror = mirrored.mirror;
+        element('voice-status').textContent = state.previewIssue ?? 'Escuchando…';
+      } else {
+        if (partial && mirrored?.kind === 'user-edited') dictationMirror = undefined;
+        element('voice-status').textContent = state.previewIssue
+          ? state.previewIssue
+          : partial
+            ? (mirrored?.kind === 'user-edited'
+              ? `Escribiste en el mensaje, así que no lo piso. Tu dictado sigue grabándose: ${partial}`
+              : partial)
+            : 'Escuchando…';
+      }
     } catch { /* The final transcript does not depend on preview polling. */ }
     finally { polling = false; }
   };

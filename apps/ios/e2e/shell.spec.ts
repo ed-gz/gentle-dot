@@ -609,7 +609,7 @@ test('an unattributed pending recording can be explicitly discarded without inse
   expect(await page.evaluate(() => (globalThis as any).discardedOwner)).toBe('11111111-1111-4111-8111-111111111111');
 });
 
-test('provisional live dictation stays separate from the draft until one final result', async ({ page }) => {
+test('provisional live dictation shares the composer with one final result', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
@@ -628,10 +628,10 @@ test('provisional live dictation stays separate from the draft until one final r
   await page.goto('/');
   await page.locator('#prompt').fill('Borrador original');
   await page.locator('#dictate').click();
-  await expect(page.locator('#voice-status')).toContainText('Primera hipótesis');
-  await expect(page.locator('#prompt')).toHaveValue('Borrador original');
+  // S4: the preview belongs in the field itself, so nothing jumps when it ends.
+  await expect(page.locator('#prompt')).toHaveValue('Borrador original\nPrimera hipótesis');
   await page.evaluate(() => (globalThis as any).voicePartial = 'Hipótesis corregida');
-  await expect(page.locator('#voice-status')).toContainText('Hipótesis corregida');
+  await expect(page.locator('#prompt')).toHaveValue('Borrador original\nHipótesis corregida');
   await page.locator('#dictate').click();
   await expect(page.locator('#prompt')).toHaveValue('Borrador original\nTexto final.');
   await expect(page.locator('#voice-status')).not.toContainText('Hipótesis corregida');
