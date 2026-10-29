@@ -10,13 +10,13 @@ import type { ServerMessage } from '@gentle-dot/protocol';
 import { readSettings, saveSettings, loadArtwork, saveArtwork, deleteArtwork, validateArtwork, validDaemonUrl } from './local-state.ts';
 import { createLinkedChat, type LinkedStatus } from './linked-chat.ts';
 import { checkLocalIntelligence, availabilityMessage, agentStep, cancelLocal, resetLocal, type Availability } from './local-intelligence.ts';
-import { listInferenceResults, acknowledgeInference, recoverInferenceResults, withInferenceDeadline } from './inference-recovery.ts';
+import { listInferenceResults, acknowledgeInference, recoverInferenceResults, durableInferenceMatches, withInferenceDeadline } from './inference-recovery.ts';
 import { mountCompletionNotifications } from './completion-notifications.ts';
 import { mountContinuedInferenceSettings } from './continued-inference-settings.ts';
 import { createLiveActivityCoordinator } from './live-activity-coordinator.ts';
 import { mountLiveActivitySettings } from './live-activity-settings.ts';
 import type { ActivityPhase, ActivityEnd } from './live-activity.ts';
-import { loadConversation, updateEntry, reconcileHostHistory, HostHistoryIdentityError, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
+import { loadConversation, loadConversationBase, updateEntry, reconcileHostHistory, HostHistoryIdentityError, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
 import { conversationArchive } from './conversation-archive.ts';
 import { applyConversationEntry, createConversationPersistence } from './conversation-persistence.ts';
@@ -577,6 +577,12 @@ async function recoverLocalInference() {
         else { persistence.enqueue([entry]); recoveredFromArchive = true; }
       },
       commit: async () => { await persist(); return !persistence.status().blocked && persistence.status().pending === 0; },
+      verify: async (_record, expected) => {
+        const before = await loadConversationBase();
+        const archived = await conversationArchive.load(JSON.stringify(['iphone', 'iphone:main', expected.id]));
+        const after = await loadConversationBase();
+        return durableInferenceMatches(expected, before, archived, after);
+      },
       acknowledge: acknowledgeInference,
       onSettled: (record, cancelled) => endLocalActivity(record.id, !cancelled && record.status === 'answer' ? 'finished' : 'interrupted'),
     });

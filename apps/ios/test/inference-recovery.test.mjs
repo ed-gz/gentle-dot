@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseInferenceSnapshot, recoverInferenceResults, withInferenceDeadline } from '../src/inference-recovery.ts';
+import { durableInferenceMatches, sameInferenceEntry, parseInferenceSnapshot, recoverInferenceResults, withInferenceDeadline } from '../src/inference-recovery.ts';
 import { updateEntry } from '../src/conversation.ts';
 import { archiveEntry } from '../src/conversation-archive.ts';
 
@@ -22,6 +22,7 @@ function fixture(records = [answer], entry = anchor) {
     list: async () => ({ items: structuredClone(records) }), find: async () => stored,
     apply(value) { events.push('apply'); stored = value; },
     commit: async () => { events.push('commit'); return true; },
+    verify: async (_record, expected) => sameInferenceEntry(stored, expected),
     acknowledge: async value => { events.push(['ack', value.id, value.revision]); },
   };
   return { options, events, get: () => stored };
@@ -61,8 +62,29 @@ test('missing or conflicting anchor never acknowledges or overwrites another mes
 });
 test('pending work only becomes interrupted content; no resumed model or tool call exists', async () => {
   const f = fixture([{ ...answer, status: 'interrupted', text: '' }]); await recoverInferenceResults(f.options);
-  assert.equal(f.get().state, 'interrupted'); assert.equal(f.get().role, 'notice');
+  assert.equal(f.get().state, 'interrupted'); assert.equal(f.get().role, 'assistant');
   assert.match(f.get().text, /no repetí ninguna operación/);
+});
+test('a rejected conversation update or a mismatched durable result cannot ACK the native copy', async () => {
+  const dropped = fixture([{ ...answer, status: 'interrupted', text: '' }]);
+  dropped.options.apply = () => { dropped.events.push('rejected update'); };
+  await assert.rejects(recoverInferenceResults(dropped.options), /copia nativa se conserva/);
+  assert.deepEqual(dropped.events, ['rejected update', 'commit']);
+  const mismatch = fixture(); mismatch.options.verify = async () => false;
+  await assert.rejects(recoverInferenceResults(mismatch.options), /copia nativa se conserva/);
+  assert.deepEqual(mismatch.events, ['apply', 'commit']);
+});
+test('durable verification requires matching identity, text, role, revision and stable window', () => {
+  const expected = { ...anchor, state: 'complete', text: answer.text };
+  const before = { entries: [expected], draft: 'Sin enviar', revision: 8 };
+  const archived = { ...expected, scope: 'iphone:main', snapshotRevision: 8, key: 'private-index' };
+  assert.equal(durableInferenceMatches(expected, before, archived, structuredClone(before)), true);
+  for (const changed of [
+    { ...archived, text: 'Otra respuesta' }, { ...archived, id: revision }, { ...archived, role: 'notice' },
+    { ...archived, scope: 'otro' }, { ...archived, snapshotRevision: 9 }, { ...archived, activities: [] },
+  ]) assert.equal(durableInferenceMatches(expected, before, changed, before), false);
+  assert.equal(durableInferenceMatches(expected, before, archived, { ...before, revision: 9 }), false);
+  assert.equal(durableInferenceMatches(expected, { ...before, entries: [] }, archived, { ...before, entries: [] }), true);
 });
 test('a linked interrupted result preserves its assistant identity and request link', async () => {
   const linked = { ...anchor, replyTo: '02bce422-1da0-4ebc-b2fb-9df32a25434e' };

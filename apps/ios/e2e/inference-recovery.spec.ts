@@ -99,6 +99,38 @@ test('failed persistence keeps the native copy and sends no ACK', async ({ page 
   await expect(page.locator('#send')).toBeEnabled();
 });
 
+test('a changed durable archive prevents ACK until the exact answer is verified', async ({ page }) => {
+  await setup(page); await seed(page, answer);
+  await page.addInitScript(() => {
+    const state = globalThis as any, originalInvoke = state.__TAURI_INTERNALS__.invoke;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('results_list') && !state.archiveVerificationPatched) {
+        const { conversationArchive } = await import('/src/conversation-archive.ts' as string);
+        const originalLoad = conversationArchive.load;
+        state.restoreArchiveVerification = () => { conversationArchive.load = originalLoad; };
+        conversationArchive.load = async (key: string) => {
+          const result = await originalLoad(key);
+          return result && result.id === 'd3dba896-4b5c-4c1c-98c9-4e60238fe6b9' ? { ...result, text: 'Otra respuesta' } : result;
+        };
+        state.archiveVerificationPatched = true;
+      }
+      return originalInvoke(command, args);
+    };
+  });
+  await page.reload();
+  await expect(page.locator('#retry-conversation')).toBeVisible();
+  await expect(page.locator('#chat-notice')).toContainText('copia nativa se conserva');
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-events') || '[]'))).toEqual([]);
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-journal') || '[]'))).toEqual([answer]);
+  await page.evaluate(() => (globalThis as any).restoreArchiveVerification());
+  await page.locator('#retry-conversation').click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-journal') || '[]'))).toEqual([]);
+  const events = await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-events') || '[]'));
+  expect(events).toHaveLength(1);
+  expect(events[0].args).toEqual({ turnId: turn, revision });
+  expect(events[0].archived.text).toBe(response);
+});
+
 test('a failed initial checkpoint keeps the instruction and never starts the model', async ({ page }) => {
   await setup(page);
   await page.evaluate(async () => {
