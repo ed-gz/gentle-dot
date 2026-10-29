@@ -329,3 +329,35 @@ test('history merges tool activity by identity without losing detail or regressi
     { id: 'c', title: 'Revisar', kind: 'other', status: 'done' },
   ]);
 });
+
+test('old branch uncertainty persists across legacy snapshots and clears only on verified identity', () => {
+  const prefix='host:wss://host.example/ws|c1|';
+  const history=[{id:'old',role:'assistant',text:'Una respuesta anterior',activities:[],branchUnverified:true},{id:'current',role:'assistant',text:'Rama actual',activities:[]}];
+  let entries=reconcileHostHistory([],prefix,history,1,undefined,true);
+  assert.equal(entries[0].branchUnverified,true); assert.equal(entries[1].branchUnverified,undefined);
+  entries=reconcileHostHistory(entries,prefix,history.map(({branchUnverified,...x})=>x),2);
+  assert.equal(entries[0].branchUnverified,true);
+  entries=reconcileHostHistory(entries,prefix,history.map(({branchUnverified,...x})=>x),3,undefined,true);
+  assert.equal(entries[0].branchUnverified,undefined);
+});
+
+test('verified page does not claim absent cards, pending sends or other conversations', () => {
+  const prefix='host:wss://host.example/ws|c1|';
+  const old=entry(prefix+'old', {engine:'gentle',role:'assistant',text:'Mensaje guardado'});
+  const pending=entry(prefix+'pending:1', {engine:'gentle',state:'pending'});
+  const other=entry('host:wss://host.example/ws|c2|other', {engine:'gentle'});
+  const result=reconcileHostHistory([old,pending,other],prefix,[{id:'new',role:'assistant',text:'Actual',activities:[]}],1,undefined,true);
+  assert.equal(result[0].branchUnverified,true);
+  assert.equal(result[1].branchUnverified,undefined);
+  assert.equal(result[2].branchUnverified,undefined);
+  assert.equal(result[3].branchUnverified,undefined);
+  assert.match(localPrompt(result,'Continúa'), /rama no verificada/);
+});
+
+test('unverified host card cannot suppress unsynchronized local context', () => {
+  const local=entry('local', { text:'Contexto del iPhone' });
+  const uncertain=remote('old',{role:'assistant',text:'Historial incierto',branchUnverified:true});
+  const prompt=linkedPrompt([local,uncertain],'Sigue');
+  assert.match(prompt,/Contexto del iPhone/);
+  assert.doesNotMatch(prompt,/Historial incierto/);
+});

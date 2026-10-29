@@ -10,7 +10,8 @@ function query(value: Record<string, unknown>): ArchiveQuery {
   if (!Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > 10 || (value.cursor !== undefined && (typeof value.cursor !== 'string' || value.cursor.length > 8192)) || (value.scope !== undefined && (typeof value.scope !== 'string' || !value.scope || value.scope.length > 2048)) || (value.engine !== undefined && value.engine !== 'iphone' && value.engine !== 'gentle')) throw new Error('Filtros de memoria inválidos.');
   return { limit: Number(limit), ...(typeof value.cursor === 'string' ? { cursor: value.cursor } : {}), ...(typeof value.scope === 'string' ? { scope: value.scope } : {}), ...(value.engine === 'iphone' || value.engine === 'gentle' ? { engine: value.engine } : {}) };
 }
-const source = (record: ArchiveRecord) => ({ key: record.key, entryId: record.id, scope: record.scope, engine: record.engine, role: record.role, state: record.state, timestamp: new Date(record.at).toISOString(), timestampKind: 'conversation-event' as const });
+const source = (record: ArchiveRecord) => ({ key: record.key, entryId: record.id, scope: record.scope, engine: record.engine, role: record.role, state: record.state, timestamp: new Date(record.at).toISOString(), timestampKind: 'conversation-event' as const,
+  ...(record.branchUnverified ? { branchUnverified: true, warning: 'La pertenencia a la rama activa no está verificada.' } : {}) });
 function excerpt(record: ArchiveRecord, offset = 0, length = 650) {
   const end = Math.min(record.text.length, offset + length);
   return { source: source(record), text: record.text.slice(offset, end), offset, end, totalCharacters: record.text.length, partial: offset > 0 || end < record.text.length, ...(end < record.text.length ? { nextOffset: end } : {}) };

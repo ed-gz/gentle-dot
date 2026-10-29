@@ -1,7 +1,7 @@
 import type { ChatEntry, ChatActivity, Conversation } from './conversation.ts';
 
 export const ARCHIVE_LIMITS = Object.freeze({ entries: 10000, bytes: 64 * 1024 * 1024, entryBytes: 512 * 1024, batch: 500, page: 100, scan: 1000 });
-export type ArchiveEntry = Pick<ChatEntry, 'id' | 'engine' | 'role' | 'state' | 'text' | 'at' | 'localCancelled' | 'replyTo'> & { scope: string; activities?: ChatActivity[] };
+export type ArchiveEntry = Pick<ChatEntry, 'id' | 'engine' | 'role' | 'state' | 'text' | 'at' | 'localCancelled' | 'replyTo' | 'branchUnverified'> & { scope: string; activities?: ChatActivity[] };
 export type ArchiveRecord = ArchiveEntry & { key: string; sequence: number; storedAt: number; updatedAt: number; bytes: number; snapshotRevision: number };
 /** The sent host wrapper is only for reconciling a live/history echo. It can
  * include private local context, so public archive APIs never expose it. */
@@ -44,6 +44,10 @@ export function archiveEntry(value: unknown, scope?: string): ArchiveEntry {
   const source = scope ?? archiveScope(value as ChatEntry); if (!validScope(source)) throw new ArchiveError('invalid', 'El origen de conversación no es válido.');
   const entry: ArchiveEntry = { id: value.id, scope: source, engine: value.engine as ChatEntry['engine'], role: value.role as ChatEntry['role'], state: value.state as ChatEntry['state'], text: value.text, at: value.at };
   if (entry.engine === 'iphone' && value.localCancelled === true) entry.localCancelled = true;
+  if (value.branchUnverified !== undefined) {
+    if (entry.engine !== 'gentle' || entry.role === 'notice' || value.branchUnverified !== true) throw new ArchiveError('invalid', 'La procedencia del mensaje no es válida. Se conserva el original.');
+    entry.branchUnverified = true;
+  }
   if (value.replyTo !== undefined) {
     if (entry.engine !== 'iphone' || entry.role !== 'assistant' || source !== 'iphone:main' || !uuid(entry.id) || !uuid(value.replyTo) || entry.id === value.replyTo) throw new ArchiveError('invalid', 'El vínculo de la respuesta no es válido. El original se conserva.');
     entry.replyTo = value.replyTo;
@@ -280,6 +284,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
           result.push({ id: entry.id, engine: entry.engine, role: entry.role, text: entry.text, at: entry.at,
             ...(entry.localCancelled ? { localCancelled: true } : {}),
             ...(entry.replyTo ? { replyTo: entry.replyTo } : {}),
+            ...(entry.branchUnverified ? { branchUnverified: true as const } : {}),
             ...(entry.transportText !== undefined ? { transportText: entry.transportText } : typeof prior?.transportText === 'string' && prior.transportText.length <= 32000 ? { transportText: prior.transportText } : {}),
             state: entry.state === 'pending' ? 'interrupted' : entry.state,
             ...(entry.activities ? { activities: entry.activities.map(activity => ({ ...activity, status: activity.status === 'running' ? 'failed' as const : activity.status })) } : {}) });

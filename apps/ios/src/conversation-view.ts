@@ -13,11 +13,11 @@ export interface ConversationViewOptions {
 type ActivityView = { item: HTMLLIElement; label: HTMLSpanElement; details: HTMLDetailsElement; output: HTMLPreElement };
 type EntryView = { card: HTMLElement; label: HTMLElement; body: HTMLElement; state: HTMLElement;
   trace: HTMLDetailsElement; summary: HTMLElement; list: HTMLUListElement; activities: Map<string, ActivityView>; text?: string; role?: ChatEntry['role']; phase?: ChatEntry['state'] };
-type EntrySnapshot = { text: string; state: ChatEntry['state']; role: ChatEntry['role']; activities: string };
+type EntrySnapshot = { text: string; state: ChatEntry['state']; role: ChatEntry['role']; activities: string; branchUnverified: boolean };
 export const nearConversationEnd = (top: number, height: number, viewport: number, threshold = 64) => height - viewport - Math.max(0, top) <= threshold;
 const snapshot = (entry: ChatEntry): EntrySnapshot => ({ text: entry.text, state: entry.state, role: entry.role,
-  activities: JSON.stringify((entry.activities ?? []).map(item => [item.id, item.title, item.status, item.detail])) });
-const same = (a: EntrySnapshot | undefined, b: EntrySnapshot) => !!a && a.text === b.text && a.state === b.state && a.role === b.role && a.activities === b.activities;
+  activities: JSON.stringify((entry.activities ?? []).map(item => [item.id, item.title, item.status, item.detail])), branchUnverified: entry.branchUnverified === true });
+const same = (a: EntrySnapshot | undefined, b: EntrySnapshot) => !!a && a.text === b.text && a.state === b.state && a.role === b.role && a.activities === b.activities && a.branchUnverified === b.branchUnverified;
 const content = (element: HTMLElement, value: string) => { if (element.textContent !== value) element.textContent = value; };
 
 /** Keyed reconciliation moves only nodes whose order actually changed. */
@@ -136,8 +136,9 @@ export function createConversationView(options: ConversationViewOptions) {
         else content(view.body, entry.text);
         view.text = entry.text; view.role = entry.role; view.phase = entry.state;
       }
-      content(view.state, entry.state === 'pending' ? entry.role === 'user' ? 'Esperando confirmación del host…' : 'Preparando respuesta…'
-        : entry.state === 'interrupted' ? 'Interrumpido o sin confirmar. No se reenvía automáticamente.' : '');
+      const phase = entry.state === 'pending' ? entry.role === 'user' ? 'Esperando confirmación del host…' : 'Preparando respuesta…'
+        : entry.state === 'interrupted' ? 'Interrumpido o sin confirmar. No se reenvía automáticamente.' : '';
+      content(view.state, [entry.branchUnverified ? 'Rama no verificada' : '', phase].filter(Boolean).join(' · '));
       renderActivities(view, entry.activities ?? []); cards.push(view.card);
     }
     order(container, cards);

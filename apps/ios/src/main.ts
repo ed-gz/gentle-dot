@@ -848,7 +848,7 @@ function handleMessage(message: ServerMessage) {
     remoteConversation = message.conversationId ?? remoteConversation;
     try {
       persistence.enqueue(entries);
-      entries = reconcileHostHistory(entries, remoteId(''), message.messages, Date.now(), beforePrune => persistence.enqueue(beforePrune));
+      entries = reconcileHostHistory(entries, remoteId(''), message.messages, Date.now(), beforePrune => persistence.enqueue(beforePrune), message.branchVerified === true);
       renderChat(); scheduleSave();
     } catch (error) {
       remoteConversation = previousConversation;

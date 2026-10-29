@@ -1,7 +1,7 @@
 import type { Activity } from '@gentle-dot/protocol';
 export type Engine = 'iphone' | 'gentle';
 export type ChatActivity = Activity & { detail?: string };
-export type ChatEntry = { id: string; role: 'user' | 'assistant' | 'notice'; text: string; transportText?: string; engine: Engine; state: 'complete' | 'pending' | 'interrupted'; at: number; activities?: ChatActivity[]; localCancelled?: true; replyTo?: string };
+export type ChatEntry = { id: string; role: 'user' | 'assistant' | 'notice'; text: string; transportText?: string; engine: Engine; state: 'complete' | 'pending' | 'interrupted'; at: number; activities?: ChatActivity[]; localCancelled?: true; replyTo?: string; branchUnverified?: true };
 export type Conversation = { entries: ChatEntry[]; draft: string; attachedWork?: string; revision?: number };
 /** All writers of the current window must honor this durable reservation. */
 export const CONVERSATION_JOURNAL_KEY = 'conversation-journal:v1';
@@ -25,6 +25,7 @@ function cleanEntry(value: unknown, restoring = false): ChatEntry | undefined {
   // Explicit fields only: persisted data must never acquire tokens or native payloads.
   return { ...(activities.length ? { activities } : {}), id: value.id, role: value.role as ChatEntry['role'], text: value.text.slice(0, MAX_TEXT),
     ...(value.engine === 'iphone' && value.localCancelled === true ? { localCancelled: true } : {}),
+    ...(value.engine === 'gentle' && value.role !== 'notice' && value.branchUnverified === true ? { branchUnverified: true } : {}),
     ...(value.engine === 'iphone' && value.role === 'assistant' && uuid(value.id) && uuid(value.replyTo) && value.id !== value.replyTo ? { replyTo: value.replyTo } : {}),
     ...(typeof value.transportText === 'string' ? { transportText: value.transportText.slice(0, MAX_TEXT) } : {}),
     engine: value.engine as Engine, state: restoring && value.state === 'pending' ? 'interrupted' : value.state as ChatEntry['state'], at: value.at };
@@ -47,6 +48,7 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
     if (safe.engine !== 'iphone' || safe.role !== 'assistant' || (safe.replyTo && safe.replyTo !== prior.replyTo)) return entries;
     safe.replyTo = prior.replyTo;
   }
+  if (prior?.branchUnverified && safe.engine === 'gentle') safe.branchUnverified = true;
   if (prior?.transportText !== undefined) {
     if (safe.engine !== prior.engine || safe.role !== prior.role || (safe.transportText !== undefined && safe.transportText !== prior.transportText)) return entries;
     safe.transportText = prior.transportText;
@@ -54,7 +56,7 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
   if (index < 0) next.push(safe); else next[index] = safe;
   return next.slice(-MAX_ENTRIES);
 }
-type HostHistoryEntry = { id: string; role: 'user' | 'assistant'; text: string; activities?: ChatActivity[] };
+type HostHistoryEntry = { id: string; role: 'user' | 'assistant'; text: string; activities?: ChatActivity[]; branchUnverified?: true };
 export class HostHistoryIdentityError extends Error {
   constructor() { super('El historial contiene una identidad contradictoria. La conversación anterior se conserva.'); this.name = 'HostHistoryIdentityError'; }
 }
@@ -72,7 +74,7 @@ function mergeHistoryActivities(live: readonly ChatActivity[], historical: reado
 }
 /** Update exact host IDs only. Text equality cannot prove that a historical
  * message is the same event as a live or pending message. */
-export function reconcileHostHistory(entries: ChatEntry[], prefix: string, history: HostHistoryEntry[], at = Date.now(), beforePrune?: (entries: ChatEntry[]) => void): ChatEntry[] {
+export function reconcileHostHistory(entries: ChatEntry[], prefix: string, history: HostHistoryEntry[], at = Date.now(), beforePrune?: (entries: ChatEntry[]) => void, branchVerified = false): ChatEntry[] {
   const seen = new Set<string>();
   for (const item of history) {
     const id = prefix + item.id;
@@ -99,6 +101,7 @@ export function reconcileHostHistory(entries: ChatEntry[], prefix: string, histo
     const entry: ChatEntry = {
       id, role: item.role, activities: mergeHistoryActivities(prior?.entry.activities ?? [], item.activities ?? []), text: displayText,
       ...(alias !== undefined ? { transportText: alias } : {}),
+      ...(item.branchUnverified || (prior?.entry.branchUnverified && !branchVerified) ? { branchUnverified: true as const } : {}),
       engine: 'gentle',
       // History has no terminal outcome; preserve interruption on an exact ID.
       state: item.role === 'assistant' && prior && prior.entry.state !== 'complete' ? 'interrupted' : 'complete',
@@ -119,7 +122,10 @@ export function reconcileHostHistory(entries: ChatEntry[], prefix: string, histo
     else before.set(successor, [...before.get(successor) ?? [], item.entry]);
   }
   const merged = entries.flatMap((entry, index) => [
-    ...before.get(index) ?? [], replacements.get(index) ?? entry,
+    ...before.get(index) ?? [], replacements.get(index) ?? (branchVerified && entry.engine === 'gentle'
+      && entry.role !== 'notice' && entry.state === 'complete' && entry.id.startsWith(prefix)
+      && !entry.id.slice(prefix.length).startsWith('pending:')
+      ? { ...entry, branchUnverified: true as const } : entry),
   ]);
   const complete = [...merged, ...tail];
   beforePrune?.(complete);
@@ -130,7 +136,8 @@ export function localPrompt(entries: ChatEntry[], instruction: string): string {
     throw new Error('El mensaje supera los 4000 caracteres admitidos por el motor local.');
   }
   const context = cleanEntries(entries).filter(entry => entry.role !== 'notice' && entry.state === 'complete')
-    .slice(-4).map(entry => ({ role: entry.role, text: Array.from(entry.text).slice(-300).join('') }));
+    .slice(-4).map(entry => ({ role: entry.role, text: Array.from(entry.text).slice(-300).join(''),
+      ...(entry.branchUnverified ? { procedencia: 'rama no verificada' } : {}) }));
   // JSON escaping can grow context substantially. Budget the actual native prompt,
   // discarding older context before ever shortening the person's instruction.
   while (context.length) {
@@ -146,7 +153,7 @@ export function linkedPrompt(entries: ChatEntry[], instruction: string): string 
     throw new Error('El mensaje supera los 8000 caracteres admitidos por el enlace.');
   }
   const timeline = cleanEntries(entries);
-  const lastHost = timeline.findLastIndex(entry => entry.engine === 'gentle' && entry.state === 'complete' && entry.role !== 'notice');
+  const lastHost = timeline.findLastIndex(entry => entry.engine === 'gentle' && entry.state === 'complete' && entry.role !== 'notice' && !entry.branchUnverified);
   const context = timeline.slice(lastHost + 1).filter(entry => entry.engine === 'iphone' && entry.state === 'complete' && entry.role !== 'notice')
     .slice(-4).map(entry => ({ role: entry.role, text: Array.from(entry.text).slice(-300).join('') }));
   const budget = Math.min(1200, 8000 - instruction.length);

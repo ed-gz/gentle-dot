@@ -40,7 +40,7 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
       const result = query ? await conversationArchive.search(query, { cursor, limit: 20 }) : await conversationArchive.page({ cursor, limit: 20 });
       const nodes = result.entries.map(entry => {
         const article = document.createElement('article'); article.className = 'chat-card';
-        const label = document.createElement('p'); label.className = 'hint'; label.textContent = `${new Date(entry.at).toLocaleString('es-MX')} · ${entry.engine === 'iphone' ? 'iPhone' : 'Gentle Dot'} · ${entry.role} · ${entry.state}`;
+        const label = document.createElement('p'); label.className = 'hint'; label.textContent = `${new Date(entry.at).toLocaleString('es-MX')} · ${entry.engine === 'iphone' ? 'iPhone' : 'Gentle Dot'} · ${entry.role} · ${entry.state}${entry.branchUnverified ? ' · Rama no verificada' : ''}`;
         const body = document.createElement('p'); body.textContent = entry.text;
         const details = document.createElement('details');
         const summary = document.createElement('summary'); summary.textContent = 'Detalles de origen';
@@ -80,7 +80,7 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
       const unique = new Map<string, string>();
       for (const entry of copies) {
         const record = JSON.stringify({ id: entry.id, scope: archiveScope(entry), engine: entry.engine, role: entry.role, state: entry.state, text: entry.text, at: entry.at,
-          ...(entry.replyTo ? { replyTo: entry.replyTo } : {}), ...(entry.localCancelled ? { localCancelled: true } : {}),
+          ...(entry.replyTo ? { replyTo: entry.replyTo } : {}), ...(entry.localCancelled ? { localCancelled: true } : {}), ...(entry.branchUnverified ? { branchUnverified: true } : {}),
           ...(entry.activities ? { activities: entry.activities.map(activity => ({ id: activity.id, kind: activity.kind, title: activity.title, status: activity.status, detail: activity.detail })) } : {}) });
         unique.set(record, record);
       }

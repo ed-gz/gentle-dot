@@ -45,7 +45,7 @@ function cleanPending(value: unknown): ChatEntry[] {
   if (!Array.isArray(value) || value.length > LIMIT) throw new Error('Hay demasiados mensajes pendientes; conserva la fuente y exporta antes de continuar.');
   const keys = new Set<string>();
   return value.map(item => {
-    if (!object(item) || Object.keys(item).some(key => !['id', 'engine', 'role', 'state', 'text', 'at', 'localCancelled', 'replyTo', 'activities', 'transportText'].includes(key))) throw new Error('Un mensaje pendiente requiere revisión; no se modificó.');
+    if (!object(item) || Object.keys(item).some(key => !['id', 'engine', 'role', 'state', 'text', 'at', 'localCancelled', 'replyTo', 'activities', 'transportText', 'branchUnverified'].includes(key))) throw new Error('Un mensaje pendiente requiere revisión; no se modificó.');
     const archived = archiveEntry(item); const { scope, ...entry } = archived;
     if (item.transportText !== undefined && (typeof item.transportText !== 'string' || item.transportText.length > 32000)) throw new Error('El transporte de un mensaje no es válido.');
     const normalized: ChatEntry = { ...entry, ...(typeof item.transportText === 'string' ? { transportText: item.transportText } : {}) };
