@@ -69,6 +69,35 @@ test('voice insertion preserves all existing whitespace and retries do not appen
   expect(result.retry).toEqual({draft:result.delivered.draft,alreadyDelivered:true});
 });
 
+test('a full already-delivered draft retries without appending and still rejects divergent evidence', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createSessionVoiceDrafts } = await import('/src/session-voice-drafts.ts');
+    const name = `full-retry-${crypto.randomUUID()}`, destination = `session:${'b'.repeat(64)}`;
+    const id = crypto.randomUUID(), text = 'Dictado';
+    const receipt = { schema:'capri-native-voice-receipt/v1', audio:{id, owner:crypto.randomUUID(), destination, locale:'es-MX', kind:'speech', createdAt:1, state:'ready', byteCount:10, sha256:'a'.repeat(64)}, transcript:{sessionId:id,text,segments:[{text,startSeconds:0,endSeconds:1}],durationSeconds:1,locale:'es-MX',source:'apple-speech-analyzer'} } as const;
+    const store = createSessionVoiceDrafts({ databaseName: name });
+    const base = await store.save(destination, await store.read(destination), 'x'.repeat(7992));
+    const inserted = await store.deliver(destination, receipt, base);
+    const retry = await store.deliver(destination, receipt, inserted.draft);
+    const changed = structuredClone(receipt); (changed as any).transcript.text = 'Distinto'; (changed as any).transcript.segments[0].text = 'Distinto';
+    const different = await Promise.allSettled([store.deliver(destination, changed, inserted.draft)]);
+    await new Promise<void>((resolve, reject) => { const open = indexedDB.open(name); open.onerror = () => reject(open.error); open.onsuccess = () => {
+      const db = open.result, tx = db.transaction('drafts', 'readwrite');
+      tx.objectStore('drafts').put({ revision: inserted.draft.revision, text: 'y'.repeat(8000) }, `draft:${destination}`);
+      tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = () => reject(tx.error);
+    }; });
+    const corrupt = await Promise.allSettled([store.deliver(destination, receipt, inserted.draft)]);
+    const other = `session:${'c'.repeat(64)}`, newId = crypto.randomUUID();
+    const uninserted = { ...receipt, audio: { ...receipt.audio, id: newId, destination: other }, transcript: { ...receipt.transcript, sessionId: newId } };
+    const tooLong = await Promise.allSettled([store.deliver(other, uninserted, { revision: 0, text: 'z'.repeat(8000) })]);
+    return { inserted, retry, different: different[0].status, corrupt: corrupt[0].status, tooLong: tooLong[0].status };
+  });
+  expect(result.inserted.draft.text).toHaveLength(8000);
+  expect(result.retry).toEqual({ draft: result.inserted.draft, alreadyDelivered: true });
+  expect(result).toMatchObject({ different: 'rejected', corrupt: 'rejected', tooLong: 'rejected' });
+});
+
 test('a missing, corrupted or older draft cannot authorize receipt cleanup', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {

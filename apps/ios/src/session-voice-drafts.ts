@@ -88,8 +88,18 @@ export function createSessionVoiceDrafts(options: { databaseName?: string } = {}
       const target = key(destination), receipt = parseNativeVoiceReceipt(input); if (receipt.audio.destination !== destination) throw new Error('El dictado pertenece a otra sesión.');
       const hash = await hashSourceBytes(new TextEncoder().encode(JSON.stringify(receipt))); const id = receipt.audio.id.toLowerCase(), markerKey = `delivery:${id}`;
       if (!Number.isSafeInteger(expected.revision) || expected.revision < 0 || typeof expected.text !== 'string' || expected.text.length > MAX) throw new Error('Borrador no válido.');
+      // Retry the exact durable delivery before calculating a new insertion:
+      // the current draft may already contain the dictation and be full.
+      const delivered = await verified(destination, receipt);
+      if (delivered) return { draft: delivered, alreadyDelivered: true };
       const proposed = `${expected.text}${expected.text.trim() ? '\n' : ''}${receipt.transcript.text}`;
-      if (proposed.length > MAX) throw new Error('El dictado no cabe completo. Se conserva para revisión.');
+      if (proposed.length > MAX) {
+        // A different window may have delivered the same receipt after the
+        // initial read. Only its fully verified marker can resolve the retry.
+        const concurrent = await verified(destination, receipt);
+        if (concurrent) return { draft: concurrent, alreadyDelivered: true };
+        throw new Error('El dictado no cabe completo. Se conserva para revisión.');
+      }
       const draftSHA256 = await digestText(proposed);
       try {
         return await transact(name, 'readwrite', (store, done, fail) => { const mark = store.get(markerKey); mark.onsuccess = () => safely(fail, () => {
