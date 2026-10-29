@@ -62,6 +62,11 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 "$verification/voice-audio-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/VoiceRecorderCompletion.swift \
+  test/native/VoiceRecorderCompletionTests.swift -o "$verification/voice-recorder-completion-tests"
+"$verification/voice-recorder-completion-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/VoiceLevel.swift \
   test/native/VoiceLevelTests.swift -o "$verification/voice-level-tests"
 "$verification/voice-level-tests"
@@ -144,6 +149,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-local-intelligence/ios/Sources/ContinuedInferenceLease.swift \
   plugin-local-intelligence/ios/Sources/CompletionNotifications.swift \
   plugin-perception/ios/Sources/VoiceAudio.swift \
+  plugin-perception/ios/Sources/VoiceRecorderCompletion.swift \
   plugin-perception/ios/Sources/VoiceLevel.swift \
   plugin-perception/ios/Sources/VoiceRecoveryMessage.swift \
   plugin-perception/ios/Sources/VoiceRecoveryJournal.swift \

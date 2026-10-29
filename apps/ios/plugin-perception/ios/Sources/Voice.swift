@@ -66,6 +66,8 @@ private enum VoiceTranscriber {
 @MainActor
 final class VoiceController: NSObject, AVAudioRecorderDelegate {
     private var recorder: AVAudioRecorder?
+    private var recorderCompletion: VoiceRecorderCompletion?
+    private var recorderCaptureIncomplete = false
     private var recordingURL: URL?
     private var sessionID: String?
     private var analyzer: SpeechAnalyzer?
@@ -429,10 +431,12 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                 ])
                 capture.delegate = self
                 capture.isMeteringEnabled = true
+                recorder = capture
+                recorderCompletion = VoiceRecorderCompletion()
+                recorderCaptureIncomplete = false
                 guard capture.prepareToRecord(), capture.record(forDuration: maximumDuration) else {
                     throw NSError(domain: "CapriVoice", code: 1)
                 }
-                recorder = capture
             }
             try FileManager.default.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
             recordingURL = url
@@ -491,13 +495,35 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         var preserve = retentionBinding != nil
         stoppingCapture = true
         recoveryPending = true
-        recorder?.stop()
-        recorder = nil
         defer {
             busy = false
             stoppingCapture = false
             analyzer = nil
             if sessionID == id && !preserve { clearCapture() }
+        }
+        if recorderCaptureIncomplete { preserve = true; return pending(id, reason: "capture_incomplete") }
+        if let capture = recorder {
+            // Keep the exact recorder and completion object until its delegate
+            // reports a closed, successful file. stop() alone does not report
+            // whether the recording finished successfully.
+            let completion = recorderCompletion
+            capture.stop()
+            let outcome = await completion?.wait() ?? .failed
+            guard epoch == generation, sessionID == id else {
+                return .failure("cancelled", "Dictado cancelado.")
+            }
+            if Task.isCancelled {
+                // An externally cancelled bridge task must not leave the
+                // recorder or AVAudioSession active while unwinding.
+                cancel()
+                return .failure("cancelled", "Dictado cancelado.")
+            }
+            recorder = nil; recorderCompletion = nil
+            guard outcome == .completed else {
+                deactivateAudio()
+                recorderCaptureIncomplete = true; preserve = true
+                return pending(id, reason: "capture_incomplete")
+            }
         }
         if let live = liveCapture {
             do { try await live.stop() }
@@ -743,7 +769,14 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         Task { @MainActor in
             guard self.recorder === recorder else { return }
             self.deactivateAudio()
-            if !flag { self.cancel() }
+            self.recorderCompletion?.finished(successfully: flag)
+        }
+    }
+
+    nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
+        Task { @MainActor in
+            guard self.recorder === recorder else { return }
+            self.recorderCompletion?.encodingFailed()
         }
     }
 
@@ -756,8 +789,10 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         retainedLease = nil
         generation += 1
         finalDeadline?.interrupt()
+        recorderCompletion?.cancel()
         recorder?.stop()
         recorder = nil
+        recorderCompletion = nil
         requestFinalShutdown()
         let live = liveCapture; liveCapture = nil
         // The cleanup task owns this path. clearCapture must never unlink it
@@ -918,6 +953,8 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         recordedLocale = nil
         recordedKind = nil
         recordedFormat = nil
+        recorderCompletion = nil
+        recorderCaptureIncomplete = false
         liveTranscript = LiveTranscript()
         previewIssue = nil
         recoveryPending = false
