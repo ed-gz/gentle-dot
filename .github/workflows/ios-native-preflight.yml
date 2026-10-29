@@ -1,0 +1,47 @@
+name: Capri iOS native preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit in ed-gz/gentle-dot
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  native-preflight:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Validate source identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: '[[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Checkout pinned source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ed-gz/gentle-dot
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Select Xcode 26 or newer
+        run: |
+          xcode_path=$(node --input-type=module <<'NODE'
+          import { readdirSync } from 'node:fs';
+          const candidates = readdirSync('/Applications')
+            .filter(name => /^Xcode_\d+(?:\.\d+)*\.app$/.test(name))
+            .filter(name => Number(name.match(/\d+/)[0]) >= 26)
+            .sort((a, b) => b.localeCompare(a, 'en', { numeric: true }));
+          if (!candidates.length) throw new Error('Xcode 26+ is required');
+          console.log(`/Applications/${candidates[0]}`);
+          NODE
+          )
+          export DEVELOPER_DIR="$xcode_path/Contents/Developer"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Test and typecheck native features
+        run: bash apps/ios/scripts/check-native-sdk.sh
