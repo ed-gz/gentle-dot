@@ -9,6 +9,8 @@ El archivo del iPhone puede conservar dos registros de un mismo turno: uno recib
 - En esa prueba, dos turnos idénticos obtuvieron IDs de entrada distintos. El orden observado para ambos fue `message_end`, señal de prueba, `turn_end`. La señal simulada contenía sólo IDs, sin texto del usuario ni respuesta. Cambiar el suscriptor no cambia las entradas, pero esa prueba **no** demuestra recuperación durable de señales perdidas.
 - `persistedPiMessageIdentity` sólo acepta una referencia exacta dentro de la rama y la sesión esperada; rechaza casos ambiguos y copias rehidratadas. No está conectado al runtime. La serialización JSON del proceso Pi al supervisor pierde la referencia de objeto.
 - `dot-live-input.ts` ya emite `ctx.ui.setStatus` en modo RPC y `bridge.ts` recibe estos eventos; la extensión del chat principal se carga mediante `guardArgs` cuando se configura `agentHome`. Que una señal tenga la forma correcta no demuestra por sí solo su origen ni una escritura durable.
+- La consulta de lectura del host activo devolvió cuatro sesiones en inventario y respondió a la inspección de tres con IDs; cada una devolvió cinco mensajes de texto. Esa comprobación no prueba el iPhone ni la proyección nueva todavía no desplegada.
+- `identity-binding-store.ts` es un almacén experimental separado: guarda únicamente identificadores, rechaza conflictos y confirma los cambios mediante transacciones SQLite. Las pruebas cubren procesos competidores, reintento idéntico y terminación antes del commit. El almacén no autentica su entrada y aún no está conectado al bridge ni a Archivo.
 
 ## Condiciones antes de integrarlo
 
