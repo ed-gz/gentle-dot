@@ -206,7 +206,10 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       rememberVoiceOrigin(ownerId, origin);
       // A failed status query is not proof that dictation is unsupported.
       // Retry explicitly on tap instead of leaving the control disabled forever.
-      const current = retryAvailability ? await checkVoice() : availability;
+      // Assets can disappear or change after the view's initial status check.
+      // Query again on every user attempt so an assets_required response can
+      // lead to preparation on the next tap instead of an endless retry loop.
+      const current = await checkVoice();
       if (state.epoch !== epoch || !state.enabled) return;
       if (!current) throw new Error('No pude comprobar la voz. Vuelve a intentarlo.');
       setAvailability(current); setRetryAvailability(false);
