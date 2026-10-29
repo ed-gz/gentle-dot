@@ -141,7 +141,13 @@ export function createConversationArchive(options: { databaseName?: string; maxi
     if (!Array.isArray(values) || values.length > ARCHIVE_LIMITS.batch) throw new ArchiveError('invalid', 'Guarda hasta 500 mensajes por transacción.');
     if (visibleWindow !== undefined && (!Array.isArray(visibleWindow) || visibleWindow.length > 120)) throw new ArchiveError('invalid', 'La ventana visible admite hasta 120 mensajes.');
     const windowKeys = visibleWindow?.map(value => keyOf(archiveEntry(value, scope)));
-    const safe = [...new Map(values.map(value => { const entry = storedEntry(value, scope); return [keyOf(entry), entry] as const; })).values()];
+    const unique = new Map<string, StoredEntry>();
+    for (const value of values) {
+      const entry = storedEntry(value, scope), key = keyOf(entry), prior = unique.get(key);
+      if (prior && prior.role !== entry.role) throw new ArchiveError('invalid', 'Una identidad tiene roles contradictorios. Se conservan las fuentes.');
+      unique.set(key, entry);
+    }
+    const safe = [...unique.values()];
     return access('readwrite', (tx, done, fail) => {
       const entries = tx.objectStore('entries'); const metas = tx.objectStore('metadata');
       read(metas.get('state'), value => {
@@ -170,6 +176,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
           read(entries.get(keyOf(candidate)), raw => {
             const previous = raw === undefined ? undefined : stored(raw);
             if (snapshotRevision !== undefined && previous && snapshotRevision < previous.snapshotRevision) throw new ArchiveError('invalid', 'Una revisión antigua no puede reemplazar un mensaje archivado más reciente.');
+            if (previous && previous.role !== candidate.role) throw new ArchiveError('invalid', 'El rol de una identidad archivada cambió. Se conserva el original.');
             if (previous?.replyTo && candidate.replyTo !== previous.replyTo) throw new ArchiveError('invalid', 'El vínculo de una respuesta archivada cambió. Se conserva el original.');
             // Some old callers know only the visible text. Keep a previously
             // archived transport alias when an update omits it, but never

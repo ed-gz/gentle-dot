@@ -39,6 +39,7 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
   const index = entries.findIndex(item => item.id === safe.id);
   const next = [...entries];
   const prior = index < 0 ? undefined : entries[index];
+  if (prior && (safe.engine !== prior.engine || safe.role !== prior.role)) return entries;
   // A streaming update changes content and state, not the time of the
   // original conversation event. Archivo uses the same stable timestamp.
   if (prior) safe.at = prior.at;
@@ -54,6 +55,9 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
   return next.slice(-MAX_ENTRIES);
 }
 type HostHistoryEntry = { id: string; role: 'user' | 'assistant'; text: string; activities?: ChatActivity[] };
+export class HostHistoryIdentityError extends Error {
+  constructor() { super('El historial contiene una identidad contradictoria. La conversación anterior se conserva.'); this.name = 'HostHistoryIdentityError'; }
+}
 function mergeHistoryActivities(live: readonly ChatActivity[], historical: readonly ChatActivity[]): ChatActivity[] {
   const merged = new Map<string, ChatActivity>();
   for (const activity of [...live, ...historical]) {
@@ -69,6 +73,14 @@ function mergeHistoryActivities(live: readonly ChatActivity[], historical: reado
 /** Update exact host IDs only. Text equality cannot prove that a historical
  * message is the same event as a live or pending message. */
 export function reconcileHostHistory(entries: ChatEntry[], prefix: string, history: HostHistoryEntry[], at = Date.now(), beforePrune?: (entries: ChatEntry[]) => void): ChatEntry[] {
+  const seen = new Set<string>();
+  for (const item of history) {
+    const id = prefix + item.id;
+    if (seen.has(id) || entries.some(entry => entry.id === id && (entry.engine !== 'gentle' || entry.role !== item.role))) {
+      throw new HostHistoryIdentityError();
+    }
+    seen.add(id);
+  }
   const remote = entries.map((entry, index) => ({ entry, index })).filter(({ entry }) =>
     entry.engine === 'gentle' && entry.id.startsWith(prefix) && entry.role !== 'notice');
   const used = new Set<string>();

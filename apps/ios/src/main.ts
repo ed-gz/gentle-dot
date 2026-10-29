@@ -16,7 +16,7 @@ import { mountContinuedInferenceSettings } from './continued-inference-settings.
 import { createLiveActivityCoordinator } from './live-activity-coordinator.ts';
 import { mountLiveActivitySettings } from './live-activity-settings.ts';
 import type { ActivityPhase, ActivityEnd } from './live-activity.ts';
-import { loadConversation, updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
+import { loadConversation, updateEntry, reconcileHostHistory, HostHistoryIdentityError, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
 import { conversationArchive } from './conversation-archive.ts';
 import { applyConversationEntry, createConversationPersistence } from './conversation-persistence.ts';
@@ -656,10 +656,18 @@ function handleMessage(message: ServerMessage) {
     if (selected === 'gentle') { setIntent({ working: linkedBusy, thinking: message.state === 'thinking', alert: message.state === 'needs_you' }); element('scene-status').textContent = ({ thinking: 'Pensando contigo…', working: 'Estoy trabajando.', needs_you: 'Necesito tu respuesta.', idle: 'Aquí contigo.', starting: 'Iniciando…', restarting: 'Recuperando el hilo…', error: 'Algo necesita atención.' })[message.state]; }
   }
   if (message.type === 'history') {
+    const previousConversation = remoteConversation;
     remoteConversation = message.conversationId ?? remoteConversation;
-    persistence.enqueue(entries);
-    entries = reconcileHostHistory(entries, remoteId(''), message.messages, Date.now(), beforePrune => persistence.enqueue(beforePrune));
-    renderChat(); scheduleSave();
+    try {
+      persistence.enqueue(entries);
+      entries = reconcileHostHistory(entries, remoteId(''), message.messages, Date.now(), beforePrune => persistence.enqueue(beforePrune));
+      renderChat(); scheduleSave();
+    } catch (error) {
+      remoteConversation = previousConversation;
+      element('chat-notice').textContent = error instanceof HostHistoryIdentityError
+        ? 'No pude recuperar este historial: contiene identidades contradictorias. Tu conversación anterior se conserva.'
+        : 'No pude recuperar este historial. Tu conversación anterior se conserva.';
+    }
   }
   if (message.type === 'interrupted') {
     linkedBusy = false;

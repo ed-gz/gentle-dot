@@ -71,8 +71,9 @@ test('host transport alias survives restart privately without leaking through me
   expect(result.outcome).toBe('rejected');
   expect(result.restored[0].text).toBe('Anterior');
   expect(result.restored[1]).toMatchObject({ text: 'Solicitud visible', transportText: 'CONTEXTO PRIVADO\nSolicitud visible' });
-  expect(result.reconciled).toHaveLength(2);
-  expect(result.reconciled[1]).toMatchObject({ id: 'host:wss://one.example/ws|main|history-1', text: 'Solicitud visible', transportText: 'CONTEXTO PRIVADO\nSolicitud visible' });
+  expect(result.reconciled).toHaveLength(3);
+  expect(result.reconciled[1]).toMatchObject({ id: 'host:wss://one.example/ws|main|user-1', text: 'Solicitud visible' });
+  expect(result.reconciled[2]).toMatchObject({ id: 'host:wss://one.example/ws|main|history-1', text: 'Solicitud visible', transportText: 'CONTEXTO PRIVADO\nSolicitud visible' });
   expect(result.page.every((entry: any) => !('transportText' in entry))).toBe(true);
   expect(result.matching).toEqual([]);
   expect(result.exportText).not.toContain('CONTEXTO PRIVADO');
