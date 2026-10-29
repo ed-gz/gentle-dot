@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { readFile, readdir, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { canonicalWorkManifest, parseClientMessage, parseWorkSyncReply, type WorkSyncManifest, type WorkSyncRequest } from '@gentle-dot/protocol';
 import { expect, it } from 'vitest';
@@ -48,6 +48,18 @@ it('checks hashes at commit and serializes concurrent chunks without silently du
   const replies = await Promise.all([f.send(chunk), f.send(chunk)]); expect(replies.every(r => r.state === 'uploading')).toBe(true);
   await writeFile(join(f.root, hash('paired-device-1'), f.transferId, 'audio-1'), Buffer.alloc(f.bytes.length));
   expect(await f.send({ operation: 'commit' })).toMatchObject({ state: 'error', code: 'conflict' });
+});
+it('checks a multi-block attachment before committing and refuses a substituted symlink', async () => {
+  const bytes = Buffer.alloc(700_123); for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 37 + (i >>> 8)) & 255;
+  const f = fixture(bytes); await f.begin();
+  const path = join(f.root, hash('paired-device-1'), f.transferId, 'audio-1');
+  await writeFile(path, bytes);
+  expect(await f.send({ operation: 'commit' })).toMatchObject({ state: 'committed' });
+  const g = fixture(bytes); await g.begin();
+  const other = join(g.root, hash('paired-device-1'), g.transferId, 'audio-1');
+  await writeFile(other, bytes); await unlink(other); await symlink(path, other);
+  expect(await g.send({ operation: 'commit' })).toMatchObject({ state: 'error' });
+  expect(await readFile(path)).toEqual(bytes);
 });
 it('validates protocol frames and rejects traversal, oversized chunks, duplicate IDs and wrong receipts', () => {
   const f = fixture(); const begin = f.request({ operation: 'begin', manifest: f.content, manifestHash: f.manifestHash });

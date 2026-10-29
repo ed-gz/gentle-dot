@@ -19,6 +19,28 @@ async function privateDirectory(path: string): Promise<void> {
 async function readPrivate(path: string): Promise<Buffer> {
   const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); try { if (!(await fd.stat()).isFile()) throw new Error('Unsafe file'); return await fd.readFile(); } finally { await fd.close(); }
 }
+/** Verify an attachment with bounded memory, without following links or blocking on a FIFO. */
+async function matchesPrivateFile(path: string, expectedBytes: number, expectedHash: string): Promise<boolean> {
+  const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = await fd.stat();
+    if (!before.isFile() || before.size !== expectedBytes) return false;
+    const hash = createHash('sha256'); const buffer = Buffer.allocUnsafe(256 * 1024);
+    let offset = 0;
+    while (offset < expectedBytes) {
+      const { bytesRead } = await fd.read(buffer, 0, Math.min(buffer.length, expectedBytes - offset), offset);
+      if (!bytesRead) return false;
+      hash.update(buffer.subarray(0, bytesRead)); offset += bytesRead;
+    }
+    const after = await fd.stat(); const current = await lstat(path);
+    return current.isFile() && !current.isSymbolicLink()
+      && current.dev === before.dev && current.ino === before.ino
+      && current.size === after.size && current.mtimeMs === after.mtimeMs && current.ctimeMs === after.ctimeMs
+      && after.dev === before.dev && after.ino === before.ino && after.size === before.size
+      && after.mtimeMs === before.mtimeMs && after.ctimeMs === before.ctimeMs
+      && hash.digest('hex') === expectedHash;
+  } finally { await fd.close(); }
+}
 async function atomicRecord(directory: string, value: RecordFile): Promise<void> {
   const path = join(directory, `manifest-${randomUUID()}.tmp`);
   const fd = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
@@ -104,7 +126,7 @@ export class WorkSyncStore {
       if (request.approvedManifestHash !== record.manifestHash) throw new WorkStorageError('conflict', 'La aprobación no corresponde al contenido confirmado.');
       if (!this.processor || this.closed) throw new WorkStorageError('invalid', 'Este host no tiene disponible el procesador de minutas.');
       if (this.jobs.size) throw new WorkStorageError('quota', 'El host está procesando otra minuta. Vuelve a intentarlo al terminar.');
-      for (const file of record.manifest.files) if (digest(await readPrivate(join(directory, file.id))) !== file.sha256) throw new WorkStorageError('conflict', 'Los archivos del host no coinciden con la revisión aprobada. Conserva el original local.');
+      for (const file of record.manifest.files) if (!await matchesPrivateFile(join(directory, file.id), file.bytes, file.sha256)) throw new WorkStorageError('conflict', 'Los archivos del host no coinciden con la revisión aprobada. Conserva el original local.');
       record.processing = { status: 'running', message: 'Transcribiendo y preparando un borrador para revisión. No se ejecutarán acciones externas.' };
       await atomicRecord(directory, record);
       const controller = new AbortController(); const processor = this.processor; const committed = record;
@@ -151,7 +173,7 @@ export class WorkSyncStore {
       const offsets = await this.offsets(directory, record);
       for (const f of record.manifest.files) {
         if (offsets[f.id] !== f.bytes) throw new WorkStorageError('conflict', 'Todavía faltan bytes de un archivo.');
-        if (digest(await readPrivate(join(directory, f.id))) !== f.sha256) throw new WorkStorageError('conflict', 'La integridad de un archivo no coincide con lo aprobado.');
+        if (!await matchesPrivateFile(join(directory, f.id), f.bytes, f.sha256)) throw new WorkStorageError('conflict', 'La integridad de un archivo no coincide con lo aprobado.');
       }
       record.receipt = { transferId: request.transferId, workId: record.manifest.workId, revision: record.manifest.revision, manifestHash: record.manifestHash, committedAt: Date.now() };
       await atomicRecord(directory, record);
