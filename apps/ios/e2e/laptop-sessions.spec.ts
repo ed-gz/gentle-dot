@@ -130,6 +130,27 @@ test('session dictation exits recording on native interruption and preserves its
   expect(await page.evaluate(() => (globalThis as any).voiceStops)).toBe(1);
 });
 
+test('a chat microphone cancellation does not block a separate Herdr instruction', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('cancel_voice')) return await new Promise(resolve => { state.finishChatVoiceCancellation = () => resolve({ ok: true }); });
+      return previous(command, args);
+    };
+  });
+  await page.locator('[data-panel="chat"]').click();
+  await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('textbox', { name: 'Continuar esta sesión' }).fill('Instrucción independiente');
+  await expect(page.getByRole('button', { name: 'Enviar instrucción', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Enviar instrucción', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).sessionCalls.some((entry: any) => entry.body && JSON.parse(entry.body).action === 'prompt'))).toBe(true);
+  await page.evaluate(() => (globalThis as any).finishChatVoiceCancellation());
+});
+
 test('session dictation uses Apple and leaves a reviewable draft without desktop transcription', async ({ page }) => {
   await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();

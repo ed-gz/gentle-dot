@@ -443,6 +443,21 @@ let remoteConversation = 'default';
 let pendingRemote: { id: string; text: string; displayText: string } | undefined;
 let pendingTimer: ReturnType<typeof setTimeout> | undefined;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let voiceSession: string | undefined;
+let voiceOwner: string | undefined;
+// If the native bridge cannot confirm cancellation, keep the original owner
+// and offer an owner-scoped retry before starting any other recording.
+let uncertainVoiceOwner: string | undefined;
+let voiceCancelPending = false;
+let voiceRetry = false;
+let voiceStopping = false;
+let foreignVoiceOwner: string | undefined;
+let voiceStarting = false;
+let voiceController: AbortController | undefined;
+let voiceGeneration = 0;
+let voiceTimer: ReturnType<typeof setTimeout> | undefined;
+let voicePreviewTimer: ReturnType<typeof setInterval> | undefined;
+let voiceRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let persistenceWarning = '';
 const persistence = createConversationPersistence({ onStatus(status) {
   if (status.blocked) {
@@ -523,7 +538,7 @@ function updateControls() {
   element('engine-explanation').textContent = preference === 'auto'
     ? `Automático usa primero la IA del iPhone y, si no está disponible, la laptop conectada. Ahora: ${selected === 'iphone' ? 'iPhone' : 'laptop'}.`
     : selected === 'iphone' ? 'La conversación usa la IA local del iPhone.' : 'La conversación usa Gentle Dot en tu laptop conectada.';
-  element<HTMLButtonElement>('send').disabled = !conversationReady || persistence.status().blocked || !ready || busy;
+  element<HTMLButtonElement>('send').disabled = !conversationReady || persistence.status().blocked || !ready || busy || voiceInProgress();
   element<HTMLSelectElement>('engine').disabled = localBusy || !!recoveringNativeId || !!pendingRemote;
   element('stop').hidden = !(localBusy || recoveringNativeId || (selected === 'gentle' && linkedBusy));
   element<HTMLButtonElement>('send').setAttribute('aria-label', selected === 'gentle' && linkedBusy ? 'Añadir instrucción' : 'Enviar');
@@ -755,7 +770,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
   noteCompanionInteraction(); introReplayPending = false; theater?.stop();
   const text = prompt.value.trim();
   const promptText = text;
-  if (!text || localBusy || recoveringNativeId || pendingRemote || !conversationReady || persistence.status().blocked) return;
+  if (!text || localBusy || recoveringNativeId || pendingRemote || !conversationReady || persistence.status().blocked || voiceInProgress()) return;
   element('chat-notice').textContent = '';
   if (selected === 'iphone') {
     if (!localRecoveryReady) return;
@@ -991,21 +1006,9 @@ async function initialize() {
 }
 queueMicrotask(() => void initialize());
 
-let voiceSession: string | undefined;
-let voiceOwner: string | undefined;
-// If the native bridge cannot confirm cancellation, keep the original owner
-// and offer an owner-scoped retry before starting any other recording.
-let uncertainVoiceOwner: string | undefined;
-let voiceCancelPending = false;
-let voiceRetry = false;
-let voiceStopping = false;
-let foreignVoiceOwner: string | undefined;
-let voiceStarting = false;
-let voiceController: AbortController | undefined;
-let voiceGeneration = 0;
-let voiceTimer: ReturnType<typeof setTimeout> | undefined;
-let voicePreviewTimer: ReturnType<typeof setInterval> | undefined;
-let voiceRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+// A recoverable failure does not block sending independently typed text. While
+// audio is active or finalizing, prevent a partial instruction from being sent.
+function voiceInProgress() { return voiceStarting || voiceCancelPending || Boolean(voiceSession && !voiceRetry); }
 function stopVoicePreview() { clearInterval(voicePreviewTimer); voicePreviewTimer = undefined; element('dictate').style.removeProperty('--voice-level'); }
 async function recoverPendingVoice() {
   if (!isTauri() || document.hidden || panel !== 'chat' || voiceStarting || uncertainVoiceOwner || voiceCancelPending || (voiceSession && !voiceRetry)) return;
@@ -1084,14 +1087,18 @@ async function cancelDictation(reason: 'navigation' | 'manual' = 'navigation') {
     uncertainVoiceOwner = owner;
     markVoiceCancellation(owner);
     await retryVoiceCancellation(reason);
-  } else if (wasActive) element('voice-status').textContent = reason === 'manual'
-    ? 'Dictado cancelado. Toca el micrófono para volver a intentarlo.'
-    : 'El dictado se interrumpió al salir de Capri. Toca el micrófono para intentarlo de nuevo.';
+  } else {
+    if (wasActive) element('voice-status').textContent = reason === 'manual'
+      ? 'Dictado cancelado. Toca el micrófono para volver a intentarlo.'
+      : 'El dictado se interrumpió al salir de Capri. Toca el micrófono para intentarlo de nuevo.';
+    updateControls();
+  }
 }
 async function retryVoiceCancellation(reason: 'navigation' | 'manual' = 'manual') {
   const owner = uncertainVoiceOwner;
   if (!owner || voiceCancelPending) return;
   voiceCancelPending = true;
+  updateControls();
   const control = element<HTMLButtonElement>('dictate');
   control.disabled = true;
   element('voice-status').textContent = 'Deteniendo el micrófono…';
@@ -1112,6 +1119,7 @@ async function retryVoiceCancellation(reason: 'navigation' | 'manual' = 'manual'
   } finally {
     voiceCancelPending = false;
     control.disabled = false;
+    updateControls();
   }
 }
 element('dictate').addEventListener('click', async () => {
@@ -1123,6 +1131,7 @@ element('dictate').addEventListener('click', async () => {
   voiceOwner = owner;
   if (owner && !voiceSession) rememberVoiceOrigin(owner, 'chat');
   voiceStarting = true;
+  updateControls();
   const control = element<HTMLButtonElement>('dictate'); control.setAttribute('aria-label', 'Cancelar dictado');
   let stopping: string | undefined;
   try {
@@ -1180,6 +1189,7 @@ element('dictate').addEventListener('click', async () => {
       voiceStopping = false;
       if (!voiceSession) { if (owner && !uncertainVoiceOwner) forgetVoiceOrigin(owner); voiceOwner = undefined; }
       control.setAttribute('aria-pressed', String(!!voiceSession && !voiceRetry)); control.setAttribute('aria-label', uncertainVoiceOwner ? 'Reintentar detener micrófono' : voiceRetry ? 'Reintentar transcripción' : voiceSession ? 'Terminar dictado' : 'Dictar');
+      updateControls();
     }
   }
 });
