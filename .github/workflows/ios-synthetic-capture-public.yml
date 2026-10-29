@@ -2,7 +2,7 @@ name: Capri synthetic capture verification
 
 # This job uses generated audio only. It never includes personal art, credentials,
 # builds, or artifacts. Restrict automatic execution to edits of this workflow.
-# This revision includes the synthetic streaming-buffer comparison.
+# This revision isolates streaming-buffer cases in child processes.
 on:
   push:
     branches:
