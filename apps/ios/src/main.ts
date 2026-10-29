@@ -1033,6 +1033,9 @@ async function initialize() {
   // check. A late startup read must also never replace newly selected artwork.
   let initialArtworkRevision = assetRevision;
   const artworkReady = (async () => {
+    // A selection may already be in progress when initialization starts. Its
+    // revision owns the image and status, even before its IndexedDB save ends.
+    if (initialArtworkRevision !== 0) return;
     // A corrupt or unreadable override must not suppress the packaged character.
     let art: Blob | undefined;
     try { art = await loadArtwork() ?? undefined; } catch { /* The bundle is independent of IndexedDB. */ }
