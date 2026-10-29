@@ -45,6 +45,39 @@ test('an archive revision fences unchanged entries and its visible window', asyn
   expect(result.restored.revision).toBe(2);
 });
 
+test('host transport alias survives restart privately without leaking through memory or exports', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const path = '/src/conversation-archive.ts';
+    const { createConversationArchive } = await import(path);
+    const archive = createConversationArchive({ databaseName: `private-alias-${crypto.randomUUID()}` });
+    const legacy = { id: 'legacy', engine: 'iphone', role: 'user', state: 'complete', text: 'Anterior', at: 1000 };
+    const message = { id: 'host:wss://one.example/ws|main|user-1', engine: 'gentle', role: 'user', state: 'complete', text: 'Solicitud visible', transportText: 'CONTEXTO PRIVADO\nSolicitud visible', at: 2000 };
+    await archive.upsert([legacy, message], undefined, [legacy, message], 1);
+    // A later update without the alias must not erase it.
+    const { transportText: _hidden, ...withoutAlias } = message;
+    await archive.upsert([withoutAlias], undefined, [legacy, withoutAlias], 2);
+    const attempt = await Promise.allSettled([archive.upsert([{ ...message, transportText: 'otro contenido' }], undefined, [legacy, message], 3)]);
+    const restored = await archive.restoreState({ entries: [legacy, withoutAlias], revision: 0 });
+    const conversation = await import('/src/conversation.ts');
+    const reconciled = conversation.reconcileHostHistory(restored.entries, 'host:wss://one.example/ws|main|', [
+      { id: 'history-1', role: 'user', text: message.transportText },
+    ]);
+    const page = await archive.page();
+    const matching = await archive.search('CONTEXTO PRIVADO');
+    const exported = await archive.export();
+    return { outcome: attempt[0].status, restored: restored.entries, reconciled, page: page.entries, matching: matching.entries, exportText: await exported.blob.text() };
+  });
+  expect(result.outcome).toBe('rejected');
+  expect(result.restored[0].text).toBe('Anterior');
+  expect(result.restored[1]).toMatchObject({ text: 'Solicitud visible', transportText: 'CONTEXTO PRIVADO\nSolicitud visible' });
+  expect(result.reconciled).toHaveLength(2);
+  expect(result.reconciled[1]).toMatchObject({ id: 'host:wss://one.example/ws|main|history-1', text: 'Solicitud visible', transportText: 'CONTEXTO PRIVADO\nSolicitud visible' });
+  expect(result.page.every((entry: any) => !('transportText' in entry))).toBe(true);
+  expect(result.matching).toEqual([]);
+  expect(result.exportText).not.toContain('CONTEXTO PRIVADO');
+});
+
 test('archive retains more than the visible window, reloads, and idempotently completes streamed messages', async ({ page }) => {
   await page.goto('/');
   const created = await page.evaluate(async () => {

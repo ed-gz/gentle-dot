@@ -71,12 +71,6 @@ function includeBase(pending: ChatEntry[], base: Conversation | undefined, visib
   }
   return cleanPending(result);
 }
-function verifyRetainedTransport(pending: ChatEntry[], visible: ChatEntry[]): void {
-  const byKey = new Map(visible.map(entry => [entryKey(entry), entry]));
-  for (const entry of pending) {
-    if (entry.transportText !== undefined && byKey.get(entryKey(entry))?.transportText !== entry.transportText) throw new Error('El archivo aún no conserva el contexto de un mensaje podado; se conserva la fuente.');
-  }
-}
 function validate(value: unknown): ConversationJournal {
   if (!object(value) || Object.keys(value).some(key => !['schema', 'id', 'baseRevision', 'base', 'revision', 'snapshot', 'pending'].includes(key))
     || value.schema !== 'capri-conversation-journal/v1' || !uuid(value.id) || !natural(value.baseRevision) || value.baseRevision >= Number.MAX_SAFE_INTEGER
@@ -87,7 +81,6 @@ function validate(value: unknown): ConversationJournal {
   if (snapshot.revision !== value.revision) throw new Error('La revisión reservada no coincide; no se eliminó.');
   if (includeVisible(pending, snapshot.entries).length !== pending.length) throw new Error('La reserva perdió mensajes visibles; no se eliminó.');
   if (includeBase(pending, base, snapshot.entries).length !== pending.length) throw new Error('La reserva perdió mensajes anteriores; no se eliminó.');
-  verifyRetainedTransport(pending, snapshot.entries);
   const result: ConversationJournal = { schema: value.schema, id: value.id, baseRevision: value.baseRevision, ...(base ? { base } : {}), revision: value.revision, snapshot, pending };
   if (new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_BYTES) throw new Error('La reserva supera el límite; conserva y exporta la conversación.');
   return result;

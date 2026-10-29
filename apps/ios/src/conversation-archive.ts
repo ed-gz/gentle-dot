@@ -3,6 +3,10 @@ import type { ChatEntry, ChatActivity, Conversation } from './conversation.ts';
 export const ARCHIVE_LIMITS = Object.freeze({ entries: 10000, bytes: 64 * 1024 * 1024, entryBytes: 512 * 1024, batch: 500, page: 100, scan: 1000 });
 export type ArchiveEntry = Pick<ChatEntry, 'id' | 'engine' | 'role' | 'state' | 'text' | 'at' | 'localCancelled' | 'replyTo'> & { scope: string; activities?: ChatActivity[] };
 export type ArchiveRecord = ArchiveEntry & { key: string; sequence: number; storedAt: number; updatedAt: number; bytes: number; snapshotRevision: number };
+/** The sent host wrapper is only for reconciling a live/history echo. It can
+ * include private local context, so public archive APIs never expose it. */
+type StoredEntry = ArchiveEntry & { transportText?: string };
+type StoredRecord = ArchiveRecord & { transportText?: string };
 export type ArchiveStats = { entries: number; bytes: number; nextSequence: number; maximumEntries: number; maximumBytes: number };
 export type ArchiveWrite = ArchiveStats & { inserted: number; updated: number; unchanged: number };
 export type ArchiveQuery = { cursor?: string; limit?: number; scope?: string; engine?: ChatEntry['engine']; roles?: ChatEntry['role'][] };
@@ -55,11 +59,24 @@ export function archiveEntry(value: unknown, scope?: string): ArchiveEntry {
   return entry;
 }
 const keyOf = (entry: ArchiveEntry) => JSON.stringify([entry.engine, entry.scope, entry.id]);
-function stored(value: unknown): ArchiveRecord {
+function storedEntry(value: unknown, scope?: string): StoredEntry {
+  const entry: StoredEntry = archiveEntry(value, scope);
+  if (object(value) && value.transportText !== undefined) {
+    if (entry.engine !== 'gentle' || entry.role !== 'user' || !safeText(value.transportText, 32000)) throw new ArchiveError('invalid', 'El contexto de transporte no es válido. Se conserva el original.');
+    entry.transportText = value.transportText;
+    if (byteLength(JSON.stringify(entry)) > ARCHIVE_LIMITS.entryBytes) throw new ArchiveError('quota', 'El mensaje supera 512 KiB. Exporta o conserva su fuente; no se guardó parcialmente.');
+  }
+  return entry;
+}
+function stored(value: unknown): StoredRecord {
   if (!object(value) || !natural(value.sequence) || value.sequence < 1 || !natural(value.storedAt) || !natural(value.updatedAt) || !natural(value.bytes) || !validScope(value.scope) || (value.snapshotRevision !== undefined && !natural(value.snapshotRevision))) throw new ArchiveError('corrupt', 'El archivo contiene un registro inválido. No se sobrescribió.');
-  const entry = archiveEntry(value, value.scope);
+  const entry = storedEntry(value, value.scope);
   if (value.key !== keyOf(entry) || value.bytes !== byteLength(JSON.stringify(entry))) throw new ArchiveError('corrupt', 'La identidad o tamaño del registro archivado no coincide.');
   return { ...entry, key: value.key as string, sequence: value.sequence, storedAt: value.storedAt, updatedAt: value.updatedAt, bytes: value.bytes, snapshotRevision: Number(value.snapshotRevision ?? 0) };
+}
+function publicRecord(value: StoredRecord): ArchiveRecord {
+  const { transportText: _transportText, ...record } = value;
+  return record;
 }
 function metadata(value: unknown): Metadata {
   if (!object(value) || !natural(value.entries) || !natural(value.bytes) || !natural(value.nextSequence) || value.nextSequence < 1) throw new ArchiveError('corrupt', 'No se pudo verificar la cuota del archivo. No se reemplazó su contenido.');
@@ -124,7 +141,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
     if (!Array.isArray(values) || values.length > ARCHIVE_LIMITS.batch) throw new ArchiveError('invalid', 'Guarda hasta 500 mensajes por transacción.');
     if (visibleWindow !== undefined && (!Array.isArray(visibleWindow) || visibleWindow.length > 120)) throw new ArchiveError('invalid', 'La ventana visible admite hasta 120 mensajes.');
     const windowKeys = visibleWindow?.map(value => keyOf(archiveEntry(value, scope)));
-    const safe = [...new Map(values.map(value => { const entry = archiveEntry(value, scope); return [keyOf(entry), entry] as const; })).values()];
+    const safe = [...new Map(values.map(value => { const entry = storedEntry(value, scope); return [keyOf(entry), entry] as const; })).values()];
     return access('readwrite', (tx, done, fail) => {
       const entries = tx.objectStore('entries'); const metas = tx.objectStore('metadata');
       read(metas.get('state'), value => {
@@ -154,10 +171,15 @@ export function createConversationArchive(options: { databaseName?: string; maxi
             const previous = raw === undefined ? undefined : stored(raw);
             if (snapshotRevision !== undefined && previous && snapshotRevision < previous.snapshotRevision) throw new ArchiveError('invalid', 'Una revisión antigua no puede reemplazar un mensaje archivado más reciente.');
             if (previous?.replyTo && candidate.replyTo !== previous.replyTo) throw new ArchiveError('invalid', 'El vínculo de una respuesta archivada cambió. Se conserva el original.');
+            // Some old callers know only the visible text. Keep a previously
+            // archived transport alias when an update omits it, but never
+            // silently replace it with different bytes for the same message.
+            if (previous?.transportText !== undefined && candidate.transportText !== undefined && candidate.transportText !== previous.transportText) throw new ArchiveError('invalid', 'El contexto de transporte archivado cambió. Se conserva el original.');
+            if (previous?.transportText !== undefined && candidate.transportText === undefined) candidate.transportText = previous.transportText;
             // Arrival order and original event time stay stable when a stream completes later.
             const entry = previous ? { ...candidate, at: previous.at } : candidate;
             const bytes = byteLength(JSON.stringify(entry));
-            const identical = previous && JSON.stringify(archiveEntry(previous, previous.scope)) === JSON.stringify(entry);
+            const identical = previous && JSON.stringify(storedEntry(previous, previous.scope)) === JSON.stringify(entry);
             if (identical) {
               // The content may be unchanged while the durable snapshot advances.
               // Fence that revision too, otherwise a competing writer with the
@@ -168,7 +190,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
             if (snapshotRevision !== undefined && previous && snapshotRevision === previous.snapshotRevision) throw new ArchiveError('invalid', 'La revisión archivada ya contiene otro mensaje.');
             const count = meta.entries + (previous ? 0 : 1); const total = meta.bytes - (previous?.bytes ?? 0) + bytes;
             if (count > maximumEntries || total > maximumBytes) throw new ArchiveError('quota', `El archivo alcanzó su cuota (${maximumEntries} mensajes / ${maximumBytes} bytes). Exporta el historial y conserva los mensajes pendientes; no se borró nada automáticamente.`);
-            const now = Date.now(); const record: ArchiveRecord = { ...entry, key: keyOf(entry), sequence: previous?.sequence ?? meta.nextSequence++, storedAt: previous?.storedAt ?? now, updatedAt: now, bytes, snapshotRevision: snapshotRevision ?? previous?.snapshotRevision ?? 0 };
+            const now = Date.now(); const record: StoredRecord = { ...entry, key: keyOf(entry), sequence: previous?.sequence ?? meta.nextSequence++, storedAt: previous?.storedAt ?? now, updatedAt: now, bytes, snapshotRevision: snapshotRevision ?? previous?.snapshotRevision ?? 0 };
             entries.put(record); meta.entries = count; meta.bytes = total; if (previous) updated++; else inserted++; next();
           }, fail);
         };
@@ -186,8 +208,8 @@ export function createConversationArchive(options: { databaseName?: string; maxi
    * journal before releasing its staged copy; no stored value is changed. */
   function verifyExactBatch(values: readonly ChatEntry[], revision: number): Promise<boolean> {
     if (!Array.isArray(values) || values.length > ARCHIVE_LIMITS.batch || !natural(revision)) return Promise.reject(new ArchiveError('invalid', 'La verificación de archivo no es válida.'));
-    let expected: ArchiveEntry[];
-    try { expected = values.map(value => archiveEntry(value)); } catch (error) { return Promise.reject(error); }
+    let expected: StoredEntry[];
+    try { expected = values.map(value => storedEntry(value)); } catch (error) { return Promise.reject(error); }
     return access('readonly', (tx, done, fail) => {
       const entries = tx.objectStore('entries'); let offset = 0;
       const next = () => {
@@ -195,7 +217,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
         read(entries.get(keyOf(candidate)), raw => {
           if (raw === undefined) { done(false); return; }
           const actual = stored(raw);
-          if (actual.snapshotRevision !== revision || JSON.stringify(archiveEntry(actual, actual.scope)) !== JSON.stringify(candidate)) { done(false); return; }
+          if (actual.snapshotRevision !== revision || JSON.stringify(storedEntry(actual, actual.scope)) !== JSON.stringify(candidate)) { done(false); return; }
           next();
         }, fail);
       };
@@ -217,7 +239,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
           const cursor = request.result;
           if (!cursor || entries.length >= limit || scanned >= ARCHIVE_LIMITS.scan) { done({ entries: entries.reverse(), scanned, hasMore: Boolean(cursor), ...(cursor && last ? { cursor: encoded(last) } : {}) }); return; }
           const entry = stored(cursor.value); scanned++; last = { at: entry.at, sequence: entry.sequence, filter };
-          if ((!options.scope || entry.scope === options.scope) && (!options.engine || entry.engine === options.engine) && (!options.roles || options.roles.includes(entry.role)) && (!terms || matchesMemory(entry, terms))) entries.push(entry);
+          if ((!options.scope || entry.scope === options.scope) && (!options.engine || entry.engine === options.engine) && (!options.roles || options.roles.includes(entry.role)) && (!terms || matchesMemory(entry, terms))) entries.push(publicRecord(entry));
           cursor.continue();
         } catch (error) { fail(error); }
       };
@@ -226,7 +248,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
   /** Both stores carry a monotonic revision: either commit may succeed alone. */
   function restoreState(fallback: Pick<Conversation, 'entries' | 'revision'>): Promise<{ entries: ChatEntry[]; preserved: ChatEntry[]; revision: number }> {
     if (!Array.isArray(fallback.entries) || fallback.entries.length > 120 || (fallback.revision !== undefined && !natural(fallback.revision))) return Promise.reject(new ArchiveError('invalid', 'Ventana de recuperación inválida.'));
-    const safe = fallback.entries.map(entry => archiveEntry(entry));
+    const safe = fallback.entries.map(entry => storedEntry(entry));
     const fallbackRevision = fallback.revision ?? 0;
     return access('readonly', (tx, done, fail) => read(tx.objectStore('metadata').get('window'), value => {
       let archivedKeys: string[] | undefined, archivedRevision = 0;
@@ -251,7 +273,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
           result.push({ id: entry.id, engine: entry.engine, role: entry.role, text: entry.text, at: entry.at,
             ...(entry.localCancelled ? { localCancelled: true } : {}),
             ...(entry.replyTo ? { replyTo: entry.replyTo } : {}),
-            ...(typeof prior?.transportText === 'string' && prior.transportText.length <= 32000 ? { transportText: prior.transportText } : {}),
+            ...(entry.transportText !== undefined ? { transportText: entry.transportText } : typeof prior?.transportText === 'string' && prior.transportText.length <= 32000 ? { transportText: prior.transportText } : {}),
             state: entry.state === 'pending' ? 'interrupted' : entry.state,
             ...(entry.activities ? { activities: entry.activities.map(activity => ({ ...activity, status: activity.status === 'running' ? 'failed' as const : activity.status })) } : {}) });
           next();
@@ -278,14 +300,14 @@ export function createConversationArchive(options: { databaseName?: string; maxi
     stats: () => access<ArchiveStats>('readonly', (tx, done, fail) => read(tx.objectStore('metadata').get('state'), value => done(stats(metadata(value))), fail)),
     load: (key: string) => {
       if (typeof key !== 'string' || key.length > 8192) return Promise.reject(new ArchiveError('invalid', 'Referencia de archivo inválida.'));
-      return access<ArchiveRecord | undefined>('readonly', (tx, done, fail) => read(tx.objectStore('entries').get(key), value => done(value === undefined ? undefined : stored(value)), fail));
+      return access<ArchiveRecord | undefined>('readonly', (tx, done, fail) => read(tx.objectStore('entries').get(key), value => done(value === undefined ? undefined : publicRecord(stored(value))), fail));
     },
     /** One readonly transaction exports a coherent snapshot. No automatic deletion follows. */
     export: () => access<{ blob: Blob; stats: ArchiveStats }>('readonly', (tx, done, fail) => read(tx.objectStore('metadata').get('state'), value => {
       const meta = stats(metadata(value)); const chunks: string[] = [JSON.stringify({ schema: 'capri-conversation-archive/v1', exportedAt: Date.now(), entries: meta.entries, contentBytes: meta.bytes }) + '\n'];
       const cursor = tx.objectStore('entries').index('time').openCursor(); let count = 0;
       cursor.onerror = () => fail(cursor.error);
-      cursor.onsuccess = () => { try { if (!cursor.result) { if (count !== meta.entries) throw new ArchiveError('corrupt', 'El inventario del archivo no coincide.'); done({ blob: new Blob(chunks, { type: 'application/x-ndjson' }), stats: meta }); return; } chunks.push(JSON.stringify(stored(cursor.result.value)) + '\n'); count++; cursor.result.continue(); } catch (error) { fail(error); } };
+      cursor.onsuccess = () => { try { if (!cursor.result) { if (count !== meta.entries) throw new ArchiveError('corrupt', 'El inventario del archivo no coincide.'); done({ blob: new Blob(chunks, { type: 'application/x-ndjson' }), stats: meta }); return; } chunks.push(JSON.stringify(publicRecord(stored(cursor.result.value))) + '\n'); count++; cursor.result.continue(); } catch (error) { fail(error); } };
     }, fail)),
   };
 }

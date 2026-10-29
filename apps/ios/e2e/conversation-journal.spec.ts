@@ -256,7 +256,7 @@ test('an archive timestamp mismatch retains the journal and the original window'
   expect(result.archived.at).toBe(1000);
 });
 
-test('a pruned host transport alias is refused because the archive cannot preserve it', async ({ page }) => {
+test('a pruned host transport alias is preserved privately by the archive before the journal is released', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {
     const path = '/src/conversation-journal.ts', archivePath = '/src/conversation-archive.ts';
@@ -269,14 +269,24 @@ test('a pruned host transport alias is refused because the archive cannot preser
       const open = indexedDB.open(databaseName, 1); open.onupgradeneeded = () => open.result.createObjectStore('conversation'); open.onerror = () => reject(open.error);
       open.onsuccess = () => { const db = open.result, tx = db.transaction('conversation', 'readwrite'); tx.objectStore('conversation').put(base, 'current'); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
     });
-    const journal = createConversationJournal({ databaseName, archive }); let error = '';
-    try { await journal.begin({ id: crypto.randomUUID(), baseRevision: 1, base, snapshot: { entries: [], draft: '', revision: 2 }, pending: [] }); }
-    catch (caught) { error = String(caught); }
-    return { error, pending: await journal.pending(), count: (await archive.stats()).entries };
+    const journal = createConversationJournal({ databaseName, archive }); const id = crypto.randomUUID();
+    await journal.begin({ id, baseRevision: 1, base, snapshot: { entries: [], draft: '', revision: 2 }, pending: [] });
+    await journal.resume(id);
+    const rawAlias = await new Promise<unknown>((resolve, reject) => {
+      const open = indexedDB.open(archiveName, 1); open.onerror = () => reject(open.error);
+      open.onsuccess = () => { const db = open.result, tx = db.transaction('entries', 'readonly');
+        const get = tx.objectStore('entries').get(JSON.stringify(['gentle', 'host:wss://example.test/ws|main', entry.id]));
+        get.onsuccess = () => resolve(get.result?.transportText); tx.oncomplete = () => db.close(); tx.onerror = () => reject(tx.error); };
+    });
+    const exported = await archive.export();
+    return { rawAlias, pending: await journal.pending(), count: (await archive.stats()).entries,
+      visible: await archive.load(JSON.stringify(['gentle', 'host:wss://example.test/ws|main', entry.id])), exportText: await exported.blob.text() };
   });
-  expect(result.error).toContain('contexto de un mensaje podado');
+  expect(result.rawAlias).toBe('Contexto más texto');
   expect(result.pending).toBeUndefined();
-  expect(result.count).toBe(0);
+  expect(result.count).toBe(1);
+  expect(result.visible).not.toHaveProperty('transportText');
+  expect(result.exportText).not.toContain('Contexto más texto');
 });
 
 test('repeating a reservation checks the base again without erasing the pending copy', async ({ page }) => {
