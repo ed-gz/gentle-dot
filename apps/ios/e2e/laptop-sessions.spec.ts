@@ -67,13 +67,13 @@ async function linkedPhone(page: Page) {
       }
       if (command.endsWith('https_request')) {
         const body = args.body ? JSON.parse(args.body) : undefined;
-        const reply = !body ? { available: true, sessions, approvals: [], policies: [], events: [] } : body.action === 'inspect' ? {
+        const reply = !body ? { available: true, mutationInstanceFence: 1, sessions, approvals: [], policies: [], events: [] } : body.action === 'inspect' ? {
           sessionId: body.sessionId, instanceId: 'instance-1', status: 'idle', deliveries: [],
           messages: [{ id: body.before ? 'older' : 'new', role: 'assistant', content: [{ type: 'text', text: body.before ? 'Acuerdo anterior verificable.' : `Historial de ${body.sessionId}.` }], timestamp: '2026-10-28T12:00:00Z' }],
           history: { hasEarlier: !body.before, ...(body.before ? {} : { before: 'older-cursor' }) },
           metadata: { version: 1, model: { id: 'configured', name: 'Modelo configurado', provider: 'host' } },
           work: { version: 1, commands: [], agents: [], truncated: false },
-        } : { ok: true };
+        } : ['prompt', 'answer', 'abort', 'close', 'duplicate'].includes(body.action) ? { accepted: true, sessionId: body.sessionId, instanceId: 'instance-1' } : { ok: true };
         return { ok: true, status: 200, headers: {}, body: JSON.stringify(reply) };
       }
       return { ok: true };
