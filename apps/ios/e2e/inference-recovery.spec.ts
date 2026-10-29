@@ -1,4 +1,4 @@
-import { expect, test, type Page } from './fixtures.ts';
+import { expect, test, openRecoveryHarness, type Page } from './fixtures.ts';
 
 const turn = 'd3dba896-4b5c-4c1c-98c9-4e60238fe6b9';
 const revision = 'a3dba896-4b5c-4c1c-98c9-4e60238fe6b9';
@@ -164,7 +164,7 @@ test('a recovered answer locates its original turn outside the visible 120-messa
   expect(event.entry).toBeUndefined();
   expect(event.archived).toMatchObject({ id: turn, state: 'complete', text: response });
   expect(await page.locator('.chat-card').count()).toBe(120);
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   await page.getByText('Consultar mensajes anteriores', { exact: true }).click();
   await page.locator('#memory-query').fill(response);
   await page.locator('#memory-search button[type="submit"]').click();

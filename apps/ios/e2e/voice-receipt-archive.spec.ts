@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures.ts';
+import { expect, test, openRecoveryHarness } from './fixtures.ts';
 
 test('saved receipts stay out of Archivo until recovery state and retention are integrated', async ({ page }) => {
   await page.goto('/');
@@ -13,7 +13,7 @@ test('saved receipts stay out of Archivo until recovery state and retention are 
         segments: [{ text: 'Texto de prueba.', startSeconds: .1, endSeconds: 1.8 }] } },
     { draft: saved.draft, revision: saved.revision ?? 0 });
   });
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   await expect(page.locator('.voice-receipt-recovery')).toHaveCount(0);
   await expect(page.getByText('Dictado guardado', { exact: true })).toHaveCount(0);
   expect(await page.evaluate(async () => (await (await import('/src/voice-chat-commit.ts')).createVoiceChatCommit().list()).length)).toBe(1);

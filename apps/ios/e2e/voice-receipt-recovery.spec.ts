@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures.ts';
+import { expect, test, openRecoveryHarness } from './fixtures.ts';
 
 const input = (suffix = '1') => ({
   ownerId: `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa${suffix}`,
@@ -10,7 +10,7 @@ const input = (suffix = '1') => ({
 
 async function setup(page: import('@playwright/test').Page) {
   await page.goto('/');
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   await page.evaluate(async () => {
     const state = globalThis as any;
     const storePath = '/src/voice-chat-commit.ts', viewPath = '/src/voice-receipt-recovery.ts';

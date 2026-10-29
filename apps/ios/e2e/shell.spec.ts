@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures.ts';
+import { expect, test, openRecoveryHarness } from './fixtures.ts';
 
 async function nativeFixture(page: import('@playwright/test').Page, delayed = false, decisions: object[] = []) {
   await page.addInitScript(({ delayed, decisions }) => {
@@ -163,7 +163,7 @@ test('agent fixture uses the real local work tool from the conversation and pers
   })).toBe('done');
   await page.reload();
   await expect(page.locator('.chat-card[data-role="assistant"]')).toContainText('Guardé Revisar E-503');
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   await expect(page.locator('#work-list .work-item')).toHaveCount(1);
   await expect(page.locator('#work-list')).toContainText('Solo en este iPhone');
 });

@@ -1,8 +1,8 @@
-import { expect, test } from './fixtures.ts';
+import { expect, test, openRecoveryHarness } from './fixtures.ts';
 
 test('local work and attached bytes survive reload; using instructions does not send', async ({ page }) => {
   await page.goto('/');
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   await page.getByText('Crear un trabajo manualmente', { exact: true }).click();
   const title = '<img src=x onerror=alert(1)> reunión';
   const instruction = 'Preparar acuerdos <script>alert(1)</script>';
@@ -26,7 +26,7 @@ test('local work and attached bytes survive reload; using instructions does not 
   });
   expect(stored).toMatchObject({ content: 'Acuerdo: revisar el viernes.\n', type: 'text/plain', status: 'local', revision: 1 });
   await page.reload();
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   await expect(article.getByRole('heading')).toHaveText(title);
   await article.locator('summary').filter({ hasText: 'Archivos (1)' }).click();
   const downloading = page.waitForEvent('download');
@@ -43,7 +43,7 @@ test('local work and attached bytes survive reload; using instructions does not 
     return { status: work.status, revision: work.revision };
   })).toEqual({ status: 'local', revision: 1 });
 
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   await article.getByRole('button', { name: 'Eliminar', exact: true }).click();
   await expect(article).toHaveCount(1);
   await expect(article.getByText(`Eliminar “${title}” de este iPhone`, { exact: false })).toBeVisible();
@@ -63,11 +63,11 @@ test('instruction edits and text versions update locally through the UI', async 
   await page.goto('/');
   await page.locator('[data-panel="chat"]').click();
   await page.locator('#prompt').fill('Preparar minuta de operaciones');
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   await page.locator('#save-draft').click();
   await expect(page.locator('#save-draft')).toHaveText('Guardado en Trabajos');
   await expect(page.locator('#prompt')).toHaveValue('Preparar minuta de operaciones');
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   const article = page.locator('#work-list .work-item');
   await expect(article).toHaveCount(1);
   await article.locator('summary').filter({ hasText: 'Editar instrucciones' }).click();
@@ -113,7 +113,7 @@ test('IndexedDB serializes CAS edits, invalidates approval and preserves unresol
   });
   expect(result).toMatchObject({ edits: ['fulfilled', 'rejected'], editedStatus: 'local', editedRevision: 4, versionedStatus: 'local', removedWhileSending: 'rejected' });
   await page.reload();
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   await expect(page.locator('#work-list')).toContainText('Envío pendiente de confirmar');
   await expect(page.locator('#work-list').getByRole('button', { name: 'Eliminar', exact: true })).toHaveCount(0);
   const afterReload = await page.evaluate(async () => {

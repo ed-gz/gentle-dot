@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures.ts';
+import { expect, test, openRecoveryHarness } from './fixtures.ts';
 
 test('meeting drafts remain reviewable with source evidence across versions and reload', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
@@ -15,7 +15,7 @@ test('meeting drafts remain reviewable with source evidence across versions and 
     return { id: item.id, transferId: transfer.transferId, result, hasHistory: 'resultHistory' in item };
   });
   expect(initial.hasHistory).toBe(false); // Existing stored work requires no migration.
-  await page.reload(); await page.locator('[data-panel="inbox"]').click();
+  await page.reload(); await openRecoveryHarness(page);
   const article = page.locator('.work-item').filter({ hasText: 'Reunión segura' });
   await article.getByText('Minuta · pendiente de revisión', { exact: true }).click();
   await article.getByText(/Borrador 1 ·/).click();
@@ -28,7 +28,7 @@ test('meeting drafts remain reviewable with source evidence across versions and 
     const inbox = await import('/src/work-inbox.ts');
     await inbox.saveWorkResult(id, transferId, { ...result, createdAt: 300, minutes: { ...result.minutes, title: 'Borrador revisado', summary: 'Segundo resumen' } });
   }, initial);
-  await page.reload(); await page.locator('[data-panel="inbox"]').click();
+  await page.reload(); await openRecoveryHarness(page);
   await article.getByText('Minutas (2) · pendientes de revisión', { exact: true }).click();
   await article.getByText(/Borrador 1 ·/).click(); await article.getByText(/Borrador 2 ·/).click();
   await expect(article).toContainText('Borrador inicial'); await expect(article).toContainText('Borrador revisado');

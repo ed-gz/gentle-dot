@@ -1,4 +1,4 @@
-import { expect, test, type Page } from './fixtures.ts';
+import { expect, test, openRecoveryHarness, type Page } from './fixtures.ts';
 
 async function nativeExporter(page: Page) {
   await page.addInitScript(() => {
@@ -40,7 +40,7 @@ async function finish(page: Page, result: 'success' | 'cancel' | 'error') {
 test('native history export waits for a real callback, preserves content on cancellation/error and never downloads through the browser', async ({ page }) => {
   const downloads: string[] = []; page.on('download', file => downloads.push(file.suggestedFilename()));
   await nativeExporter(page); await page.goto('/'); await page.locator('#prompt').fill('Borrador que no se envió.');
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   const button = page.locator('#memory-export'), status = page.locator('#memory-status');
   await button.click(); await expect.poll(() => page.evaluate(() => (globalThis as any).exportPending)).toBe(true);
   await expect(button).toBeDisabled(); await expect(status).toContainText('Preparando copia'); await expect(status).not.toContainText('guardada');
@@ -64,7 +64,7 @@ test('native attachment export copies exact bytes in chunks and cancellation ret
     const work = await createWork({ title: 'Audio original', kind: 'meeting', instruction: 'Conservar los bytes originales.', files: [new File([bytes], 'reunion.m4a', { type: 'audio/mp4' })] });
     (globalThis as any).exportWork = { id: work.id, fileId: work.files[0].id };
   });
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   const item = page.locator('#work-list .work-item'); await item.locator('summary').filter({ hasText: 'Archivos (1)' }).click();
   const button = item.getByRole('button', { name: 'Descargar reunion.m4a' }), status = page.locator('#work-status');
   await button.click(); await expect.poll(() => page.evaluate(() => (globalThis as any).exportPending)).toBe(true);

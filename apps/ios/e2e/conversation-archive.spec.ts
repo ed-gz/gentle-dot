@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures.ts';
+import { expect, test, openRecoveryHarness } from './fixtures.ts';
 import { readFile } from 'node:fs/promises';
 
 test('the visible conversation rejects stale and competing equal-revision writes', async ({ page }) => {
@@ -218,7 +218,7 @@ test('real shell archives messages before its 120-card window prunes and retriev
   });
   expect(recalled.records).toHaveLength(1); expect(recalled.records[0].text).toBe('Evidencia inicial: reunión con Ana el martes.');
   expect(recalled.records[0].source).toMatchObject({ engine: 'gentle', scope: 'host:wss://archive.example/ws|memory-test', state: 'complete' });
-  await page.locator('[data-panel="inbox"]').click(); await expect(page.locator('#memory-status')).toContainText('205 mensajes');
+  await openRecoveryHarness(page); await expect(page.locator('#memory-status')).toContainText('205 mensajes');
   expect(pageErrors).toEqual([]);
 });
 
@@ -269,6 +269,7 @@ test('shell stops new sends after archive failure, preserves the draft and expor
   // Shared WebGL warmup can block browser tasks on software renderers before
   // native availability and the initial durable checkpoint reach the UI.
   await expect(page.locator('#send')).toBeEnabled({ timeout: 15000 });
+  await expect(page.locator('#rescue-history')).toBeHidden();
   await page.evaluate(async () => {
     const { conversationArchive } = await import('/src/conversation-archive.ts');
     (globalThis as any).restoreArchive = conversationArchive.upsert;
@@ -283,7 +284,8 @@ test('shell stops new sends after archive failure, preserves the draft and expor
   await expect(page.locator('#send')).toBeDisabled(); await expect(page.locator('#chat-notice')).toContainText('Los envíos están detenidos');
   await page.locator('#prompt').fill('Siguiente borrador, todavía sin enviar.');
   await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).draft)).toBe('Siguiente borrador, todavía sin enviar.');
-  await page.locator('[data-panel="inbox"]').click(); await expect(page.locator('#memory-status')).toContainText('1 mensajes pendientes');
+  await expect(page.locator('#rescue-history')).toBeVisible();
+  await page.locator('#rescue-history').click(); await expect(page.locator('#memory-status')).toContainText('1 mensajes pendientes');
   // This case verifies the browser fallback; native delivery has its own fixture suite.
   await page.evaluate(() => { (globalThis as any).isTauri = false; });
   const download = page.waitForEvent('download'); await page.locator('#memory-export').click();
@@ -295,6 +297,7 @@ test('shell stops new sends after archive failure, preserves the draft and expor
   await page.evaluate(async () => { (await import('/src/conversation-archive.ts')).conversationArchive.upsert = (globalThis as any).restoreArchive; });
   await page.locator('#memory-retry').click(); await expect(page.locator('#memory-status')).toContainText('2 mensajes');
   await page.locator('[data-panel="chat"]').click(); await expect(page.locator('#send')).toBeEnabled();
+  await expect(page.locator('#rescue-history')).toBeHidden();
   await expect(page.locator('#prompt')).toHaveValue('Siguiente borrador, todavía sin enviar.');
   await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation-archive.ts')).conversationArchive.stats()).entries)).toBe(2);
 });
@@ -345,7 +348,7 @@ test('legacy archive hydration keeps a newer receipt and rescue exports visible 
   });
   await page.reload(); await expect(page.locator('#cards')).toContainText('Mensaje visible para rescatar');
   await page.evaluate(async () => { (await import('/src/conversation-archive.ts')).conversationArchive.export = async () => { throw new Error('Lectura no disponible (fixture).'); }; });
-  await page.locator('[data-panel="inbox"]').click();
+  await openRecoveryHarness(page);
   const download = page.waitForEvent('download'); await page.locator('#memory-export').click();
   const lines = (await readFile((await (await download).path())!, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   expect(lines.find(line => line.schema === 'capri-conversation-pending/v1')).toMatchObject({ committed: false, source: 'visible-and-pending-rescue', entries: 1 });
