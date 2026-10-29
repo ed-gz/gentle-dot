@@ -81,6 +81,11 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   test/native/VoiceOwnersTests.swift -o "$verification/voice-owner-tests"
 "$verification/voice-owner-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/VoiceLocaleSelection.swift \
+  test/native/VoiceLocaleSelectionTests.swift -o "$verification/voice-locale-tests"
+"$verification/voice-locale-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/LiveAudioBuffer.swift \
   test/native/LiveAudioBufferTests.swift -o "$verification/live-audio-buffer-tests"
@@ -124,6 +129,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/VoiceRecoveryMessage.swift \
   plugin-perception/ios/Sources/VoiceTranscriptBounds.swift \
   plugin-perception/ios/Sources/VoiceOwners.swift \
+  plugin-perception/ios/Sources/VoiceLocaleSelection.swift \
   plugin-perception/ios/Sources/LiveAudioBuffer.swift \
   plugin-perception/ios/Sources/LiveTranscript.swift \
   plugin-perception/ios/Sources/LiveVoiceDrain.swift \

@@ -100,25 +100,29 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
 
     private func preferredTranscriber() async -> (locale: Locale, kind: VoiceTranscriberKind)? {
         let preferences = [Locale(identifier: "es-MX"), Locale(identifier: "es-ES")]
-        var speech: Locale?
+        var candidates: [(locale: Locale, kind: VoiceTranscriberKind)] = []
         if SpeechTranscriber.isAvailable {
             for preferred in preferences {
-                if let locale = await SpeechTranscriber.supportedLocale(equivalentTo: preferred) { speech = locale; break }
+                if let locale = await SpeechTranscriber.supportedLocale(equivalentTo: preferred) {
+                    candidates.append((locale, .speech))
+                }
             }
         }
         // DictationTranscriber is also on-device and covers additional locales
         // and devices when the newer SpeechTranscriber is unavailable.
-        var dictation: Locale?
         for preferred in preferences {
-            if let locale = await DictationTranscriber.supportedLocale(equivalentTo: preferred) { dictation = locale; break }
+            if let locale = await DictationTranscriber.supportedLocale(equivalentTo: preferred) {
+                candidates.append((locale, .dictation))
+            }
         }
-        // An installed local option is useful offline; do not demand a new
-        // download simply because the preferred module also has a locale.
-        if let locale = speech, await installed(locale, kind: .speech) { return (locale, .speech) }
-        if let locale = dictation, await installed(locale, kind: .dictation) { return (locale, .dictation) }
-        if let locale = speech { return (locale, .speech) }
-        if let locale = dictation { return (locale, .dictation) }
-        return nil
+        // Check every supported Spanish candidate before asking for a download.
+        // es-MX may be supported but not installed while es-ES is already on
+        // the device. Stopping at the first supported locale broke offline use.
+        var choices: [(value: (locale: Locale, kind: VoiceTranscriberKind), installed: Bool)] = []
+        for candidate in candidates {
+            choices.append((candidate, await installed(candidate.locale, kind: candidate.kind)))
+        }
+        return VoiceLocaleSelection.preferred(choices)
     }
 
     private func installed(_ locale: Locale, kind: VoiceTranscriberKind) async -> Bool {
