@@ -894,7 +894,14 @@ function updateControls() {
   healthAction = health.primaryAction;
   element('health-action').hidden = ready || !healthAction;
   element('health-action').textContent = healthAction ? healthActionLabel(healthAction) : '';
-  element('engine-status').textContent = selected === 'iphone' ? health.local.detail : health.host.detail;
+  element('engine-status').textContent = selected !== 'iphone' ? health.host.detail
+    : health.local.state !== 'ready' ? health.local.detail
+    : localBusy ? 'Una respuesta del iPhone está en curso.'
+    : recoveringNativeId ? 'Una respuesta anterior sigue en curso en este iPhone.'
+    : !localRecoveryReady ? recoveringLocal ? 'Comprobando respuestas guardadas en este iPhone…'
+      : !conversationReady ? 'Preparando la conversación en este iPhone…'
+      : 'Revisa la recuperación antes de iniciar otra respuesta local.'
+    : health.local.detail;
 }
 function unconfirmedRemote() {
   if (!pendingRemote) return;

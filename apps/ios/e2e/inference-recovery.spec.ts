@@ -92,6 +92,7 @@ test('failed persistence keeps the native copy and sends no ACK', async ({ page 
   expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-events') || '[]'))).toEqual([]);
   expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-journal') || '[]'))).toEqual([answer]);
   await expect(page.locator('#send')).toBeDisabled();
+  await expect(page.locator('#engine-status')).toContainText('Revisa la recuperación');
   await page.evaluate(() => sessionStorage.removeItem('fixture-block-writes'));
   await page.locator('#retry-conversation').click();
   await expect(page.locator('#cards')).toContainText(response);
@@ -169,6 +170,7 @@ test('a still-running inference can be stopped after the WebView restarts', asyn
   await page.reload();
   await expect(page.locator('#stop')).toBeVisible();
   await expect(page.locator('#send')).toBeDisabled();
+  await expect(page.locator('#engine-status')).toContainText('respuesta anterior sigue en curso');
   await page.locator('#stop').click();
   await expect(page.locator('#cards')).toContainText('Respuesta interrumpida.');
   await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-journal') || '[]'))).toEqual([]);
