@@ -24,13 +24,14 @@ private enum LocalModule {
 private func candidate() async -> (Locale, LocalModule)? {
     let locales = [Locale(identifier: "es-MX"), Locale(identifier: "es-ES")]
     var options: [(Locale, LocalModule)] = []
+    print("SUPPORT: SpeechTranscriber deviceAvailable=\(SpeechTranscriber.isAvailable)")
     if SpeechTranscriber.isAvailable {
         for requested in locales {
             if let locale = await SpeechTranscriber.supportedLocale(equivalentTo: requested) {
                 let final = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
                 let preview = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [.audioTimeRange])
                 options.append((locale, .speech(final, preview)))
-            }
+            } else { print("SUPPORT: SpeechTranscriber \(requested.identifier) unsupported") }
         }
     }
     for requested in locales {
@@ -38,9 +39,23 @@ private func candidate() async -> (Locale, LocalModule)? {
             let final = DictationTranscriber(locale: locale, contentHints: [], transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
             let preview = DictationTranscriber(locale: locale, contentHints: [], transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [.audioTimeRange])
             options.append((locale, .dictation(final, preview)))
-        }
+        } else { print("SUPPORT: DictationTranscriber \(requested.identifier) unsupported") }
     }
-    for option in options { if await AssetInventory.status(forModules: option.1.modules) == .installed { return option } }
+    var selected: (Locale, LocalModule)?
+    for option in options {
+        let state = await AssetInventory.status(forModules: option.1.modules)
+        let label: String
+        switch state {
+        case .installed: label = "installed"
+        case .supported: label = "supported"
+        case .downloading: label = "downloading"
+        case .unsupported: label = "unsupported"
+        @unknown default: label = "unknown"
+        }
+        print("SUPPORT: \(option.1.name) locale=\(option.0.identifier) assets=\(label)")
+        if state == .installed && selected == nil { selected = option }
+    }
+    if let selected { return selected }
     return nil
 }
 
