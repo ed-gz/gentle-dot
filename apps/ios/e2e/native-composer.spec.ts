@@ -62,7 +62,7 @@ test('failed native import offers explicit cleanup and retry while preserving th
   await expect(page.locator('#history-loading')).toBeHidden();
   await page.evaluate(async () => { (globalThis as any).failDocumentsRead = true; await (globalThis as any).__TAURI_INTERNALS__.invoke('plugin:device-bridge|documents_pick'); document.dispatchEvent(new Event('visibilitychange')); });
   const recovery = page.getByRole('group', { name: 'Recuperación de archivos' });
-  await expect(recovery.getByText(/El original se conserva/)).toBeVisible();
+  await expect(recovery.getByText(/La copia original se conserva/)).toBeVisible();
   expect(await page.evaluate(() => (globalThis as any).calls.includes('documents_ack'))).toBe(false);
   await recovery.getByRole('button', { name: 'Liberar copia incompleta' }).click();
   await expect(recovery.getByText(/Copia incompleta liberada/)).toBeVisible();
