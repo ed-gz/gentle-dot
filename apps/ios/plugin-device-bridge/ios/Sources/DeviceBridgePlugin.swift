@@ -65,6 +65,7 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     private var documentExporter: DocumentExporter?
     private var documentImporter: DocumentImporter?
     private var pairingScanner: PairingScannerSession?
+    private let pairingCameraGate = PairingCameraGate()
     @MainActor private lazy var liveActivity = LiveActivityController()
 
     @objc override func load(webview: WKWebView) {
@@ -349,6 +350,8 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     }
     @objc func pairingScan(_ invoke: Invoke) {
         DispatchQueue.main.async {
+            let args: IDInput
+            do { args = try invoke.parseArgs(IDInput.self) } catch { self.fail(invoke, error); return }
             guard #available(iOS 16.0, *) else {
                 self.fail(invoke, DeviceFailure.unavailable("El escáner requiere iOS 16 o posterior. Elige una foto del QR.")); return
             }
@@ -357,8 +360,12 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
                   let presenter = self.webview?.window?.rootViewController, presenter.presentedViewController == nil else {
                 self.fail(invoke, DeviceFailure.unavailable("Cierra el selector abierto antes de escanear.")); return
             }
+            guard self.pairingCameraGate.begin(args.id) else {
+                self.fail(invoke, DeviceFailure.unavailable("Esta lectura ya terminó o no puede iniciarse. Vuelve a intentarlo.")); return
+            }
             let scanner = PairingScanner { result in
                 self.pairingScanner = nil
+                self.pairingCameraGate.finish(args.id)
                 switch result {
                 case .success(let value): invoke.resolve(BridgeReply(value: value, cancelled: value == nil))
                 case .failure(let error): self.fail(invoke, error)
@@ -369,7 +376,16 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
         }
     }
     @objc func pairingScanCancel(_ invoke: Invoke) {
-        DispatchQueue.main.async { self.pairingScanner?.cancel(); invoke.resolve(BridgeReply()) }
+        DispatchQueue.main.async {
+            do {
+                let args = try invoke.parseArgs(IDInput.self)
+                let shouldCancel = self.pairingCameraGate.cancel(args.id) { closed in
+                    if closed { invoke.resolve(BridgeReply()) }
+                    else { self.fail(invoke, DeviceFailure.unavailable("No se confirmó el cierre del escáner.")) }
+                }
+                if shouldCancel { self.pairingScanner?.cancel() }
+            } catch { self.fail(invoke, error) }
+        }
     }
     @objc func documentsPick(_ invoke: Invoke) {
         DispatchQueue.main.async {

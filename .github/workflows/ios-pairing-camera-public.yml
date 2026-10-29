@@ -1,0 +1,29 @@
+name: Capri pairing camera native check
+
+# Public source and synthetic fixtures only: no credentials, signing, IPA or artifacts.
+on:
+  push:
+    branches:
+      - fix/android-capri-motion-mobile
+    paths:
+      - .github/workflows/ios-pairing-camera-public.yml
+
+permissions: {}
+
+jobs:
+  pairing-camera:
+    if: github.repository == 'ed-gz/gentle-dot'
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: Fetch exact public source without credentials
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init .
+          git -c credential.helper= fetch --depth=1 https://github.com/ed-gz/gentle-dot.git "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Run native fixtures and iOS bridge typecheck
+        run: bash apps/ios/scripts/check-native-sdk.sh

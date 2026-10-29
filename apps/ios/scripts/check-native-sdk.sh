@@ -85,6 +85,11 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   test/native/PairingCameraAvailabilityTests.swift -o "$verification/pairing-camera-availability-tests"
 "$verification/pairing-camera-availability-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-device-bridge/ios/Sources/PairingCameraGate.swift \
+  test/native/PairingCameraGateTests.swift -o "$verification/pairing-camera-gate-tests"
+"$verification/pairing-camera-gate-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/VoiceAudio.swift \
   test/native/VoiceAudioTests.swift -o "$verification/voice-audio-tests"
@@ -238,6 +243,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-device-bridge/ios/Sources/DocumentImportMime.swift \
   plugin-device-bridge/ios/Sources/DocumentImport.swift \
   plugin-device-bridge/ios/Sources/PairingCameraAvailability.swift \
+  plugin-device-bridge/ios/Sources/PairingCameraGate.swift \
   plugin-device-bridge/ios/Sources/PairingScanner.swift \
   plugin-device-bridge/ios/Sources/LiveActivityPolicy.swift \
   plugin-device-bridge/ios/Sources/CapriActivityAttributes.swift \

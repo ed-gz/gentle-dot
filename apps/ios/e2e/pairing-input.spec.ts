@@ -11,6 +11,8 @@ async function fixture(page: Page, options: { codes?: string[]; hold?: boolean; 
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('results_list')) return { ok: true, items: [] };
       state.qrCommands.push(command); if (command.endsWith('|scan_pairing_code')) state.qrIdentities.push(['scan', args.request.requestId]); if (command.endsWith('|cancel_pairing_code')) state.qrIdentities.push(['cancel', args.requestId]);
+      if (command.endsWith('|pairing_scan')) state.cameraIdentities = [...(state.cameraIdentities ?? []), ['scan',args.request.id]];
+      if (command.endsWith('|pairing_scan_cancel')) state.cameraIdentities = [...(state.cameraIdentities ?? []), ['cancel',args.request.id]];
       if (command.endsWith('|pairing_scan_cancel')) {
         state.cancelCalls++;
         if (state.cancelCalls <= cancelFails) return { ok: false, message: 'Cierre no confirmado.' };
@@ -91,6 +93,9 @@ test('confirmed cancellation unlocks a scanner even if its original callback nev
   await page.evaluate(() => (globalThis as any).finishQR());
   await expect(page.locator('#invitation')).toHaveValue(link);
   expect(await page.evaluate(() => (globalThis as any).pairSubmits)).toBe(0);
+  const ids = await page.evaluate(() => (globalThis as any).cameraIdentities);
+  expect(ids.map((item: string[]) => item[0])).toEqual(['scan','cancel','scan']);
+  expect(ids[0][1]).toBe(ids[1][1]); expect(ids[2][1]).not.toBe(ids[0][1]);
 });
 
 test('an unconfirmed scanner close blocks rescans and repeated taps until retry succeeds', async ({ page }) => {
@@ -108,6 +113,9 @@ test('an unconfirmed scanner close blocks rescans and repeated taps until retry 
   await page.evaluate(() => (globalThis as any).finishCancel());
   await expect(page.getByRole('button', { name: 'Escanear QR', exact: true })).toBeEnabled();
   await expect(page.locator('#invitation')).toHaveValue('');
+  const ids = await page.evaluate(() => (globalThis as any).cameraIdentities);
+  expect(ids.map((item: string[]) => item[0])).toEqual(['scan','cancel','cancel']);
+  expect(ids[1][1]).toBe(ids[0][1]); expect(ids[2][1]).toBe(ids[0][1]);
   expect(await page.evaluate(() => (globalThis as any).qrCommands.filter((command: string) => command.endsWith('|pairing_scan')).length)).toBe(1);
 });
 

@@ -7,7 +7,7 @@ const link = `gentledot://pair?${new URLSearchParams({ url: origin, code: 'a'.re
 test('live camera returns a validated canonical candidate without issuing pairing or navigation', async () => {
   const commands = [];
   const candidate = await scanPairingCamera(async (command, args) => {
-    commands.push(command); assert.deepEqual(args, {}); return { ok: true, cancelled: false, value: link };
+    commands.push(command); assert.match(args.id, /^[a-f0-9-]{36}$/); return { ok: true, cancelled: false, value: link };
   });
   assert.deepEqual(commands, ['pairing_scan']);
   assert.equal(candidate.invitation.origin, origin); assert.equal(candidate.link, link);
