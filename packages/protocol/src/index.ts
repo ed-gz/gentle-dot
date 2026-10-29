@@ -92,6 +92,9 @@ export interface Features {
 	sendAccepted?: 1;
 	/** Durable inbox RPC version. Absent means unsupported; chat remains compatible. */
 	workSync?: number;
+	/** Optional larger audio and aggregate attachment limits; absence means legacy 25/50 MiB. */
+	workSyncAudioBytes?: number;
+	workSyncAttachmentBytes?: number;
 	/** Meeting draft processor version; requires workSync. */
 	meetingDrafts?: number;
 }

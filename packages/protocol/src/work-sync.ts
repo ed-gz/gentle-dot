@@ -1,5 +1,5 @@
 /** Durable inbox transport. A committed receipt acknowledges storage, never execution. */
-export const WORK_SYNC_LIMITS = Object.freeze({ files: 110, fileBytes: 25 * 1024 * 1024, totalBytes: 130 * 1024 * 1024, chunkBytes: 64 * 1024, transfers: 100 });
+export const WORK_SYNC_LIMITS = Object.freeze({ files: 110, fileBytes: 25 * 1024 * 1024, audioBytes: 128 * 1024 * 1024, attachmentBytes: 256 * 1024 * 1024, totalBytes: 336 * 1024 * 1024, chunkBytes: 64 * 1024, transfers: 100 });
 export type WorkSyncFile = { id: string; name: string; mime: string; bytes: number; sha256: string; role: 'attachment' | 'version'; createdAt?: number };
 export type WorkSyncManifest = { schema: 1; workId: string; revision: number; title: string; kind: 'task' | 'meeting'; instruction: string; files: WorkSyncFile[] };
 export type WorkSyncReceipt = { transferId: string; workId: string; revision: number; manifestHash: string; committedAt: number };
@@ -32,8 +32,8 @@ export function parseWorkSyncManifest(v: unknown): WorkSyncManifest | undefined 
   if (!object(v) || v.schema !== 1 || !id(v.workId) || !natural(v.revision) || v.revision < 1 || !text(v.title, 120) || !v.title.trim() || !text(v.instruction, 8000) || (v.kind !== 'task' && v.kind !== 'meeting') || !Array.isArray(v.files) || v.files.length > WORK_SYNC_LIMITS.files) return;
   const files: WorkSyncFile[] = []; let total = 0; let attachmentBytes = 0; let attachments = 0; let versions = 0;
   for (const f of v.files) {
-    if (!object(f) || !id(f.id) || files.some(x => x.id === f.id) || !text(f.name, 255) || !f.name.trim() || /[\u0000-\u001f\u007f]/.test(f.name) || !text(f.mime, 100) || !/^[a-z0-9.+_-]+\/[a-z0-9.+_-]+$/.test(f.mime) || !natural(f.bytes) || f.bytes < 1 || f.bytes > WORK_SYNC_LIMITS.fileBytes || !hash(f.sha256) || (f.role !== 'attachment' && f.role !== 'version') || (f.createdAt !== undefined && !natural(f.createdAt))) return;
-    if (f.role === 'attachment') { attachmentBytes += f.bytes; if (++attachments > 10 || attachmentBytes > 50 * 1024 * 1024) return; } else { if (++versions > 100 || f.mime !== 'text/plain' || f.bytes > 800_000) return; }
+    if (!object(f) || !id(f.id) || files.some(x => x.id === f.id) || !text(f.name, 255) || !f.name.trim() || /[\u0000-\u001f\u007f]/.test(f.name) || !text(f.mime, 100) || !/^[a-z0-9.+_-]+\/[a-z0-9.+_-]+$/.test(f.mime) || !natural(f.bytes) || f.bytes < 1 || f.bytes > (f.role === 'attachment' && f.mime.startsWith('audio/') ? WORK_SYNC_LIMITS.audioBytes : WORK_SYNC_LIMITS.fileBytes) || !hash(f.sha256) || (f.role !== 'attachment' && f.role !== 'version') || (f.createdAt !== undefined && !natural(f.createdAt))) return;
+    if (f.role === 'attachment') { attachmentBytes += f.bytes; if (++attachments > 10 || attachmentBytes > WORK_SYNC_LIMITS.attachmentBytes) return; } else { if (++versions > 100 || f.mime !== 'text/plain' || f.bytes > 800_000) return; }
     total += f.bytes; if (total > WORK_SYNC_LIMITS.totalBytes) return;
     files.push({ id: f.id, name: f.name, mime: f.mime, bytes: f.bytes, sha256: f.sha256, role: f.role, ...(f.createdAt !== undefined ? { createdAt: f.createdAt } : {}) });
   }
@@ -59,7 +59,7 @@ export function parseWorkSyncReply(v: unknown): WorkSyncReply | undefined {
     if (v.processing.status === 'ready') { const result = parseWorkResult(v.processing.result); if (result) return { ...base, state: 'processing', processing: { status: 'ready', result } }; }
   }
   if (v.state === 'error' && ['invalid', 'conflict', 'quota', 'missing', 'storage'].includes(v.code as string) && text(v.message, 500)) return { ...base, state: 'error', code: v.code as 'invalid', message: v.message };
-  if (v.state === 'uploading' && hash(v.manifestHash) && object(v.offsets) && Object.keys(v.offsets).length <= WORK_SYNC_LIMITS.files && Object.entries(v.offsets).every(([key, offset]) => id(key) && natural(offset) && offset <= WORK_SYNC_LIMITS.fileBytes)) return { ...base, state: 'uploading', manifestHash: v.manifestHash, offsets: { ...v.offsets } as Record<string, number> };
+  if (v.state === 'uploading' && hash(v.manifestHash) && object(v.offsets) && Object.keys(v.offsets).length <= WORK_SYNC_LIMITS.files && Object.entries(v.offsets).every(([key, offset]) => id(key) && natural(offset) && offset <= WORK_SYNC_LIMITS.audioBytes)) return { ...base, state: 'uploading', manifestHash: v.manifestHash, offsets: { ...v.offsets } as Record<string, number> };
   if (v.state === 'committed' && object(v.receipt)) { const r = v.receipt; if (r.transferId === v.transferId && id(r.workId) && natural(r.revision) && r.revision > 0 && hash(r.manifestHash) && natural(r.committedAt)) return { ...base, state: 'committed', receipt: { transferId: v.transferId, workId: r.workId, revision: r.revision, manifestHash: r.manifestHash, committedAt: r.committedAt } }; }
 }
 

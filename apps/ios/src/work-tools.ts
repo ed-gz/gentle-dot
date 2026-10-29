@@ -44,15 +44,19 @@ export function createWorkTools(dependencies: WorkToolDependencies): Tool[] {
       const linked = getLinked(); let item = await store.readWork(idOf(args)); store.assertWorkRevision(item, revisionOf(args));
       if (!['local','prepared','approved','failed','uncertain'].includes(item.status)) throw new Error('Consulta o recupera la transferencia existente antes de crear otra.');
       let approved = item;
+      linked.dispatcher.checkTransferLimits(item);
       if (approved.status !== 'approved') { if (approved.status !== 'prepared') approved = store.transitionWorkItem(approved, 'prepared'); approved = store.transitionWorkItem(approved, 'approved'); }
       const frozen = await prepare(approved, linked.host);
       await approve(context, linked.host, `Transferir «${item.title}» al host`, { operation: 'store-only', manifest: frozen.manifest, manifestHash: frozen.manifestHash, meaning: 'Guarda archivos y versiones; no ejecuta acciones externas ni aprueba la minuta.' });
-      getLinked();
+      const refreshed = getLinked(); if (refreshed.host !== linked.host) throw new Error('El host cambió después de revisar la operación.');
       const current = await store.readWork(item.id); store.assertWorkRevision(current, item.revision);
+      refreshed.dispatcher.checkTransferLimits(current);
       context.signal.throwIfAborted();
       if (item.status !== 'approved') { if (item.status !== 'prepared') item = await store.transitionWork(item.id, item.revision, 'prepared'); item = await store.transitionWork(item.id, item.revision, 'approved'); }
       context.signal.throwIfAborted();
-      const result = await linked.dispatcher.send(item.id, item.revision, frozen.manifestHash, context.signal); return { ...summary(result), receipt: result.transfer?.receipt, executed: false };
+      const latest = getLinked(); if (latest.host !== linked.host) throw new Error('El host cambió después de revisar la operación.');
+      latest.dispatcher.checkTransferLimits(item);
+      const result = await latest.dispatcher.send(item.id, item.revision, frozen.manifestHash, context.signal); return { ...summary(result), receipt: result.transfer?.receipt, executed: false };
     } },
     { definition: { name: 'work_recover', description: 'Consulta el ACK durable de una transferencia existente y reanuda sólo sus bytes ya aprobados. Nunca repite procesamiento ni acciones externas.', parameters: schema(id, ['id']) }, validate(args) { return { id: idOf(args) }; }, execute: async (args, context) => { context.signal.throwIfAborted(); const result = await getLinked().dispatcher.recover(idOf(args), context.signal); return { ...summary(result), receipt: result.transfer?.receipt }; } },
     { definition: { name: 'work_process', description: 'Propone procesar una reunión confirmada en el host con el transcriptor configurado de la PC y su modelo Pi. Solicita aprobación del contenido exacto y produce únicamente una minuta para revisión, sin enviar comunicaciones ni modificar servicios.', parameters: schema(versioned, ['id','revision']) }, validate(args) { return { id: idOf(args), revision: revisionOf(args) }; }, execute: async (args, context) => {

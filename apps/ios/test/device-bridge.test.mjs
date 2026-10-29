@@ -35,6 +35,8 @@ test('credentials remain tied to their exact host; approval failures are explici
 
 test('shared manifests enforce UUIDs, size limits, hashes, and unique files', async () => {
   const item = manifest(); assert.equal(validSharedImport(item), true);
+  assert.equal(validSharedImport({ ...item, files: [{ ...item.files[0], mime: 'audio/mp4', size: 26 * 1024 * 1024 }] }), true);
+  assert.equal(validSharedImport({ ...item, files: [{ ...item.files[0], mime: 'audio/mp4', size: 128 * 1024 * 1024 + 1 }] }), false);
   for (const bad of [{ ...item, id: '../../escape' }, { ...item, files: [...item.files, ...item.files] }, { ...item, files: [] },
     { ...item, files: [{ ...item.files[0], size: 26 * 1024 * 1024 }] }, { ...item, files: [{ ...item.files[0], sha256: 'bad' }] }, { ...item, notes: 'a'.repeat(8001) }]) assert.equal(validSharedImport(bad), false);
   await assert.rejects(listSharedImports(async () => ({ ok: true, items: [{ ...item, id: '../bad' }] })), /inválido/);

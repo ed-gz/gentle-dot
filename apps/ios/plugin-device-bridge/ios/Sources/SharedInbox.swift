@@ -8,7 +8,7 @@ enum ShareFailure: Error, LocalizedError {
         switch self {
         case .unavailable: return "El grupo compartido no está disponible con esta firma. Puedes importar desde Archivos en Capri."
         case .invalid: return "El material compartido no es válido o ya no está disponible."
-        case .limit: return "Límite: 10 archivos, 25 MiB por archivo, 50 MiB por trabajo y 100 importaciones pendientes."
+        case .limit: return "Límite: 10 archivos, audio hasta 128 MiB, otros archivos hasta 25 MiB, 256 MiB por trabajo y 100 importaciones pendientes."
         case .integrity: return "No se pudo verificar el archivo. El original compartido se conserva."
         }
     }
@@ -33,7 +33,9 @@ struct SharedManifest: Codable {
 // to the app. The acknowledgement removes it after the app's IndexedDB commit.
 enum SharedInbox {
     static let maxFile = 25 * 1024 * 1024
-    static let maxTotal = 50 * 1024 * 1024
+    static let maxAudio = 128 * 1024 * 1024
+    static let maxTotal = 256 * 1024 * 1024
+    static func fileLimit(_ mime: String) -> Int { mime.hasPrefix("audio/") ? maxAudio : maxFile }
     static func validID(_ value: String) -> Bool {
         UUID(uuidString: value)?.uuidString.lowercased() == value
     }
@@ -66,7 +68,7 @@ enum SharedInbox {
               Set(value.files.map { $0.id }).count == value.files.count else { throw ShareFailure.invalid }
         for file in value.files {
             guard validID(file.id), !file.name.isEmpty, file.name.count <= 255, file.mime.count <= 128,
-                  file.size > 0, file.size <= maxFile,
+                  file.size > 0, file.size <= fileLimit(file.mime),
                   file.sha256.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw ShareFailure.invalid }
         }
         guard value.files.reduce(0, { $0 + $1.size }) <= maxTotal else { throw ShareFailure.invalid }
@@ -132,7 +134,8 @@ enum SharedInbox {
         let scoped = source.startAccessingSecurityScopedResource()
         defer { if scoped { source.stopAccessingSecurityScopedResource() } }
         let values = try source.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
-        guard values.isRegularFile == true, let count = values.fileSize, count > 0, count <= maxFile else { throw ShareFailure.limit }
+        let limit = fileLimit(mime)
+        guard values.isRegularFile == true, let count = values.fileSize, count > 0, count <= limit else { throw ShareFailure.limit }
         let id = UUID().uuidString.lowercased()
         let destination = staging.appendingPathComponent("\(id).blob")
         let input = try FileHandle(forReadingFrom: source)
@@ -144,7 +147,7 @@ enum SharedInbox {
         var digest = SHA256(); var bytes = 0
         while let data = try input.read(upToCount: 256 * 1024), !data.isEmpty {
             bytes += data.count
-            guard bytes <= maxFile else { throw ShareFailure.limit }
+            guard bytes <= limit else { throw ShareFailure.limit }
             digest.update(data: data)
             try output.write(contentsOf: data)
         }

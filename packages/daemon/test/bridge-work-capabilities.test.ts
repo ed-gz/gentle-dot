@@ -26,9 +26,15 @@ it('storage and meeting capabilities correspond to the installed handler and pro
     const h = setup({ meetingDrafts, handle: async message => { calls.push(message); return { type: 'work_sync_reply', requestId: message.requestId, transferId: message.transferId, state: 'missing' }; } });
     const ready = h.messages.find(message => message.type === 'ready'); if (ready?.type !== 'ready') throw new Error('No ready');
     expect(ready.features?.workSync).toBe(1); expect(ready.features?.meetingDrafts).toBe(meetingDrafts ? 1 : undefined);
+    expect(ready.features?.workSyncAudioBytes).toBeUndefined(); expect(ready.features?.workSyncAttachmentBytes).toBeUndefined();
     await h.bridge.handle(h.client, request); expect(calls).toEqual([request]); expect(h.messages.at(-1)).toMatchObject({ state: 'missing', requestId: 'request-1', transferId: 'transfer-1' });
     await h.bridge.handle(h.client, { ...request, operation: 'process', approvedManifestHash: 'a'.repeat(64) }); expect(calls).toHaveLength(meetingDrafts ? 2 : 1);
   }
+});
+it('advertises larger limits only when explicitly provided by the installed handler', () => {
+  const h = setup({ meetingDrafts: true, limits: { audioBytes: 128 * 1024 * 1024, attachmentBytes: 256 * 1024 * 1024 }, handle: async message => ({ type: 'work_sync_reply', requestId: message.requestId, transferId: message.transferId, state: 'missing' }) });
+  const ready = h.messages.find(message => message.type === 'ready'); if (ready?.type !== 'ready') throw new Error('No ready');
+  expect(ready.features).toMatchObject({ workSync: 1, workSyncAudioBytes: 128 * 1024 * 1024, workSyncAttachmentBytes: 256 * 1024 * 1024 });
 });
 it('handler failure is a correlated storage failure without leaking exception text', async () => {
   const h = setup({ meetingDrafts: true, handle: async () => { throw new Error('private host details'); } });

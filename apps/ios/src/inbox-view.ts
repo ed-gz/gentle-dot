@@ -1,9 +1,9 @@
 import {
-  addWorkVersion, approveMinute, createWork, deleteWork, listWork, readWorkFile, reviseWork, validMinuteApproval,
+  addWorkVersion, approveMinute, createWork, deleteWork, listWork, readWorkFile, readWorkFileInfo, readWorkFileSlice, reviseWork, validMinuteApproval,
   WORK_LIMITS, type WorkItem, type WorkStatus,
 } from './work-inbox.ts';
 import { isTauri } from '@tauri-apps/api/core';
-import { exportFileName, exportNativeFile } from './file-export.ts';
+import { exportFileName, exportNativeFileRanges } from './file-export.ts';
 import { parseWorkResult, type WorkResult } from '@gentle-dot/protocol';
 import { cancelMinuteActionReview, deleteMinuteProposal, listMinuteProposals } from './minute-proposals.ts';
 import { getConnection } from './external-connections.ts';
@@ -44,11 +44,13 @@ function errorText(error: unknown, fallback: string): string {
     'Adjunta archivos válidos.',
     'El nombre del archivo no es válido.',
     'Adjunta audio, texto, PDF o imágenes con un tipo de archivo reconocido.',
-    'Cada archivo debe contener datos y pesar hasta 25 MiB.',
-    'Los archivos de un trabajo pueden sumar hasta 50 MiB.',
+    'Cada archivo debe contener datos.',
+    'Cada audio admite hasta 128 MiB; los demás archivos, hasta 25 MiB.',
+    'Los archivos de un trabajo pueden sumar hasta 256 MiB.',
     'La bandeja admite 100 trabajos. Elimina uno antes de crear otro.',
     'Este trabajo ya tiene 100 versiones.',
     'La bandeja local no respondió.',
+    'No hay espacio suficiente en este iPhone. Libera espacio y vuelve a intentarlo; los originales se conservan.',
     'La bandeja está ocupada. Cierra otras ventanas de Capri.',
   ];
   if (safeMessages.includes(error.message) || /^(Título|Instrucción|Versión): (de 1 a|máximo) \d+ caracteres\.$/.test(error.message)) {
@@ -150,16 +152,18 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
   async function download(item: WorkItem, file: WorkItem['files'][number], trigger: HTMLButtonElement) {
     trigger.disabled = true;
     try {
-      const blob = await readWorkFile(item.id, file.id);
-      if (!blob) throw new Error('missing attachment');
       if (isTauri()) {
+        const info = await readWorkFileInfo(item.id, file.id);
+        if (!info || info.size !== file.size) throw new Error('missing attachment');
         status.textContent = 'Preparando copia para Archivos…';
-        const result = await exportNativeFile(blob, exportFileName(file.name));
+        const result = await exportNativeFileRanges({ size: file.size, read: (offset, length) => readWorkFileSlice(item.id, file.id, offset, length) }, exportFileName(file.name), { ...(info.sha256 ? { expectedSHA256: info.sha256 } : {}) });
         status.textContent = result.status === 'exported'
           ? 'Copia guardada en Archivos. El adjunto original se conserva en Capri.'
           : 'Exportación cancelada. El adjunto original se conserva en Capri.';
         return;
       }
+      const blob = await readWorkFile(item.id, file.id);
+      if (!blob) throw new Error('missing attachment');
       // Keep HTML/SVG attachments inert even if a browser ignores the download attribute.
       const url = URL.createObjectURL(new Blob([blob], { type: 'application/octet-stream' }));
       downloadUrls.add(url);

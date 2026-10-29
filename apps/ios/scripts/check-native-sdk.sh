@@ -69,6 +69,12 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 "$verification/session-upload-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-device-bridge/ios/Sources/SharedInbox.swift \
+  plugin-device-bridge/ios/Sources/DocumentImportMime.swift \
+  test/native/SharedInboxLargeTests.swift -o "$verification/shared-inbox-large-tests"
+"$verification/shared-inbox-large-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/Documents.swift \
   test/native/PairingCodeVisionTests.swift -o "$verification/pairing-qr-tests"
 "$verification/pairing-qr-tests"
@@ -215,9 +221,11 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-device-bridge/ios/Sources/KeychainStore.swift \
   plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
   plugin-device-bridge/ios/Sources/SharedInbox.swift \
+  share-extension/ShareViewController.swift \
   plugin-device-bridge/ios/Sources/StreamingHash.swift \
   plugin-device-bridge/ios/Sources/SessionUpload.swift \
   plugin-device-bridge/ios/Sources/DocumentExport.swift \
+  plugin-device-bridge/ios/Sources/DocumentImportMime.swift \
   plugin-device-bridge/ios/Sources/DocumentImport.swift \
   plugin-device-bridge/ios/Sources/PairingCameraAvailability.swift \
   plugin-device-bridge/ios/Sources/PairingScanner.swift \

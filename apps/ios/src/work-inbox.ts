@@ -47,7 +47,7 @@ function isChunkPointer(value: unknown): value is ChunkPointer {
   const p = value as Partial<ChunkPointer> | null;
   return !!p && p.kind === 'chunks-v1' && typeof p.sourceId === 'string' && /^(?:share|document):[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(p.sourceId)
     && typeof p.fileId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(p.fileId)
-    && Number.isSafeInteger(p.size) && p.size! > 0 && p.size! <= WORK_LIMITS.fileBytes
+    && Number.isSafeInteger(p.size) && p.size! > 0 && p.size! <= WORK_LIMITS.audioBytes
     && typeof p.sha256 === 'string' && /^[a-f0-9]{64}$/.test(p.sha256);
 }
 
@@ -57,7 +57,7 @@ const FILES = 'files';
 const TIMEOUT_MS = 8000;
 const MIB = 1024 * 1024;
 export const WORK_LIMITS = Object.freeze({
-  items: 100, files: 10, fileBytes: 25 * MIB, totalFileBytes: 50 * MIB,
+  items: 100, files: 10, fileBytes: 25 * MIB, audioBytes: 128 * MIB, totalFileBytes: 256 * MIB,
   title: 120, instruction: 8000, versions: 100, versionText: 200_000, resultHistory: 20,
 });
 
@@ -97,10 +97,11 @@ function validateWorkMetadata(files: readonly { name: string; type: string; size
     if (!/^(audio|text|image)\/[a-z0-9.+_-]+$/.test(mime) && !['application/pdf', 'application/json', 'application/x-subrip'].includes(mime)) {
       throw new Error('Adjunta audio, texto, PDF o imágenes con un tipo de archivo reconocido.');
     }
-    if (!Number.isSafeInteger(file.size) || file.size <= 0 || file.size > WORK_LIMITS.fileBytes) throw new Error('Cada archivo debe contener datos y pesar hasta 25 MiB.');
+    if (!Number.isSafeInteger(file.size) || file.size <= 0) throw new Error('Cada archivo debe contener datos.');
+    if (file.size > (mime.startsWith('audio/') ? WORK_LIMITS.audioBytes : WORK_LIMITS.fileBytes)) throw new Error('Cada audio admite hasta 128 MiB; los demás archivos, hasta 25 MiB.');
     total += file.size;
   }
-  if (total > WORK_LIMITS.totalFileBytes) throw new Error('Los archivos de un trabajo pueden sumar hasta 50 MiB.');
+  if (total > WORK_LIMITS.totalFileBytes) throw new Error('Los archivos de un trabajo pueden sumar hasta 256 MiB.');
 }
 
 /** Return only supported fields; connection credentials are never part of the inbox schema. */
@@ -218,7 +219,7 @@ function openDatabase(): Promise<IDBDatabase> {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      reject(error);
+      reject(error instanceof Error && error.name === 'QuotaExceededError' ? new Error('No hay espacio suficiente en este iPhone. Libera espacio y vuelve a intentarlo; los originales se conservan.') : error);
     };
     const timeout = setTimeout(() => fail(new Error('La bandeja local no respondió.')), TIMEOUT_MS);
     try {
@@ -260,7 +261,7 @@ async function transact<T>(mode: IDBTransactionMode, action: TransactionAction<T
       clearTimeout(timeout);
       try { transaction?.abort(); } catch { /* It may already be aborted. */ }
       database.close();
-      reject(error);
+      reject(error instanceof Error && error.name === 'QuotaExceededError' ? new Error('No hay espacio suficiente en este iPhone. Libera espacio y vuelve a intentarlo; los originales se conservan.') : error);
     };
     const timeout = setTimeout(() => fail(new Error('La bandeja local no respondió.')), TIMEOUT_MS);
     try {
@@ -609,7 +610,7 @@ export function cancelStreamedImport(sourceId: string): Promise<void> {
         const cursor = stages.result;
         if (!cursor) { done(undefined); return; }
         const stage = cursor.value as ChunkStage; const key = cursor.key;
-        if (!Array.isArray(key) || typeof key[2] !== 'string' || stage?.kind !== 'chunk-stage-v1' || stage.published !== false || !Number.isSafeInteger(stage.size) || stage.size <= 0 || stage.size > WORK_LIMITS.fileBytes) throw new Error('La importación ya fue publicada o no se puede verificar. Los datos se conservan.');
+        if (!Array.isArray(key) || typeof key[2] !== 'string' || stage?.kind !== 'chunk-stage-v1' || stage.published !== false || !Number.isSafeInteger(stage.size) || stage.size <= 0 || stage.size > WORK_LIMITS.audioBytes) throw new Error('La importación ya fue publicada o no se puede verificar. Los datos se conservan.');
         files.delete(IDBKeyRange.bound(['chunk', sourceId, key[2], 0], ['chunk', sourceId, key[2], stage.size]));
         cursor.delete(); cursor.continue();
       } catch (error) { fail(error); }
@@ -638,6 +639,11 @@ async function readStoredFile(workId: string, fileId: string): Promise<Blob | Ch
 }
 export async function readWorkFileSize(workId: string, fileId: string): Promise<number | undefined> {
   return (await readStoredFile(workId, fileId))?.size;
+}
+export async function readWorkFileInfo(workId: string, fileId: string): Promise<{ size: number; sha256?: string } | undefined> {
+  const source = await readStoredFile(workId, fileId);
+  if (!source) return undefined;
+  return source instanceof Blob ? { size: source.size } : { size: source.size, sha256: source.sha256 };
 }
 /** Bounded read for transfers. Old Blob records and new chunk references are supported. */
 export async function readWorkFileSlice(workId: string, fileId: string, offset: number, length: number): Promise<Uint8Array> {

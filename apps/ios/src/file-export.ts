@@ -37,7 +37,12 @@ function identifier(reply: NativeReply & { id?: string }): string {
 /** Explicit human export only, never a model tool. The caller retains its original
  * Blob. Native preparation is not export success; only the picker delegate is. */
 export async function exportNativeFile(blob: Blob, name: string, options: FileExportOptions = {}, call: DeviceInvoker = deviceInvoke): Promise<FileExportResult> {
-  if (!(blob instanceof Blob) || blob.size > FILE_EXPORT_LIMIT) throw new Error('La exportación admite hasta 256 MiB.');
+  if (!(blob instanceof Blob)) throw new Error('El archivo no es válido.');
+  return exportNativeFileRanges({ size: blob.size, read: async (offset, length) => new Uint8Array(await blob.slice(offset, offset + length).arrayBuffer()) }, name, options, call);
+}
+/** Read bounded ranges so chunk-backed audio never needs to be assembled in memory. */
+export async function exportNativeFileRanges(source: { size: number; read(offset: number, length: number): Promise<Uint8Array> }, name: string, options: FileExportOptions = {}, call: DeviceInvoker = deviceInvoke): Promise<FileExportResult> {
+  if (!Number.isSafeInteger(source.size) || source.size < 0 || source.size > FILE_EXPORT_LIMIT || typeof source.read !== 'function') throw new Error('La exportación admite hasta 256 MiB.');
   if (!name || new TextEncoder().encode(name).length > 240 || name.startsWith('.') || /[/\\:\p{Cc}\p{Cf}]/u.test(name)) throw new Error('Usa un nombre de archivo sin rutas ni caracteres de control.');
   if (options.expectedSHA256 !== undefined && !/^[a-f0-9]{64}$/.test(options.expectedSHA256)) throw new Error('La huella original del archivo no es válida.');
   const signal = options.signal;
@@ -50,8 +55,9 @@ export async function exportNativeFile(blob: Blob, name: string, options: FileEx
     // second pass is independently hashed while native writes the protected file.
     hashId = identifier(await call<NativeReply & { id?: string }>('crypto_hash_begin', {}));
     signal?.throwIfAborted();
-    for (let offset = 0; offset < blob.size; offset += CHUNK) {
-      const bytes = new Uint8Array(await blob.slice(offset, offset + CHUNK).arrayBuffer());
+    for (let offset = 0; offset < source.size; offset += CHUNK) {
+      const length = Math.min(CHUNK, source.size - offset); const bytes = await source.read(offset, length);
+      if (!(bytes instanceof Uint8Array) || bytes.length !== length) throw new Error('No se pudieron leer todos los bytes del archivo.');
       signal?.throwIfAborted();
       requireNative(await call('crypto_hash_update', { id: hashId, data: base64(bytes) }));
       signal?.throwIfAborted();
@@ -61,10 +67,11 @@ export async function exportNativeFile(blob: Blob, name: string, options: FileEx
     const sha256 = digest.hex;
     if (options.expectedSHA256 !== undefined && sha256 !== options.expectedSHA256) throw new Error('Los bytes no coinciden con el archivo original; no se abrió el selector.');
     signal?.throwIfAborted();
-    exportId = identifier(await call<NativeReply & { id?: string }>('export_begin', { name, size: blob.size, sha256 }));
+    exportId = identifier(await call<NativeReply & { id?: string }>('export_begin', { name, size: source.size, sha256 }));
     signal?.throwIfAborted();
-    for (let offset = 0; offset < blob.size; offset += CHUNK) {
-      const bytes = new Uint8Array(await blob.slice(offset, offset + CHUNK).arrayBuffer());
+    for (let offset = 0; offset < source.size; offset += CHUNK) {
+      const length = Math.min(CHUNK, source.size - offset); const bytes = await source.read(offset, length);
+      if (!(bytes instanceof Uint8Array) || bytes.length !== length) throw new Error('No se pudieron leer todos los bytes del archivo.');
       signal?.throwIfAborted();
       const reply = requireNative(await call<NativeReply & { written?: number }>('export_write', { id: exportId, offset, data: base64(bytes) }));
       if (reply.written !== offset + bytes.length) throw new Error('El archivo temporal no confirmó todos los bytes.');
@@ -74,7 +81,7 @@ export async function exportNativeFile(blob: Blob, name: string, options: FileEx
     const result = requireNative(await call<NativeReply & { exported?: boolean; cancelled?: boolean }>('export_present', { id: exportId }));
     // A real success callback wins a concurrent cancel: do not deny a copy that
     // the system already confirmed. No other reply may imply successful export.
-    if (result.exported === true && result.cancelled === false) return { status: 'exported', name, size: blob.size, sha256 };
+    if (result.exported === true && result.cancelled === false) return { status: 'exported', name, size: source.size, sha256 };
     if (result.exported === false && result.cancelled === true) return { status: 'cancelled' };
     throw new Error('El selector de Archivos no confirmó la exportación.');
   } finally {

@@ -1,5 +1,5 @@
 import { localIdentifier } from './local-identifiers.ts';
-import { CloseCode, PROTOCOL_VERSION, parseWorkSyncReply, parseWorkSyncRequest, type AgentState, type Ask, type ServerMessage, type WorkSyncReply, type WorkSyncRequest } from '@gentle-dot/protocol';
+import { CloseCode, PROTOCOL_VERSION, parseWorkSyncReply, parseWorkSyncRequest, WORK_SYNC_LIMITS, type AgentState, type Ask, type ServerMessage, type WorkSyncReply, type WorkSyncRequest } from '@gentle-dot/protocol';
 import { validDaemonUrl } from './local-state.ts';
 
 export type LinkedStatus = 'offline' | 'connecting' | 'ready' | 'rejected';
@@ -13,6 +13,7 @@ const id = (value: unknown): value is string => string(value) && value.length > 
 const optional = (value: unknown, check: (input: unknown) => boolean) => value === undefined || check(value);
 const boolean = (value: unknown) => typeof value === 'boolean';
 const featureVersion = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= 65535;
+const byteLimit = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0;
 const state = (value: unknown) => string(value) && STATES.has(value as AgentState);
 const oneOf = (value: unknown, values: readonly string[]) => string(value) && values.includes(value);
 const strings = (value: unknown) => Array.isArray(value) && value.length <= 1000 && value.every(string);
@@ -38,6 +39,7 @@ function parse(raw: unknown): ServerMessage | undefined {
         && optional(message.model, string)
         && optional(message.features, value => record(value) && boolean(value.conversations) && optional(value.historyRefresh, boolean)
           && optional(value.workSync, featureVersion) && optional(value.meetingDrafts, featureVersion)
+          && optional(value.workSyncAudioBytes, byteLimit) && optional(value.workSyncAttachmentBytes, byteLimit)
           && optional(value.sendAccepted, featureVersion))
         && optional(message.voice, value => record(value) && boolean(value.transcribe) && boolean(value.speak) && optional(value.local, boolean))
         && optional(message.pin, value => record(value) && boolean(value.set) && optional(value.locked, boolean));
@@ -91,6 +93,7 @@ export function createLinkedChat(callbacks: Callbacks) {
   let suspended = false;
   let authenticated = false;
   let workSync = false, meetingDrafts = false, sendAccepted = false;
+  let workAudioBytes = WORK_SYNC_LIMITS.fileBytes, workAttachmentBytes = 50 * 1024 * 1024;
   const asks = new Map<string, Ask>();
   const requests = new Map<string, { transferId: string; resolve(reply: WorkSyncReply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
 
@@ -101,6 +104,7 @@ export function createLinkedChat(callbacks: Callbacks) {
     const old = socket;
     socket = undefined;
     authenticated = false; workSync = meetingDrafts = sendAccepted = false;
+    workAudioBytes = WORK_SYNC_LIMITS.fileBytes; workAttachmentBytes = 50 * 1024 * 1024;
     asks.clear();
     for (const request of requests.values()) {
       clearTimeout(request.timer);
@@ -157,6 +161,9 @@ export function createLinkedChat(callbacks: Callbacks) {
         connectTimer = undefined;
         authenticated = true;
         workSync = message.features?.workSync === 1; meetingDrafts = workSync && message.features?.meetingDrafts === 1;
+        if (workSync && message.features?.workSyncAudioBytes !== undefined && message.features.workSyncAttachmentBytes !== undefined) {
+          workAudioBytes = Math.min(message.features.workSyncAudioBytes, WORK_SYNC_LIMITS.audioBytes); workAttachmentBytes = Math.min(message.features.workSyncAttachmentBytes, WORK_SYNC_LIMITS.attachmentBytes);
+        }
         sendAccepted = message.features?.sendAccepted === 1;
         attempts = 0;
         callbacks.onStatus('ready');
@@ -216,10 +223,15 @@ export function createLinkedChat(callbacks: Callbacks) {
         && (ask.method !== 'select' || ask.options?.includes(fields.value))) return transmit({ type: 'ui_response', requestId, value: fields.value });
       return false;
     },
-    exchange(request: WorkSyncRequest): Promise<WorkSyncReply> {
+    exchange(request: WorkSyncRequest, expectedHost?: string): Promise<WorkSyncReply> {
       const safe = parseWorkSyncRequest(request);
       if (!safe || requests.has(safe.requestId) || !authenticated) return Promise.reject(new Error('Conecta Gentle Dot antes de transferir el trabajo.'));
+      if (expectedHost !== undefined && credentials?.url !== validDaemonUrl(expectedHost)) return Promise.reject(new Error('El host cambió. La transferencia aprobada se conserva localmente.'));
       if (!workSync) return Promise.reject(new Error('Actualiza Gentle Dot en la laptop para transferir trabajos. La conversación sigue disponible y el trabajo local se conserva.'));
+      if (safe.operation === 'begin') {
+        const attachments = safe.manifest.files.filter(file => file.role === 'attachment');
+        if (attachments.reduce((sum, file) => sum + file.bytes, 0) > workAttachmentBytes || attachments.some(file => file.mime.startsWith('audio/') && file.bytes > workAudioBytes)) return Promise.reject(new Error('La laptop ya no admite este tamaño. El trabajo local se conserva.'));
+      }
       if (safe.operation === 'process' && !meetingDrafts) return Promise.reject(new Error('Este Gentle Dot no tiene disponible el procesamiento de reuniones. El material confirmado se conserva.'));
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -235,6 +247,7 @@ export function createLinkedChat(callbacks: Callbacks) {
     },
     abort: () => transmit({ type: 'abort' }),
     supportsWorkSync: () => authenticated && workSync,
+    workSyncLimits: () => ({ audioBytes: workAudioBytes, attachmentBytes: workAttachmentBytes }),
     supportsMeetingDrafts: () => authenticated && meetingDrafts,
     supportsSendAccepted: () => authenticated && sendAccepted,
     ready: () => authenticated && socket?.readyState === WebSocket.OPEN,

@@ -15,6 +15,7 @@ import {
 	type ClientMessage,
 	CloseCode,
 	PROTOCOL_VERSION,
+	WORK_SYNC_LIMITS,
 	parseClientMessage,
 } from "@gentle-dot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -1229,7 +1230,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 					mobilePresence.configure(key, req.headers["x-gentle-presence"] === "off" ? false : req.headers["x-gentle-presence"] === "on" ? true : undefined);
 					return key;
 				},
-				{ handle: (key, message) => workSync.handle(mobile.deviceIdForToken(key) ?? "desktop", message), meetingDrafts: !vps },
+				{ handle: (key, message) => workSync.handle(mobile.deviceIdForToken(key) ?? "desktop", message), meetingDrafts: !vps, limits: { audioBytes: WORK_SYNC_LIMITS.audioBytes, attachmentBytes: WORK_SYNC_LIMITS.attachmentBytes } },
 			),
 		);
 	});
@@ -1393,7 +1394,7 @@ function acceptClient(
 	onAuth: (key: string) => void,
 	onDisconnect: () => void,
 	mobileKey: (key: string) => string | undefined,
-	syncWork?: { handle(key: string, message: WorkSyncRequest): Promise<WorkSyncReply>; meetingDrafts: boolean },
+	syncWork?: { handle(key: string, message: WorkSyncRequest): Promise<WorkSyncReply>; meetingDrafts: boolean; limits?: { audioBytes: number; attachmentBytes: number } },
 ): void {
 	let seq = 0;
 	let clientKey: string | undefined;
@@ -1423,7 +1424,7 @@ function acceptClient(
 			}
 			clientKey = message.token;
 			client.mobileKey = mobileKey(message.token);
-			if (syncWork) client.workSync = { handle: request => syncWork.handle(message.token, request), meetingDrafts: syncWork.meetingDrafts };
+			if (syncWork) client.workSync = { handle: request => syncWork.handle(message.token, request), meetingDrafts: syncWork.meetingDrafts, ...(syncWork.limits ? { limits: syncWork.limits } : {}) };
 			onAuth(message.token);
 			detach = bridge.attach(client);
 			return;

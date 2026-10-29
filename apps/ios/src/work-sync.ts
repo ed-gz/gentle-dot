@@ -1,6 +1,6 @@
 import { localIdentifier } from './local-identifiers.ts';
 import { canonicalWorkManifest, parseWorkSyncReply, WORK_SYNC_LIMITS, type WorkSyncManifest, type WorkSyncReply, type WorkSyncRequest, type WorkProcessing } from '@gentle-dot/protocol';
-import { beginWorkTransfer, readWork, readWorkFile, readWorkFileSize, readWorkFileSlice, settleWorkTransfer, saveWorkResult, type WorkItem, type WorkTransfer } from './work-inbox.ts';
+import { beginWorkTransfer, readWork, readWorkFile, readWorkFileInfo, readWorkFileSlice, settleWorkTransfer, saveWorkResult, type WorkItem, type WorkTransfer } from './work-inbox.ts';
 import { blobSHA256 } from './blob-sha256.ts';
 import { Hash } from 'fast-sha256';
 
@@ -10,7 +10,8 @@ async function sha256(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 async function storedSHA256(workId: string, fileId: string, size: number, signal?: AbortSignal): Promise<string> {
-  if (await readWorkFileSize(workId, fileId) !== size) throw new Error('Falta un archivo local o sus bytes cambiaron.');
+  const info = await readWorkFileInfo(workId, fileId);
+  if (!info || info.size !== size) throw new Error('Falta un archivo local o sus bytes cambiaron.');
   const hash = new Hash();
   try {
     for (let offset = 0; offset < size; offset += 256 * 1024) {
@@ -18,7 +19,9 @@ async function storedSHA256(workId: string, fileId: string, size: number, signal
       const bytes = await readWorkFileSlice(workId, fileId, offset, Math.min(256 * 1024, size - offset));
       signal?.throwIfAborted(); hash.update(bytes);
     }
-    return Array.from(hash.digest(), byte => byte.toString(16).padStart(2, '0')).join('');
+    const actual = Array.from(hash.digest(), byte => byte.toString(16).padStart(2, '0')).join('');
+    if (info.sha256 && actual !== info.sha256) throw new Error('El archivo local no coincide con su huella. Se conserva la información restante.');
+    return actual;
   } finally { hash.clean(); }
 }
 export async function prepareWorkTransfer(item: WorkItem, host: string, getFile?: typeof readWorkFile, signal?: AbortSignal): Promise<WorkTransfer> {
@@ -41,11 +44,19 @@ export async function prepareWorkTransfer(item: WorkItem, host: string, getFile?
 function base64(bytes: Uint8Array): string {
   let binary = ''; for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192)); return btoa(binary);
 }
-export function createWorkDispatcher(exchange: WorkExchange, host: string) {
+export function createWorkDispatcher(exchange: WorkExchange, host: string, limits: { audioBytes: number; attachmentBytes: number } = { audioBytes: WORK_SYNC_LIMITS.fileBytes, attachmentBytes: 50 * 1024 * 1024 }) {
+  if (!Number.isSafeInteger(limits.audioBytes) || limits.audioBytes <= 0 || limits.audioBytes > WORK_SYNC_LIMITS.audioBytes || !Number.isSafeInteger(limits.attachmentBytes) || limits.attachmentBytes <= 0 || limits.attachmentBytes > WORK_SYNC_LIMITS.attachmentBytes) throw new Error('Los límites anunciados por la laptop no son válidos.');
+  const assertHostLimits = (item: WorkItem) => {
+    const total = item.files.reduce((sum, file) => sum + file.size, 0);
+    if (total > limits.attachmentBytes || item.files.some(file => file.type.startsWith('audio/') && file.size > limits.audioBytes)) {
+      throw new Error(`La laptop admite audio de hasta ${Math.floor(limits.audioBytes / 1024 / 1024)} MiB y ${Math.floor(limits.attachmentBytes / 1024 / 1024)} MiB en adjuntos por trabajo. Actualiza Gentle Dot para transferir este material; la copia local se conserva.`);
+    }
+  };
   const active = new Set<string>();
   async function run(item: WorkItem, fresh: boolean, signal?: AbortSignal): Promise<WorkItem> {
     const transfer = item.transfer;
     if (!transfer || transfer.host !== host) throw new Error('Conecta el mismo host al que aprobaste transferir este trabajo.');
+    assertHostLimits(item);
     if (!fresh && !['sending', 'uncertain', 'sent'].includes(item.status)) throw new Error('Esta revisión no tiene una transferencia recuperable.');
     if (active.has(item.id)) throw new Error('Este trabajo ya se está transfiriendo.');
     active.add(item.id);
@@ -103,10 +114,12 @@ export function createWorkDispatcher(exchange: WorkExchange, host: string) {
     return reply.processing;
   }
   return {
+    checkTransferLimits(item: WorkItem): void { assertHostLimits(item); },
     async send(id: string, revision: number, approvedManifestHash?: string, signal?: AbortSignal): Promise<WorkItem> {
       signal?.throwIfAborted();
       const item = await readWork(id);
       if (item.revision !== revision) throw new Error('El trabajo cambió. Revisa la versión actual antes de enviar.');
+      assertHostLimits(item);
       const transfer = await prepareWorkTransfer(item, host, undefined, signal);
       if (approvedManifestHash !== undefined && transfer.manifestHash !== approvedManifestHash) throw new Error('El contenido cambió después de aprobar la transferencia. Revisa de nuevo antes de enviar.');
       signal?.throwIfAborted();

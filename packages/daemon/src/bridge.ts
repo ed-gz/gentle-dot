@@ -61,7 +61,7 @@ export interface BridgeClient {
 	/** Set only after authenticating a paired phone, never by a client message. */
 	mobileKey?: string;
 	/** Installed by the authenticated transport, never supplied by a client frame. */
-	workSync?: { handle(request: WorkSyncRequest): Promise<WorkSyncReply>; meetingDrafts: boolean };
+	workSync?: { handle(request: WorkSyncRequest): Promise<WorkSyncReply>; meetingDrafts: boolean; limits?: { audioBytes: number; attachmentBytes: number } };
 	send(payload: ServerPayload): void;
 }
 
@@ -386,7 +386,7 @@ export class DotBridge {
 			...this.conversationRef(),
 			...(this.supervisor.model ? { model: this.supervisor.model } : {}),
 			features: { conversations: this.features.conversations, historyRefresh: true, sendAccepted: 1,
-				...(client.workSync ? { workSync: 1, ...(client.workSync.meetingDrafts ? { meetingDrafts: 1 } : {}) } : {}) },
+				...(client.workSync ? { workSync: 1, ...(client.workSync.limits ? { workSyncAudioBytes: client.workSync.limits.audioBytes, workSyncAttachmentBytes: client.workSync.limits.attachmentBytes } : {}), ...(client.workSync.meetingDrafts ? { meetingDrafts: 1 } : {}) } : {}) },
 			...(this.options.voice ? { voice: this.options.voice.capability() } : {}),
 			...(this.options.pin && !this.options.app?.connected ? { pin: this.options.pin.status() } : {}),
 		});

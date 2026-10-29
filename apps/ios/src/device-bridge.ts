@@ -103,11 +103,11 @@ export function validSharedImport(value: unknown): value is SharedImport {
   const ids = new Set<string>(); let total = 0;
   for (const file of value.files) {
     if (!object(file) || typeof file.id !== 'string' || !uuid.test(file.id) || ids.has(file.id) || typeof file.name !== 'string' || !file.name || Array.from(file.name).length > 255 ||
-        typeof file.mime !== 'string' || file.mime.length > 128 || !Number.isSafeInteger(file.size) || (file.size as number) <= 0 || (file.size as number) > 25 * 1024 * 1024 ||
+        typeof file.mime !== 'string' || file.mime.length > 128 || !Number.isSafeInteger(file.size) || (file.size as number) <= 0 || (file.size as number) > (file.mime.startsWith('audio/') ? 128 : 25) * 1024 * 1024 ||
         typeof file.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(file.sha256)) return false;
     ids.add(file.id); total += file.size as number;
   }
-  return total <= 50 * 1024 * 1024;
+  return total <= 256 * 1024 * 1024;
 }
 export async function listSharedImports(call: DeviceInvoker = deviceInvoke): Promise<SharedImport[]> {
   const reply = requireNative(await call<NativeReply & { items?: unknown }>('share_list', {}));

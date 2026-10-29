@@ -88,6 +88,13 @@ test('OCR cancellation reaches the native operation and rejects late successful 
   assert.deepEqual(f.calls, [['cancel-ocr']]);
 });
 
+test('large audio is rejected as text or Vision before loading attachment bytes', async () => {
+  const f = fixture(); f.work.files = [{ id: 'audio', name: 'meeting.m4a', type: 'audio/mp4', size: 128 * 1024 * 1024 }];
+  await assert.rejects(f.registry().execute('file_read', { workId: f.work.id, fileId: 'audio' }, context()), /no es texto/);
+  await assert.rejects(f.registry().execute('file_ocr', { workId: f.work.id, fileId: 'audio' }, context()), /PNG/);
+  assert.deepEqual(f.calls, []);
+});
+
 test('external actions are validated draft intents and can neither approve nor execute', async () => {
   const f = fixture();
   const result = await f.registry().execute('external_prepare', { operation: { kind: 'slack.message', channel: 'C12345', text: 'Borrador' } }, context());

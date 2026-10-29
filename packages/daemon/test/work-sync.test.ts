@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, readdir, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { canonicalWorkManifest, parseClientMessage, parseWorkSyncReply, type WorkSyncManifest, type WorkSyncRequest } from '@gentle-dot/protocol';
+import { canonicalWorkManifest, parseClientMessage, parseWorkSyncManifest, parseWorkSyncReply, WORK_SYNC_LIMITS, type WorkSyncManifest, type WorkSyncRequest } from '@gentle-dot/protocol';
 import { expect, it } from 'vitest';
 import { WorkSyncStore } from '../src/work-sync.ts';
 import { tempDir } from './helpers.ts';
@@ -61,9 +61,32 @@ it('checks a multi-block attachment before committing and refuses a substituted 
   expect(await g.send({ operation: 'commit' })).toMatchObject({ state: 'error' });
   expect(await readFile(path)).toEqual(bytes);
 });
+it('durably resumes and commits a 26 MiB audio using bounded protocol chunks', async () => {
+  const bytes = Buffer.alloc(26 * 1024 * 1024 + 19);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 17 + (i >>> 12)) & 255;
+  const f = fixture(bytes); expect(await f.begin()).toMatchObject({ state: 'uploading' });
+  const size = 64 * 1024; let offset = 0;
+  for (; offset < bytes.length; offset += size) {
+    const data = bytes.subarray(offset, offset + size).toString('base64');
+    const reply = await f.send({ operation: 'chunk', fileId: 'audio-1', offset, data });
+    expect(reply).toMatchObject({ state: 'uploading', offsets: { 'audio-1': Math.min(offset + size, bytes.length) } });
+  }
+  const committed = await f.send({ operation: 'commit' }); expect(committed.state).toBe('committed');
+  const reopened = await new WorkSyncStore(f.root).handle('paired-device-1', f.request({ operation: 'status' }));
+  expect(reopened).toMatchObject({ state: 'committed', ...(committed.state === 'committed' ? { receipt: committed.receipt } : {}) });
+  expect(hash(await readFile(join(f.root, hash('paired-device-1'), f.transferId, 'audio-1')))).toBe(hash(bytes));
+}, 60_000);
 it('validates protocol frames and rejects traversal, oversized chunks, duplicate IDs and wrong receipts', () => {
   const f = fixture(); const begin = f.request({ operation: 'begin', manifest: f.content, manifestHash: f.manifestHash });
   expect(parseClientMessage(JSON.stringify(begin))).toEqual(begin);
   for (const invalid of [{ ...begin, transferId: '../outside' }, { ...begin, manifest: { ...f.content, files: [f.content.files[0], f.content.files[0]] } }, f.request({ operation: 'chunk', fileId: 'audio-1', offset: -1, data: 'eA==' }), f.request({ operation: 'chunk', fileId: 'audio-1', offset: 0, data: 'a'.repeat(100_000) })]) expect(parseClientMessage(JSON.stringify(invalid))).toBeUndefined();
   expect(parseWorkSyncReply({ type: 'work_sync_reply', requestId: 'r1', transferId: 'a', state: 'committed', receipt: { transferId: 'b', workId: 'w', revision: 1, manifestHash: f.manifestHash, committedAt: 1 } })).toBeUndefined();
+});
+it('bounds large audio independently from non-audio and total attachments', () => {
+  const content = manifest(); const original = content.files[0]!;
+  const withFiles = (files: typeof content.files) => ({ ...content, files });
+  expect(parseWorkSyncManifest(withFiles([{ ...original, bytes: WORK_SYNC_LIMITS.audioBytes }]))).toBeDefined();
+  expect(parseWorkSyncManifest(withFiles([{ ...original, bytes: WORK_SYNC_LIMITS.audioBytes + 1 }]))).toBeUndefined();
+  expect(parseWorkSyncManifest(withFiles([{ ...original, mime: 'text/plain', bytes: WORK_SYNC_LIMITS.fileBytes + 1 }]))).toBeUndefined();
+  expect(parseWorkSyncManifest(withFiles([{ ...original, bytes: WORK_SYNC_LIMITS.audioBytes }, { ...original, id: 'audio-2', bytes: WORK_SYNC_LIMITS.audioBytes }, { ...original, id: 'audio-3', bytes: 1 }]))).toBeUndefined();
 });

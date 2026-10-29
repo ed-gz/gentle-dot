@@ -54,15 +54,15 @@ test('quota errors, cancellation and damaged staged chunks never publish or ackn
     const run = (signal?: AbortSignal) => bridge.importSharedItemStreamed(item, async ({ sourceId, read }) => { await inbox.createStreamedImportedWork(sourceId, input, (file, offset, length) => read(item.files.find(f => f.id === file.id)!, offset, length), signal); }, call);
     const add = IDBObjectStore.prototype.add;
     IDBObjectStore.prototype.add = function(value: any, key?: IDBValidKey) { if (Array.isArray(key) && key[0] === 'chunk') throw new DOMException('Full', 'QuotaExceededError'); return add.call(this, value, key); };
-    let quota = false; try { await run(); } catch { quota = true; } finally { IDBObjectStore.prototype.add = add; }
+    let quota = false, quotaMessage = ''; try { await run(); } catch (error) { quota = true; quotaMessage = (error as Error).message; } finally { IDBObjectStore.prototype.add = add; }
     const cancelled = new AbortController(); cancelled.abort(); let aborted = false; try { await run(cancelled.signal); } catch { aborted = true; }
     let interrupted = false; try { await inbox.createStreamedImportedWork(`share:${item.id}`, input, async (_f, off, len) => { if (off) throw Error('stop'); return bytes.slice(off, off + len); }); } catch { interrupted = true; }
     const db = await new Promise<IDBDatabase>((resolve, reject) => { const req = indexedDB.open('capri-ios-work-inbox', 1); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
     await new Promise<void>((resolve, reject) => { const tx = db.transaction('files', 'readwrite'); tx.objectStore('files').put(new Uint8Array(256 * 1024).fill(48), ['chunk', `share:${item.id}`, item.files[0].id, 0]); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }); db.close();
     let damaged = false; try { await run(); } catch { damaged = true; }
-    return { quota, aborted, interrupted, damaged, ack, count: (await inbox.listWork()).length };
+    return { quota, quotaMessage, aborted, interrupted, damaged, ack, count: (await inbox.listWork()).length };
   });
-  expect(result).toEqual({ quota: true, aborted: true, interrupted: true, damaged: true, ack: 0, count: 0 });
+  expect(result).toEqual({ quota: true, quotaMessage: 'No hay espacio suficiente en este iPhone. Libera espacio y vuelve a intentarlo; los originales se conservan.', aborted: true, interrupted: true, damaged: true, ack: 0, count: 0 });
 });
 
 test('explicit cancellation fences an in-flight writer, retains the source, and allows a later retry', async ({ page }) => {
@@ -146,4 +146,40 @@ test('competing windows publish the same source once and conflicting bytes canno
     return inbox.createStreamedImportedWork('share:ea499afa-182e-468b-bc53-a6f1b0e0e4df', input, async (_f, _offset, length) => new Uint8Array(length).fill(83)).then(() => false, () => true);
   });
   expect(conflictingRejected).toBe(true);
+});
+
+test('a 26 MiB audio survives reload, refuses a legacy host, and reaches a capable host by bounded ranges', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/');
+  const created = await page.evaluate(async () => {
+    const inbox = await import('/src/work-inbox.ts'); const size = 26 * 1024 * 1024 + 17; const bytes = new Uint8Array(size);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 13 + (i >>> 11)) & 255;
+    const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
+    const file = { id: 'b706ebda-e0b0-4a97-957d-15a9d3048229', name: 'reunion.m4a', type: 'audio/mp4', size, sha256 };
+    let maxRead = 0;
+    let work = await inbox.createStreamedImportedWork('share:cca902f9-9c01-4d2b-b942-d535ec8a4fc0', { title: 'Reunión larga', kind: 'meeting', instruction: '', files: [file] }, async (_file, offset, length) => { maxRead = Math.max(maxRead, length); return bytes.slice(offset, offset + length); });
+    work = await inbox.transitionWork(work.id, work.revision, 'prepared'); work = await inbox.transitionWork(work.id, work.revision, 'approved');
+    return { id: work.id, revision: work.revision, size, sha256, maxRead };
+  });
+  expect(created.maxRead).toBeLessThanOrEqual(256 * 1024);
+  await page.reload();
+  const sent = await page.evaluate(async input => {
+    const inbox = await import('/src/work-inbox.ts'); const sync = await import('/src/work-sync.ts'); let legacyCalls = 0;
+    const legacy = sync.createWorkDispatcher(async () => { legacyCalls++; throw Error('unexpected network'); }, 'wss://host/ws');
+    const rejection = await legacy.send(input.id, input.revision).then(() => '', e => e.message);
+    const after = await inbox.readWork(input.id);
+    const output = new Uint8Array(input.size); let offset = 0, maxChunk = 0, manifest: any, manifestHash = '';
+    const modern = sync.createWorkDispatcher(async (request: any) => {
+      const base = { type: 'work_sync_reply', requestId: request.requestId, transferId: request.transferId };
+      if (request.operation === 'begin') { manifest = request.manifest; manifestHash = request.manifestHash; }
+      if (request.operation === 'chunk') { const chunk = atob(request.data); maxChunk = Math.max(maxChunk, chunk.length); for (let i = 0; i < chunk.length; i++) output[offset + i] = chunk.charCodeAt(i); offset += chunk.length; }
+      if (request.operation === 'commit') return { ...base, state: 'committed', receipt: { transferId: request.transferId, workId: manifest.workId, revision: manifest.revision, manifestHash, committedAt: 1 } };
+      return { ...base, state: 'uploading', manifestHash, offsets: { [manifest.files[0].id]: offset } };
+    }, 'wss://host/ws', { audioBytes: 128 * 1024 * 1024, attachmentBytes: 256 * 1024 * 1024 });
+    const final = await modern.send(input.id, input.revision);
+    const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', output))].map(b => b.toString(16).padStart(2, '0')).join('');
+    return { rejection, legacyCalls, legacyStatus: after.status, status: final.status, size: offset, sha256, maxChunk };
+  }, created);
+  expect(sent.rejection).toContain('Actualiza Gentle Dot'); expect(sent.legacyCalls).toBe(0); expect(sent.legacyStatus).toBe('approved');
+  expect(sent).toMatchObject({ status: 'sent', size: created.size, sha256: created.sha256 }); expect(sent.maxChunk).toBeLessThanOrEqual(64 * 1024);
 });

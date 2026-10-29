@@ -52,6 +52,32 @@ test('waits for valid ready before send/abort and requests history once', () => 
   assert.deepEqual(socket.sent.at(-1), { type: 'abort' });
 });
 
+test('large work limits require both valid authenticated capability fields and reset on disconnect', () => {
+  const legacy = fixture(); ready(legacy.socket, { workSync: 1 });
+  assert.deepEqual(legacy.chat.workSyncLimits(), { audioBytes: 25 * 1024 * 1024, attachmentBytes: 50 * 1024 * 1024 });
+  legacy.socket.drop(); mock.timers.tick(500); const next = FakeSocket.all.at(-1);
+  ready(next, { workSync: 1, workSyncAudioBytes: 128 * 1024 * 1024, workSyncAttachmentBytes: 256 * 1024 * 1024 });
+  assert.deepEqual(legacy.chat.workSyncLimits(), { audioBytes: 128 * 1024 * 1024, attachmentBytes: 256 * 1024 * 1024 });
+  next.drop(); assert.deepEqual(legacy.chat.workSyncLimits(), { audioBytes: 25 * 1024 * 1024, attachmentBytes: 50 * 1024 * 1024 });
+  const partial = fixture(); ready(partial.socket, { workSync: 1, workSyncAudioBytes: 128 * 1024 * 1024 });
+  assert.deepEqual(partial.chat.workSyncLimits(), { audioBytes: 25 * 1024 * 1024, attachmentBytes: 50 * 1024 * 1024 });
+  const future = fixture(); ready(future.socket, { workSync: 1, workSyncAudioBytes: 1024 * 1024 * 1024, workSyncAttachmentBytes: 2 * 1024 * 1024 * 1024 });
+  assert.equal(future.chat.ready(), true); assert.deepEqual(future.chat.workSyncLimits(), { audioBytes: 128 * 1024 * 1024, attachmentBytes: 256 * 1024 * 1024 });
+  const malformed = fixture(); ready(malformed.socket, { workSync: 1, workSyncAudioBytes: 0, workSyncAttachmentBytes: 1 });
+  assert.equal(malformed.chat.ready(), false);
+});
+test('a reconnected legacy or different host cannot receive a previously approved large transfer', async () => {
+  const { chat, socket } = fixture();
+  ready(socket, { workSync: 1, workSyncAudioBytes: 128 * 1024 * 1024, workSyncAttachmentBytes: 256 * 1024 * 1024 });
+  socket.drop(); mock.timers.tick(500); const next = FakeSocket.all.at(-1); ready(next, { workSync: 1 });
+  const request = { type: 'work_sync', requestId: 'request-1', transferId: 'transfer-1', operation: 'begin', manifestHash: 'a'.repeat(64), manifest: { schema: 1, workId: 'work-1', revision: 1, title: 'Meeting', kind: 'meeting', instruction: '', files: [{ id: 'audio-1', name: 'a.m4a', mime: 'audio/mp4', bytes: 26 * 1024 * 1024, sha256: 'b'.repeat(64), role: 'attachment' }] } };
+  await assert.rejects(chat.exchange(request, 'wss://example.ts.net/ws'), /ya no admite/);
+  assert.equal(next.sent.some(message => message.type === 'work_sync'), false);
+  chat.connect('wss://other.ts.net/ws', 'secret'); const other = FakeSocket.all.at(-1); ready(other, { workSync: 1, workSyncAudioBytes: 128 * 1024 * 1024, workSyncAttachmentBytes: 256 * 1024 * 1024 });
+  await assert.rejects(chat.exchange(request, 'wss://example.ts.net/ws'), /host cambió/);
+  assert.equal(other.sent.some(message => message.type === 'work_sync'), false);
+});
+
 test('reconnects without replaying a prompt and ignores stale socket events', () => {
   const { chat, socket, messages } = fixture();
   ready(socket);

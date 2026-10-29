@@ -54,7 +54,11 @@ test('attachment count and byte limits apply per file and per work', () => {
   assert.doesNotThrow(() => validateWorkFiles(Array.from({ length: 10 }, () => file())));
   assert.throws(() => validateWorkFiles(Array.from({ length: 11 }, () => file())), /10 archivos/);
   assert.throws(() => validateWorkFiles([file('text/plain', WORK_LIMITS.fileBytes + 1)]), /25 MiB/);
-  assert.throws(() => validateWorkFiles([max, max, file()]), /50 MiB/);
+  const large = file('audio/mp4', 1, 'large.m4a'); Object.defineProperty(large, 'size', { value: WORK_LIMITS.audioBytes });
+  assert.doesNotThrow(() => validateWorkFiles([large, large]));
+  assert.throws(() => validateWorkFiles([large, large, file()]), /256 MiB/);
+  const over = file('audio/mp4', 1, 'too-large.m4a'); Object.defineProperty(over, 'size', { value: WORK_LIMITS.audioBytes + 1 });
+  assert.throws(() => validateWorkFiles([over]), /128 MiB/);
 });
 
 test('work cannot bypass review and approval to reach sending or sent', () => {

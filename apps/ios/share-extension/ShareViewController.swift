@@ -52,7 +52,7 @@ final class ShareViewController: UIViewController {
         stack.addArrangedSubview(notesField)
         statusLabel.font = .preferredFont(forTextStyle: .footnote); statusLabel.adjustsFontForContentSizeCategory = true
         statusLabel.numberOfLines = 0; statusLabel.textColor = .white
-        statusLabel.text = "Hasta 10 archivos · 25 MiB por archivo · 50 MiB por trabajo"
+        statusLabel.text = "Hasta 10 archivos · audio 128 MiB · otros 25 MiB · total 256 MiB"
         stack.addArrangedSubview(statusLabel)
         saveButton.setTitle("Guardar en Capri", for: .normal)
         saveButton.tintColor = UIColor(red: 0.72, green: 1, blue: 0.22, alpha: 1)
@@ -173,11 +173,27 @@ final class ShareViewController: UIViewController {
             return try await withCheckedThrowingContinuation { continuation in
                 provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { value, error in
                     do {
-                        guard error == nil, let url = value as? URL, url.isFileURL,
-                              let type = UTType(filenameExtension: url.pathExtension),
-                              types.contains(where: { type.conforms(to: $0) }) else { throw ShareFailure.invalid }
-                        continuation.resume(returning: try SharedInbox.stageFile(url, name: url.lastPathComponent,
-                            mime: type.preferredMIMEType ?? "application/octet-stream", in: staging))
+                        guard error == nil, let url = value as? URL, url.isFileURL else { throw ShareFailure.invalid }
+                        let type = UTType(filenameExtension: url.pathExtension)
+                        let suggested = provider.suggestedName ?? ""
+                        let m4a = url.pathExtension.lowercased() == "m4a" || (suggested as NSString).pathExtension.lowercased() == "m4a"
+                        guard m4a || (type != nil && types.contains(where: { type!.conforms(to: $0) })) else { throw ShareFailure.invalid }
+                        let mime = m4a ? "audio/mp4" : (type?.preferredMIMEType ?? "application/octet-stream")
+                        continuation.resume(returning: try SharedInbox.stageFile(url, name: m4a && !suggested.isEmpty ? suggested : url.lastPathComponent,
+                            mime: mime, in: staging))
+                    } catch { continuation.resume(throwing: error) }
+                }
+            }
+        }
+        // Some providers advertise an MPEG-4 container instead of an audio UTI
+        // for an .m4a. The suffix classifies metadata only; ffprobe still checks bytes.
+        if let name = provider.suggestedName, (name as NSString).pathExtension.lowercased() == "m4a",
+           let identifier = provider.registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: .data) == true }) {
+            return try await withCheckedThrowingContinuation { continuation in
+                provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, error in
+                    do {
+                        guard error == nil, let url = url else { throw ShareFailure.invalid }
+                        continuation.resume(returning: try SharedInbox.stageFile(url, name: name, mime: "audio/mp4", in: staging))
                     } catch { continuation.resume(throwing: error) }
                 }
             }

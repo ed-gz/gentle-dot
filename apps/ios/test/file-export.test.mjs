@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { exportNativeFile, exportFileName, FILE_EXPORT_LIMIT } from '../src/file-export.ts';
+import { exportNativeFile, exportNativeFileRanges, exportFileName, FILE_EXPORT_LIMIT } from '../src/file-export.ts';
 
 const hashID = '5d3d8ff7-b06e-4f88-a17b-3bfbd37e8ca4';
 const exportID = 'b56ae6b2-8595-42dc-9f01-e03a45443fbd';
@@ -52,6 +52,14 @@ test('exports exact bytes in bounded chunks and confirms only the native picker 
   assert.equal(f.calls.filter(call => call.command === 'export_present').length, 1);
   assert.equal(f.calls.filter(call => call.command === 'export_write').length, 3);
   assert.deepEqual(f.calls.slice(-2).map(call => call.command), ['export_cancel', 'crypto_hash_cancel']);
+});
+test('range-backed exports never request a whole file and reject a short range', async () => {
+  const bytes = new Uint8Array(600_001).map((_, index) => index % 251), reads = []; const f = fixture();
+  const source = { size: bytes.length, read: async (offset, length) => { reads.push([offset, length]); return bytes.slice(offset, offset + length); } };
+  const result = await exportNativeFileRanges(source, 'reunion.m4a', {}, f.call);
+  assert.equal(result.status, 'exported'); assert.equal(reads.length, 6); assert.ok(reads.every(([, length]) => length <= 256 * 1024));
+  const short = fixture(); await assert.rejects(exportNativeFileRanges({ ...source, read: async () => new Uint8Array(1) }, 'reunion.m4a', {}, short.call), /todos los bytes/);
+  assert.equal(short.calls.some(call => call.command === 'export_present'), false);
 });
 test('the picker cancellation is distinct from exported and retains source bytes', async () => {
   const f = fixture({ cancelled: true }); const blob = new Blob(['Original']);

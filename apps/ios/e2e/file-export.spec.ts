@@ -79,3 +79,24 @@ test('native attachment export copies exact bytes in chunks and cancellation ret
   expect(result).toEqual({ size: 700000, unchanged: true, writes: [262144,262144,175712,262144,262144,175712], names: ['reunion.m4a','reunion.m4a'] });
   expect(downloads).toEqual([]);
 });
+
+test('corrupted chunk-backed attachment is rejected before export or transfer approval', async ({ page }) => {
+  await nativeExporter(page); await page.goto('/');
+  const id = await page.evaluate(async () => {
+    const inbox = await import('/src/work-inbox.ts'); const bytes = new TextEncoder().encode('original');
+    const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
+    const source = 'share:739e894c-5c98-4f72-9f40-1a831d05bc01', fileId = 'b706ebda-e0b0-4a97-957d-15a9d3048229';
+    const work = await inbox.createStreamedImportedWork(source, { title: 'Reunión', kind: 'meeting', instruction: '', files: [{ id: fileId, name: 'audio.m4a', type: 'audio/mp4', size: bytes.length, sha256 }] }, async () => bytes);
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { const req = indexedDB.open('capri-ios-work-inbox', 1); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
+    await new Promise<void>((resolve, reject) => { const tx = db.transaction('files', 'readwrite'); tx.objectStore('files').put(new TextEncoder().encode('alterado'), ['chunk', source, fileId, 0]); tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); }); db.close();
+    let approved = await inbox.transitionWork(work.id, work.revision, 'prepared'); approved = await inbox.transitionWork(work.id, approved.revision, 'approved');
+    const sync = await import('/src/work-sync.ts'); const transferRejected = await sync.prepareWorkTransfer(approved, 'wss://host/ws').then(() => false, () => true);
+    return { id: work.id, transferRejected };
+  });
+  expect(id.transferRejected).toBe(true);
+  await openRecoveryHarness(page);
+  const item = page.locator(`[data-work-id="${id.id}"]`); await item.locator('summary').filter({ hasText: 'Archivos (1)' }).click();
+  await item.getByRole('button', { name: 'Descargar audio.m4a' }).click();
+  await expect(page.locator('#work-status')).toContainText('No se pudo recuperar');
+  expect(await page.evaluate(() => (globalThis as any).exportCalls.some((call: any) => call.name === 'export_begin'))).toBe(false);
+});

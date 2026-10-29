@@ -21,7 +21,8 @@ enum DocumentImportStore {
         var files: [SharedFile] = []
         var total = 0
         for url in urls {
-            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            let type = UTType(filenameExtension: url.pathExtension)
+            let mime = DocumentImportMime.normalize(fileExtension: url.pathExtension, reported: type?.preferredMIMEType, conformsToAudio: type?.conforms(to: .audio) == true)
             let file = try SharedInbox.stageFile(url, name: url.lastPathComponent, mime: mime, in: staging)
             total += file.size
             guard total <= SharedInbox.maxTotal else { throw ShareFailure.limit }

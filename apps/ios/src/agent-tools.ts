@@ -1,6 +1,6 @@
 import { addWorkVersion, createWork, listWork, readWork, readWorkFile, reviseWork, WORK_LIMITS,
   type WorkInput, type WorkItem } from './work-inbox.ts';
-import { checkVoice, recognizeDocument, hashSourceBytes, type RecognizedDocument } from './perception.ts';
+import { checkVoice, recognizeDocument, validateDocument, hashSourceBytes, type RecognizedDocument } from './perception.ts';
 import { checkLocalIntelligence } from './local-intelligence.ts';
 import { validateOperation, type Operation } from './external-actions.ts';
 
@@ -103,11 +103,12 @@ const defaults: LocalToolServices = {
 /** These tools have no access to connector credentials, network writes or approval transitions. */
 export function createLocalTools(overrides: Partial<LocalToolServices> = {}): Tool[] {
   const service: LocalToolServices = { ...defaults, ...overrides };
-  const readFile = async (workId: string, fileId: string, signal: AbortSignal) => {
+  const readFile = async (workId: string, fileId: string, signal: AbortSignal, validate: (metadata: WorkItem['files'][number]) => void) => {
     const work = await service.readWork(workId);
     signal.throwIfAborted();
     const metadata = work.files.find(file => file.id === fileId);
     if (!metadata) throw new Error('El archivo no pertenece a ese trabajo.');
+    validate(metadata);
     const blob = await service.readWorkFile(workId, fileId);
     signal.throwIfAborted();
     if (!blob || blob.size !== metadata.size) throw new Error('No se pudo recuperar el archivo original completo.');
@@ -150,9 +151,10 @@ export function createLocalTools(overrides: Partial<LocalToolServices> = {}): To
       parameters: parameters({ workId: idSchema, fileId: idSchema, ...pageProperties }, ['workId', 'fileId']) },
       value => { const a = args(value, ['workId', 'fileId', 'offset', 'maxChars']); return { workId: id(a.workId), fileId: id(a.fileId), ...paging(a) }; },
       async (a, context) => {
-        const { metadata, blob } = await readFile(a.workId, a.fileId, context.signal);
-        if (!(metadata.type.startsWith('text/') || ['application/json', 'application/x-subrip'].includes(metadata.type))) throw new Error('Este adjunto no es texto. Usa Vision para imágenes/PDF o el host para audio.');
-        if (blob.size > 1024 * 1024) throw new Error('Este texto supera 1 MiB; divide el archivo o delega su procesamiento al host.');
+        const { metadata, blob } = await readFile(a.workId, a.fileId, context.signal, metadata => {
+          if (!(metadata.type.startsWith('text/') || ['application/json', 'application/x-subrip'].includes(metadata.type))) throw new Error('Este adjunto no es texto. Usa Vision para imágenes/PDF o el host para audio.');
+          if (metadata.size > 1024 * 1024) throw new Error('Este texto supera 1 MiB; divide el archivo o delega su procesamiento al host.');
+        });
         const bytes = await blob.arrayBuffer(); context.signal.throwIfAborted();
         let content: string; try { content = new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { throw new Error('El adjunto no contiene texto UTF-8 válido.'); }
         const sha256 = await hashSourceBytes(new Uint8Array(bytes));
@@ -163,7 +165,7 @@ export function createLocalTools(overrides: Partial<LocalToolServices> = {}): To
       parameters: parameters({ workId: idSchema, fileId: idSchema, page: { type: 'integer', minimum: 1, maximum: 20 }, ...pageProperties }, ['workId', 'fileId']) },
       value => { const a = args(value, ['workId', 'fileId', 'page', 'offset', 'maxChars']); return { workId: id(a.workId), fileId: id(a.fileId), ...(a.page === undefined ? {} : { page: integer(a.page, 1, 20) }), ...paging(a) }; },
       async (a, context) => {
-        const { metadata, blob } = await readFile(a.workId, a.fileId, context.signal);
+        const { metadata, blob } = await readFile(a.workId, a.fileId, context.signal, validateDocument);
         context.signal.throwIfAborted();
         const result = await service.recognizeDocument(new File([blob], metadata.name, { type: metadata.type }), context.signal);
         context.signal.throwIfAborted();

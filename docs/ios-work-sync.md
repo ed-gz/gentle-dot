@@ -4,7 +4,7 @@ Capri puede conservar trabajos y adjuntos offline, transferir una revisión apro
 
 ## Recorrido operativo
 
-1. Crear o importar un trabajo. `createImportedWork("share:<UUID>", input)` deduplica metadata y bytes antes de confirmar su transacción IndexedDB. La extensión Compartir debe esperar esa promesa antes de borrar su original.
+1. Crear o importar un trabajo. Las importaciones nativas copian fragmentos a IndexedDB y comprueban los bytes persistidos antes de publicar el trabajo. La extensión Compartir espera la confirmación local antes de retirar su copia; Notas de Voz conserva su original. Una copia incompleta se puede liberar o reintentar sin borrar la fuente nativa.
 2. Revisar el contenido en la conversación. `work_sync` presenta manifiesto, revisión y hashes; una aprobación corresponde únicamente a esos bytes y ese host.
 3. Transferir. `begin`, `chunk` y `commit` usan el mismo `transferId`. `sent` sólo aparece después de un recibo correlacionado y durable.
 4. Solicitar la minuta. `work_process` requiere una aprobación separada de esa revisión confirmada. El resultado siempre tiene `requiresReview: true`.
@@ -32,7 +32,7 @@ El [almacén del daemon](../packages/daemon/src/work-sync.ts) trabaja bajo `<dat
 - Fragmentos de hasta 64 KiB. Un fragmento repetido debe contener exactamente los mismos bytes.
 - `commit` verifica tamaños y SHA-256, hace `fsync` del registro temporal, `rename` y `fsync` del directorio antes del ACK.
 - `status` recupera desplazamientos o el recibo estable después de reiniciar. Una revisión no puede reutilizarse bajo otra transferencia para eludir deduplicación.
-- Cuota por dispositivo: 100 transferencias y 512 MiB reservados. Cada trabajo permite 10 adjuntos originales y 100 versiones, hasta 130 MiB incluyendo texto; los límites originales de adjuntos siguen siendo 25 MiB por archivo y 50 MiB sumados.
+- Cuota por dispositivo: 100 transferencias y 512 MiB reservados en el host. Cada trabajo admite 10 adjuntos originales y 100 versiones, con audio hasta 128 MiB por archivo, otros archivos hasta 25 MiB y 256 MiB en adjuntos; el total con versiones no supera 336 MiB. El espacio disponible en iPhone y host puede ser menor. Una laptop antigua conserva el límite de 25/50 MiB: Capri comprueba el anuncio autenticado del host antes de iniciar la transferencia y conserva localmente el material que no puede enviar.
 - La eliminación local y la revocación de un dispositivo no borran automáticamente los datos del host. La gestión de retención remota requiere una unidad posterior; una nueva vinculación no hereda automáticamente el namespace anterior.
 
 El [dispatcher iOS](../apps/ios/src/work-sync.ts) conserva un snapshot inmutable en IndexedDB antes de enviar. Los cambios de contenido invalidan la aprobación. Ante desconexión o un ACK perdido mantiene `uncertain`; recuperar consulta primero `status`. No vuelve a ejecutar procesamiento ni acciones externas por reconectar. Si el host no encuentra el snapshot, exige revisión nueva antes de otro intento.
