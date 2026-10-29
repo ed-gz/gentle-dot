@@ -67,6 +67,7 @@ const stage = element('stage');
 const director = new RigDirector();
 let engine: Awaited<ReturnType<typeof createEngineAsync>> | undefined;
 let preparingRig: AbortController | undefined;
+let rigNeedsPreparation = false;
 let fx: RigFx | undefined;
 let image: HTMLImageElement | undefined;
 let frame = 0;
@@ -240,6 +241,11 @@ function applyPresenceSample(sample: PresenceSample, now: number) {
   if (visibilityChanged) layoutCompanion();
 }
 function settlePresence() { applyPresenceSample(presenceTransition.settle(), performance.now()); }
+function pauseRigPreparation() {
+  if (!preparingRig) return;
+  rigNeedsPreparation = true;
+  const operation = preparingRig; preparingRig = undefined; operation.abort();
+}
 function setIntent(next: RigIntent) { intent = next; if (next.gesture || next.dragging || next.question || next.working) travel = undefined; redraw(); }
 function gesture(name: string) {
   clearTimeout(gestureTimer);
@@ -281,19 +287,24 @@ function maybeStartCompanionIntro() {
 }
 async function startRig() {
   settlePresence();
-  preparingRig?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined;
+  const previous = preparingRig; preparingRig = undefined; previous?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined;
   layoutCompanion();
+  rigNeedsPreparation = Boolean(image);
   if (!image) return;
-  const operation = new AbortController(); preparingRig = operation;
   rig.dataset.ready = 'false';
+  // Do not poll shader compilation while WKWebView is in the background.
+  // The current artwork remains in memory and gets one new attempt on return.
+  if (document.hidden) return;
+  const operation = new AbortController(); preparingRig = operation;
   try {
     const prepared = await createEngineAsync(canvas, image, { maskReadback: false }, operation.signal);
     if (operation.signal.aborted || preparingRig !== operation) { prepared.dispose(); return; }
-    engine = prepared; layoutCompanion(); lastFrame = -1; rig.dataset.ready = 'true'; element('art-placeholder').hidden = true; place(position.x, position.y); redraw();
+    engine = prepared; rigNeedsPreparation = false; layoutCompanion(); lastFrame = -1; rig.dataset.ready = 'true'; element('art-placeholder').hidden = true; place(position.x, position.y); redraw();
     element('art-status').textContent = 'Tu Capri está aquí. Arrástrala, salúdala o déjala chillear.'; maybeStartCompanionIntro();
   }
   catch {
     if (operation.signal.aborted || preparingRig !== operation) return;
+    rigNeedsPreparation = false;
     rig.dataset.ready = 'false'; element('art-placeholder').hidden = false; element('art-placeholder').textContent = 'No se pudo iniciar el personaje 2D. Vuelve a abrir Capri.'; element('art-status').textContent = 'WebGL no está disponible. La conversación sigue activa.';
   } finally { if (preparingRig === operation) preparingRig = undefined; }
 }
@@ -312,7 +323,7 @@ async function useArtwork(blob: Blob, persist: boolean) {
     await startRig();
   } finally { URL.revokeObjectURL(url); }
 }
-canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); settlePresence(); preparingRig?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; rig.dataset.ready = 'false'; layoutCompanion(); element('art-status').textContent = 'Recuperando el personaje…'; });
+canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); settlePresence(); const previous = preparingRig; preparingRig = undefined; previous?.abort(); rigNeedsPreparation = false; cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; rig.dataset.ready = 'false'; layoutCompanion(); element('art-status').textContent = 'Recuperando el personaje…'; });
 canvas.addEventListener('webglcontextrestored', startRig);
 reduced.addEventListener('change', () => { if (isReduced()) settlePresence(); fx?.clear(); redraw(); });
 element<HTMLInputElement>('art').addEventListener('change', async event => {
@@ -1008,7 +1019,7 @@ element('view-material').addEventListener('click', () => {
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { release(); settlePresence(); }
+  if (document.hidden) { release(); settlePresence(); pauseRigPreparation(); }
   cancelAnimationFrame(frame); fx?.clear(); persist();
   if (document.hidden) {
     // The native permission sheet can temporarily hide WKWebView while the
@@ -1018,10 +1029,10 @@ document.addEventListener('visibilitychange', () => {
     if (voiceSession && !voiceRetry) void cancelDictation();
     director.update(intent, performance.now(), true); linked.suspend();
   }
-  else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void recoverPendingVoice(); void completionNotifications.refresh(); void lockScreenSettings?.refresh(); }
+  else { if (rigNeedsPreparation && image && !preparingRig) void startRig(); lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void recoverPendingVoice(); void completionNotifications.refresh(); void lockScreenSettings?.refresh(); }
 });
-window.addEventListener('pagehide', () => { settlePresence(); connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
-window.addEventListener('pageshow', event => { if (event.persisted) { redraw(); linked.resume(); void recoverLocalInference(); } });
+window.addEventListener('pagehide', () => { settlePresence(); pauseRigPreparation(); connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
+window.addEventListener('pageshow', event => { if (event.persisted) { if (!document.hidden && rigNeedsPreparation && image && !preparingRig) void startRig(); redraw(); linked.resume(); void recoverLocalInference(); } });
 let conversationLoading = false;
 const recoveryMessage = 'No se pudo recuperar la conversación local. Tu borrador sigue aquí; reintenta antes de enviar para proteger el historial guardado.';
 async function restoreConversation() {
