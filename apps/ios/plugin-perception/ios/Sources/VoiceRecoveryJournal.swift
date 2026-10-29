@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -7,10 +8,9 @@ import Glibc
 
 /// Isolated prototype: callers must close a recording before publishing it and
 /// must not acknowledge a transcript until its exact destination saved it.
-/// This type is not yet connected to VoiceController or the WebView. The lock
-/// only covers one process; the returned URL is not a read lease, and byte
-/// hashes or fsync guarantees are not provided. Integrating it requires those
-/// protections and an acknowledgement of the exact saved destination.
+/// This type is not yet connected to VoiceController or the WebView. Its locks
+/// protect cooperating journal users only; atomic rename is not an fsync
+/// guarantee. Integration requires acknowledgement of the exact saved draft.
 struct VoiceRecoveryRecord: Codable, Equatable {
     enum State: String, Codable { case capturing, ready }
     enum Kind: String, Codable { case speech, dictation }
@@ -21,10 +21,44 @@ struct VoiceRecoveryRecord: Codable, Equatable {
     let kind: Kind
     let createdAt: Int64
     let state: State
+    let byteCount: Int64?
+    let sha256: String?
 }
 
 enum VoiceRecoveryJournalError: Error {
-    case invalid, occupied, changed, missingAudio, invalidAudio, corrupt
+    case invalid, occupied, changed, missingAudio, invalidAudio, corrupt, busy
+}
+
+/// Holds a process-shared read lock until explicitly closed or deinitialized.
+/// The URL is for AVAudioFile. Check exact file identity again after analysis
+/// and before acknowledging its transcript; it cannot prevent rogue writers.
+final class VoiceRecoveryReadLease {
+    let url: URL
+    private var lockFD: Int32
+    private let guardLock = NSLock()
+    private let validate: () throws -> Void
+    init(url: URL, lockFD: Int32, validate: @escaping () throws -> Void) {
+        self.url = url; self.lockFD = lockFD; self.validate = validate
+    }
+    func verify() throws {
+        guardLock.lock(); defer { guardLock.unlock() }
+        guard lockFD >= 0 else { throw VoiceRecoveryJournalError.changed }
+        try validate()
+    }
+    func close() {
+        guardLock.lock(); defer { guardLock.unlock() }
+        guard lockFD >= 0 else { return }
+        _ = flock(lockFD, LOCK_UN); _ = closeVoiceDescriptor(lockFD); lockFD = -1
+    }
+    deinit { close() }
+}
+
+private func closeVoiceDescriptor(_ descriptor: Int32) -> Int32 {
+    #if canImport(Darwin)
+    return Darwin.close(descriptor)
+    #else
+    return Glibc.close(descriptor)
+    #endif
 }
 
 /// One bounded capture per private directory. Metadata is committed before a
@@ -37,6 +71,7 @@ final class VoiceRecoveryJournal {
     private let manager: FileManager
     private let maxAudioBytes: Int64 = 128 * 1024 * 1024
     private var manifest: URL { root.appendingPathComponent("current.json") }
+    private var lockFile: URL { root.appendingPathComponent(".journal.lock") }
 
     init(root: URL, manager: FileManager = .default) { self.root = root; self.manager = manager }
 
@@ -59,7 +94,11 @@ final class VoiceRecoveryJournal {
         return parts.first?.lowercased() == "es" && parts.allSatisfy { !$0.isEmpty && $0.count <= 8 && $0.allSatisfy { $0.isASCII && $0.isLetter || $0.isASCII && $0.isNumber } }
     }
     private func valid(_ record: VoiceRecoveryRecord) -> Bool {
-        uuid(record.id) && uuid(record.owner) && record.id.lowercased() != record.owner.lowercased()
+        let binding = record.state == .capturing
+            ? record.byteCount == nil && record.sha256 == nil
+            : record.byteCount.map { $0 > 0 && $0 <= maxAudioBytes } == true
+                && record.sha256.map { $0.count == 64 && $0.allSatisfy { ("0"..."9").contains($0) || ("a"..."f").contains($0) } } == true
+        return binding && uuid(record.id) && uuid(record.owner) && record.id.lowercased() != record.owner.lowercased()
             && destination(record.destination) && locale(record.locale) && record.createdAt > 0
     }
     private func ensureRoot() throws {
@@ -85,6 +124,27 @@ final class VoiceRecoveryJournal {
         if code == ENOENT { return false }
         throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
     }
+    private func acquireFileLock(shared: Bool) throws -> Int32 {
+        let descriptor = lockFile.path.withCString { open($0, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, mode_t(0o600)) }
+        guard descriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG), info.st_nlink == 1 else {
+            _ = closeVoiceDescriptor(descriptor); throw VoiceRecoveryJournalError.invalid
+        }
+        let operation = (shared ? LOCK_SH : LOCK_EX) | LOCK_NB
+        guard flock(descriptor, operation) == 0 else {
+            let code = errno; _ = closeVoiceDescriptor(descriptor)
+            if code == EWOULDBLOCK || code == EAGAIN { throw VoiceRecoveryJournalError.busy }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+        return descriptor
+    }
+    private func withFileLock<T>(shared: Bool, _ operation: () throws -> T) throws -> T {
+        try ensureRoot()
+        let fd = try acquireFileLock(shared: shared)
+        defer { _ = flock(fd, LOCK_UN); _ = closeVoiceDescriptor(fd) }
+        return try operation()
+    }
     private func read() throws -> VoiceRecoveryRecord? {
         guard try exists(manifest) else { return nil }
         let values = try manifest.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
@@ -92,7 +152,8 @@ final class VoiceRecoveryJournal {
               let size = values.fileSize, size > 0, size <= 8192 else { throw VoiceRecoveryJournalError.corrupt }
         let data = try Data(contentsOf: manifest)
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              Set(object.keys) == Set(["id", "owner", "destination", "locale", "kind", "createdAt", "state"]),
+              let state = object["state"] as? String,
+              Set(object.keys) == Set(["id", "owner", "destination", "locale", "kind", "createdAt", "state"] + (state == "ready" ? ["byteCount", "sha256"] : [])),
               let record = try? JSONDecoder().decode(VoiceRecoveryRecord.self, from: data), valid(record) else { throw VoiceRecoveryJournalError.corrupt }
         return record
     }
@@ -103,19 +164,73 @@ final class VoiceRecoveryJournal {
         try manager.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: manifest.path)
         #endif
     }
-    private func verifiedAudio(_ record: VoiceRecoveryRecord) throws -> URL {
+    private struct AudioIdentity: Equatable {
+        let byteCount: Int64
+        let sha256: String
+        let device: UInt64
+        let inode: UInt64
+        let modifiedSeconds: Int64
+        let modifiedNanoseconds: Int64
+    }
+    private func modifiedTime(_ value: stat) -> (Int64, Int64) {
+        #if canImport(Darwin)
+        return (Int64(value.st_mtimespec.tv_sec), Int64(value.st_mtimespec.tv_nsec))
+        #else
+        return (Int64(value.st_mtim.tv_sec), Int64(value.st_mtim.tv_nsec))
+        #endif
+    }
+    private func audioIdentity(_ record: VoiceRecoveryRecord) throws -> (URL, AudioIdentity) {
         let file = audio(record)
         guard try exists(file) else { throw VoiceRecoveryJournalError.missingAudio }
-        let values = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-        guard values.isRegularFile == true, values.isSymbolicLink != true,
-              let size = values.fileSize, size > 0, Int64(size) <= maxAudioBytes else { throw VoiceRecoveryJournalError.invalidAudio }
-        return file
+        let fd = file.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() }
+        var before = stat()
+        guard fstat(fd, &before) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        guard (before.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG), before.st_nlink == 1, before.st_size > 0,
+              before.st_size <= maxAudioBytes else { throw VoiceRecoveryJournalError.invalidAudio }
+        var hasher = SHA256()
+        var bytes: Int64 = 0
+        while let chunk = try handle.read(upToCount: 65_536), !chunk.isEmpty {
+            bytes += Int64(chunk.count)
+            guard bytes <= maxAudioBytes else { throw VoiceRecoveryJournalError.invalidAudio }
+            hasher.update(data: chunk)
+        }
+        var after = stat(), named = stat()
+        guard fstat(fd, &after) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        let namedResult = file.path.withCString { lstat($0, &named) }
+        guard namedResult == 0 else { throw VoiceRecoveryJournalError.changed }
+        let beforeTime = modifiedTime(before), afterTime = modifiedTime(after), namedTime = modifiedTime(named)
+        guard bytes == before.st_size, after.st_size == before.st_size, named.st_size == before.st_size,
+              after.st_nlink == 1, named.st_nlink == 1,
+              before.st_ino == after.st_ino, before.st_ino == named.st_ino,
+              before.st_dev == after.st_dev, before.st_dev == named.st_dev,
+              beforeTime.0 == afterTime.0, beforeTime.1 == afterTime.1,
+              beforeTime.0 == namedTime.0, beforeTime.1 == namedTime.1 else { throw VoiceRecoveryJournalError.changed }
+        return (file, AudioIdentity(byteCount: bytes, sha256: hasher.finalize().map { String(format: "%02x", $0) }.joined(),
+            device: UInt64(truncatingIfNeeded: before.st_dev), inode: UInt64(truncatingIfNeeded: before.st_ino),
+            modifiedSeconds: beforeTime.0, modifiedNanoseconds: beforeTime.1))
     }
-    func current() throws -> VoiceRecoveryRecord? { try locked { try read() } }
-    func readyAudio(_ expected: VoiceRecoveryRecord) throws -> URL {
+    func current() throws -> VoiceRecoveryRecord? { try locked { try withFileLock(shared: true) { try read() } } }
+    func acquire(_ expected: VoiceRecoveryRecord) throws -> VoiceRecoveryReadLease {
         try locked {
-            guard valid(expected), expected.state == .ready, try read() == expected else { throw VoiceRecoveryJournalError.changed }
-            return try verifiedAudio(expected)
+            try ensureRoot()
+            let fd = try acquireFileLock(shared: true)
+            do {
+                guard valid(expected), expected.state == .ready, try read() == expected else { throw VoiceRecoveryJournalError.changed }
+                let (file, identity) = try audioIdentity(expected)
+                guard expected.byteCount == identity.byteCount, expected.sha256 == identity.sha256 else { throw VoiceRecoveryJournalError.changed }
+                return VoiceRecoveryReadLease(url: file, lockFD: fd) { [self] in
+                    try locked {
+                        guard try read() == expected else { throw VoiceRecoveryJournalError.changed }
+                        let (_, current) = try audioIdentity(expected)
+                        guard current == identity else { throw VoiceRecoveryJournalError.changed }
+                    }
+                }
+            } catch {
+                _ = flock(fd, LOCK_UN); _ = closeVoiceDescriptor(fd); throw error
+            }
         }
     }
 
@@ -123,35 +238,41 @@ final class VoiceRecoveryJournal {
     func reserve(id: String, owner: String, destination: String, locale: String,
                  kind: VoiceRecoveryRecord.Kind) throws -> (VoiceRecoveryRecord, URL) {
         try locked {
-            try ensureRoot()
+          try withFileLock(shared: false) {
             guard try read() == nil else { throw VoiceRecoveryJournalError.occupied }
             // An unbound orphan may be the only surviving copy after disk
             // corruption. Refuse a new reservation and never remove it.
-            guard try manager.contentsOfDirectory(atPath: root.path).isEmpty else { throw VoiceRecoveryJournalError.occupied }
+            guard try manager.contentsOfDirectory(atPath: root.path).filter({ $0 != ".journal.lock" }).isEmpty else { throw VoiceRecoveryJournalError.occupied }
             let record = VoiceRecoveryRecord(id: id, owner: owner, destination: destination, locale: locale,
-                kind: kind, createdAt: Int64(Date().timeIntervalSince1970), state: .capturing)
+                kind: kind, createdAt: Int64(Date().timeIntervalSince1970), state: .capturing, byteCount: nil, sha256: nil)
             guard valid(record) else { throw VoiceRecoveryJournalError.invalid }
             let file = audio(record)
             // Never replace an orphaned file, even when metadata was damaged or lost.
             guard !(try exists(file)) else { throw VoiceRecoveryJournalError.occupied }
             try write(record)
             return (record, file)
+          }
         }
     }
 
     /// The caller is responsible for closing and draining its audio writer.
     func publish(_ expected: VoiceRecoveryRecord) throws -> VoiceRecoveryRecord {
         try locked {
+          try withFileLock(shared: false) {
             guard valid(expected), expected.state == .capturing else { throw VoiceRecoveryJournalError.invalid }
             guard try read() == expected else { throw VoiceRecoveryJournalError.changed }
-            let file = try verifiedAudio(expected)
+            let (file, identity) = try audioIdentity(expected)
             #if os(iOS)
             try manager.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: file.path)
             #endif
+            // A ready recording is read-only until its explicit removal.
+            try manager.setAttributes([.posixPermissions: 0o400], ofItemAtPath: file.path)
             let ready = VoiceRecoveryRecord(id: expected.id, owner: expected.owner, destination: expected.destination,
-                locale: expected.locale, kind: expected.kind, createdAt: expected.createdAt, state: .ready)
+                locale: expected.locale, kind: expected.kind, createdAt: expected.createdAt, state: .ready,
+                byteCount: identity.byteCount, sha256: identity.sha256)
             try write(ready)
             return ready
+          }
         }
     }
 
@@ -159,10 +280,12 @@ final class VoiceRecoveryJournal {
     /// Deleting bytes first avoids a surviving audio file without its binding.
     func remove(_ expected: VoiceRecoveryRecord) throws {
         try locked {
+          try withFileLock(shared: false) {
             guard valid(expected), try read() == expected else { throw VoiceRecoveryJournalError.changed }
             let file = audio(expected)
             if try exists(file) { try manager.removeItem(at: file) }
             try manager.removeItem(at: manifest)
+          }
         }
     }
 }

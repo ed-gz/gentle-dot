@@ -8,6 +8,15 @@ import Glibc
 @main
 struct VoiceRecoveryJournalTests {
     static func main() throws {
+        if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "try-remove" {
+            let journal = VoiceRecoveryJournal(root: URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true))
+            do {
+                guard let record = try journal.current() else { exit(24) }
+                try journal.remove(record)
+                exit(0)
+            } catch VoiceRecoveryJournalError.busy { exit(23) }
+            catch { exit(24) }
+        }
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("capri-voice-journal-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: root) }
@@ -25,7 +34,7 @@ struct VoiceRecoveryJournalTests {
         let (reserved, file) = try journal.reserve(id: id, owner: owner, destination: "session:" + String(repeating: "a", count: 64), locale: "es-MX", kind: .speech)
         check(reserved.state == .capturing && reserved.owner == owner && reserved.destination.hasPrefix("session:"))
         check(try second.current() == reserved, "relaunch sees the bound but unconfirmed capture")
-        check(reject { _ = try second.readyAudio(reserved) }, "incomplete audio cannot be opened as ready")
+        check(reject { _ = try second.acquire(reserved) }, "incomplete audio cannot be opened as ready")
         check(reject { _ = try second.publish(reserved) }, "missing audio cannot be published")
         check(reject { _ = try second.reserve(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-ES", kind: .dictation) }, "never replace a pending capture")
         try Data().write(to: file)
@@ -34,7 +43,28 @@ struct VoiceRecoveryJournalTests {
         let ready = try journal.publish(reserved)
         let reloadedReady = try second.current()
         check(ready.state == .ready && reloadedReady == ready)
-        check(try second.readyAudio(ready) == file)
+        check(ready.byteCount == 3 && ready.sha256 == "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81")
+        let lease = try second.acquire(ready)
+        check(lease.url == file)
+        try lease.verify()
+        check(reject { try journal.remove(ready) }, "cancel cannot delete bytes while the reader holds its lease")
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        child.arguments = ["try-remove", root.path]
+        try child.run(); child.waitUntilExit()
+        check(child.terminationStatus == 23, "the read lease must block a different process from deleting audio")
+        // A writer outside the journal can still replace the private file; the
+        // post-analysis verification must detect that before any future ACK.
+        try Data([3, 2, 1]).write(to: file, options: .atomic)
+        check(reject { try lease.verify() }, "a replaced file cannot retain the acquired identity")
+        lease.close()
+        check(reject { _ = try second.acquire(ready) }, "changed bytes cannot be acquired as the recorded audio")
+        try Data([1, 2, 3]).write(to: file, options: .atomic)
+        let restoredLease = try second.acquire(ready)
+        try restoredLease.verify()
+        try Data([1, 2, 3]).write(to: file, options: .atomic)
+        check(reject { try restoredLease.verify() }, "replacing a file with equal bytes still changes the acquired identity")
+        restoredLease.close()
         check(reject { try second.remove(reserved) }, "stale cancellation must not remove a newer publication")
         check(fm.fileExists(atPath: file.path), "stale cancellation preserves the bytes")
         try second.remove(ready)
