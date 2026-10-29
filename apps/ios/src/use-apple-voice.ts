@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceControls, VoicePhase } from '@gentle-dot/ui/src/useVoice.ts';
-import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, VoiceRetryPending, type VoiceAvailability } from './perception.ts';
+import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCancelWithDeadline, VoiceCancelUnconfirmed, VoiceRetryPending, type VoiceAvailability } from './perception.ts';
 import { localIdentifier } from './local-identifiers.ts';
-import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, sessionVoiceOrigin } from './voice-origin.ts';
+import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, sessionVoiceOrigin, markVoiceCancellation, clearVoiceCancellation, pendingVoiceCancellation } from './voice-origin.ts';
 
 function availabilityNote(value: VoiceAvailability): string | undefined {
   if (value.microphonePermission === 'denied') return 'Activa el micrófono para Capri en Ajustes del iPhone.';
@@ -21,6 +21,7 @@ const deferredTranscripts = new Map<string, string>();
 export function useAppleVoice(enabled: boolean, destination?: string): VoiceControls & { retryPending: boolean; discarding: boolean; discardPending(): void } {
   const [availability, setAvailability] = useState<VoiceAvailability>();
   const [retryAvailability, setRetryAvailability] = useState(false);
+  const [retryCancellation, setRetryCancellation] = useState(false);
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [level, setLevel] = useState(0);
@@ -37,8 +38,21 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     const ownerId = state.ownerId;
     const retainAudio = state.retry && !discardRetry;
     state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false; state.retry = false;
-    setPhase('idle'); setElapsed(0); setLevel(0); setPartial(''); setDraft(undefined); setNote(undefined); setRetryPending(false);
-    if (ownerId && !retainAudio) { forgetVoiceOrigin(ownerId); void cancelVoice(ownerId).catch(() => {}); }
+    setPhase('idle'); setElapsed(0); setLevel(0); setPartial(''); setDraft(undefined); setNote(undefined); setRetryPending(false); setRetryCancellation(false);
+    if (ownerId && !retainAudio) {
+      // Navigation can outlive the cancellation callback. Keep the original
+      // identity until native confirms, so another view can safely retry.
+      markVoiceCancellation(ownerId);
+      const epoch = state.epoch;
+      void voiceCancelWithDeadline(() => cancelVoice(ownerId))
+        .then(() => { clearVoiceCancellation(ownerId); forgetVoiceOrigin(ownerId); })
+        .catch(() => {
+          if (state.epoch === epoch && state.enabled && pendingVoiceCancellation() === ownerId) {
+            setRetryCancellation(true);
+            setNote('No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.');
+          }
+        });
+    }
   }, []);
   // Shared session components call cancel on unmount; preserve a completed
   // recording awaiting recovery through that cleanup.
@@ -48,11 +62,13 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     if (!state.retry || !id || state.pending || discarding || !window.confirm('¿Descartar el audio pendiente de transcripción?')) return;
     state.pending = true;
     setDiscarding(true);
-    void cancelVoice(id).then(() => {
+    markVoiceCancellation(id);
+    void voiceCancelWithDeadline(() => cancelVoice(id)).then(() => {
+      clearVoiceCancellation(id);
       forgetVoiceOrigin(id);
       if (state.epoch === epoch) release(false);
     }).catch(error => {
-      if (state.epoch === epoch) { state.pending = false; setNote(error.message || 'No pude descartar el audio. Inténtalo de nuevo.'); }
+      if (state.epoch === epoch) { state.pending = false; setRetryCancellation(true); setNote(error.message || 'No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.'); }
     }).finally(() => setDiscarding(false));
   }, [discarding, release]);
   useEffect(() => {
@@ -63,8 +79,16 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       if (deferred) { deferredTranscripts.delete(destination); setDraft({ id: ++owner.current.epoch, text: deferred }); }
     }
     const refresh = async () => {
+      if (pendingVoiceCancellation()) {
+        if (live) { setRetryCancellation(true); setNote('No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.'); }
+        return;
+      }
       const value = await checkVoice();
       if (!live) return;
+      if (pendingVoiceCancellation()) {
+        setRetryCancellation(true); setNote('No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.');
+        return;
+      }
       setRetryAvailability(false);
       if (value.recoveryPending && value.busy) {
         setAvailability({ ...value, available: false, status: 'voice_finishing' });
@@ -150,6 +174,27 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
   }, [phase, stop]);
   const start = useCallback(() => {
     const state = owner.current;
+    const pendingCancellation = pendingVoiceCancellation();
+    if (state.enabled && pendingCancellation && !state.pending) {
+      const epoch = state.epoch;
+      state.pending = true; setNote('Deteniendo el micrófono…');
+      void voiceCancelWithDeadline(() => cancelVoice(pendingCancellation)).then(async () => {
+        clearVoiceCancellation(pendingCancellation); forgetVoiceOrigin(pendingCancellation);
+        if (state.epoch === epoch) {
+          if (state.ownerId === pendingCancellation) { state.ownerId = ''; state.session = ''; state.retry = false; setRetryPending(false); }
+          setRetryCancellation(Boolean(pendingVoiceCancellation()));
+          setNote('Micrófono detenido. Toca de nuevo para dictar.');
+          try {
+            const current = await checkVoice();
+            if (state.epoch === epoch && state.enabled) { setAvailability(current); setRetryAvailability(false); }
+          } catch {
+            if (state.epoch === epoch && state.enabled) setRetryAvailability(true);
+          }
+        }
+      }).catch(error => { if (state.epoch === epoch) { setRetryCancellation(true); setNote(error.message); } })
+        .finally(() => { if (state.epoch === epoch) state.pending = false; });
+      return;
+    }
     if (state.enabled && state.retry && state.session && !state.pending) { stop(); return; }
     if (!state.enabled || state.pending || state.session || !(retryAvailability || availability?.available || availability?.status === 'assets_required')) return;
     const epoch = ++state.epoch, ownerId = localIdentifier(); state.ownerId = ownerId; state.pending = true; setNote(undefined); setDraft(undefined);
@@ -181,9 +226,13 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       if (state.epoch !== epoch || !state.enabled) return;
       state.session = value.sessionId; setElapsed(0); setPhase('recording');
       setNote('Grabando. Toca el micrófono otra vez para revisar la transcripción.');
-    })().catch(error => { if (state.epoch === epoch) { forgetVoiceOrigin(ownerId); state.ownerId = ''; setNote(error.message); } }).finally(() => { if (state.epoch === epoch) state.pending = false; });
+    })().catch(error => { if (state.epoch === epoch) {
+      if (error instanceof VoiceCancelUnconfirmed) { markVoiceCancellation(ownerId); setRetryCancellation(true); }
+      else forgetVoiceOrigin(ownerId);
+      state.ownerId = ''; setNote(error.message);
+    } }).finally(() => { if (state.epoch === epoch) state.pending = false; });
   }, [availability, destination, retryAvailability, stop]);
-  return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : retryAvailability || availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
+  return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : retryCancellation || retryAvailability || availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
     phase, elapsed, level, partial, note, draft, start, stop, cancel, retryPending, discarding, discardPending,
     draftTaken: id => setDraft(value => value?.id === id ? undefined : value),
     speaking: false, muted: true, stopSpeaking() {}, setMuted() {}, typed() {}, sent() {}, sendOnStop: false, setSendOnStop() {} };

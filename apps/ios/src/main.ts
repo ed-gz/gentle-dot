@@ -31,8 +31,8 @@ import { createDesktopTools } from './desktop-tools.ts';
 import { createLocalTools } from './agent-tools.ts';
 import { createTrustedApprovals } from './trusted-approvals.ts';
 import { createConversationRequests } from './conversation-requests.ts';
-import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, VoiceRetryPending } from './perception.ts';
-import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin } from './voice-origin.ts';
+import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCancelWithDeadline, VoiceCancelUnconfirmed, VoiceRetryPending } from './perception.ts';
+import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, markVoiceCancellation, clearVoiceCancellation, pendingVoiceCancellation } from './voice-origin.ts';
 import { isTauri } from '@tauri-apps/api/core';
 import { listSharedImports, importSharedItem, recoverImportBatch } from './device-bridge.ts';
 import { parseInvitation, pairDevice } from './device-pairing.ts';
@@ -503,6 +503,13 @@ function renderChat() {
 function add(entry: ChatEntry) { if (!entry.activities) entry.activities = entries.find(prior => prior.id === entry.id)?.activities; persistence.enqueue(entries); persistence.enqueue([entry]); entries = updateEntry(entries, entry); renderChat(); scheduleSave(); }
 function notice(text: string, target: Engine = selected, id: string = localIdentifier()) { add({ id, role: 'notice', text, engine: target, state: 'complete', at: Date.now() }); }
 function remoteId(id: string) { return `host:${host}|${remoteConversation}|${id}`; }
+function interruptRemoteEntries() {
+  // Only one host socket can be active. When it goes away, no pending remote
+  // stream can still progress, including one from the host just replaced.
+  entries = entries.map(entry => entry.engine === 'gentle' && entry.state === 'pending'
+    ? { ...entry, state: 'interrupted', ...(entry.activities ? { activities: entry.activities.map(activity => activity.status === 'running' ? { ...activity, status: 'failed' as const } : activity) } : {}) }
+    : entry);
+}
 function updateControls() {
   const health = connectionHealth({ local: availability, linkedStatus, agentState: hostAgentState, hostConfigured: Boolean(settings.url), preference, capabilities: { workSync: linked.supportsWorkSync(), meetingDrafts: linked.supportsMeetingDrafts() } });
   if (!localBusy && !recoveringNativeId && !pendingRemote) selected = preference === 'auto' && !localRecoveryReady && health.host.state === 'ready' ? 'gentle' : health.selectedEngine;
@@ -554,7 +561,7 @@ function handleMessage(message: ServerMessage) {
   }
   if (message.type === 'interrupted') {
     linkedBusy = false;
-    entries = entries.map(entry => entry.engine === 'gentle' && entry.id.startsWith(remoteId('')) && entry.state === 'pending' ? { ...entry, state: 'interrupted' } : entry);
+    interruptRemoteEntries();
     unconfirmedRemote(); renderChat(); scheduleSave();
     if (selected === 'gentle') setIntent({});
   }
@@ -692,7 +699,7 @@ const linked = createLinkedChat({
     element('connection-badge').textContent = value === 'ready' ? 'VINCULADO' : 'LOCAL';
     if (value !== 'ready') {
       linkedBusy = false; if (!localBusy) element('active-tool').textContent = '';
-      entries = entries.map(entry => entry.engine === 'gentle' && entry.id.startsWith(`host:${host}|`) && entry.state === 'pending' ? { ...entry, state: 'interrupted' } : entry);
+      interruptRemoteEntries();
       unconfirmedRemote();
       renderChat(); scheduleSave();
     }
@@ -985,6 +992,10 @@ queueMicrotask(() => void initialize());
 
 let voiceSession: string | undefined;
 let voiceOwner: string | undefined;
+// If the native bridge cannot confirm cancellation, keep the original owner
+// and offer an owner-scoped retry before starting any other recording.
+let uncertainVoiceOwner: string | undefined;
+let voiceCancelPending = false;
 let voiceRetry = false;
 let voiceStopping = false;
 let foreignVoiceOwner: string | undefined;
@@ -996,11 +1007,19 @@ let voicePreviewTimer: ReturnType<typeof setInterval> | undefined;
 let voiceRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
 function stopVoicePreview() { clearInterval(voicePreviewTimer); voicePreviewTimer = undefined; element('dictate').style.removeProperty('--voice-level'); }
 async function recoverPendingVoice() {
-  if (!isTauri() || document.hidden || panel !== 'chat' || voiceStarting || (voiceSession && !voiceRetry)) return;
+  if (!isTauri() || document.hidden || panel !== 'chat' || voiceStarting || uncertainVoiceOwner || voiceCancelPending || (voiceSession && !voiceRetry)) return;
+  const cancellation = pendingVoiceCancellation();
+  if (cancellation) {
+    uncertainVoiceOwner = cancellation;
+    element('dictate').setAttribute('aria-label', 'Reintentar detener micrófono');
+    element('voice-status').textContent = 'No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.';
+    return;
+  }
   const generation = voiceGeneration;
   try {
     const state = await checkVoice();
     if (generation !== voiceGeneration || document.hidden || panel !== 'chat' || voiceStarting) return;
+    if (pendingVoiceCancellation()) { void recoverPendingVoice(); return; }
     if (state.recoveryPending && state.busy) {
       element('voice-status').textContent = 'Terminando el audio guardado…';
       clearTimeout(voiceRecoveryTimer);
@@ -1052,6 +1071,7 @@ function showVoicePreview(id: string, generation: number) {
   void refresh();
 }
 async function cancelDictation(reason: 'navigation' | 'manual' = 'navigation') {
+  if (voiceCancelPending) return;
   const wasActive = voiceStarting || Boolean(voiceSession);
   const owner = voiceOwner; voiceOwner = undefined;
   voiceGeneration++; voiceController?.abort(); voiceSession = undefined; voiceRetry = false; voiceStopping = false; clearTimeout(voiceTimer); stopVoicePreview();
@@ -1059,13 +1079,43 @@ async function cancelDictation(reason: 'navigation' | 'manual' = 'navigation') {
   voiceStarting = false;
   const control = element<HTMLButtonElement>('dictate');
   control.disabled = false; control.setAttribute('aria-pressed', 'false'); control.setAttribute('aria-label', 'Dictar');
-  if (wasActive) element('voice-status').textContent = reason === 'manual'
+  if (owner && isTauri()) {
+    uncertainVoiceOwner = owner;
+    markVoiceCancellation(owner);
+    await retryVoiceCancellation(reason);
+  } else if (wasActive) element('voice-status').textContent = reason === 'manual'
     ? 'Dictado cancelado. Toca el micrófono para volver a intentarlo.'
     : 'El dictado se interrumpió al salir de Capri. Toca el micrófono para intentarlo de nuevo.';
-  if (isTauri() && owner) await cancelVoice(owner).catch(() => {});
-  if (owner) forgetVoiceOrigin(owner);
+}
+async function retryVoiceCancellation(reason: 'navigation' | 'manual' = 'manual') {
+  const owner = uncertainVoiceOwner;
+  if (!owner || voiceCancelPending) return;
+  voiceCancelPending = true;
+  const control = element<HTMLButtonElement>('dictate');
+  control.disabled = true;
+  element('voice-status').textContent = 'Deteniendo el micrófono…';
+  try {
+    await voiceCancelWithDeadline(() => cancelVoice(owner));
+    if (uncertainVoiceOwner !== owner) return;
+    uncertainVoiceOwner = undefined;
+    clearVoiceCancellation(owner);
+    forgetVoiceOrigin(owner);
+    control.setAttribute('aria-label', 'Dictar');
+    element('voice-status').textContent = reason === 'manual'
+      ? 'Dictado cancelado. Toca el micrófono para volver a intentarlo.'
+      : 'El dictado se interrumpió al salir de Capri. Toca el micrófono para intentarlo de nuevo.';
+  } catch {
+    if (uncertainVoiceOwner !== owner) return;
+    control.setAttribute('aria-label', 'Reintentar detener micrófono');
+    element('voice-status').textContent = 'No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.';
+  } finally {
+    voiceCancelPending = false;
+    control.disabled = false;
+  }
 }
 element('dictate').addEventListener('click', async () => {
+  uncertainVoiceOwner ??= pendingVoiceCancellation();
+  if (uncertainVoiceOwner) { void retryVoiceCancellation(); return; }
   if (voiceStarting) { void cancelDictation('manual'); return; }
   const current = ++voiceGeneration;
   const owner = voiceSession ? voiceOwner : localIdentifier();
@@ -1115,6 +1165,11 @@ element('dictate').addEventListener('click', async () => {
       if (error instanceof VoiceRetryPending && stopping && error.sessionId.toLowerCase() === stopping.toLowerCase()) {
         voiceSession = error.sessionId; voiceRetry = true; element('discard-voice').hidden = false;
       }
+      if (error instanceof VoiceCancelUnconfirmed && owner) {
+        uncertainVoiceOwner = owner;
+        markVoiceCancellation(owner);
+        voiceOwner = undefined;
+      }
       element('voice-status').textContent = errorText(error);
     }
   }
@@ -1122,8 +1177,8 @@ element('dictate').addEventListener('click', async () => {
     if (current === voiceGeneration) {
       voiceStarting = false; control.disabled = false;
       voiceStopping = false;
-      if (!voiceSession) { if (owner) forgetVoiceOrigin(owner); voiceOwner = undefined; }
-      control.setAttribute('aria-pressed', String(!!voiceSession && !voiceRetry)); control.setAttribute('aria-label', voiceRetry ? 'Reintentar transcripción' : voiceSession ? 'Terminar dictado' : 'Dictar');
+      if (!voiceSession) { if (owner && !uncertainVoiceOwner) forgetVoiceOrigin(owner); voiceOwner = undefined; }
+      control.setAttribute('aria-pressed', String(!!voiceSession && !voiceRetry)); control.setAttribute('aria-label', uncertainVoiceOwner ? 'Reintentar detener micrófono' : voiceRetry ? 'Reintentar transcripción' : voiceSession ? 'Terminar dictado' : 'Dictar');
     }
   }
 });

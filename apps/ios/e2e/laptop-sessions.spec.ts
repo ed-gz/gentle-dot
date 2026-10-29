@@ -419,7 +419,7 @@ test('a session can discard a silent recording explicitly, and a failed discard 
   expect(await page.evaluate(() => (globalThis as any).voiceDiscardCalls)).toBe(0);
   page.once('dialog', dialog => dialog.accept());
   await discard.click();
-  await expect(page.getByText('No pude descartar el audio.')).toBeVisible();
+  await expect(page.getByText(/No pude confirmar que el micrófono se detuvo/)).toBeVisible();
   await expect(discard).toBeVisible();
   page.once('dialog', dialog => dialog.accept());
   await discard.click();
@@ -427,6 +427,70 @@ test('a session can discard a silent recording explicitly, and a failed discard 
   expect(await page.evaluate(() => (globalThis as any).voiceDiscardCalls)).toBe(2);
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
+});
+
+test('an unconfirmed session cancellation can be retried safely from the main chat', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '12345678-1234-1234-1234-123456789012';
+    state.cancelOwners = []; state.startOwners = [];
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
+      if (command.endsWith('start_voice')) { state.startOwners.push(args.ownerId); return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('cancel_voice')) {
+        state.cancelOwners.push(args.ownerId);
+        if (state.cancelOwners.length === 1) throw new Error('bridge unavailable');
+        return { ok: true };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
+  await page.locator('[data-panel="chat"]').click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).cancelOwners.length)).toBe(1);
+  await page.locator('#dictate').click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).cancelOwners.length)).toBe(2);
+  expect(await page.evaluate(() => (globalThis as any).cancelOwners)).toEqual([
+    await page.evaluate(() => (globalThis as any).startOwners[0]), await page.evaluate(() => (globalThis as any).startOwners[0]),
+  ]);
+  expect(await page.evaluate(() => (globalThis as any).startOwners.length)).toBe(1);
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  expect(await page.evaluate(() => (globalThis as any).startOwners.length)).toBe(2);
+});
+
+test('a session shows an unconfirmed cancellation and retries its original owner', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '12345678-1234-1234-1234-123456789012';
+    state.cancelOwners = []; state.startOwners = [];
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
+      if (command.endsWith('start_voice')) { state.startOwners.push(args.ownerId); return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('cancel_voice')) {
+        state.cancelOwners.push(args.ownerId);
+        if (state.cancelOwners.length === 1) throw new Error('bridge unavailable');
+        return { ok: true };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Cancelar grabación' }).click();
+  await expect(page.getByText(/No pude confirmar que el micrófono se detuvo/)).toBeVisible();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.getByText('Micrófono detenido. Toca de nuevo para dictar.')).toBeVisible();
+  const { cancelOwners, startOwners } = await page.evaluate(() => ({ cancelOwners: (globalThis as any).cancelOwners, startOwners: (globalThis as any).startOwners }));
+  expect(cancelOwners).toEqual([startOwners[0], startOwners[0]]);
+  expect(startOwners).toHaveLength(1);
 });
 
 

@@ -33,6 +33,45 @@ async function chooseEngine(page: import('@playwright/test').Page, value: string
   await page.locator('#engine').selectOption(value);
 }
 
+test('changing laptops interrupts the previous host stream without resending it', async ({ page }) => {
+  let firstSend: ((data: object) => void) | undefined;
+  const submissions: string[] = [];
+  for (const [host, first] of [['first.example', true], ['second.example', false]] as const) {
+    await page.routeWebSocket(`wss://${host}/ws`, ws => {
+      let sequence = 0;
+      const send = (data: object) => ws.send(JSON.stringify({ seq: sequence++, ...data }));
+      if (first) firstSend = send;
+      ws.onMessage(raw => {
+        const message = JSON.parse(String(raw));
+        if (message.type === 'hello') send({ type: 'ready', agentState: 'idle', conversationId: 'main' });
+        if (message.type === 'get_history') send({ type: 'history', conversationId: 'main', messages: [] });
+        if (message.type === 'send') submissions.push(message.text);
+      });
+    });
+  }
+  await page.goto('/');
+  await openManualConnection(page);
+  await page.locator('#url').fill('wss://first.example/ws');
+  await page.locator('#token').fill('fixture-one');
+  await page.locator('#connection button[type="submit"]').click();
+  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+  await page.locator('[data-panel="chat"]').click();
+  firstSend!({ type: 'message_delta', messageId: 'stream-1', delta: 'Respuesta parcial' });
+  firstSend!({ type: 'activity', messageId: 'stream-1', activity: { id: 'task-1', title: 'Consultando contexto', kind: 'read', status: 'running' } });
+  const card = page.locator('.chat-card[data-role="assistant"]').filter({ hasText: 'Respuesta parcial' });
+  await expect(card).toHaveAttribute('data-state', 'pending');
+  await openManualConnection(page);
+  await page.locator('#url').fill('wss://second.example/ws');
+  await page.locator('#token').fill('fixture-two');
+  await page.locator('#connection button[type="submit"]').click();
+  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+  await page.locator('[data-panel="chat"]').click();
+  await expect(card).toHaveAttribute('data-state', 'interrupted');
+  await expect(card).toContainText('No se reenvía automáticamente');
+  await expect(card.locator('.tool-trace > summary')).toContainText('interrumpida o fallida');
+  expect(submissions).toEqual([]);
+});
+
 test('browser never claims native inference; draft survives reload without sending', async ({ page }) => {
   await page.goto('/');
   await page.locator('[data-panel="chat"]').click();
@@ -284,6 +323,41 @@ test('a preserved voice command returns to its original chat after navigation', 
   await page.locator('#dictate').click();
   await expect(page.locator('#prompt')).toHaveValue('Transcripción recuperada.');
   await expect(page.locator('#discard-voice')).toBeHidden();
+});
+
+test('an unconfirmed microphone cancellation retains its owner and retries before recording again', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '01234567-89ab-cdef-0123-456789abcdef';
+    let owner = '', attempts = 0;
+    state.voiceCancelAttempts = [];
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
+      if (command.endsWith('start_voice')) { owner = args.ownerId; state.voiceOwner = owner; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('cancel_voice')) {
+        state.voiceCancelAttempts.push(args.ownerId);
+        if (++attempts === 1) throw new Error('bridge unavailable');
+        return { ok: true };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  await page.locator('[data-panel="settings"]').click();
+  await page.locator('[data-panel="chat"]').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar detener micrófono');
+  await expect(page.locator('#voice-status')).toContainText('No pude confirmar');
+  expect(await page.evaluate(() => sessionStorage.getItem(`capri.voice.origin.${(globalThis as any).voiceOwner}`))).toBe('chat');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
+  await expect(page.locator('#voice-status')).toContainText('Dictado cancelado');
+  expect(await page.evaluate(() => sessionStorage.getItem(`capri.voice.origin.${(globalThis as any).voiceOwner}`))).toBeNull();
+  expect(await page.evaluate(() => (globalThis as any).voiceCancelAttempts)).toEqual([
+    await page.evaluate(() => (globalThis as any).voiceOwner), await page.evaluate(() => (globalThis as any).voiceOwner),
+  ]);
 });
 
 test('an unattributed pending recording can be explicitly discarded without inserting its contents', async ({ page }) => {

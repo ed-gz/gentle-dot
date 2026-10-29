@@ -108,6 +108,9 @@ async function native(command: string, args?: Record<string, unknown>): Promise<
 export class VoiceBridgeTimeout extends Error {
   constructor(message: string) { super(message); this.name = 'VoiceBridgeTimeout'; }
 }
+export class VoiceCancelUnconfirmed extends Error {
+  constructor() { super('No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.'); this.name = 'VoiceCancelUnconfirmed'; }
+}
 /** A late result can never turn a timed-out status check into success. */
 export async function withVoiceDeadline<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -124,11 +127,16 @@ export async function voiceStartWithDeadline<T>(operation: Promise<T>, cancelOwn
     return await withVoiceDeadline(operation, timeoutMs, 'El micrófono tardó demasiado. Revisa el permiso de iOS y vuelve a intentarlo.');
   } catch (error) {
     if (error instanceof VoiceBridgeTimeout) {
-      try { await withVoiceDeadline(cancelOwner(), cancelTimeoutMs, 'No se confirmó la cancelación.'); }
-      catch { throw new Error('No pude confirmar que el micrófono se detuvo. Sal de Capri para interrumpirlo.'); }
+      await voiceCancelWithDeadline(cancelOwner, cancelTimeoutMs);
     }
     throw error;
   }
+}
+
+/** A missing callback is not proof that the microphone stopped. */
+export async function voiceCancelWithDeadline(cancelOwner: () => Promise<void>, timeoutMs = 8_000): Promise<void> {
+  try { await withVoiceDeadline(cancelOwner(), timeoutMs, 'No se confirmó la cancelación.'); }
+  catch { throw new VoiceCancelUnconfirmed(); }
 }
 
 export function parseVoiceAvailability(value: unknown): VoiceAvailability {
@@ -234,7 +242,13 @@ export async function startVoice(ownerId?: string): Promise<VoiceSession> {
   if (!ownerId) throw new Error('No pude identificar este dictado. Vuelve a intentarlo.');
   const owner = sessionId(ownerId);
   const reply = await voiceStartWithDeadline(native('start_voice', { ownerId: owner }), () => cancelVoice(owner));
-  return parseVoiceSession(reply);
+  try { return parseVoiceSession(reply); }
+  catch (error) {
+    // A malformed or rejected reply does not prove that native capture never
+    // started. Fence this owner before letting the UI start another recording.
+    await voiceCancelWithDeadline(() => cancelVoice(owner));
+    throw error;
+  }
 }
 /** Returns a draft; it never sends the instruction to a conversation or service. */
 export async function stopVoice(id: string): Promise<VoiceTranscript> {

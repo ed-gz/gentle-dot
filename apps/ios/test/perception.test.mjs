@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MAX_DOCUMENT_BYTES, hashSourceBytes, parseVoiceAvailability, parseVoiceSession, parseVoiceTranscript, VoiceRetryPending, VoiceBridgeTimeout, withVoiceDeadline, voiceStartWithDeadline,
+import { MAX_DOCUMENT_BYTES, hashSourceBytes, parseVoiceAvailability, parseVoiceSession, parseVoiceTranscript, VoiceRetryPending, VoiceBridgeTimeout, VoiceCancelUnconfirmed, voiceCancelWithDeadline, withVoiceDeadline, voiceStartWithDeadline,
   validateDocument, parseRecognizedDocument } from '../src/perception.ts';
 
 const id = '01234567-89ab-cdef-0123-456789abcdef';
@@ -27,7 +27,10 @@ test('voice timeout reports an unresponsive bridge and fences only the timed-out
   finishStart('late');
   await assert.rejects(voiceStartWithDeadline(Promise.reject(new Error('denied')), async () => { cancelled++; }, 50), /denied/);
   assert.equal(cancelled, 1, 'ordinary native failure must not cancel another capture');
-  await assert.rejects(voiceStartWithDeadline(new Promise(() => {}), () => new Promise(() => {}), 5, 5), /No pude confirmar que el micrófono se detuvo/);
+  await assert.rejects(voiceStartWithDeadline(new Promise(() => {}), () => new Promise(() => {}), 5, 5), VoiceCancelUnconfirmed);
+  await assert.rejects(voiceCancelWithDeadline(() => Promise.reject(new Error('bridge lost')), 50), VoiceCancelUnconfirmed);
+  await assert.rejects(voiceCancelWithDeadline(() => new Promise(() => {}), 5), VoiceCancelUnconfirmed);
+  await voiceCancelWithDeadline(() => Promise.resolve(), 50);
 });
 
 test('retry is limited to the original native voice session', () => {
