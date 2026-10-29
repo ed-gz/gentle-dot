@@ -1,6 +1,7 @@
 name: Capri personal IPA via encrypted log
 
-# Public source, standard public runner; private art and encryption key are
+# Public source for the suspension and voice candidate, standard public runner;
+# private art and encryption key are
 # injected as short-lived Actions secrets. No plaintext IPA or art is uploaded.
 on:
   push:
