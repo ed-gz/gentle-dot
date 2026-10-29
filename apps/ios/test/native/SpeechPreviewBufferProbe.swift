@@ -1,5 +1,7 @@
 import AVFoundation
 import CoreMedia
+import Darwin
+import Dispatch
 import Foundation
 import Speech
 
@@ -30,19 +32,68 @@ func runPreviewBufferProbe(locale: Locale) async throws {
     guard prepared.url.standardizedFileURL == converted.standardizedFileURL, prepared.length > 0 else { throw ProbeError.audio }
     let before = try Data(contentsOf: converted)
     var failures = 0
-    for (label, int16) in [("int16", true), ("float32", false)] {
+    for label in ["int16", "float32"] {
         do {
-            let file = int16 ? try AVAudioFile(forReading: converted, commonFormat: .pcmFormatInt16, interleaved: true) : try AVAudioFile(forReading: converted)
-            guard file.processingFormat.sampleRate == 16_000,
-                  file.processingFormat.commonFormat == (int16 ? .pcmFormatInt16 : .pcmFormatFloat32) else { throw ProbeError.audio }
-            try await transcribePreviewBuffers(file: file, locale: locale)
-            print("PREVIEW PASS: \(label) synthetic buffers transcribed; not an iPhone test.")
+            // The framework can terminate the process for an unsupported input
+            // representation. Run each comparison separately so the parent can
+            // report the exact signal and still release its locale reservation.
+            let child = Process()
+            child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            child.arguments = ["--preview-buffer-child", converted.path, locale.identifier, label]
+            child.standardError = FileHandle.nullDevice
+            let finished = DispatchSemaphore(value: 0)
+            child.terminationHandler = { _ in finished.signal() }
+            try child.run()
+            if finished.wait(timeout: .now() + 25) == .timedOut {
+                kill(child.processIdentifier, SIGKILL)
+                child.waitUntilExit()
+                failures += 1
+                print("PREVIEW FAIL: \(label) child timed out; no transcript confirmed.")
+                continue
+            }
+            child.waitUntilExit()
+            guard child.terminationReason == .exit, child.terminationStatus == 0 else {
+                failures += 1
+                let reason = child.terminationReason == .uncaughtSignal ? "signal" : "exit"
+                print("PREVIEW FAIL: \(label) child \(reason)=\(child.terminationStatus); no transcript confirmed.")
+                continue
+            }
         } catch {
             failures += 1
             print("PREVIEW FAIL: \(label) synthetic buffers \(errorIdentity(error)); no transcript confirmed.")
         }
     }
     guard try Data(contentsOf: converted) == before, failures == 0 else { throw ProbeError.audio }
+}
+
+/// Called only by the test binary's explicit child mode. Require the known
+/// synthetic filename inside the runner's temporary directory.
+@available(macOS 26.0, *)
+func runPreviewBufferChild(arguments: [String]) async -> Int32 {
+    guard arguments.count == 4, arguments[0] == "--preview-buffer-child",
+          ["int16", "float32"].contains(arguments[3]),
+          arguments[2].lowercased().replacingOccurrences(of: "_", with: "-") == "es-mx" else {
+        print("PREVIEW FAIL: invalid synthetic child arguments."); return 2
+    }
+    let fileURL = URL(fileURLWithPath: arguments[1]).standardizedFileURL.resolvingSymlinksInPath()
+    let temp = FileManager.default.temporaryDirectory.standardizedFileURL.resolvingSymlinksInPath()
+    guard fileURL.lastPathComponent == "converted.caf",
+          fileURL.deletingLastPathComponent().lastPathComponent.hasPrefix("capri-preview-buffers-"),
+          fileURL.deletingLastPathComponent().deletingLastPathComponent() == temp else {
+        print("PREVIEW FAIL: invalid synthetic child path."); return 2
+    }
+    do {
+        let int16 = arguments[3] == "int16"
+        let file = int16 ? try AVAudioFile(forReading: fileURL, commonFormat: .pcmFormatInt16, interleaved: true) : try AVAudioFile(forReading: fileURL)
+        guard file.processingFormat.sampleRate == 16_000,
+              file.processingFormat.commonFormat == (int16 ? .pcmFormatInt16 : .pcmFormatFloat32) else { throw ProbeError.audio }
+        try await transcribePreviewBuffers(file: file, locale: Locale(identifier: arguments[2]))
+        print("PREVIEW PASS: \(arguments[3]) synthetic buffers transcribed; not an iPhone test.")
+        return 0
+    } catch {
+        print("PREVIEW FAIL: \(arguments[3]) synthetic buffers \(errorIdentity(error)); no transcript confirmed.")
+        return 1
+    }
 }
 
 @available(macOS 26.0, *)

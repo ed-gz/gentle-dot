@@ -104,7 +104,12 @@ private enum InstallProbeError: Error { case notInstalled }
 @main struct SpeechAnalyzerInstallProbe {
     static func main() async {
         setbuf(stdout, nil); setbuf(stderr, nil)
-        if CommandLine.arguments.dropFirst().elementsEqual(["--diagnostics-self-test"]) {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.first == "--preview-buffer-child" {
+            if #available(macOS 26.0, *) { exit(await runPreviewBufferChild(arguments: arguments)) }
+            print("PREVIEW SKIP: macOS 26 required."); exit(2)
+        }
+        if arguments == ["--diagnostics-self-test"] {
             let unknown = "com.apple.private-token"
             let output = diagnosticIdentifier(unknown, allowed: ["SFSpeechErrorDomain"])
             let known = diagnosticIdentifier("SFSpeechErrorDomain", allowed: ["SFSpeechErrorDomain"])
