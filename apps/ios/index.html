@@ -26,7 +26,7 @@
       </div>
       <div id="conversation-scroll" class="conversation-scroll" tabindex="0" aria-label="Historial de conversación">
         <p id="history-loading" class="hint" role="status">Recuperando tu conversación…</p>
-        <div id="empty-conversation" class="empty-conversation" hidden><h1>¿Qué resolvemos<span> hoy?</span></h1><p>Tu mundo, mi siguiente misión.</p><p class="hint">Escribe, dicta o trae un archivo.</p></div>
+        <div id="empty-conversation" class="empty-conversation" hidden><h1>¿Qué hacemos<span> hoy?</span></h1></div>
         <div id="engine-help"><p id="engine-status" class="engine-status hint" role="status">Comprobando el motor local…</p><button id="health-action" type="button" hidden></button></div>
         <div id="cards" class="conversation" role="log" aria-label="Conversación" aria-live="polite" aria-relevant="additions"></div>
         <div id="requests" aria-label="Revisiones y preguntas de Capri"></div>
@@ -37,7 +37,7 @@
         <div class="compose-surface">
           <div id="attachment-context" class="hint"></div>
           <div class="actions composer-actions">
-            <button id="attach" type="button" aria-label="Adjuntar archivos" title="Añadir archivos"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+            <button id="attach" type="button" aria-label="Adjuntar archivos" title="Añadir archivos" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
             <input id="chat-files" aria-label="Seleccionar archivos" type="file" multiple accept="audio/*,text/plain,text/markdown,application/pdf,image/*,.m4a,.txt,.md" hidden />
             <button id="camera" type="button" aria-label="Tomar foto" title="Tomar foto"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3"/></svg></button>
             <input id="chat-camera" aria-label="Capturar foto" type="file" accept="image/*" capture="environment" hidden />

@@ -1,0 +1,19 @@
+/* Procedural in-app choreography; no surface can intercept a control. */
+.capri-theater { position: fixed; inset: 0; z-index: 100; overflow: hidden; pointer-events: none; }
+.capri-theater, .capri-theater * { pointer-events: none !important; }
+.capri-theater > svg { display: block; width: 100%; height: 100%; }
+.capri-theater-border { fill: none; stroke: #ff65ad; stroke-width: 3; opacity: .5; filter: drop-shadow(0 0 4px #fa4b9a); }
+.capri-theater-arm { fill: none; stroke: #fb5898; stroke-width: 20; stroke-linecap: round; filter: drop-shadow(3px 3px 0 #682f96); }
+.capri-theater-hand { fill: #fa619f; stroke: #2b1934; stroke-width: 3; }
+.capri-theater-left, .capri-theater-right { opacity: 0; transition: opacity 220ms ease; }
+.capri-theater[data-beat='left-hand'] .capri-theater-left,
+.capri-theater[data-beat='right-hand'] .capri-theater-left,
+.capri-theater[data-beat='right-hand'] .capri-theater-right,
+.capri-theater[data-beat='haul'] .capri-theater-left,
+.capri-theater[data-beat='haul'] .capri-theater-right,
+.capri-theater[data-beat='regrab'] .capri-theater-left,
+.capri-theater[data-beat='regrab'] .capri-theater-right { opacity: .72; }
+.capri-theater[data-beat='shatter'] .capri-theater-border { opacity: .8; stroke: #baff67; }
+.capri-theater[data-beat='dive'] .capri-theater-border,
+.capri-theater[data-beat='unfold'] .capri-theater-border { opacity: .18; }
+@media (prefers-reduced-motion: reduce) { .capri-theater { display: none !important; } }

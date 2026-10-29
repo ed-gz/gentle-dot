@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { phonePerches } from '../src/companion-space.ts';
+import { occupiedPhoneSpace, phonePerches, phonePositionFree } from '../src/companion-space.ts';
 import { RoamDirector } from '../../../packages/ui/src/capri2d/roam.ts';
 test('phone perches avoid text and controls, and closed space has no fallback', () => {
  const area={x:0,y:0,width:358,height:500}, size={width:86,height:122};
@@ -31,4 +31,20 @@ test('invalid or too-small geometry produces no destinations', () => {
  assert.deepEqual(phonePerches(area,{width:NaN,height:100},[]),[]);
  assert.deepEqual(phonePerches(area,{width:0,height:100},[]),[]);
  assert.deepEqual(phonePerches(area,{width:201,height:100},[]),[]);
+});
+test('long panel content is treated as occupied without covering the reserved shelf', () => {
+ const priorDocument=globalThis.document, priorFilter=globalThis.NodeFilter;
+ let count=0;
+ try {
+  globalThis.NodeFilter={SHOW_TEXT:4};
+  globalThis.document={
+   createTreeWalker:()=>({ currentNode:{textContent:'x',parentElement:{closest:()=>null}}, nextNode:()=>count++ < 3001 }),
+   createRange:()=>({selectNodeContents(){},getClientRects:()=>[]}),
+  };
+  const panel={querySelectorAll:()=>[],getBoundingClientRect:()=>({left:0,top:96,width:390,height:500})};
+  const occupied=occupiedPhoneSpace(panel,{left:0,top:0,width:390,height:596});
+  assert.deepEqual(occupied,[{x:0,y:96,width:390,height:500}]);
+  assert.equal(phonePositionFree({x:4,y:4,width:60,height:86},occupied),true);
+  assert.equal(phonePositionFree({x:4,y:100,width:60,height:86},occupied),false);
+ } finally { globalThis.document=priorDocument; globalThis.NodeFilter=priorFilter; }
 });

@@ -8,6 +8,15 @@ async function linkedPhone(page: Page) {
       if (command.endsWith('results_list')) return { ok: true, items: [] };
       if (command.startsWith('plugin:device-bridge|')) args = args?.request;
       state.sessionCalls.push({ command, ...(command.endsWith('https_request') ? { body: args.body } : {}) });
+      // Simulate a persistent Keychain item; success without storing the
+      // pending selection would make the app correctly reject confirmation.
+      if (command.endsWith('secret_get')) {
+        const value = sessionStorage.getItem(`fixture-keychain:${args.scope}:${args.account}`);
+        return value === null ? { ok: true } : { ok: true, value };
+      }
+      if (command.endsWith('secret_set')) {
+        sessionStorage.setItem(`fixture-keychain:${args.scope}:${args.account}`, args.value); return { ok: true };
+      }
       if (command.endsWith('check_availability')) return { available: false, status: 'model_not_ready', supportsSpanish: false };
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_voice')) return { available: !state.voiceNeedsAssets, status: state.voiceNeedsAssets ? 'assets_required' : 'available', assetsInstalled: !state.voiceNeedsAssets, microphonePermission: 'granted', recording: false };
@@ -57,7 +66,7 @@ async function connectPhone(page: Page) {
   await page.getByText('Conexión manual', { exact: true }).click();
   await page.locator('#url').fill('wss://sessions.fixture.example/ws'); await page.locator('#token').fill('fixture-only');
   await page.locator('#connection button[type="submit"]').click();
-  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+  await expect(page.locator('#status')).toContainText('Acceso guardado en Keychain');
 }
 
 async function selectSessionFile(page: Page, file: { name: string; mimeType: string; buffer: Buffer }) {
@@ -154,6 +163,31 @@ test('session dictation displays provisional text without adding it to the draft
   await expect(page.locator('.agent-reply .voice-partial')).toHaveText('Hipótesis nueva');
   await page.getByRole('button', { name: 'Terminar y revisar' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Anterior Revisa la evidencia.');
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toEqual([]);
+});
+
+test('session microphone meter follows native capture level without sending audio or text', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
+    state.meterLevel = 0.7; state.meterRecording = false;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('start_voice')) state.meterRecording = true;
+      if (command.endsWith('stop_voice')) state.meterRecording = false;
+      if (command.endsWith('check_voice') && state.meterRecording) return { available: true, status: 'available', assetsInstalled: true,
+        microphonePermission: 'granted', recording: true, sessionId: '12345678-1234-1234-1234-123456789012', microphoneLevel: state.meterLevel };
+      return original(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  const meter = page.getByRole('meter', { name: 'Nivel del micrófono' });
+  await expect(meter).toHaveJSProperty('value', 0.7);
+  await page.evaluate(() => (globalThis as any).meterLevel = 0.2);
+  await expect(meter).toHaveJSProperty('value', 0.2);
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
   expect(await page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toEqual([]);
 });
 

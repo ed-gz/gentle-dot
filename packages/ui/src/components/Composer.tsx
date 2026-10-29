@@ -3,7 +3,7 @@ import { publishCompanionActivity } from "../companion-activity.ts";
 import { type ClipboardEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import type { AttachmentControls } from "../useAttachments.ts";
 import type { VoiceControls } from "../useVoice.ts";
-import { MicIcon, PaperclipIcon, SendIcon, StopIcon } from "./icons.tsx";
+import { CameraIcon, MicIcon, PaperclipIcon, SendIcon, StopIcon } from "./icons.tsx";
 import { newRequestId, type Send } from "./types.ts";
 import { AttachmentChip } from "./AttachmentChip.tsx";
 
@@ -190,12 +190,14 @@ export function Composer({
 				}}
 			>
 				{attachments && !recording ? (
-					<label className="composer-attach" title={copy("Attach files", "Adjuntar archivos")}>
-						<PaperclipIcon />
+					<label className="composer-attach" title={capriMobile && inputOnly ? "Tomar foto" : copy("Attach files", "Adjuntar archivos")}>
+						{capriMobile && inputOnly ? <CameraIcon /> : <PaperclipIcon />}
 						<input
 							type="file"
-							multiple
-							aria-label={labels?.files ?? copy("Attach files", "Adjuntar archivos")}
+							multiple={!(capriMobile && inputOnly)}
+							accept={capriMobile && inputOnly ? "image/*" : undefined}
+							capture={capriMobile && inputOnly ? "environment" : undefined}
+							aria-label={capriMobile && inputOnly ? "Tomar foto para esta sesión" : labels?.files ?? copy("Attach files", "Adjuntar archivos")}
 							className="visually-hidden"
 							disabled={disabled || uploading || pending}
 							onChange={(event) => {

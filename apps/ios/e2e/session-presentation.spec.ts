@@ -16,6 +16,7 @@ test('iPhone session list separates offline terminals and preserves assistant te
         const body = wrapper?.request?.body ? JSON.parse(wrapper.request.body) : undefined;
         const data = !body ? { available: true, sessions, approvals: [], policies: [], events: [] } : {
           sessionId: body.sessionId, status: 'working', question: null, deliveries: [],
+          metadata: { version: 1, source: 'live', model: { id: 'fixture-model', name: 'Modelo de prueba', provider: 'fixture' }, profile: { name: 'Perfil de prueba', source: 'session' }, tools: { active: ['gentle_review'], available: 1 }, mcp: [{ name: 'fixture-mcp', status: 'available', tools: 1 }] },
           messages: [
             { id: 'a1', role: 'assistant', stopReason: 'toolUse', content: [{ type: 'text', text: 'Estoy revisando el error.' }] },
             { id: 't1', role: 'tool', content: [{ type: 'text', text: 'Detalle de herramienta uno.' }] },
@@ -45,6 +46,13 @@ test('iPhone session list separates offline terminals and preserves assistant te
   await expect(page.locator('.capri-session-group').filter({ hasText: 'Sin conexión' }).locator('.agent-session')).toHaveCount(1);
   await expect(page.getByRole('button', { name: 'Proyecto 6 · Sin conexión' })).toBeVisible();
   await page.getByRole('button', { name: 'Proyecto 1 · Trabajando' }).click();
+  await expect(page.locator('.capri-session-metadata')).toHaveText('Modelo de prueba · Perfil de prueba · gentle_review activa');
+  await page.getByRole('button', { name: 'Detalles y actividad' }).click();
+  await page.getByRole('button', { name: /Ver información de la sesión/ }).click();
+  await page.getByText('Detalles técnicos').click();
+  await page.getByText('Conexiones MCP').click();
+  await expect(page.getByText('fixture-mcp')).toBeVisible();
+  await page.getByRole('button', { name: 'Cerrar detalles' }).click();
   await expect(page.getByText('Estoy revisando el error.')).toBeVisible();
   await expect(page.getByText('Encontré la causa y sigo trabajando.')).toBeVisible();
   await expect(page.getByText('Detalle de herramienta uno.')).toBeHidden();

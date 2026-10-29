@@ -187,18 +187,31 @@ test('pairing tells the user to approve on the laptop while the host request is 
 });
 
 test('a paired credential that could not be saved can be retried without redeeming the QR again', async ({ page }) => {
+  await page.routeWebSocket('wss://laptop.example.ts.net/ws', ws => {
+    let seq = 0;
+    ws.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.type === 'hello') ws.send(JSON.stringify({ seq: seq++, type: 'ready', agentState: 'idle', conversationId: 'fixture' }));
+      if (message.type === 'get_history') ws.send(JSON.stringify({ seq: seq++, type: 'history', conversationId: 'fixture', messages: [] }));
+    });
+  });
   await page.addInitScript(link => {
-    const state = globalThis as any; state.isTauri = true; state.pairCalls = 0; state.saveCalls = 0;
+    const state = globalThis as any; state.isTauri = true; state.pairCalls = 0; state.saveCalls = 0; state.selectionMarker = undefined;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('|secret_get') && args.request.account === 'capri.selected-connection.v1') return { ok: true, value: state.selectionMarker };
+      if (command.endsWith('|secret_set') && args.request.account === 'capri.selected-connection.v1') {
+        const marker = JSON.parse(args.request.value);
+        if (marker.state === 'pending' && marker.candidate) {
+          state.saveCalls++;
+          if (state.saveCalls === 1) return { ok: false, error: 'storage' };
+          return new Promise(resolve => { state.finishSave = () => { state.selectionMarker = args.request.value; resolve({ ok: true }); }; });
+        }
+        state.selectionMarker = args.request.value; return { ok: true };
+      }
       if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: link };
       if (command.endsWith('|pair_device')) {
         state.pairCalls++;
         return { ok: true, persisted: false, connection: { url: 'wss://laptop.example.ts.net/ws', token: 'a'.repeat(64), deviceId: 'device-1', name: 'Capri iPhone' } };
-      }
-      if (command.endsWith('|secret_set') && args.request.scope === 'daemon-pairing') {
-        state.saveCalls++;
-        if (state.saveCalls === 1) return { ok: false, error: 'storage' };
-        return new Promise(resolve => { state.finishSave = () => resolve({ ok: true }); });
       }
       if (command.endsWith('|share_list') || command.endsWith('|documents_list') || command.endsWith('results_list')) return { ok: true, items: [] };
       return { ok: true };
@@ -208,9 +221,6 @@ test('a paired credential that could not be saved can be retried without redeemi
   await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
   await page.getByRole('button', { name: 'Vincular iPhone', exact: true }).click();
   const retry = page.getByRole('button', { name: 'Volver a guardar acceso' });
-  await expect(retry).toBeVisible();
-  await retry.click();
-  await expect(page.locator('#pairing-status')).toContainText('No se pudo guardar');
   await expect(retry).toBeVisible();
   await retry.click();
   await page.waitForFunction(() => typeof (globalThis as any).finishSave === 'function');

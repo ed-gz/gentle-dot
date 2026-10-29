@@ -34,7 +34,7 @@ export function SessionWorkShelf({
 			>
 				<span>
 					<span id={`${id}-title`}>Detalles y actividad</span>
-					<small id={`${id}-summary`}>{activitySummary(work, stale)}</small>
+					<small id={`${id}-summary`}>{activitySummary(work, stale, capriMobile)}</small>
 				</span>
 				<Chevron open={open} />
 			</button>
@@ -129,7 +129,7 @@ export function SessionDeliveryPicker({
 	);
 }
 
-function activitySummary(work: AgentWork | undefined, stale: boolean) {
+function activitySummary(work: AgentWork | undefined, stale: boolean, capriMobile: boolean) {
 	if (stale) return "Sin actualizar";
 	const current = work?.version === 1 ? work : undefined;
 	const parts: string[] = [];
@@ -146,7 +146,7 @@ function activitySummary(work: AgentWork | undefined, stale: boolean) {
 		0;
 	if (commands) parts.push(`${commands} ${commands === 1 ? "herramienta" : "herramientas"}`);
 	if (agents) parts.push(`${agents} ${agents === 1 ? "subagente" : "subagentes"}`);
-	return parts.join(" · ") || "Modelo, terminal y actividad";
+	return parts.join(" · ") || (capriMobile ? "Modelo, perfil y herramientas" : "Modelo, terminal y actividad");
 }
 
 function Chevron({ open }: { open: boolean }) {

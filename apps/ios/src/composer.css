@@ -1,6 +1,6 @@
 /* One message surface, with secondary actions inside the thumb's reach. The
    system owns the Files sheet; this layer owns only the conversation controls. */
-#panel-chat #composer { border: 0; padding: 8px 0 4px; background: transparent; }
+#panel-chat #composer { border: 0; padding: 8px 0 4px; background: transparent; overflow: visible; }
 #composer .compose-surface {
   min-width: 0; padding: 8px;
   background: color-mix(in srgb, var(--panel) 94%, var(--violet));
@@ -20,8 +20,17 @@
 #composer #dictate .icon-stop, #composer #dictate[aria-pressed="true"] .icon-mic { display: none; }
 #composer #dictate[aria-pressed="true"] .icon-stop { display: block; }
 #panel-chat #composer #dictate[aria-pressed="true"] { color: var(--pink); background: color-mix(in srgb, var(--pink) 12%, transparent); }
-#composer #attachment-context:not(:empty) { border-radius: 16px; margin: 2px 2px 6px; padding: 10px 12px; background: var(--bg); overflow-wrap: anywhere; }
-#composer #voice-status { padding-inline: 12px; }
+#panel-chat #composer #dictate { position: relative; }
+#panel-chat #composer #dictate[aria-pressed="true"]::after {
+  content: ''; position: absolute; left: 11px; right: 11px; bottom: 4px; height: 3px;
+  border-radius: 4px; background: var(--pink); transform: scaleX(var(--voice-level, 0)); transform-origin: left;
+}
+#composer #attachment-context:not(:empty) { border-radius: 16px; margin: 2px 2px 6px; padding: 10px 12px; background: var(--bg); overflow-wrap: anywhere; max-height: min(12dvh, 80px); overflow-y: auto; }
+#composer #voice-status:not(:empty) {
+  position: absolute; z-index: 5; bottom: calc(100% + 6px); left: 8px; right: 8px;
+  max-height: min(20dvh, 120px); overflow-y: auto; margin: 0; padding: 8px 12px;
+  border-radius: 14px; background: #292334; color: var(--ink); box-shadow: 0 4px 16px #0005;
+}
 @media (prefers-reduced-motion: reduce) { #composer .compose-surface { transition: none; } }
 @media (min-width: 600px) and (max-height: 560px) {
   :root[data-large-text="true"] #composer { display: block; }

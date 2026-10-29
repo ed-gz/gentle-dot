@@ -7,7 +7,7 @@ async function expectReadableComposer(page: import('@playwright/test').Page) {
     const prompt = read('#prompt'); const css = getComputedStyle(input);
     const line = Number.parseFloat(css.lineHeight);
     const top = prompt.top + Number.parseFloat(css.borderTopWidth) + Number.parseFloat(css.paddingTop);
-    const controls = ['#attach', '#camera', '#dictate', '#send'].map(read); const send = read('#send');
+    const controls = ['#camera', '#dictate', '#send'].map(read); const send = read('#send');
     return { copyBottom: read('.presence-copy').bottom, threadTop: read('#conversation-scroll').top,
       promptInner: input.clientHeight - Number.parseFloat(css.paddingTop) - Number.parseFloat(css.paddingBottom),
       line, lineTop: top, lineBottom: top + line,
@@ -25,7 +25,8 @@ async function expectReadableComposer(page: import('@playwright/test').Page) {
   expect(boxes.sendCenterVisible).toBe(true);
 }
 
-async function personalBuild(page: import('@playwright/test').Page) {
+async function personalBuild(page: import('@playwright/test').Page, waitForReady = true,
+  artworkGate?: { wait: Promise<void>; requested(): void }) {
   // Deliberately synthetic bytes. The personal character is never committed as a fixture.
   await page.goto('/');
   const asset = await page.evaluate(async () => {
@@ -38,7 +39,11 @@ async function personalBuild(page: import('@playwright/test').Page) {
   });
   await page.route('**/personal-art/manifest.json', route => route.fulfill({ json: { schemaVersion: 1, file: 'capri-full.png', sha256: asset.sha256, size: asset.size, width: 240, height: 420 } }));
   let packagedReads = 0;
-  await page.route('**/personal-art/capri-full.png', route => { packagedReads++; return route.fulfill({ contentType: 'image/png', body: Buffer.from(asset.b64, 'base64') }); });
+  await page.route('**/personal-art/capri-full.png', async route => {
+    packagedReads++; artworkGate?.requested();
+    if (artworkGate) await artworkGate.wait;
+    return route.fulfill({ contentType: 'image/png', body: Buffer.from(asset.b64, 'base64') });
+  });
   await page.addInitScript(() => {
     const state = globalThis as any; state.isTauri = true;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
@@ -50,11 +55,13 @@ async function personalBuild(page: import('@playwright/test').Page) {
     } };
   });
   await page.reload();
-  await expect(page.locator('#rig-handle')).toHaveAttribute('data-ready', 'true', { timeout: 15000 });
-  // Artwork initialization and IndexedDB restoration run independently. The
-  // rig being ready does not mean the conversation can accept a message yet.
-  await expect(page.locator('#history-loading')).toBeHidden({ timeout: 20000 });
-  await expect(page.locator('#send')).toBeEnabled({ timeout: 20000 });
+  if (waitForReady) {
+    await expect(page.locator('#rig-handle')).toHaveAttribute('data-ready', 'true', { timeout: 15000 });
+    // Artwork initialization and IndexedDB restoration run independently. The
+    // rig being ready does not mean the conversation can accept a message yet.
+    await expect(page.locator('#history-loading')).toBeHidden({ timeout: 20000 });
+    await expect(page.locator('#send')).toBeEnabled({ timeout: 20000 });
+  }
   return { packagedReads: () => packagedReads };
 }
 
@@ -109,6 +116,124 @@ test('new controls remain reachable when Capri was manually placed and motion is
   })).toBe(true);
   await control.click();
   await expect(control).toHaveAttribute('data-clicked', 'true');
+});
+
+test('Capri uses the shared entrance in the app and yields immediately to interaction', async ({ page }) => {
+  test.slow();
+  await page.clock.install();
+  // Observe the finite startup entrance immediately after navigation rather
+  // than waiting for unrelated model availability and missing the effect.
+  await personalBuild(page, false);
+  const theater = page.locator('[data-capri-theater="intro"]');
+  await expect(theater).toHaveCount(1, { timeout: 30000 });
+  await page.clock.runFor(1200);
+  await expect(theater).toHaveAttribute('data-beat', 'haul');
+  await page.locator('#prompt').click();
+  await expect(theater).toHaveCount(0);
+  await expect(page.locator('#prompt')).toBeFocused();
+});
+
+test('a delayed character never starts its entrance after someone already uses the app', async ({ page }) => {
+  test.slow();
+  await page.clock.install();
+  let release!: () => void, requested!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { requested = resolve; });
+  await personalBuild(page, false, { wait, requested });
+  await started;
+  await page.locator('#prompt').click();
+  await page.locator('#prompt').blur();
+  release();
+  await expect(page.locator('#rig-handle')).toHaveAttribute('data-ready', 'true', { timeout: 30000 });
+  await page.clock.runFor(1000);
+  await expect(page.locator('[data-capri-theater]')).toHaveCount(0);
+});
+
+test('programmatic submission ends the startup entrance before conversation appears', async ({ page }) => {
+  test.slow();
+  await page.clock.install();
+  await personalBuild(page, false);
+  const theater = page.locator('[data-capri-theater="intro"]');
+  await expect(theater).toHaveCount(1, { timeout: 30000 });
+  await page.evaluate(() => {
+    const input = document.querySelector<HTMLTextAreaElement>('#prompt')!;
+    input.value = 'Continuemos';
+    document.querySelector<HTMLFormElement>('#composer')!.requestSubmit();
+  });
+  await expect(theater).toHaveCount(0);
+});
+
+test('Capri remains visible across sections without occupying the controls or narrowing chat', async ({ page }) => {
+  test.slow();
+  await personalBuild(page);
+  await page.locator('#prompt').fill('Continuemos con las tareas.');
+  await page.locator('#send').click();
+  await expect(page.locator('.chat-text ul li')).toHaveCount(2);
+  await expect(page.locator('.companion-shelf')).toBeVisible();
+  expect(await page.locator('#cards').evaluate(el => getComputedStyle(el).paddingRight)).toBe('0px');
+  for (const size of [{ width: 375, height: 812 }, { width: 844, height: 390 }]) {
+    await page.setViewportSize(size);
+    for (const panel of ['agents', 'inbox', 'settings', 'chat']) {
+      await page.locator(`[data-panel="${panel}"]`).click();
+      await expect(page.locator('.companion-shelf')).toBeVisible();
+      await expect(page.locator('#rig-handle')).toBeVisible();
+      await expect.poll(async () => page.evaluate(() => {
+        const rig = document.querySelector<HTMLElement>('#rig-handle')!.getBoundingClientRect();
+        return rig.width >= 44 && rig.height >= 44 && rig.left >= 0 && rig.right <= innerWidth && rig.top >= 0 && rig.bottom <= innerHeight;
+      })).toBe(true);
+      const rig = await page.locator('#rig-handle').boundingBox();
+      expect(rig!.width).toBe(size.width === 375 ? 60 : 44);
+      expect(rig!.height).toBe(size.width === 375 ? 86 : 62);
+      if (size.width === 375 && panel === 'settings') {
+        const canvas = page.locator('#capri');
+        const first = await canvas.evaluate((node: HTMLCanvasElement) => node.toDataURL());
+        await expect.poll(() => canvas.evaluate((node: HTMLCanvasElement) => node.toDataURL())).not.toBe(first);
+      }
+    }
+  }
+});
+
+test('a filled settings panel keeps Capri in the reserved space after scrolling with reduced motion', async ({ page }) => {
+  test.slow();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await personalBuild(page);
+  await page.locator('[data-panel="settings"]').click();
+  await expect(page.locator('#rig-handle')).toBeVisible();
+  await page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>('#panel-settings')!;
+    const rect = panel.getBoundingClientRect();
+    const control = document.createElement('button'); control.id = 'occupied-panel-fixture'; control.textContent = 'Control';
+    Object.assign(control.style, { position: 'fixed', top: `${rect.top}px`, left: `${rect.left}px`, width: `${rect.width}px`, height: `${rect.height}px`, zIndex: '0' });
+    panel.append(control); panel.scrollTop = 60;
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const rig = document.querySelector<HTMLElement>('#rig-handle')!.getBoundingClientRect();
+    const shelf = document.querySelector<HTMLElement>('.companion-shelf')!.getBoundingClientRect();
+    return rig.top >= shelf.top && rig.bottom <= shelf.bottom;
+  })).toBe(true);
+  const control = page.locator('#occupied-panel-fixture');
+  await expect.poll(() => control.evaluate(el => {
+    const r = el.getBoundingClientRect(); return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el;
+  })).toBe(true);
+  await expect(page.locator('html')).toHaveAttribute('data-motion', 'reduced');
+});
+
+test('the reserved space collapses when Capri is hidden or the graphics context is lost', async ({ page }) => {
+  test.slow();
+  await personalBuild(page);
+  await page.locator('[data-panel="settings"]').click();
+  await expect(page.locator('.companion-shelf')).toBeVisible();
+  await page.locator('#settings-character > summary').click();
+  await page.getByText('Gestos y presencia', { exact: true }).click();
+  await page.locator('#appear').click();
+  await expect(page.locator('.companion-shelf')).toBeHidden();
+  await expect(page.locator('#stage')).toBeHidden();
+  await page.locator('#appear').click();
+  await expect(page.locator('.companion-shelf')).toBeVisible();
+  await expect(page.locator('#rig-handle')).toBeVisible();
+  await page.locator('#capri').evaluate(canvas => canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true })));
+  await expect(page.locator('.companion-shelf')).toBeHidden();
+  await expect(page.locator('#stage')).toBeHidden();
 });
 
 test('conversation keeps composer and companion reachable in short viewport and enlarged text', async ({ page }) => {

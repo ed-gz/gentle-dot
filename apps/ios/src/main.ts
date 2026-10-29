@@ -34,8 +34,9 @@ import { createConversationRequests } from './conversation-requests.ts';
 import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, VoiceRetryPending } from './perception.ts';
 import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin } from './voice-origin.ts';
 import { isTauri } from '@tauri-apps/api/core';
-import { secretGet, secretSet, secretDelete, listSharedImports, importSharedItem, recoverImportBatch } from './device-bridge.ts';
-import { parseInvitation, pairDevice, restorePairing } from './device-pairing.ts';
+import { listSharedImports, importSharedItem, recoverImportBatch } from './device-bridge.ts';
+import { parseInvitation, pairDevice } from './device-pairing.ts';
+import { ConnectionSelectionAmbiguous, ConnectionSelectionPending, createConnectionSelectionStore, type SelectedConnection } from './connection-selection.ts';
 import { mountPairingSaveRecovery } from './pairing-save-recovery.ts';
 import { createWork, createImportedWork } from './work-inbox.ts';
 import { companionBounds, constrainCompanion, mountPhoneViewport } from './companion-layout.ts';
@@ -83,11 +84,28 @@ let perched: Pick<RigIntent, 'resting' | 'direction'> = {};
 let measuredAt = -Infinity;
 let safePerches: [number, number][] = [];
 stage.dataset.companionLayer = 'true';
-document.querySelector('main')!.append(stage);
+const mainElement = document.querySelector('main')!;
+// Keep a permanent safe place for Capri on secondary screens, even when a
+// scrolled session, work list or settings form occupies all other space.
+const companionShelf = document.createElement('div');
+companionShelf.className = 'companion-shelf'; companionShelf.hidden = true;
+companionShelf.setAttribute('aria-hidden', 'true');
+mainElement.insertBefore(companionShelf, element('panel-chat'));
+mainElement.append(stage);
 let lastTime = 0;
 let nextRoam = 0;
 let gestureTimer: ReturnType<typeof setTimeout> | undefined;
 let humanGesture: RigIntent['gesture'];
+let theater: ReturnType<typeof import('./companion-theater.tsx')['createCompanionTheater']> | undefined;
+let theaterLoading: Promise<void> | undefined;
+let introShown = false;
+let introReplayPending = false;
+let lastCompanionInteraction = -Infinity;
+let companionInteractionRevision = 0;
+let theaterExplicit = false;
+function noteCompanionInteraction() { lastCompanionInteraction = performance.now(); companionInteractionRevision++; }
+document.addEventListener('pointerdown', noteCompanionInteraction, { capture: true, passive: true });
+document.addEventListener('keydown', noteCompanionInteraction, true);
 const isReduced = () => reduced.matches || settings.motion !== 'full';
 try { fx = new RigFx(element<HTMLCanvasElement>('fx')); } catch { /* Optional procedural effects. */ }
 
@@ -113,14 +131,17 @@ function presenceIntent(): RigIntent {
 }
 function layoutCompanion() {
   const main = document.querySelector('main')!.getBoundingClientRect();
+  const emptyChat = panel === 'chat' && element('panel-chat').dataset.empty === 'true';
+  companionShelf.hidden = emptyChat || absent || !engine;
   const active = element(`panel-${panel}`);
   const area = active.getBoundingClientRect();
-  const top = Math.max(document.querySelector('.masthead')!.getBoundingClientRect().bottom, area.top);
+  const top = Math.max(document.querySelector('.masthead')!.getBoundingClientRect().bottom,
+    companionShelf.hidden ? area.top : companionShelf.getBoundingClientRect().top);
   const input = active.querySelector('#composer, .agent-reply');
   const bottom = input?.getBoundingClientRect().top ?? Math.min(area.bottom, main.bottom) - 12;
   Object.assign(stage.style, { left: `${area.left}px`, top: `${top}px`, width: `${area.width}px`, height: `${Math.max(0, bottom - top)}px` });
-  stage.hidden = !['chat', 'agents'].includes(panel);
-  document.documentElement.dataset.companionSize = panel === 'chat' && element('panel-chat').dataset.empty === 'true' ? 'hero' : 'compact';
+  stage.hidden = absent || !engine || !['chat', 'agents', 'inbox', 'settings'].includes(panel);
+  document.documentElement.dataset.companionSize = emptyChat ? 'hero' : 'rail';
   measuredAt = -Infinity;
   place(position.x, position.y);
 }
@@ -128,7 +149,7 @@ const framePacer = createFramePacer();
 function animate(now: number) {
   // Let the persisted transcript reach the DOM before the first GPU frame.
   // Software renderers can block unrelated IndexedDB callbacks during warmup.
-  if (!conversationRestored || !engine || document.hidden || !['agents', 'chat'].includes(panel) || absent) return;
+  if (!conversationRestored || !engine || document.hidden || !['agents', 'chat', 'inbox', 'settings'].includes(panel) || absent) return;
   if (!isReduced() && !framePacer.ready(now)) { frame = requestAnimationFrame(animate); return; }
   if (intent.outcome && now - intent.outcome.at > 2400) { const { outcome: _outcome, ...rest } = intent; intent = rest; revision++; }
   if (now - measuredAt >= 1000) {
@@ -138,7 +159,7 @@ function animate(now: number) {
     safePerches = phonePerches({ x: 0, y: 0, width: area.width, height: area.height },
       { width: rig.offsetWidth, height: rig.offsetHeight }, occupied);
     rig.style.visibility = '';
-    if (!manuallyPlaced && !drag && !travel) {
+    if ((!manuallyPlaced || !companionShelf.hidden) && !drag && !travel) {
       const here = { x: position.x + (area.width - rig.offsetWidth) / 2, y: position.y + (area.height - rig.offsetHeight) / 2, width: rig.offsetWidth, height: rig.offsetHeight };
       // A manual placement or resting pose must not cover controls introduced
       // later. Preserve it when safe, otherwise choose the closest free perch.
@@ -153,7 +174,8 @@ function animate(now: number) {
   if (roaming && !drag && !travel && now >= nextRoam) {
     const region = { x: 0, y: 0, width: stage.clientWidth, height: stage.clientHeight };
     const next = roamDirector.step({ laptop: region, region, x: 0, y: 0, width: rig.offsetWidth, height: rig.offsetHeight, herdr: false, safePerches }, now,
-      { composer: typing, question: attention, paused: isReduced() || Boolean(intent.working || humanGesture || intent.outcome) });
+      { composer: typing || Boolean(document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')),
+        question: attention, paused: isReduced() || Boolean(intent.working || humanGesture || intent.outcome) });
     if (next) { manuallyPlaced = false; travel = { started: now, target: next, moved: false }; nextRoam = now + 18000; revision++; }
   }
   if (travel) {
@@ -188,8 +210,38 @@ function gesture(name: string) {
     humanGesture = undefined; redraw();
   }, 2500);
 }
+function companionTheaterSafe() {
+  const focused = document.activeElement;
+  return Boolean(conversationRestored && engine && panel === 'chat' && !absent && !isReduced() && !document.hidden
+    && !typing && !attention && !localBusy && !linkedBusy && !voiceSession && !voiceStarting
+    && !(focused instanceof HTMLElement && focused.matches('input, textarea, select, [contenteditable="true"]')));
+}
+function companionTheaterAllowed() {
+  return companionTheaterSafe() && (theaterExplicit || element('panel-chat').dataset.empty === 'true');
+}
+function maybeStartCompanionIntro() {
+  // Never surprise someone with the delayed startup choreography after they
+  // already began using the app. An explicit appearance may still replay it.
+  if ((!introReplayPending && (introShown || lastCompanionInteraction !== -Infinity || element('panel-chat').dataset.empty !== 'true')) || !companionTheaterSafe() || theaterLoading) return;
+  const replay = introReplayPending;
+  const interactionAtRequest = companionInteractionRevision;
+  theaterLoading = import('./companion-theater.tsx').then(({ createCompanionTheater }) => {
+    theater ??= createCompanionTheater({ canPlay: companionTheaterAllowed, onGesture: gesture, onFinish(reason) {
+      theaterExplicit = false;
+      if (reason === 'complete') setTimeout(() => {
+        if (performance.now() - lastCompanionInteraction > 3000 && companionTheaterAllowed()) theater?.startPossession();
+      }, 8000);
+    } });
+    if (companionInteractionRevision !== interactionAtRequest) { if (replay) introReplayPending = false; return; }
+    theaterExplicit = replay;
+    if (companionTheaterAllowed() && theater.startIntro(replay)) { introShown = true; introReplayPending = false; }
+    else theaterExplicit = false;
+  }).catch(() => { /* The conversation and 2D rig do not depend on this optional effect. */ })
+    .finally(() => { theaterLoading = undefined; });
+}
 async function startRig() {
   preparingRig?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined;
+  layoutCompanion();
   if (!image) return;
   const operation = new AbortController(); preparingRig = operation;
   rig.dataset.ready = 'false';
@@ -197,7 +249,7 @@ async function startRig() {
     const prepared = await createEngineAsync(canvas, image, { maskReadback: false }, operation.signal);
     if (operation.signal.aborted || preparingRig !== operation) { prepared.dispose(); return; }
     engine = prepared; layoutCompanion(); lastFrame = -1; rig.dataset.ready = 'true'; element('art-placeholder').hidden = true; place(position.x, position.y); redraw();
-    element('art-status').textContent = 'Tu Capri está aquí. Arrástrala, salúdala o déjala chillear.';
+    element('art-status').textContent = 'Tu Capri está aquí. Arrástrala, salúdala o déjala chillear.'; maybeStartCompanionIntro();
   }
   catch {
     if (operation.signal.aborted || preparingRig !== operation) return;
@@ -219,7 +271,7 @@ async function useArtwork(blob: Blob, persist: boolean) {
     await startRig();
   } finally { URL.revokeObjectURL(url); }
 }
-canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); preparingRig?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; rig.dataset.ready = 'false'; element('art-status').textContent = 'Recuperando el personaje…'; });
+canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); preparingRig?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; rig.dataset.ready = 'false'; layoutCompanion(); element('art-status').textContent = 'Recuperando el personaje…'; });
 canvas.addEventListener('webglcontextrestored', startRig);
 reduced.addEventListener('change', () => { fx?.clear(); redraw(); });
 element<HTMLInputElement>('art').addEventListener('change', async event => {
@@ -250,9 +302,10 @@ element('chill').addEventListener('click', () => { roaming = false; element('roa
 element('roam').addEventListener('click', () => { roaming = !roaming; nextRoam = 0; element('roam').setAttribute('aria-pressed', String(roaming)); setIntent({}); element('scene-status').textContent = roaming ? 'Explorando mi espacio.' : 'Aquí contigo.'; });
 element('appear').addEventListener('click', () => {
   absent = !absent; rig.classList.toggle('absent', absent); rig.disabled = absent;
+  if (absent) theater?.stop(); else introReplayPending = true;
   element('appear').textContent = absent ? 'Aparecer' : 'Desaparecer';
   element('scene-status').textContent = absent ? 'Vuelvo cuando me llames.' : 'De vuelta.';
-  fx?.clear(); redraw();
+  fx?.clear(); layoutCompanion(); redraw();
 });
 let drag: { id: number; x: number; y: number; start: typeof position; moved: boolean } | undefined;
 let suppressClick = false;
@@ -295,6 +348,7 @@ function showPanel(next: string) {
     if (button.dataset.panel === next) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
   }
   travel = undefined; nextRoam = 0; layoutCompanion(); redraw();
+  if (next === 'chat') maybeStartCompanionIntro(); else theater?.stop();
   if (next === 'inbox') { void inbox.refresh(); void memoryView.refresh(); }
   if (next === 'chat') void recoverPendingVoice();
 }
@@ -309,14 +363,41 @@ let preference: Engine | 'auto' = 'auto';
 let localController: AbortController | undefined;
 let attachedWork: string | undefined;
 let connectionEpoch = 0;
-let manualToSave: { url: string; token: string } | undefined;
-let runtimeConnection: { url: string; token: string } | undefined;
+const connectionSelection = createConnectionSelectionStore();
+type ManualAttempt = { connection: SelectedConnection & { source: 'manual' }; ticket: number; epoch: number; previous?: SelectedConnection };
+let manualAttempt: ManualAttempt | undefined;
+let manualSavePending: ManualAttempt | undefined;
+type PairingPending = { ticket: number; epoch: number; connection: SelectedConnection & { source: 'paired' }; previous?: SelectedConnection };
+let pairingSavePending: PairingPending | undefined;
+let pairingAttempt: (PairingPending & { resolve(): void; reject(error: Error): void }) | undefined;
+let runtimeConnection: SelectedConnection | undefined;
+let connectionBusy = false;
+let restorationUncertain = false;
+const retryManualSave = document.createElement('button');
+retryManualSave.type = 'button'; retryManualSave.id = 'retry-manual-save'; retryManualSave.textContent = 'Volver a guardar acceso'; retryManualSave.hidden = true;
+element('status').after(retryManualSave);
+const recoverPreviousAccess = document.createElement('button');
+recoverPreviousAccess.type = 'button'; recoverPreviousAccess.id = 'recover-previous-access'; recoverPreviousAccess.textContent = 'Recuperar acceso anterior'; recoverPreviousAccess.hidden = true;
+element('pairing-status').after(recoverPreviousAccess);
+const retryPendingAccess = document.createElement('button');
+retryPendingAccess.type = 'button'; retryPendingAccess.id = 'retry-pending-access'; retryPendingAccess.textContent = 'Reintentar acceso pendiente'; retryPendingAccess.hidden = true;
+recoverPreviousAccess.after(retryPendingAccess);
+function connectionLock(value: boolean) {
+  connectionBusy = value;
+  element<HTMLButtonElement>('disconnect').disabled = value;
+  element<HTMLFormElement>('connection').querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled = value;
+  pairingUI.setSubmitting(value);
+}
+function saveSelectedURL(url: string) {
+  settings.url = url;
+  if (!saveSettings(settings)) notice('Conectado, pero no pude recordar la dirección para el próximo inicio.');
+}
 let laptop: ReturnType<typeof import('./laptop-view.tsx')['mountLaptopView']> | undefined;
 let laptopLoading = false;
-function contentMoved() { manuallyPlaced = false; measuredAt = -Infinity; if (panel === 'agents' || panel === 'chat') redraw(); }
+function contentMoved() { manuallyPlaced = false; measuredAt = -Infinity; if (['agents', 'chat', 'inbox', 'settings'].includes(panel)) redraw(); }
 const contentObserver = new MutationObserver(contentMoved);
-for (const id of ['laptop-root', 'cards', 'requests']) contentObserver.observe(element(id), { childList: true, subtree: true });
-for (const id of ['laptop-root', 'conversation-scroll']) element(id).addEventListener('scroll', contentMoved, { passive: true, capture: true });
+for (const id of ['laptop-root', 'cards', 'requests', 'panel-inbox', 'panel-settings']) contentObserver.observe(element(id), { childList: true, subtree: true });
+for (const id of ['laptop-root', 'conversation-scroll', 'panel-inbox', 'panel-settings']) element(id).addEventListener('scroll', contentMoved, { passive: true, capture: true });
 function updateLaptopView() {
   if (laptop) { laptop.update({ connection: runtimeConnection, active: panel === 'agents' }); return; }
   if (panel !== 'agents' || laptopLoading) return;
@@ -524,13 +605,87 @@ function handleMessage(message: ServerMessage) {
   if (message.type === 'ask_resolved') reviews.resolved(message.requestId);
   updateControls();
 }
+async function commitManualSelection(attempt: ManualAttempt) {
+  connectionLock(true); retryManualSave.hidden = true;
+  try {
+    await connectionSelection.commit(attempt.ticket, attempt.connection);
+    if (attempt.epoch !== connectionEpoch || runtimeConnection !== attempt.connection) return;
+    manualSavePending = undefined; recoverPreviousAccess.hidden = true; retryPendingAccess.hidden = true; saveSelectedURL(attempt.connection.url);
+    element('status').textContent = 'Vinculado a Gentle Dot. Acceso guardado en Keychain.';
+  } catch {
+    if (attempt.epoch === connectionEpoch && runtimeConnection === attempt.connection) {
+      manualSavePending = attempt; retryManualSave.hidden = false;
+      element('status').textContent = 'Conectado, pero no pude guardar el acceso. Puedes reintentarlo mientras Capri siga abierta.';
+    }
+  } finally { if (attempt.epoch === connectionEpoch) connectionLock(false); }
+}
+async function restorePreviousSelection(attempt: ManualAttempt) {
+  let restored: SelectedConnection | null = null;
+  try { restored = await connectionSelection.rollback(attempt.ticket); } catch { /* The pending marker prevents an unsafe automatic restore. */ }
+  if (attempt.epoch !== connectionEpoch) return;
+  const previous = restored ?? attempt.previous;
+  runtimeConnection = previous;
+  manualSavePending = undefined; retryManualSave.hidden = true; connectionLock(false);
+  if (previous) {
+    host = previous.url; element<HTMLInputElement>('url').value = previous.url;
+    linked.connect(previous.url, previous.token);
+    notice('No se confirmó el nuevo acceso. Recuperé la conexión anterior.');
+  } else { linked.disconnect(); element('status').textContent = 'No se confirmó el acceso. Revisa la conexión y vuelve a intentarlo.'; }
+}
+retryManualSave.addEventListener('click', () => { if (manualSavePending && !connectionBusy) void commitManualSelection(manualSavePending); });
+function startPairingHandshake(pending: PairingPending): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (pending.epoch !== connectionEpoch || pairingAttempt) { reject(new Error('La conexión cambió.')); return; }
+    pairingAttempt = { ...pending, resolve, reject };
+    runtimeConnection = pending.connection; host = pending.connection.url;
+    try { linked.connect(host, pending.connection.token); }
+    catch { const attempt = pairingAttempt; pairingAttempt = undefined; if (attempt) failPairingHandshake(attempt); }
+  });
+}
+async function finishPairingHandshake(attempt: NonNullable<typeof pairingAttempt>) {
+  try {
+    await connectionSelection.commit(attempt.ticket, attempt.connection);
+    if (attempt.epoch !== connectionEpoch || runtimeConnection !== attempt.connection) throw new Error('La conexión cambió.');
+    saveSelectedURL(attempt.connection.url); pairingSavePending = undefined;
+    recoverPreviousAccess.hidden = true; retryPendingAccess.hidden = true;
+    element<HTMLInputElement>('url').value = attempt.connection.url;
+    element('pairing-status').textContent = 'iPhone vinculado. Acceso guardado en Keychain.';
+    attempt.resolve();
+  } catch {
+    pairingSavePending = attempt;
+    attempt.reject(new Error('La laptop aceptó el acceso, pero no pude confirmar su guardado.'));
+  }
+}
+function failPairingHandshake(attempt: NonNullable<typeof pairingAttempt>) {
+  pairingSavePending = attempt;
+  runtimeConnection = attempt.previous;
+  if (attempt.previous) {
+    host = attempt.previous.url;
+    // retry() schedules its timer after notifying offline; wait until that
+    // callback returns so reconnecting the previous host cancels the timer.
+    queueMicrotask(() => { if (attempt.epoch === connectionEpoch && runtimeConnection === attempt.previous) linked.connect(attempt.previous!.url, attempt.previous!.token); });
+  } else linked.disconnect();
+  attempt.reject(new Error('No se confirmó el nuevo acceso. Puedes reintentarlo o recuperar el anterior.'));
+}
 const linked = createLinkedChat({
   onStatus(value) {
-    if (value === 'ready' && manualToSave && isTauri()) {
-      const credential = manualToSave; manualToSave = undefined;
-      void secretSet('daemon-manual', new URL(credential.url.replace('wss:', 'https:')).origin, credential.token).catch(() => notice('Conectado; no se pudo conservar el acceso en Keychain.'));
+    let pairingFailed = false;
+    if (value === 'ready' && pairingAttempt) {
+      const attempt = pairingAttempt; pairingAttempt = undefined;
+      void finishPairingHandshake(attempt);
+    } else if ((value === 'rejected' || value === 'offline') && pairingAttempt) {
+      const attempt = pairingAttempt; pairingAttempt = undefined;
+      pairingFailed = true;
+      failPairingHandshake(attempt);
     }
-    if (value === 'rejected') { connectionEpoch++; manualToSave = undefined; runtimeConnection = undefined; }
+    if (value === 'ready' && manualAttempt) {
+      const attempt = manualAttempt; manualAttempt = undefined;
+      void commitManualSelection(attempt);
+    }
+    if ((value === 'rejected' || value === 'offline') && manualAttempt) {
+      const attempt = manualAttempt; manualAttempt = undefined;
+      void restorePreviousSelection(attempt);
+    } else if (value === 'rejected' && !pairingFailed) { if (!connectionBusy) connectionEpoch++; runtimeConnection = undefined; }
     updateLaptopView();
     linkedStatus = value; reviews.connection(value === 'ready');
     element('status').textContent = { offline: 'Sin conexión', connecting: 'Conectando…', ready: 'Vinculado a Gentle Dot', rejected: 'Acceso rechazado. Revisa token y versión.' }[value];
@@ -588,6 +743,9 @@ new MutationObserver(() => {
 }).observe(element('requests'), { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
 element<HTMLFormElement>('composer').addEventListener('submit', async event => {
   event.preventDefault();
+  // Submission may be triggered by keyboard, accessibility or code without a
+  // pointer event. It always ends startup theater and fences a delayed import.
+  noteCompanionInteraction(); introReplayPending = false; theater?.stop();
   const text = prompt.value.trim();
   const promptText = text;
   if (!text || localBusy || recoveringNativeId || pendingRemote || !conversationReady || persistence.status().blocked) return;
@@ -694,18 +852,50 @@ element('stop').addEventListener('click', () => {
 });
 element<HTMLFormElement>('connection').addEventListener('submit', async event => {
   event.preventDefault();
+  if (connectionBusy) return;
+  if (restorationUncertain) { element('status').textContent = 'No pude verificar el acceso guardado. Desconecta antes de conectar otro.'; return; }
+  let ticket: number | undefined;
+  const previous = runtimeConnection;
   try {
     const nextHost = validDaemonUrl(element<HTMLInputElement>('url').value);
-    const token = element<HTMLInputElement>('token').value;
-    connectionEpoch++;
-    runtimeConnection = { url: nextHost, token }; linked.connect(nextHost, token);
-    manualToSave = { url: nextHost, token };
+    const token = element<HTMLInputElement>('token').value.trim();
+    if (!token || token.length > 4096) throw new Error('Introduce un token válido para conectar.');
+    const epoch = ++connectionEpoch;
+    if (isTauri()) {
+      connectionLock(true);
+      element('status').textContent = 'Preparando el acceso seguro…';
+      ticket = await connectionSelection.begin(nextHost, previous);
+      if (epoch !== connectionEpoch) return;
+    }
+    pairingSaveRecovery.clear(); pairingSavePending = undefined;
+    const connection: SelectedConnection & { source: 'manual' } = { source: 'manual', url: nextHost, token };
+    if (ticket !== undefined) {
+      await connectionSelection.stage(ticket, connection);
+      if (epoch !== connectionEpoch) throw new Error('La conexión cambió antes de guardar el acceso.');
+    }
+    runtimeConnection = connection;
+    manualSavePending = undefined; retryManualSave.hidden = true;
+    manualAttempt = ticket === undefined ? undefined : { connection, ticket, epoch, previous };
     host = nextHost;
     element<HTMLInputElement>('token').value = '';
-    settings.url = host; saveSettings(settings);
-  } catch (error) { element('status').textContent = errorText(error); }
+    linked.connect(nextHost, token);
+    if (!isTauri()) saveSelectedURL(host);
+  } catch (error) {
+    if (ticket !== undefined) try { await connectionSelection.rollback(ticket); } catch { /* The pending marker remains fail-closed. */ }
+    runtimeConnection = previous; connectionLock(false); element('status').textContent = errorText(error);
+  }
 });
-element('disconnect').addEventListener('click', () => { connectionEpoch++; manualToSave = undefined; runtimeConnection = undefined; linked.disconnect(); element<HTMLInputElement>('token').value = ''; if (isTauri() && host) void secretDelete('daemon-manual', new URL(host.replace('wss:', 'https:')).origin).catch(() => {}); });
+element('disconnect').addEventListener('click', () => void (async () => {
+  if (connectionBusy) return;
+  connectionLock(true);
+  try {
+    if (isTauri()) await connectionSelection.disconnect();
+    connectionEpoch++; restorationUncertain = false; manualAttempt = undefined; manualSavePending = undefined; pairingSavePending = undefined;
+    pairingSaveRecovery.clear(); retryManualSave.hidden = true; recoverPreviousAccess.hidden = true; retryPendingAccess.hidden = true; runtimeConnection = undefined;
+    linked.disconnect(); element<HTMLInputElement>('token').value = '';
+  } catch { element('status').textContent = 'No pude confirmar la desconexión. La conexión anterior se conserva.'; }
+  finally { connectionLock(false); }
+})());
 element('check-local').addEventListener('click', () => void checkModel());
 element<HTMLInputElement>('url').value = settings.url;
 const connectionSettings = mountConnectionSettings();
@@ -754,7 +944,7 @@ async function restoreConversation() {
     retry.hidden = false;
   } finally {
     conversationLoading = false; retry.disabled = false; updateControls();
-    conversationRestored = true; redraw();
+    conversationRestored = true; redraw(); maybeStartCompanionIntro();
   }
 }
 element('retry-conversation').addEventListener('click', () => void restoreConversation());
@@ -804,7 +994,7 @@ let voiceGeneration = 0;
 let voiceTimer: ReturnType<typeof setTimeout> | undefined;
 let voicePreviewTimer: ReturnType<typeof setInterval> | undefined;
 let voiceRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
-function stopVoicePreview() { clearInterval(voicePreviewTimer); voicePreviewTimer = undefined; }
+function stopVoicePreview() { clearInterval(voicePreviewTimer); voicePreviewTimer = undefined; element('dictate').style.removeProperty('--voice-level'); }
 async function recoverPendingVoice() {
   if (!isTauri() || document.hidden || panel !== 'chat' || voiceStarting || (voiceSession && !voiceRetry)) return;
   const generation = voiceGeneration;
@@ -843,6 +1033,7 @@ function showVoicePreview(id: string, generation: number) {
     try {
       const state = await checkVoice();
       if (generation !== voiceGeneration || voiceSession !== id || state.sessionId?.toLowerCase() !== id.toLowerCase()) return;
+      element('dictate').style.setProperty('--voice-level', String(state.microphoneLevel ?? 0));
       if (!state.recording && state.readyToTranscribe) {
         // Finish the same native session once; stopVoice either yields a full
         // transcript or reports the capture failure without using the preview.
@@ -851,9 +1042,9 @@ function showVoicePreview(id: string, generation: number) {
         return;
       }
       element('voice-status').textContent = state.previewIssue
-        ? `● Grabando. ${state.previewIssue} Toca el micrófono para terminar.`
-        : state.partial ? `● ${state.partial} · texto provisional. Toca el micrófono para terminar.`
-        : '● Grabando. Toca el micrófono otra vez para transcribir.';
+        ? state.previewIssue
+        : state.partial ? state.partial
+        : 'Escuchando…';
     } catch { /* The final transcript does not depend on preview polling. */ }
     finally { polling = false; }
   };
@@ -892,7 +1083,7 @@ element('dictate').addEventListener('click', async () => {
       // Voice edits the same draft; nothing is sent without the person's submit.
       prompt.value = `${prompt.value}${prompt.value.trim() ? '\n' : ''}${transcript.text}`;
       draftEdited = true; scheduleSave(); prompt.focus();
-      element('voice-status').textContent = 'Transcripción añadida. Puedes corregirla antes de enviar.';
+      element('voice-status').textContent = '';
       if (owner) forgetVoiceOrigin(owner);
       setIntent({});
     } else {
@@ -908,13 +1099,13 @@ element('dictate').addEventListener('click', async () => {
         if (!prepared.available) throw new Error('Apple aún no terminó de preparar la voz en español. Comprueba la conexión y vuelve a intentarlo.');
       }
       if (current !== voiceGeneration) return;
-      element('voice-status').textContent = 'Iniciando el micrófono. Si iOS pide permiso, acéptalo para dictar.';
+      element('voice-status').textContent = 'Iniciando micrófono…';
       const session = await startVoice(owner);
       // Explicit cancellation already reached the native controller. A second
       // global cancel here could stop a newer capture owned by another panel.
       if (current !== voiceGeneration) return;
       voiceSession = session.sessionId;
-      element('voice-status').textContent = '● Grabando. Toca el micrófono otra vez para transcribir.';
+      element('voice-status').textContent = 'Escuchando…';
       showVoicePreview(session.sessionId, current);
       setIntent({ alert: true });
       voiceTimer = setTimeout(() => control.click(), session.maxDurationSeconds * 1000 - 500);
@@ -959,8 +1150,9 @@ async function importComposerSelection(event: Event) {
   try {
     const item = await createWork({ title: files[0]!.name.slice(0, 120), kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: prompt.value.trim() || 'Material adjunto a la conversación de Capri.', files });
     attachedWork = item.id;
-    element('attachment-context').textContent = `${files.length} archivo(s) guardados · ${item.title}`;
-    notice(`Adjuntos guardados en este iPhone: ${item.title}. Trabajo ${item.id}. Todavía no enviados a la laptop.`, 'iphone');
+    element('attachment-context').textContent = item.title;
+    element('attachment-context').title = 'Guardado en este iPhone';
+    scheduleSave();
     control.value = ''; await inbox.refresh();
   } catch (error) { element('chat-notice').textContent = errorText(error); }
 }
@@ -970,40 +1162,117 @@ const pairingUI = mountPairingInput(element<HTMLFormElement>('pairing'), element
 const pairingSaveRecovery = mountPairingSaveRecovery({
   status: element('pairing-status'), pairingBusy: pairingUI.setSubmitting,
   manualForm: element<HTMLFormElement>('connection'), disconnect: element('disconnect'),
-  current: () => runtimeConnection, epoch: () => connectionEpoch,
+  current: () => pairingSavePending?.connection ?? runtimeConnection, epoch: () => connectionEpoch,
+  save: async (_origin, connection) => {
+    const pending = pairingSavePending;
+    if (!pending || pending.epoch !== connectionEpoch || pending.connection !== connection) throw new Error('La conexión cambió.');
+    await connectionSelection.stage(pending.ticket, pending.connection);
+    await startPairingHandshake(pending);
+  },
 });
 element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
   event.preventDefault();
-  pairingUI.setSubmitting(true);
+  if (connectionBusy) return;
+  if (restorationUncertain) { element('pairing-status').textContent = 'No pude verificar el acceso guardado. Desconecta antes de vincular otro.'; return; }
+  connectionLock(true);
+  let ticket: number | undefined;
+  let accepted = false;
+  const previous = runtimeConnection;
   try {
     const invitation = parseInvitation(element<HTMLInputElement>('pairing-invitation').value);
     const epoch = ++connectionEpoch;
+    const target = `${invitation.origin.replace('https:', 'wss:')}/ws`;
+    ticket = await connectionSelection.begin(target, previous);
+    if (epoch !== connectionEpoch) throw new Error('La conexión cambió antes de vincular.');
     element('pairing-status').textContent = 'Esperando a Gentle Dot. Si aparece una solicitud en tu laptop, aprueba el acceso allí.';
     const result = await pairDevice(invitation);
-    if (epoch !== connectionEpoch) return;
+    if (epoch !== connectionEpoch) throw new Error('La conexión cambió durante la vinculación.');
+    accepted = true;
     pairingSaveRecovery.clear();
-    linked.connect(result.connection.url, result.connection.token);
-    runtimeConnection = result.connection; host = result.connection.url;
-    settings.url = host; saveSettings(settings); element<HTMLInputElement>('url').value = host;
+    const connection: SelectedConnection & { source: 'paired' } = { source: 'paired', ...result.connection };
+    manualSavePending = undefined; retryManualSave.hidden = true;
     element<HTMLInputElement>('pairing-invitation').value = '';
     element('pairing-invitation').dispatchEvent(new Event('input', { bubbles: true }));
-    element('pairing-status').textContent = result.persisted ? 'iPhone vinculado. Acceso guardado en Keychain.' : result.message ?? 'Vinculado; el acceso no se pudo guardar.';
-    if (!result.persisted) pairingSaveRecovery.offer(invitation.origin, result.connection, epoch);
-  } catch (error) { element('pairing-status').textContent = errorText(error); }
-  finally { pairingUI.setSubmitting(false); }
+    const pending: PairingPending = { ticket, epoch, connection, previous };
+    pairingSavePending = pending;
+    await connectionSelection.stage(ticket, connection);
+    element('pairing-status').textContent = 'La laptop aprobó el acceso. Comprobando la conexión…';
+    await startPairingHandshake(pending);
+  } catch (error) {
+    if (ticket !== undefined && !accepted) try { await connectionSelection.rollback(ticket); } catch { /* Keep the pending marker rather than restoring another credential. */ }
+    if (accepted && pairingSavePending) {
+      const pending = pairingSavePending;
+      pairingSaveRecovery.offer(new URL(pending.connection.url.replace(/^wss:/, 'https:')).origin, pending.connection, pending.epoch);
+      recoverPreviousAccess.hidden = !pending.previous;
+    }
+    element('pairing-status').textContent = errorText(error);
+  }
+  finally { connectionLock(false); }
 });
 async function restoreDeviceConnection() {
-  if (!isTauri() || !settings.url) return;
+  if (!isTauri() || connectionBusy) return;
   const restoredURL = settings.url;
   const epoch = connectionEpoch;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  connectionLock(true);
+  element('status').textContent = 'Recuperando acceso guardado…';
   try {
-    const origin = new URL(restoredURL.replace('wss:', 'https:')).origin;
-    let paired;
-    try { paired = await restorePairing(origin); } catch { /* Manual hosts may not use Tailscale. */ }
-    const token = paired?.token ?? await secretGet('daemon-manual', origin);
-    if (token && epoch === connectionEpoch) { runtimeConnection = paired ?? { url: restoredURL, token }; linked.connect(restoredURL, token); }
-  } catch { if (epoch !== connectionEpoch) return; element('status').textContent = 'No se pudo recuperar el acceso guardado. Puedes volver a vincular este iPhone.'; }
+    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('El llavero no respondió.')), 8000); });
+    const selected = await Promise.race([connectionSelection.restore(restoredURL || undefined), timeout]);
+    if (epoch !== connectionEpoch) return;
+    restorationUncertain = false;
+    if (selected) {
+      runtimeConnection = selected; host = selected.url; settings.url = selected.url;
+      element<HTMLInputElement>('url').value = selected.url; saveSettings(settings);
+      linked.connect(selected.url, selected.token);
+    } else element('status').textContent = 'Sin conexión';
+  } catch (error) {
+    if (epoch !== connectionEpoch) return;
+    if (error instanceof ConnectionSelectionPending) {
+      restorationUncertain = false; recoverPreviousAccess.hidden = !error.hasPrevious; retryPendingAccess.hidden = !error.hasCandidate;
+      element('status').textContent = error.message; element('pairing-status').textContent = error.message;
+    } else if (error instanceof ConnectionSelectionAmbiguous) {
+      restorationUncertain = false; element('status').textContent = error.message;
+    } else {
+      // A late read cannot install a connection after this timeout/failure.
+      connectionEpoch++; restorationUncertain = true;
+      element('status').textContent = 'No pude verificar el acceso guardado. Desconecta antes de conectar otro.';
+    }
+  } finally { clearTimeout(timer); connectionLock(false); }
 }
+recoverPreviousAccess.addEventListener('click', () => void (async () => {
+  if (connectionBusy) return;
+  connectionLock(true);
+  try {
+    const previous = await connectionSelection.recoverPrevious();
+    if (!previous) throw new Error('Ya no hay un acceso anterior que recuperar.');
+    connectionEpoch++; restorationUncertain = false; pairingSavePending = undefined; manualSavePending = undefined;
+    pairingSaveRecovery.clear(); retryManualSave.hidden = true; recoverPreviousAccess.hidden = true; retryPendingAccess.hidden = true;
+    runtimeConnection = previous; host = previous.url; element<HTMLInputElement>('url').value = previous.url;
+    saveSelectedURL(previous.url); linked.connect(previous.url, previous.token);
+    element('pairing-status').textContent = 'Acceso anterior recuperado. Comprobando la conexión…';
+  } catch (error) { element('pairing-status').textContent = errorText(error); }
+  finally { connectionLock(false); }
+})());
+retryPendingAccess.addEventListener('click', () => void (async () => {
+  if (connectionBusy) return;
+  connectionLock(true);
+  let waitingForManual = false;
+  try {
+    const pending = await connectionSelection.recoverCandidate();
+    if (!pending) throw new Error('Ya no hay un acceso pendiente que reintentar.');
+    const epoch = ++connectionEpoch;
+    if (pending.connection.source === 'paired') {
+      const attempt: PairingPending = { ...pending, epoch, connection: pending.connection };
+      pairingSavePending = attempt; await startPairingHandshake(attempt);
+    } else {
+      const attempt: ManualAttempt = { ...pending, epoch, connection: pending.connection };
+      manualAttempt = attempt; runtimeConnection = attempt.connection; host = attempt.connection.url;
+      waitingForManual = true; linked.connect(host, attempt.connection.token);
+    }
+  } catch (error) { element('pairing-status').textContent = errorText(error); }
+  finally { if (!waitingForManual) connectionLock(false); }
+})());
 function importSharedFiles(): Promise<void> {
   if (!isTauri()) return Promise.resolve();
   if (sharedImports) return sharedImports.then(() => importSharedFiles());

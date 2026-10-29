@@ -4,6 +4,7 @@
 #panel-agents .orchestration { margin: 0; padding: 0; }
 #panel-agents .agent-detail { display: flex; flex-direction: column; height: calc(var(--app-height, 100dvh) - 96px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); min-height: 220px; }
 #panel-agents .agent-detail-navigation { flex: none; }
+#panel-agents .capri-session-metadata { display: block; color: var(--muted); font-size: .75rem; line-height: 1.3; overflow-wrap: anywhere; }
 #panel-agents .agent-detail-scroll { flex: 1; min-height: 0; overflow: auto; }
 #panel-agents .agent-reply { flex: none; }
 #panel-agents .agent-session { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }

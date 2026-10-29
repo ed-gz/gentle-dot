@@ -242,11 +242,11 @@ test('voice fixture prepares assets on microphone tap and appends dictation with
   await page.locator('#prompt').fill('Borrador existente.');
   await page.locator('#dictate').click();
   await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
-  await expect(page.locator('#voice-status')).toContainText('Grabando');
+  await expect(page.locator('#voice-status')).toContainText('Escuchando');
   expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['prepare', 'start']);
   await page.locator('#dictate').click();
   await expect(page.locator('#prompt')).toHaveValue('Borrador existente.\nAñade evidencia del error.');
-  await expect(page.locator('#voice-status')).toContainText('Puedes corregirla antes de enviar.');
+  await expect(page.locator('#voice-status')).toBeEmpty();
   await expect(page.locator('.chat-card[data-role="user"]')).toHaveCount(0);
   expect(await page.evaluate(() => (globalThis as any).nativePrompts)).toEqual([]);
   expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['prepare', 'start', 'stop']);
@@ -380,7 +380,7 @@ test('a late provisional result cannot overwrite a completed dictation', async (
   await expect(page.locator('#prompt')).toHaveValue('Final correcto.');
   await page.evaluate(() => (globalThis as any).finishOldPreview({ available: true, status: 'available', assetsInstalled: true,
     recording: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', partial: 'resultado viejo' }));
-  await expect(page.locator('#voice-status')).toContainText('Transcripción añadida');
+  await expect(page.locator('#voice-status')).toBeEmpty();
   await expect(page.locator('#prompt')).toHaveValue('Final correcto.');
 });
 
@@ -509,7 +509,7 @@ test('an interrupted recording does not leave a false recording indicator', asyn
   });
   await page.goto('/');
   await page.locator('#dictate').click();
-  await expect(page.locator('#voice-status')).toContainText('Grabando');
+  await expect(page.locator('#voice-status')).toContainText('Escuchando');
   await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
   await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
   await expect(page.locator('#voice-status')).toContainText('se interrumpió');

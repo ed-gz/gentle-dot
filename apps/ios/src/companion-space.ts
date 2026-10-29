@@ -55,7 +55,12 @@ export function occupiedPhoneSpace(panel: HTMLElement, area: DOMRect): Rect[] {
     const range = document.createRange(); range.selectNodeContents(text);
     for (const rect of range.getClientRects()) add(rect);
   }
-  // Above the bound, opt out of roaming instead of claiming unexamined space is empty.
-  if (count >= 3000) return [{ x: 0, y: 0, width: area.width, height: area.height }];
+  // Above the bound, regard the whole panel as occupied. A reserved companion
+  // shelf outside that panel remains usable, without treating unexamined text
+  // or controls inside the panel as empty space.
+  if (count >= 3000) {
+    const bounds = panel.getBoundingClientRect();
+    return [{ x: bounds.left - area.left, y: bounds.top - area.top, width: bounds.width, height: bounds.height }];
+  }
   return rects;
 }

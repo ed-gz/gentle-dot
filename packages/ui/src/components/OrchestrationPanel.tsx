@@ -452,6 +452,7 @@ export function OrchestrationPanel({
 					</label>
 				) : null}
 				<AgentAttachments key={`${identity}:${clientEpoch.current.epoch}`} client={client} paneId={session.paneId} sessionId={session.sessionId}
+					capriMobile={mobile && capriMobile}
 					text={instruction} onText={setInstruction} busy={busy} disabled={!connected || !active || !session.connected}
 					images={session.capabilities?.attachments?.images ?? false}
 					filesEnabled={session.capabilities?.attachments?.version === 1 && Boolean(client.uploadAttachment)}
@@ -493,6 +494,13 @@ export function OrchestrationPanel({
 					<div className="agent-current-session">
 						<h3>{session.label || "Sesión seleccionada"}</h3>
 						<SessionStatus session={session} />
+						{mobile && capriMobile && conversation && conversation.sessionId === session.sessionId && conversation.metadata ? (() => {
+							const metadata = conversation.metadata;
+							const items = [metadata.model?.name || metadata.model?.id, metadata.profile?.name];
+							if (metadata.source === "live" && connected && session.connected && !conversationError && metadata.tools?.active.includes("gentle_review")) items.push("gentle_review activa");
+							const details = items.filter(Boolean).join(" · ");
+							return details ? <span className="capri-session-metadata">{!connected || !session.connected || conversationError || metadata.source === "history" ? "Última lectura: " : ""}{details}</span> : null;
+						})() : null}
 					</div>
 					<SessionMenu
 						key={identity}

@@ -51,6 +51,20 @@ it("uploads attachment-only to the exact session and sends refs once despite rep
 	expect(screen.queryByText(/no se graba ni transcribe/)).toBeNull();
 });
 
+it("uses the camera picker in Capri iOS and sends the captured image through the session upload", async () => {
+	const h = setup();
+	h.rerender(<AgentAttachments {...h.props} capriMobile />);
+	const input = screen.getByLabelText("Tomar foto para esta sesión") as HTMLInputElement;
+	expect(input).toHaveAttribute("accept", "image/*");
+	expect(input).toHaveAttribute("capture", "environment");
+	expect(input.multiple).toBe(false);
+	const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
+	fireEvent.change(input, { target: { files: [photo] } });
+	fireEvent.click(screen.getByRole("button", { name: "Enviar instrucción" }));
+	await waitFor(() => expect(h.onSend).toHaveBeenCalledWith("", [{ uploadId: "u_fixture123", name: "camera.jpg" }]));
+	expect(h.upload).toHaveBeenCalledWith("pi:one", "one", photo, undefined, expect.any(AbortSignal));
+});
+
 it.each([true, false])("keeps attachment controls without always-visible explanations (images=%s)", (images) => {
 	const h = setup();
 	h.rerender(<AgentAttachments {...h.props} images={images} />);

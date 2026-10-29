@@ -27,24 +27,32 @@ async function fixture(page: Page) {
     } };
   });
 }
-test('native attachment action saves verified files before acknowledgement and survives reload', async ({ page }) => {
+test('composer keeps the camera and voice controls without the extra attachment button', async ({ page }) => {
   await fixture(page); await page.goto('/');
   await expect(page.locator('#send')).toBeEnabled();
   await page.locator('#send').click(); // An empty composer must not start inference.
   expect(await page.evaluate(() => (globalThis as any).calls.includes('agent_step'))).toBe(false);
-  await page.getByRole('button', { name: 'Adjuntar archivos', exact: true }).click();
+  await expect(page.locator('#attach')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Tomar foto' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Dictar' })).toBeVisible();
+});
+test('a document already imported by iOS is saved locally before acknowledgement', async ({ page }) => {
+  await fixture(page); await page.goto('/');
+  await expect(page.locator('#history-loading')).toBeHidden();
+  await page.evaluate(async () => {
+    await (globalThis as any).__TAURI_INTERNALS__.invoke('plugin:device-bridge|documents_pick');
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
   await expect(page.locator('#attachment-context')).toContainText('Reunión.txt');
   const saved = await page.evaluate(async () => {
-    const path = '/src/work-inbox.ts', inbox = await import(path);
+    const inbox = await import('/src/work-inbox.ts' as string);
     const work = (await inbox.listWork())[0];
-    return { work, calls: (globalThis as any).calls, text: await (await inbox.readWorkFile(work.id, work.files[0].id)).text() };
+    return { calls: (globalThis as any).calls, text: await (await inbox.readWorkFile(work.id, work.files[0].id)).text() };
   });
-  expect(saved.calls).toContain('documents_pick'); expect(saved.calls).toContain('documents_ack');
-  expect(saved.work.files).toHaveLength(1); expect(saved.text).toBe('Contenido importado');
-  expect(saved.work.title).toBe('Reunión.txt');
+  expect(saved.calls).toContain('documents_ack');
+  expect(saved.text).toBe('Contenido importado');
   await page.reload();
   await expect(page.locator('#attachment-context')).toContainText('Material local adjunto');
-  expect(await page.evaluate(async () => { const path = '/src/work-inbox.ts'; return (await (await import(path)).listWork()).length; })).toBe(1);
 });
 test('background visibility no longer aborts an in-flight native answer; explicit Stop still exists', async ({ page }) => {
   await fixture(page); await page.goto('/');
@@ -58,20 +66,6 @@ test('background visibility no longer aborts an in-flight native answer; explici
   });
   await expect(page.locator('#cards')).toContainText('Respuesta conservada al volver.');
   await expect(page.locator('#stop')).toBeHidden();
-});
-test('a native selection waits for an older foreground scan and then imports the newly published file', async ({ page }) => {
-  await fixture(page); await page.goto('/');
-  await expect(page.locator('#history-loading')).toBeHidden();
-  await page.evaluate(() => {
-    (globalThis as any).holdDocumentsList = true;
-    document.dispatchEvent(new Event('visibilitychange'));
-  });
-  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).releaseDocumentScan)).toBe('function');
-  await page.locator('#attach').click();
-  await expect.poll(() => page.evaluate(() => (globalThis as any).documentItems.length)).toBe(1);
-  await page.evaluate(() => (globalThis as any).releaseDocumentScan());
-  await expect(page.locator('#attachment-context')).toContainText('Reunión.txt');
-  await expect.poll(() => page.evaluate(() => (globalThis as any).documentItems.length)).toBe(0);
 });
 test('camera selection enters the same local attachment flow without sending', async ({ page }) => {
   await fixture(page); await page.goto('/');
@@ -90,7 +84,7 @@ test('composer controls remain fully reachable on small and landscape viewports 
     await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
     await page.locator('#prompt').fill('Una instrucción para Capri');
     const row: import('@playwright/test').Rect[] = [];
-    for (const id of ['attach', 'camera', 'dictate', 'prompt', 'send']) {
+    for (const id of ['camera', 'dictate', 'prompt', 'send']) {
       const bounds = await page.locator('#' + id).boundingBox();
       expect(bounds).not.toBeNull(); expect(bounds!.width).toBeGreaterThanOrEqual(44); expect(bounds!.height).toBeGreaterThanOrEqual(44);
       expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(size.height);

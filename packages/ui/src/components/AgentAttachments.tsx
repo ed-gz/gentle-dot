@@ -24,6 +24,7 @@ interface AgentAttachmentsProps {
  busy?: boolean;
  images: boolean;
  filesEnabled?: boolean;
+ capriMobile?: boolean;
 }
 export function AgentAttachments(props: AgentAttachmentsProps) {
  const voice = useContext(AgentVoiceOverrideContext);
@@ -63,7 +64,7 @@ function AgentAttachmentsBody(props: AgentAttachmentsProps & { voice: VoiceContr
  }, [client, paneId, sessionId]);
  useEffect(() => { if (disconnected) controller.current.abort(); }, [disconnected]);
  return <div className="agent-reply agent-attachments">
-  <Composer mobile inputOnly busy={false} disabled={disconnected || busy || Boolean(attachments?.storageError)} send={() => false}
+  <Composer mobile inputOnly capriMobile={props.capriMobile} busy={false} disabled={disconnected || busy || Boolean(attachments?.storageError)} send={() => false}
    text={text} onText={onText} attachments={guardedAttachments} voice={voice}
    labels={{ text: "Continuar esta sesión", send: "Enviar instrucción", files: "Archivos para esta sesión", remove: "Quitar" }}
    onSubmitText={async (value, refs) => {
