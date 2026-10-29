@@ -32,38 +32,48 @@ func runPreviewBufferProbe(locale: Locale) async throws {
     guard prepared.url.standardizedFileURL == converted.standardizedFileURL, prepared.length > 0 else { throw ProbeError.audio }
     let before = try Data(contentsOf: converted)
     var failures = 0
+    let executable = CommandLine.arguments[0], path = converted.path, localeID = locale.identifier
     for label in ["int16", "float32"] {
-        do {
-            // The framework can terminate the process for an unsupported input
-            // representation. Run each comparison separately so the parent can
-            // report the exact signal and still release its locale reservation.
-            let child = Process()
-            child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
-            child.arguments = ["--preview-buffer-child", converted.path, locale.identifier, label]
-            child.standardError = FileHandle.nullDevice
-            let finished = DispatchSemaphore(value: 0)
-            child.terminationHandler = { _ in finished.signal() }
-            try child.run()
-            if finished.wait(timeout: .now() + 25) == .timedOut {
-                kill(child.processIdentifier, SIGKILL)
-                child.waitUntilExit()
-                failures += 1
-                print("PREVIEW FAIL: \(label) child timed out; no transcript confirmed.")
-                continue
+        // The subprocess can block until its bounded timeout; keep that wait
+        // outside the async executor and report the exact exit or signal.
+        let succeeded = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: runPreviewFormatChild(executable: executable, path: path, locale: localeID, label: label))
             }
-            child.waitUntilExit()
-            guard child.terminationReason == .exit, child.terminationStatus == 0 else {
-                failures += 1
-                let reason = child.terminationReason == .uncaughtSignal ? "signal" : "exit"
-                print("PREVIEW FAIL: \(label) child \(reason)=\(child.terminationStatus); no transcript confirmed.")
-                continue
-            }
-        } catch {
-            failures += 1
-            print("PREVIEW FAIL: \(label) synthetic buffers \(errorIdentity(error)); no transcript confirmed.")
         }
+        if !succeeded { failures += 1 }
     }
     guard try Data(contentsOf: converted) == before, failures == 0 else { throw ProbeError.audio }
+}
+
+private func runPreviewFormatChild(executable: String, path: String, locale: String, label: String) -> Bool {
+    do {
+        // Isolating each framework invocation lets the parent release its
+        // locale reservation even if an unsupported representation crashes.
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: executable)
+        child.arguments = ["--preview-buffer-child", path, locale, label]
+        child.standardError = FileHandle.nullDevice
+        let finished = DispatchSemaphore(value: 0)
+        child.terminationHandler = { _ in finished.signal() }
+        try child.run()
+        if finished.wait(timeout: .now() + 25) == .timedOut {
+            if child.isRunning { kill(child.processIdentifier, SIGKILL) }
+            child.waitUntilExit()
+            print("PREVIEW FAIL: \(label) child timed out; no transcript confirmed.")
+            return false
+        }
+        child.waitUntilExit()
+        guard child.terminationReason == .exit, child.terminationStatus == 0 else {
+            let reason = child.terminationReason == .uncaughtSignal ? "signal" : "exit"
+            print("PREVIEW FAIL: \(label) child \(reason)=\(child.terminationStatus); no transcript confirmed.")
+            return false
+        }
+        return true
+    } catch {
+        print("PREVIEW FAIL: \(label) synthetic buffers \(errorIdentity(error)); no transcript confirmed.")
+        return false
+    }
 }
 
 /// Called only by the test binary's explicit child mode. Require the known
