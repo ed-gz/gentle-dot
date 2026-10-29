@@ -192,3 +192,10 @@ test('background task configuration rejects malformed existing plist arrays with
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('shared native manifests accept composed Unicode without exceeding the byte bound', () => {
+  const original = manifest();
+  assert.equal(validSharedImport({ ...original, title: 'e\u0301'.repeat(80) + '.m4a', notes: 'e\u0301'.repeat(5000) }), true);
+  assert.equal(validSharedImport({ ...original, title: 'a'.repeat(65537) }), false);
+  assert.equal(validSharedImport({ ...original, notes: 'a'.repeat(65537) }), false);
+});

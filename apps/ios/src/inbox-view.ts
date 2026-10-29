@@ -1,5 +1,5 @@
 import {
-  addWorkVersion, approveMinute, createWork, deleteWork, listWork, readWorkFile, readWorkFileInfo, readWorkFileSlice, reviseWork, validMinuteApproval,
+  addWorkVersion, approveMinute, createWork, deleteWork, listWork, readWorkFile, readWorkFileInfo, readWorkFileSlice, reviseWork, validMinuteApproval, isImportedNotesVersion,
   WORK_LIMITS, type WorkItem, type WorkStatus,
 } from './work-inbox.ts';
 import { isTauri } from '@tauri-apps/api/core';
@@ -278,9 +278,9 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
       for (const [index, version] of item.versions.entries()) {
         const detail = node('details');
         const text = node('p');
-        detail.append(node('summary', `Versión ${index + 1} · ${dateLabel(version.createdAt)}`), text);
+        detail.append(node('summary', `${isImportedNotesVersion(version) ? 'Notas importadas' : `Versión ${index + 1}`} · ${dateLabel(version.createdAt)}`), text);
         detail.addEventListener('toggle', () => { text.textContent = detail.open ? version.text : ''; });
-        if (item.kind === 'meeting' && item.result && item.status !== 'sent' && item.status !== 'sending' && index === item.versions.length - 1) {
+        if (item.kind === 'meeting' && item.result && !isImportedNotesVersion(version) && item.status !== 'sent' && item.status !== 'sending' && index === item.versions.length - 1) {
           if (validMinuteApproval(item) && item.minuteApproval?.kind === 'version') detail.append(node('p', 'Versión aprobada en este iPhone. Esto no envía ni autoriza acciones externas.', 'hint'));
           else {
             const approve = button('Aprobar esta versión');

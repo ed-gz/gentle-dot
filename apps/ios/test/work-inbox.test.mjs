@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   WORK_LIMITS, validateWorkInput, validateWorkFiles, assertWorkRevision,
   transitionWorkItem, reviseWorkItem, addWorkVersionItem,
-  createWork, listWork, readWorkFile, deleteWork,
+  createWork, listWork, readWorkFile, deleteWork, importedWorkTitle,
 } from '../src/work-inbox.ts';
 
 const item = (extra = {}) => ({
@@ -148,4 +148,14 @@ test('missing IndexedDB fails promptly without treating data as saved or sent', 
   await assert.rejects(createWork({ title: 'Draft', kind: 'task', instruction: 'Work' }), /no está disponible/);
   await assert.rejects(readWorkFile('work-1', 'file-1'), /no está disponible/);
   await assert.rejects(deleteWork('work-1', 1), /no está disponible/);
+});
+
+
+test('native import titles preserve graphemes, fit UTF-16 and handle an empty label', () => {
+  assert.equal(importedWorkTitle('  Reunión ágil  '), 'Reunión ágil');
+  assert.equal(importedWorkTitle('   '), 'Material importado');
+  assert.equal(importedWorkTitle('🎵'.repeat(61) + '.m4a'), '🎵'.repeat(60));
+  const accent = 'a'.repeat(119) + 'e\u0301' + 'extra';
+  assert.equal(importedWorkTitle(accent), 'a'.repeat(119));
+  assert.equal(importedWorkTitle('x'.repeat(120) + 'y').length, 120);
 });

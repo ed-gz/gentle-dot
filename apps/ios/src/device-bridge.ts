@@ -96,13 +96,21 @@ export async function nativeSHA256Bytes(bytes: Uint8Array, call: DeviceInvoker =
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function object(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }
+// Swift String.count measures extended grapheme clusters. Match it so a
+// decomposed accented title accepted by the native inbox is also importable.
+function withinGraphemes(value: string, limit: number): boolean {
+  const units = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value) : Array.from(value);
+  let count = 0;
+  for (const _ of units) if (++count > limit) return false;
+  return true;
+}
 export function validSharedImport(value: unknown): value is SharedImport {
   if (!object(value) || value.schemaVersion !== 1 || typeof value.id !== 'string' || !uuid.test(value.id) ||
-      !Number.isSafeInteger(value.createdAt) || (value.createdAt as number) <= 0 || typeof value.title !== 'string' || !value.title.trim() || Array.from(value.title).length > 120 ||
-      typeof value.notes !== 'string' || Array.from(value.notes).length > 8000 || !Array.isArray(value.files) || value.files.length < 1 || value.files.length > 10) return false;
+      !Number.isSafeInteger(value.createdAt) || (value.createdAt as number) <= 0 || typeof value.title !== 'string' || !value.title.trim() || value.title.length > 65536 ||
+      typeof value.notes !== 'string' || value.notes.length > 65536 || new TextEncoder().encode(value.title + value.notes).byteLength > 65536 || !withinGraphemes(value.title, 120) || !withinGraphemes(value.notes, 8000) || !Array.isArray(value.files) || value.files.length < 1 || value.files.length > 10) return false;
   const ids = new Set<string>(); let total = 0;
   for (const file of value.files) {
-    if (!object(file) || typeof file.id !== 'string' || !uuid.test(file.id) || ids.has(file.id) || typeof file.name !== 'string' || !file.name || Array.from(file.name).length > 255 ||
+    if (!object(file) || typeof file.id !== 'string' || !uuid.test(file.id) || ids.has(file.id) || typeof file.name !== 'string' || !file.name || file.name.length > 65536 || !withinGraphemes(file.name, 255) ||
         typeof file.mime !== 'string' || file.mime.length > 128 || !Number.isSafeInteger(file.size) || (file.size as number) <= 0 || (file.size as number) > (file.mime.startsWith('audio/') ? 128 : 25) * 1024 * 1024 ||
         typeof file.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(file.sha256)) return false;
     ids.add(file.id); total += file.size as number;

@@ -136,6 +136,9 @@ function nextRevision(item: WorkItem, now: number): WorkItem {
   };
 }
 
+/** Imported notes are source material, never a generated minute or an approval. */
+export function isImportedNotesVersion(version: { id: string }): boolean { return version.id.startsWith('import-notes-'); }
+
 /** A locally approved minute must still equal the exact reviewed content and revision. */
 export function validMinuteApproval(item: WorkItem): boolean {
   const approval = item.minuteApproval;
@@ -146,7 +149,7 @@ export function validMinuteApproval(item: WorkItem): boolean {
   }
   if (approval.kind === 'version') {
     const version = item.versions.at(-1);
-    return item.status !== 'sent' && item.status !== 'sending' && !!parseWorkResult(item.result) && !!version && approval.versionId === version.id && approval.snapshot === version.text;
+    return item.status !== 'sent' && item.status !== 'sending' && !!parseWorkResult(item.result) && !!version && !isImportedNotesVersion(version) && approval.versionId === version.id && approval.snapshot === version.text;
   }
   return false;
 }
@@ -160,7 +163,7 @@ export function approveMinuteItem(item: WorkItem, kind: MinuteApproval['kind'], 
     snapshot = JSON.stringify(result);
   } else if (kind === 'version') {
     const version = item.versions.at(-1);
-    if (item.status === 'sent' || item.status === 'sending' || !parseWorkResult(item.result) || !version || version.id !== versionId) throw new Error('La versión ya no está disponible para revisión.');
+    if (item.status === 'sent' || item.status === 'sending' || !parseWorkResult(item.result) || !version || isImportedNotesVersion(version) || version.id !== versionId) throw new Error('La versión ya no está disponible para revisión.');
     snapshot = version.text;
   } else throw new Error('No se puede aprobar esta minuta.');
   const next = nextRevision(item, now);
@@ -497,21 +500,46 @@ export async function createImportedWork(sourceId: string, input: WorkInput): Pr
   return insertWork(safe, { id: sourceId.toLowerCase(), hash });
 }
 
+/** Native file providers and Swift count Unicode differently from the work
+ * schema's UTF-16 limit. Shorten only the display title; never rename audio. */
+export function importedWorkTitle(value: string): string {
+  if (typeof value !== 'string') throw new Error('Título no válido.');
+  const trimmed = value.trim();
+  if (!trimmed) return 'Material importado';
+  if (trimmed.length <= WORK_LIMITS.title) return trimmed;
+  const segments = typeof Intl.Segmenter === 'function'
+    ? Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(trimmed), value => value.segment)
+    : Array.from(trimmed);
+  let result = '';
+  for (const segment of segments) {
+    if (result.length + segment.length > WORK_LIMITS.title) break;
+    result += segment;
+  }
+  return result.trim() || 'Material importado';
+}
+
 /** Persist native imports in bounded chunks; the native original remains until publication succeeds. */
 export async function createStreamedImportedWork(sourceId: string, input: {
   title: string; kind: WorkItem['kind']; instruction: string; files: ChunkFile[];
 }, read: (file: ChunkFile, offset: number, length: number) => Promise<Uint8Array>, signal?: AbortSignal): Promise<WorkItem> {
   sourceId = importSourceId(sourceId);
   if (input.kind !== 'task' && input.kind !== 'meeting') throw new Error('Tipo de trabajo no válido.');
-  const title = textWithin(input.title, WORK_LIMITS.title, 'Título', true);
-  const instruction = textWithin(input.instruction, WORK_LIMITS.instruction, 'Instrucción');
+  const originalTitle = typeof input.title === 'string' ? input.title.trim() : '';
+  const title = importedWorkTitle(input.title);
+  if (typeof input.instruction !== 'string') throw new Error('Instrucción no válida.');
+  const overflowNotes = input.instruction.trim().length > WORK_LIMITS.instruction;
+  const originalInstruction = overflowNotes ? input.instruction : textWithin(input.instruction, WORK_LIMITS.instruction, 'Instrucción');
+  const notesPrefix = 'Notas originales importadas; no son una minuta ni una aprobación:\n\n';
+  if (overflowNotes && (notesPrefix.length + originalInstruction.length > WORK_LIMITS.versionText)) throw new Error('Las notas originales superan el límite. Vuelve a compartir el audio con notas más cortas; el original se conserva.');
+  const instruction = overflowNotes ? 'Las notas originales están completas en Versiones guardadas. Revísalas antes de procesar el material.' : originalInstruction;
   if (!Array.isArray(input.files)) throw new Error('Los archivos compartidos no son válidos.');
   const files = input.files.map(file => Object.freeze({ id: file.id, name: file.name, type: file.type, size: file.size, sha256: file.sha256 }));
   const kind = input.kind;
+  if (files.some(file => typeof file.name === 'string' && file.name.length > 255)) throw new Error('El nombre compartido supera el límite de Capri. Renombra el archivo original y vuelve a compartirlo; el original se conserva.');
   validateWorkMetadata(files);
   if (!files.length || new Set(files.map(file => file.id)).size !== files.length || files.some(file => !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(file.id) || !/^[a-f0-9]{64}$/.test(file.sha256))) throw new Error('Los archivos compartidos no son válidos.');
   const digest = new Hash();
-  const content = JSON.stringify({ title, kind, instruction, files: files.map(f => ({ name: f.name, type: f.type, size: f.size, hash: f.sha256 })) });
+  const content = JSON.stringify({ title: originalTitle || title, kind, instruction: originalInstruction, files: files.map(f => ({ name: f.name, type: f.type, size: f.size, hash: f.sha256 })) });
   const sourceHash = Array.from(digest.update(new TextEncoder().encode(content)).digest(), byte => byte.toString(16).padStart(2, '0')).join(''); digest.clean();
   const generation = await transact<number>('readonly', (tx, done, fail) => {
     const store = tx.objectStore(FILES);
@@ -560,7 +588,7 @@ export async function createStreamedImportedWork(sourceId: string, input: {
   signal?.throwIfAborted();
   const now = Date.now();
   const item: WorkItem = { id: localIdentifier(), title, kind, instruction, createdAt: now, updatedAt: now, status: 'local', revision: 1,
-    files: files.map(file => ({ id: localIdentifier(), name: file.name, type: file.type, size: file.size })), versions: [], source: { id: sourceId, hash: sourceHash } };
+    files: files.map(file => ({ id: localIdentifier(), name: file.name, type: file.type, size: file.size })), versions: overflowNotes ? [{ id: `import-notes-${localIdentifier()}`, text: notesPrefix + originalInstruction, createdAt: now }] : [], source: { id: sourceId, hash: sourceHash } };
   return transact('readwrite', (tx, done, fail) => {
     const items = tx.objectStore(ITEMS), fileStore = tx.objectStore(FILES);
     whenImportActive(tx, sourceId, generation, () => whenReady<WorkItem[]>(items.getAll(), existing => {

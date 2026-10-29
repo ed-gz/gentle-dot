@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures.ts';
+import { expect, test, openRecoveryHarness } from './fixtures.ts';
 
 test('native import resumes durable chunks after interruption and lost ACK without duplicating work', async ({ page }) => {
   await page.goto('/');
@@ -182,4 +182,99 @@ test('a 26 MiB audio survives reload, refuses a legacy host, and reaches a capab
   }, created);
   expect(sent.rejection).toContain('Actualiza Gentle Dot'); expect(sent.legacyCalls).toBe(0); expect(sent.legacyStatus).toBe('approved');
   expect(sent).toMatchObject({ status: 'sent', size: created.size, sha256: created.sha256 }); expect(sent.maxChunk).toBeLessThanOrEqual(64 * 1024);
+});
+
+test('long Unicode native titles preserve the original m4a name and bytes for both import sources', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const inbox = await import('/src/work-inbox.ts'); const bridge = await import('/src/device-bridge.ts');
+    const names = ['🎵'.repeat(61) + '.m4a', 'e\u0301'.repeat(80) + '.m4a'], bytes = new TextEncoder().encode('audio original');
+    const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
+    const outcome = [];
+    for (const [index, kind] of ['share', 'document'].entries()) {
+      const originalName = names[index];
+      const files = [{ id: 'b706ebda-e0b0-4a97-957d-15a9d3048229', name: originalName, mime: 'audio/mp4', size: bytes.length, sha256 }];
+      const item = { schemaVersion: 1, id: 'ea499afa-182e-468b-bc53-a6f1b0e0e4df', createdAt: 1, title: originalName, notes: '', files };
+      let acknowledged = 0;
+      const call = async (command: string, request: any) => {
+        if (command.endsWith('_ack')) { acknowledged++; return { ok: true }; }
+        return { ok: true, data: btoa(String.fromCharCode(...bytes.slice(request.offset, request.offset + request.length))) };
+      };
+      const run = async ({ sourceId, read }: any) => inbox.createStreamedImportedWork(sourceId, { title: item.title, kind: 'meeting', instruction: '', files: files.map(f => ({ ...f, type: f.mime })) }, (file, offset, length) => read(files.find(f => f.id === file.id)!, offset, length));
+      const execute = kind === 'share' ? bridge.importSharedItemStreamed : (await import('/src/document-import.ts')).importDocumentItemStreamed;
+      let work: any, error = '';
+      try { await execute(item, async input => { work = await run(input); }, call); } catch (e) { error = (e as Error).message; }
+      const blob = work && await inbox.readWorkFile(work.id, work.files[0].id);
+      let conflict = false;
+      if (work) try { await inbox.createStreamedImportedWork(`${kind}:${item.id}`, { title: item.title + 'x', kind: 'meeting', instruction: '', files: files.map(f => ({ ...f, type: f.mime })) }, async () => bytes); } catch { conflict = true; }
+      outcome.push({ error, acknowledged, conflict, validManifest: bridge.validSharedImport(item), originalName, titleUnits: work?.title.length, name: work?.files[0].name, bytes: blob ? [...new Uint8Array(await blob.arrayBuffer())] : [] });
+    }
+    return { bytes: [...bytes], outcome };
+  });
+  for (const item of result.outcome) { expect(item.validManifest).toBe(true); expect(item.error).toBe(''); expect(item.acknowledged).toBe(1); expect(item.conflict).toBe(true); expect(item.titleUnits).toBeLessThanOrEqual(120); expect(item.name).toBe(item.originalName); expect(item.bytes).toEqual(result.bytes); }
+});
+
+test('long Unicode Share notes survive intact as a reviewable version without approving an action', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const inbox = await import('/src/work-inbox.ts'); const bridge = await import('/src/device-bridge.ts');
+    const bytes = new TextEncoder().encode('audio original'), notes = '🧠'.repeat(4001);
+    const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
+    const item = { schemaVersion: 1, id: 'fa499afa-182e-468b-bc53-a6f1b0e0e4df', createdAt: 1, title: 'Reunión', notes, files: [{ id: 'b706ebda-e0b0-4a97-957d-15a9d3048229', name: 'reunión.m4a', mime: 'audio/mp4', size: bytes.length, sha256 }] };
+    let ack = 0, work: any;
+    const call = async (command: string, request: any) => { if (command === 'share_ack') { ack++; return { ok: true }; } return { ok: true, data: btoa(String.fromCharCode(...bytes.slice(request.offset, request.offset + request.length))) }; };
+    await bridge.importSharedItemStreamed(item, async ({ sourceId, read }) => { work = await inbox.createStreamedImportedWork(sourceId, { title: item.title, kind: 'meeting', instruction: item.notes, files: item.files.map(f => ({ ...f, type: f.mime })) }, (file, offset, length) => read(item.files[0], offset, length)); }, call);
+    return { id: work.id, ack, notes, valid: bridge.validSharedImport(item), bytes: [...bytes] };
+  });
+  expect(result.valid).toBe(true); expect(result.ack).toBe(1);
+  await page.reload();
+  const saved = await page.evaluate(async id => { const inbox = await import('/src/work-inbox.ts'); const work = await inbox.readWork(id); const blob = await inbox.readWorkFile(id, work.files[0].id); return { work, bytes: [...new Uint8Array(await blob!.arrayBuffer())] }; }, result.id);
+  expect(saved.work.status).toBe('local'); expect(saved.work.minuteApproval).toBeUndefined();
+  expect(saved.work.instruction).toContain('Versiones guardadas'); expect(saved.work.versions).toHaveLength(1); expect(saved.work.versions[0].text).toBe('Notas originales importadas; no son una minuta ni una aprobación:\n\n' + result.notes);
+  expect(saved.bytes).toEqual(result.bytes);
+  await openRecoveryHarness(page);
+  const article = page.locator(`[data-work-id="${result.id}"]`);
+  await article.getByText('Versiones guardadas (1)').click();
+  await article.getByText('Notas importadas ·', { exact: false }).click();
+  await expect(article.getByText('Notas originales importadas; no son una minuta ni una aprobación:', { exact: false })).toBeVisible();
+  await expect(article.getByRole('button', { name: 'Aprobar esta versión' })).toHaveCount(0);
+  const denied = await page.evaluate(async ({ id }) => { const inbox = await import('/src/work-inbox.ts'); const work = await inbox.readWork(id);
+    const result = { schema: 1, manifestHash: 'a'.repeat(64), createdAt: 1, model: 'fixture', minutes: { title: 'Minuta', summary: 'Borrador', items: [] }, evidence: [], transcriptComparison: '', requiresReview: true };
+    try { inbox.approveMinuteItem({ ...work, result }, 'version', work.versions[0].id); return false; } catch { return true; }
+  }, { id: result.id });
+  expect(denied).toBe(true);
+  const sent = await page.evaluate(async id => {
+    const inbox = await import('/src/work-inbox.ts'); const sync = await import('/src/work-sync.ts');
+    let work = await inbox.readWork(id); work = await inbox.transitionWork(id, work.revision, 'prepared'); work = await inbox.transitionWork(id, work.revision, 'approved');
+    const offsets: Record<string, number> = {}, contents: Record<string, string> = {}; let manifest: any, manifestHash = '';
+    const dispatcher = sync.createWorkDispatcher(async (request: any) => {
+      const base = { type: 'work_sync_reply', requestId: request.requestId, transferId: request.transferId };
+      if (request.operation === 'begin') { manifest = request.manifest; manifestHash = request.manifestHash; for (const file of manifest.files) { offsets[file.id] = 0; contents[file.id] = ''; } }
+      if (request.operation === 'chunk') { const chunk = atob(request.data); contents[request.fileId] += chunk; offsets[request.fileId] += chunk.length; }
+      if (request.operation === 'commit') return { ...base, state: 'committed', receipt: { transferId: request.transferId, workId: manifest.workId, revision: manifest.revision, manifestHash, committedAt: 1 } };
+      return { ...base, state: 'uploading', manifestHash, offsets };
+    }, 'wss://host/ws');
+    await dispatcher.send(id, work.revision);
+    const version = manifest.files.find((file: any) => file.role === 'version');
+    const data = Uint8Array.from(contents[version.id], char => char.charCodeAt(0));
+    return { role: version.role, text: new TextDecoder().decode(data), instruction: manifest.instruction };
+  }, result.id);
+  expect(sent.role).toBe('version'); expect(sent.text).toBe(saved.work.versions[0].text); expect(sent.instruction).toContain('Versiones guardadas');
+});
+
+test('an older unusable native name is isolated and never acknowledged while later imports continue', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const inbox = await import('/src/work-inbox.ts'); const bridge = await import('/src/device-bridge.ts');
+    const bytes = new TextEncoder().encode('audio original'); const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
+    const build = (id: string, name: string) => ({ schemaVersion: 1, id, createdAt: 1, title: 'Reunión', notes: '', files: [{ id: 'b706ebda-e0b0-4a97-957d-15a9d3048229', name, mime: 'audio/mp4', size: bytes.length, sha256 }] });
+    const bad = build('aa499afa-182e-468b-bc53-a6f1b0e0e4df', '🎵'.repeat(130) + '.m4a'), good = build('bb499afa-182e-468b-bc53-a6f1b0e0e4df', 'normal.m4a'); const acknowledgements: string[] = [];
+    const call = async (command: string, request: any) => { if (command === 'share_list') return { ok: true, items: [bad, good] }; if (command === 'share_ack') { acknowledgements.push(request.id); return { ok: true }; } return { ok: true, data: btoa(String.fromCharCode(...bytes.slice(request.offset, request.offset + request.length))) }; };
+    const listed = await bridge.listSharedImports(call);
+    const batch = await bridge.recoverImportBatch(listed, item => bridge.importSharedItemStreamed(item, async ({ sourceId, read }) => { await inbox.createStreamedImportedWork(sourceId, { title: item.title, kind: 'meeting', instruction: '', files: item.files.map(f => ({ ...f, type: f.mime })) }, (file, offset, length) => read(item.files.find(f => f.id === file.id)!, offset, length)); }, call));
+    return { batch, acknowledgements, items: (await inbox.listWork()).map(work => work.files[0].name), bad: bad.id, good: good.id };
+  });
+  expect(result.batch.recovered).toBe(1); expect(result.batch.failures).toHaveLength(1);
+  expect(result.batch.failures[0].id).toBe(result.bad); expect(result.batch.failures[0].message).toContain('Renombra');
+  expect(result.acknowledgements).toEqual([result.good]); expect(result.items).toEqual(['normal.m4a']);
 });

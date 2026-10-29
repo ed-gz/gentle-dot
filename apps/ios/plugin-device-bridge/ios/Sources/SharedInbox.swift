@@ -3,13 +3,15 @@ import CryptoKit
 import Darwin
 
 enum ShareFailure: Error, LocalizedError {
-    case unavailable, invalid, limit, integrity
+    case unavailable, invalid, limit, integrity, metadataLimit, nameLimit
     var errorDescription: String? {
         switch self {
         case .unavailable: return "El grupo compartido no está disponible con esta firma. Puedes importar desde Archivos en Capri."
         case .invalid: return "El material compartido no es válido o ya no está disponible."
         case .limit: return "Límite: 10 archivos, audio hasta 128 MiB, otros archivos hasta 25 MiB, 256 MiB por trabajo y 100 importaciones pendientes."
         case .integrity: return "No se pudo verificar el archivo. El original compartido se conserva."
+        case .metadataLimit: return "El título y las notas ocupan demasiado espacio. Acórtalos y vuelve a intentarlo; el archivo original se conserva."
+        case .nameLimit: return "El nombre del archivo es demasiado largo para Capri. Renómbralo y vuelve a intentarlo; el original se conserva."
         }
     }
 }
@@ -136,6 +138,8 @@ enum SharedInbox {
         let values = try source.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
         let limit = fileLimit(mime)
         guard values.isRegularFile == true, let count = values.fileSize, count > 0, count <= limit else { throw ShareFailure.limit }
+        let safeName = name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && $0 != "/" && $0 != "\\" }.map(String.init).joined()
+        guard safeName.utf16.count <= 255 else { throw ShareFailure.nameLimit }
         let id = UUID().uuidString.lowercased()
         let destination = staging.appendingPathComponent("\(id).blob")
         let input = try FileHandle(forReadingFrom: source)
@@ -153,7 +157,6 @@ enum SharedInbox {
         }
         guard bytes == count else { throw ShareFailure.integrity }
         try output.synchronize()
-        let safeName = String(name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && $0 != "/" && $0 != "\\" }.map(String.init).joined().prefix(255))
         return SharedFile(id: id, name: safeName.isEmpty ? "adjunto" : safeName, mime: String(mime.prefix(128)), size: bytes,
             sha256: digest.finalize().map { String(format: "%02x", $0) }.joined())
     }
@@ -166,6 +169,7 @@ enum SharedInbox {
         let manifest = SharedManifest(schemaVersion: 1, id: UUID().uuidString.lowercased(),
             createdAt: Int64(Date().timeIntervalSince1970 * 1000), title: title, notes: notes, files: files)
         let data = try JSONEncoder().encode(manifest)
+        guard data.count <= 64 * 1024 else { throw ShareFailure.metadataLimit }
         try data.write(to: staging.appendingPathComponent("manifest.json"), options: [.atomic, .completeFileProtection])
         return try locked(root) {
             let count = try FileManager.default.contentsOfDirectory(atPath: root.path).filter(validID).count
