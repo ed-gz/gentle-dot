@@ -1098,7 +1098,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
         if (!linked.supportsWorkSync()) throw new Error('Actualiza Gentle Dot en la laptop para transferir trabajos. La conversación sigue disponible y el trabajo local se conserva.');
         if (operation === 'process' && !linked.supportsMeetingDrafts()) throw new Error('Este Gentle Dot no tiene disponible el procesamiento de reuniones. El material confirmado se conserva.');
         return createWorkDispatcher(linked.exchange, host);
-      } }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))], step: prompt => agentStep(prompt, id, allowBackground), onTrace(trace) {
+      } }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct', 'work_propose_action', 'work_proposals', 'work_review_action'].includes(tool.definition.name))], step: prompt => agentStep(prompt, id, allowBackground), onTrace(trace) {
         const entry = entries.find(item => item.id === id) ?? turnEntry;
         const activities = [...entry.activities ?? []]; const at = activities.findIndex(item => item.id === trace.id);
         const activity = { id: trace.id, kind: 'other' as const, title: trace.label, status: trace.status, detail: trace.detail };
