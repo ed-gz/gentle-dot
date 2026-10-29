@@ -51,6 +51,7 @@ import './style.css';
 import './companion-presence.css';
 import './settings.css';
 import { createFramePacer } from './frame-pacer.ts';
+import { createPresenceTransition, type PresenceSample } from './companion-presence-transition.ts';
 import './composer.css';
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -76,6 +77,8 @@ let lastRevision = -1;
 let assetRevision = 0;
 let panel = 'chat';
 let absent = false;
+const presenceTransition = createPresenceTransition();
+let presenceState = presenceTransition.settle();
 let roaming = true;
 let position = { x: 0, y: 0 };
 const roamDirector = new RoamDirector();
@@ -136,7 +139,7 @@ function layoutCompanion() {
   const input = active.querySelector('#composer, .agent-reply');
   const bottom = Math.max(masthead.bottom, input?.getBoundingClientRect().top ?? Math.min(area.bottom, main.bottom) - 12);
   Object.assign(stage.style, { left: `${area.left}px`, top: `${top}px`, width: `${area.width}px`, height: `${Math.max(0, bottom - top)}px` });
-  stage.hidden = absent || !engine || !['chat', 'agents', 'inbox', 'settings'].includes(panel);
+  stage.hidden = !presenceState.visible || !engine || !['chat', 'agents', 'inbox', 'settings'].includes(panel);
   document.documentElement.dataset.companionSize = emptyChat ? 'hero' : 'rail';
   measuredAt = -Infinity;
   place(position.x, position.y);
@@ -145,7 +148,7 @@ const framePacer = createFramePacer();
 function animate(now: number) {
   // Let the persisted transcript reach the DOM before the first GPU frame.
   // Software renderers can block unrelated IndexedDB callbacks during warmup.
-  if (!conversationRestored || !engine || document.hidden || !['agents', 'chat', 'inbox', 'settings'].includes(panel) || absent) return;
+  if (!conversationRestored || !engine || document.hidden || !['agents', 'chat', 'inbox', 'settings'].includes(panel) || !presenceState.visible) return;
   if (!isReduced() && !framePacer.ready(now)) { frame = requestAnimationFrame(animate); return; }
   if (intent.outcome && now - intent.outcome.at > 2400) { const { outcome: _outcome, ...rest } = intent; intent = rest; revision++; }
   if (now - measuredAt >= 1000) {
@@ -185,7 +188,7 @@ function animate(now: number) {
       }
     }
   }
-  if (roaming && !drag && !travel && now >= nextRoam) {
+  if (roaming && !presenceState.transitioning && !drag && !travel && now >= nextRoam) {
     const region = { x: 0, y: 0, width: stage.clientWidth, height: stage.clientHeight };
     const next = roamDirector.step({ laptop: region, region, x: 0, y: 0, width: rig.offsetWidth, height: rig.offsetHeight, herdr: false, safePerches }, now,
       { composer: typing || Boolean(document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')),
@@ -202,6 +205,19 @@ function animate(now: number) {
   }
   lastTime = now;
   director.update(presenceIntent(), now);
+  if (presenceState.transitioning) {
+    applyPresenceSample(presenceTransition.sample(now), now);
+    if (presenceState.transitioning && presenceState.pose) {
+      rig.dataset.pose = 'teleport';
+      engine.draw(presenceState.pose, frameAt(now, 24));
+      fx?.draw(now);
+      framePacer.submitted(now); frame = requestAnimationFrame(animate);
+      return;
+    }
+    if (!presenceState.visible) return;
+    // The first ordinary frame must replace the transition drawing.
+    lastFrame = -1; revision++;
+  }
   const next = isReduced() ? 0 : frameAt(now, director.fps());
   if (next !== lastFrame || revision !== lastRevision) {
     const sample = director.sample(now, isReduced());
@@ -214,6 +230,16 @@ function animate(now: number) {
   if (!isReduced()) { framePacer.submitted(now); frame = requestAnimationFrame(animate); }
 }
 function redraw() { document.documentElement.dataset.motion = isReduced() ? 'reduced' : 'full'; revision++; cancelAnimationFrame(frame); framePacer.wake(); lastTime = 0; frame = requestAnimationFrame(animate); }
+function applyPresenceSample(sample: PresenceSample, now: number) {
+  const visibilityChanged = presenceState.visible !== sample.visible;
+  presenceState = sample;
+  rig.disabled = !sample.targetVisible || sample.transitioning;
+  rig.style.pointerEvents = sample.transitioning ? 'none' : '';
+  rig.dataset.presence = sample.transitioning ? (sample.targetVisible ? 'entering' : 'exiting') : (sample.visible ? 'visible' : 'hidden');
+  for (const cue of sample.cues) fx?.cue(cue, now, intent.direction);
+  if (visibilityChanged) layoutCompanion();
+}
+function settlePresence() { applyPresenceSample(presenceTransition.settle(), performance.now()); }
 function setIntent(next: RigIntent) { intent = next; if (next.gesture || next.dragging || next.question || next.working) travel = undefined; redraw(); }
 function gesture(name: string) {
   clearTimeout(gestureTimer);
@@ -254,6 +280,7 @@ function maybeStartCompanionIntro() {
     .finally(() => { theaterLoading = undefined; });
 }
 async function startRig() {
+  settlePresence();
   preparingRig?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined;
   layoutCompanion();
   if (!image) return;
@@ -285,9 +312,9 @@ async function useArtwork(blob: Blob, persist: boolean) {
     await startRig();
   } finally { URL.revokeObjectURL(url); }
 }
-canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); preparingRig?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; rig.dataset.ready = 'false'; layoutCompanion(); element('art-status').textContent = 'Recuperando el personaje…'; });
+canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); settlePresence(); preparingRig?.abort(); cancelAnimationFrame(frame); engine?.dispose(); engine = undefined; rig.dataset.ready = 'false'; layoutCompanion(); element('art-status').textContent = 'Recuperando el personaje…'; });
 canvas.addEventListener('webglcontextrestored', startRig);
-reduced.addEventListener('change', () => { fx?.clear(); redraw(); });
+reduced.addEventListener('change', () => { if (isReduced()) settlePresence(); fx?.clear(); redraw(); });
 element<HTMLInputElement>('art').addEventListener('change', async event => {
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
@@ -309,17 +336,19 @@ element<HTMLSelectElement>('motion').value = settings.motion;
 element('motion').addEventListener('change', () => {
   settings.motion = element<HTMLSelectElement>('motion').value as typeof settings.motion;
   element('settings-status').textContent = saveSettings(settings) ? 'Preferencias guardadas.' : 'No se pudieron guardar las preferencias.';
-  fx?.clear(); redraw();
+  if (isReduced()) settlePresence(); fx?.clear(); redraw();
 });
 element('greet').addEventListener('click', () => { gesture('saludar'); element('scene-status').textContent = 'Hey. Aquí estoy.'; });
 element('chill').addEventListener('click', () => { roaming = false; element('roam').setAttribute('aria-pressed', 'false'); setIntent({ resting: 'sit' }); element('scene-status').textContent = 'Chilleando contigo.'; });
 element('roam').addEventListener('click', () => { roaming = !roaming; nextRoam = 0; element('roam').setAttribute('aria-pressed', String(roaming)); setIntent({}); element('scene-status').textContent = roaming ? 'Explorando mi espacio.' : 'Aquí contigo.'; });
 element('appear').addEventListener('click', () => {
-  absent = !absent; rig.classList.toggle('absent', absent); rig.disabled = absent;
-  if (absent) theater?.stop(); else introReplayPending = true;
+  absent = !absent; travel = undefined; theater?.stop(); introReplayPending = false;
   element('appear').textContent = absent ? 'Aparecer' : 'Desaparecer';
   element('scene-status').textContent = absent ? 'Vuelvo cuando me llames.' : 'De vuelta.';
-  fx?.clear(); layoutCompanion(); redraw();
+  fx?.clear();
+  const now = performance.now();
+  applyPresenceSample(presenceTransition.request(!absent, now, Boolean(engine && conversationRestored && !document.hidden && !isReduced())), now);
+  redraw();
 });
 let drag: { id: number; x: number; y: number; start: typeof position; moved: boolean } | undefined;
 let suppressClick = false;
@@ -367,6 +396,10 @@ function showPanel(next: string) {
   if (next === 'chat') void recoverPendingVoice();
 }
 for (const button of document.querySelectorAll<HTMLElement>('[data-panel]')) button.addEventListener('click', () => showPanel(button.dataset.panel!));
+const navigation = document.querySelector<HTMLElement>('.navigation');
+navigation?.removeAttribute('inert');
+navigation?.removeAttribute('aria-busy');
+element('navigation-loading').hidden = true;
 function errorText(error: unknown) { return error instanceof Error ? error.message : 'No se pudo completar la operación.'; }
 
 // The UI owns one durable conversation; each transport has an explicit trust boundary.
@@ -975,7 +1008,7 @@ element('view-material').addEventListener('click', () => {
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) release();
+  if (document.hidden) { release(); settlePresence(); }
   cancelAnimationFrame(frame); fx?.clear(); persist();
   if (document.hidden) {
     // The native permission sheet can temporarily hide WKWebView while the
@@ -987,7 +1020,7 @@ document.addEventListener('visibilitychange', () => {
   }
   else { lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void recoverPendingVoice(); void completionNotifications.refresh(); void lockScreenSettings?.refresh(); }
 });
-window.addEventListener('pagehide', () => { connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
+window.addEventListener('pagehide', () => { settlePresence(); connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
 window.addEventListener('pageshow', event => { if (event.persisted) { redraw(); linked.resume(); void recoverLocalInference(); } });
 let conversationLoading = false;
 const recoveryMessage = 'No se pudo recuperar la conversación local. Tu borrador sigue aquí; reintenta antes de enviar para proteger el historial guardado.';
