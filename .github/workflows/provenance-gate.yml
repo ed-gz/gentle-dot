@@ -1,0 +1,17 @@
+name: Capri isolated provenance lease gate
+on:
+  push:
+    branches: [capri-provenance-lease-gate-check]
+permissions: {}
+jobs:
+  lease-gate:
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Compile and run isolated Swift gate
+        run: |
+          swiftc validation/provenance/ProvenanceLeaseGate.swift validation/provenance/main.swift -o "$RUNNER_TEMP/capri-provenance-gate"
+          "$RUNNER_TEMP/capri-provenance-gate"
