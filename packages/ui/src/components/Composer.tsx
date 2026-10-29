@@ -69,6 +69,9 @@ export function Composer({
 	const [refused, setRefused] = useState(false);
 	const box = useRef<HTMLTextAreaElement>(null);
 	const recording = voice?.phase === "recording";
+	// A dictation for this iOS session is still being prepared, transcribed or
+	// joined to its draft. Don't dispatch the earlier partial instruction.
+	const voiceInputPending = capriMobile && inputOnly && Boolean(voice?.inputBusy || recording || voice?.phase === "transcribing" || voice?.draft);
 	const voiceStatus =
 		voice?.phase === "transcribing" ? copy("Transcribing…", "Transcribiendo…") : voice?.note;
 
@@ -103,7 +106,7 @@ export function Composer({
 
 	async function submit() {
 		const value = text.trim();
-		if ((!value && files.length === 0) || disabled || uploading || blocked || submitting.current) return;
+		if ((!value && files.length === 0) || disabled || uploading || blocked || submitting.current || voiceInputPending) return;
 		if (onSubmitText) {
 			submitting.current = true;
 			setPending(true);
@@ -286,7 +289,7 @@ export function Composer({
 										)
 								: voice.mic.reason
 						}
-						disabled={disabled || pending || !voice.mic.available || voice.phase === "transcribing"}
+						disabled={disabled || pending || !voice.mic.available || voice.phase === "transcribing" || (capriMobile && inputOnly && voice.inputBusy === true)}
 						onClick={recording ? voice.stop : voice.start}
 					>
 						<MicIcon />
@@ -309,7 +312,7 @@ export function Composer({
 					<button
 						type="submit"
 						className={`composer-send${capriMobile ? " composer-send-capri" : ""}`}
-						disabled={disabled || pending || uploading || blocked || (text.trim() === "" && files.length === 0)}
+						disabled={disabled || pending || uploading || blocked || voiceInputPending || (text.trim() === "" && files.length === 0)}
 						aria-label={labels?.send ?? copy("Send", "Enviar mensaje")}
 						title={copy("Send", "Enviar mensaje")}
 					>

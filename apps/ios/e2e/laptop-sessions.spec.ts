@@ -162,6 +162,69 @@ test('session dictation uses Apple and leaves a reviewable draft without desktop
   expect(commands.some((c: string) => /voice_native|voice_transcribe|native_voice/.test(c))).toBe(false);
 });
 
+test('a session cannot send its partial instruction while its own dictation is preparing or transcribing', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
+    state.holdTranscript = true;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('start_voice')) await new Promise(resolve => { state.finishStart = resolve; });
+      return original(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const text = page.getByRole('textbox', { name: 'Continuar esta sesión' });
+  const send = page.getByRole('button', { name: 'Enviar instrucción', exact: true });
+  await text.fill('Revisa también');
+  await expect(send).toBeEnabled();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishStart)).toBe('function');
+  await expect(send).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Dictar mensaje' })).toBeDisabled();
+  await page.locator('.agent-reply form').evaluate((form: HTMLFormElement) => form.requestSubmit());
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toHaveLength(0);
+  await page.evaluate(() => (globalThis as any).finishStart());
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(page.getByText('Transcribiendo…', { exact: true })).toBeVisible();
+  await expect(send).toBeDisabled();
+  for (const viewport of [{ width: 375, height: 667 }, { width: 667, height: 375 }]) {
+    await page.setViewportSize(viewport);
+    await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+    await expect(send).toBeDisabled();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    const box = await send.boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
+  }
+  await page.locator('.agent-reply form').evaluate((form: HTMLFormElement) => form.requestSubmit());
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toHaveLength(0);
+  await page.evaluate(() => (globalThis as any).finishTranscript());
+  await expect(text).toHaveValue('Revisa también Revisa la evidencia.');
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt').map((c: any) => JSON.parse(c.body).text))).toEqual(['Revisa también Revisa la evidencia.']);
+});
+
+test('a refused session microphone leaves the typed instruction available to send', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => command.endsWith('start_voice')
+      ? { ok: false, error: 'microphone_denied', message: 'Activa el micrófono para Capri en Ajustes del iPhone.' }
+      : original(command, args);
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const input = page.getByRole('textbox', { name: 'Continuar esta sesión' });
+  await input.fill('Conservar instrucción');
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.getByText('Activa el micrófono para Capri en Ajustes del iPhone.')).toBeVisible();
+  await expect(input).toHaveValue('Conservar instrucción');
+  await expect(page.getByRole('button', { name: 'Enviar instrucción' })).toBeEnabled();
+});
+
 test('session dictation displays provisional text without adding it to the draft', async ({ page }) => {
   await linkedPhone(page);
   await page.evaluate(() => {

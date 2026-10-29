@@ -28,6 +28,8 @@ export interface VoiceControls {
 	/** Undefined when the mic is not offered at all (the web without an OpenAI key). */
 	mic?: MicState;
 	phase: VoicePhase;
+	/** A platform is preparing this composer's microphone or awaiting permission. */
+	inputBusy?: boolean;
 	/** Seconds since recording started. */
 	elapsed: number;
 	/** Microphone level, 0 to 1. */
