@@ -12,6 +12,22 @@ source = Path('plugin-local-intelligence/ios/Sources/LocalIntelligencePlugin.swi
 source = source.split('final class LocalIntelligencePlugin: Plugin {', 1)[0].replace('import Tauri\n', '')
 Path(sys.argv[1]).write_text(source)
 PY
+python3 - "$verification/PerceptionPlugin.swift" <<'PY'
+from pathlib import Path
+import sys
+source = Path('plugin-perception/ios/Sources/PerceptionPlugin.swift').read_text()
+# Tauri's Swift package is generated only during an iOS build. These narrow
+# typecheck stubs mirror the APIs used here, without claiming a Tauri build.
+stub = '''import Foundation
+import WebKit
+@objc class Invoke: NSObject {
+    func parseArgs<T: Decodable>(_ type: T.Type) throws -> T { fatalError() }
+    func resolve<T: Encodable>(_ data: T) {}
+}
+class Plugin: NSObject { @objc func load(webview: WKWebView) {} }
+'''
+Path(sys.argv[1]).write_text(source.replace('import Tauri\n', stub))
+PY
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-local-intelligence/ios/Sources/CompletionNotifications.swift \
@@ -186,6 +202,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/LiveVoiceCapture.swift \
   plugin-perception/ios/Sources/Voice.swift \
   plugin-perception/ios/Sources/Documents.swift \
+  "$verification/PerceptionPlugin.swift" \
   plugin-device-bridge/ios/Sources/BoundedHTTP.swift \
   plugin-device-bridge/ios/Sources/KeychainStore.swift \
   plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
