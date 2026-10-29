@@ -22,6 +22,18 @@ struct CheckpointDecision: Codable, Equatable {
     let argumentsJSON: String
 }
 
+struct CheckpointAttempt: Codable, Equatable {
+    let id: String
+    let tool: String
+    let canonicalArguments: String
+    let canonicalEffect: String
+    var uncertainEvidence: String?
+}
+
+/// The executor supplies this only after evaluating its own receipt. JSON
+/// payload contents are external data and do not themselves confer certainty.
+enum ForegroundOutcome { case confirmed, uncertain }
+
 struct AgentCheckpoint: Codable, Equatable {
     let id: String
     var revision: String
@@ -32,6 +44,12 @@ struct AgentCheckpoint: Codable, Equatable {
     var described: [String]
     var stepCount: Int
     var stepID: String?
+    var operationID: String?
+    // Optional for records written before the foreground reservation existed.
+    var attempts: [CheckpointAttempt]?
+    // nil means the v1 record predates durable attempt history. Preserve this
+    // marker even after a new read-only attempt initializes the attempts array.
+    var legacyAttemptHistory: Bool?
     var state: String
     var decision: CheckpointDecision?
 }
@@ -49,13 +67,17 @@ final class AgentCheckpointJournal {
     private static let lock = NSLock()
     private let root: URL
     private let limit: Int
+    private let beforeWrite: (() throws -> Void)?
+    private let afterWrite: (() throws -> Void)?
     private let maximumBytes = 2 * 1024 * 1024
     private var file: URL { root.appendingPathComponent("agent-checkpoints.json") }
 
-    init(root: URL? = nil, limit: Int = 20) {
+    init(root: URL? = nil, limit: Int = 20, beforeWrite: (() throws -> Void)? = nil, afterWrite: (() throws -> Void)? = nil) {
         self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CapriAgentCheckpoints", isDirectory: true)
         self.limit = limit
+        self.beforeWrite = beforeWrite
+        self.afterWrite = afterWrite
     }
 
     private static func id() -> String { UUID().uuidString.lowercased() }
@@ -81,6 +103,19 @@ final class AgentCheckpointJournal {
         guard text.utf8.count <= max, let data = text.data(using: .utf8) else { return nil }
         return try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
     }
+    private func canonicalArguments(_ text: String) -> String? {
+        guard let object = jsonObject(text, max: 16_384),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+              let canonical = String(data: data, encoding: .utf8) else { return nil }
+        return canonical
+    }
+    // Mirrors the packaged agent registry; unknown/new tools default to a
+    // non-replayable operation. A model never chooses this classification.
+    private let readOnlyTools: Set<String> = [
+        "local_capabilities", "work_list", "work_read", "file_list", "file_read", "file_ocr",
+        "session_list", "session_read", "work_result", "connections_list", "connection_tools",
+        "recall_history", "search_memory"
+    ]
     private func validDecision(_ value: CheckpointDecision) -> Bool {
         guard value.text.unicodeScalars.count <= 2_400,
               let arguments = jsonObject(value.argumentsJSON, max: 16_384) else { return false }
@@ -94,20 +129,35 @@ final class AgentCheckpointJournal {
               !value.instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               value.instruction.unicodeScalars.count <= 2_400, value.context.unicodeScalars.count <= 8_000,
               value.tools.count <= 64, value.observations.count <= 16, value.described.count <= 64,
+              (value.attempts?.count ?? 0) <= 16,
               (0...16).contains(value.stepCount),
-              ["ready", "running", "awaitingForeground", "answer", "interrupted", "cancelled"].contains(value.state),
-              value.stepID.map(validID) ?? true,
+              ["ready", "running", "awaitingForeground", "executingForeground", "uncertainForeground", "budgetExhausted", "answer", "interrupted", "cancelled"].contains(value.state),
+              value.stepID.map(validID) ?? true, value.operationID.map(validID) ?? true,
               value.tools.allSatisfy({ validCatalogName($0.name) && $0.description.unicodeScalars.count <= 4_000 && (jsonObject($0.schemaJSON, max: 16_384)?["type"] as? String) == "object" }),
               Set(value.tools.map(\.name)).count == value.tools.count,
               value.observations.allSatisfy({ validToolName($0.tool) && jsonObject($0.argumentsJSON, max: 16_384) != nil && jsonValue($0.valueJSON, max: 24_576) != nil }),
               value.described.allSatisfy({ name in value.tools.contains(where: { $0.name == name }) }),
               Set(value.described).count == value.described.count,
+              (value.attempts ?? []).allSatisfy({ attempt in
+                  validID(attempt.id) && value.tools.contains(where: { $0.name == attempt.tool })
+                      && canonicalArguments(attempt.canonicalArguments) == attempt.canonicalArguments
+                      && canonicalArguments(attempt.canonicalEffect) == attempt.canonicalEffect
+                      && (attempt.uncertainEvidence.map({ jsonValue($0, max: 24_576) != nil }) ?? true)
+              }),
+              Set((value.attempts ?? []).map(\.id)).count == (value.attempts?.count ?? 0),
               value.decision.map(validDecision) ?? true else { return false }
         switch value.state {
-        case "running": return value.stepID != nil && value.decision == nil
-        case "awaitingForeground": return value.stepID == nil && value.decision?.kind == "tool" && value.decision?.toolName != "tool_describe"
-        case "answer": return value.stepID == nil && value.decision?.kind == "answer"
-        default: return value.stepID == nil && value.decision == nil
+        case "running": return value.stepID != nil && value.operationID == nil && value.decision == nil
+        case "awaitingForeground", "executingForeground", "uncertainForeground":
+            guard value.stepID == nil, let decision = value.decision, decision.kind == "tool",
+                  decision.toolName != "tool_describe", value.described.contains(decision.toolName),
+                  value.tools.contains(where: { $0.name == decision.toolName }) else { return false }
+            if value.state == "awaitingForeground" { return value.operationID == nil }
+            guard let operationID = value.operationID else { return false }
+            return (value.attempts ?? []).contains(where: { $0.id == operationID && $0.tool == decision.toolName && $0.canonicalArguments == canonicalArguments(decision.argumentsJSON) })
+        case "answer": return value.stepID == nil && value.operationID == nil && value.decision?.kind == "answer"
+        case "budgetExhausted": return value.stepID == nil && value.operationID == nil && value.decision == nil && value.stepCount == 16
+        default: return value.stepID == nil && value.operationID == nil && value.decision == nil
         }
     }
     private func withLock<T>(_ body: () throws -> T) rethrows -> T {
@@ -122,7 +172,14 @@ final class AgentCheckpointJournal {
         guard data.count <= maximumBytes, let value = try? JSONDecoder().decode(Envelope.self, from: data),
               value.version == 1, value.records.count <= limit, value.records.allSatisfy(valid),
               Set(value.records.map(\.id)).count == value.records.count else { throw AgentCheckpointError.corrupt }
-        return value.records
+        // Older v1 builds could leave a completed sixteenth step as `ready`.
+        // Project that state honestly on every read; the next successful write
+        // also persists it without inventing another inference or operation.
+        return value.records.map { record in
+            var normalized = record
+            if normalized.state == "ready" && normalized.stepCount == 16 { normalized.state = "budgetExhausted" }
+            return normalized
+        }
     }
     private func write(_ records: [AgentCheckpoint]) throws {
         guard records.count <= limit, records.allSatisfy(valid) else { throw AgentCheckpointError.invalid }
@@ -131,11 +188,13 @@ final class AgentCheckpointJournal {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         var directory = root; var values = URLResourceValues(); values.isExcludedFromBackup = true
         try directory.setResourceValues(values)
+        try beforeWrite?()
         #if os(iOS)
         try data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         #else
         try data.write(to: file, options: .atomic)
         #endif
+        try afterWrite?()
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }
     private func update(_ id: String, revision: String, _ change: (inout AgentCheckpoint) throws -> Void) throws -> AgentCheckpoint {
@@ -153,7 +212,7 @@ final class AgentCheckpointJournal {
             guard records.count < limit else { throw AgentCheckpointError.full }
             guard !records.contains(where: { $0.id == id }) else { throw AgentCheckpointError.stale }
             let value = AgentCheckpoint(id: id, revision: Self.id(), instruction: instruction, context: context, tools: tools,
-                                        observations: [], described: [], stepCount: 0, stepID: nil, state: "ready", decision: nil)
+                                        observations: [], described: [], stepCount: 0, stepID: nil, operationID: nil, attempts: [], legacyAttemptHistory: false, state: "ready", decision: nil)
             guard valid(value) else { throw AgentCheckpointError.invalid }
             records.append(value); try write(records); return value
         }
@@ -261,35 +320,87 @@ final class AgentCheckpointJournal {
                 let arguments = jsonObject(decision.argumentsJSON, max: 16_384)
                 let requested = arguments?.count == 1 ? arguments?["name"] as? String : nil
                 try appendDescription(requested, argumentsJSON: decision.argumentsJSON, to: &value)
-                value.state = "ready"; return
+                value.state = value.stepCount == 16 ? "budgetExhausted" : "ready"; return
             }
             guard value.tools.contains(where: { $0.name == decision.toolName }) else {
                 guard value.observations.count < 16 else { throw AgentCheckpointError.budget }
                 value.observations.append(CheckpointObservation(tool: decision.toolName, argumentsJSON: "{}", valueJSON: "{\"error\":\"Herramienta no disponible.\"}"))
-                value.state = "ready"; return
+                value.state = value.stepCount == 16 ? "budgetExhausted" : "ready"; return
             }
             if !value.described.contains(decision.toolName) {
                 let data = try JSONSerialization.data(withJSONObject: ["name": decision.toolName], options: [.sortedKeys])
                 guard let arguments = String(data: data, encoding: .utf8) else { throw AgentCheckpointError.invalid }
                 try appendDescription(decision.toolName, argumentsJSON: arguments, to: &value)
-                value.state = "ready"; return
+                value.state = value.stepCount == 16 ? "budgetExhausted" : "ready"; return
             }
             value.state = "awaitingForeground"; value.decision = decision
         }
     }
 
-    /// Records data from a separately completed foreground operation. This is
-    /// not proof of success or approval: the caller must enforce its existing
-    /// exact-content review, durable receipt and uncertainty rules. The frozen
-    /// name, arguments and revision must still match the proposal byte for byte.
-    func continueAfterForeground(id: String, revision: String, toolName: String, argumentsJSON: String, resultJSON: String) throws -> AgentCheckpoint {
-        guard jsonObject(argumentsJSON, max: 16_384) != nil, jsonValue(resultJSON, max: 24_576) != nil else { throw AgentCheckpointError.invalid }
-        return try update(id, revision: revision) { value in
+    /// Reserve an exact proposal and its effective normalized payload durably
+    /// before any external operation starts. The trusted executor must include
+    /// applied defaults, destination, account, attachment identities, and all
+    /// approved effect-bearing fields; raw model arguments are not sufficient.
+    /// Exclude non-semantic request UUIDs/timestamps from the effect key. This
+    /// store alone cannot validate the adapter, approval, idempotency or receipt.
+    /// This is only a claim on the checkpoint; it is not approval to execute.
+    /// The executor must independently enforce the exact-content review and
+    /// approval rules. A restarted caller must never dispatch an already claimed
+    /// proposal again, because the operation could have reached its destination.
+    func beginForeground(id: String, revision: String, toolName: String, argumentsJSON: String, effectJSON: String) throws -> AgentCheckpoint {
+        try update(id, revision: revision) { value in
             guard value.state == "awaitingForeground", let proposal = value.decision,
                   proposal.toolName == toolName, proposal.argumentsJSON == argumentsJSON else { throw AgentCheckpointError.stale }
             guard value.observations.count < 16 else { throw AgentCheckpointError.budget }
-            value.observations.append(CheckpointObservation(tool: toolName, argumentsJSON: argumentsJSON, valueJSON: resultJSON))
-            value.decision = nil; value.state = "ready"
+            guard let canonical = canonicalArguments(argumentsJSON), let effect = canonicalArguments(effectJSON) else { throw AgentCheckpointError.invalid }
+            var attempts = value.attempts ?? []
+            guard attempts.count < 16 else { throw AgentCheckpointError.budget }
+            if !readOnlyTools.contains(toolName) {
+                // A legacy proposal may already have been dispatched before a
+                // crash without leaving an observation. All legacy mutations
+                // fail closed until a separate reconciliation is implemented.
+                guard value.legacyAttemptHistory == false,
+                      !attempts.contains(where: { $0.tool == toolName && $0.canonicalEffect == effect }) else {
+                    throw AgentCheckpointError.state
+                }
+            }
+            let attempt = CheckpointAttempt(id: Self.id(), tool: toolName, canonicalArguments: canonical, canonicalEffect: effect, uncertainEvidence: nil)
+            attempts.append(attempt); value.attempts = attempts
+            value.operationID = attempt.id; value.state = "executingForeground"
+        }
+    }
+
+    /// A lost callback or process restart never implies that a dispatched
+    /// operation failed. Uncertainty preserves the exact frozen proposal and
+    /// prevents automatic replay or deletion.
+    func markForegroundUncertain(id: String, revision: String, operationID: String) throws -> AgentCheckpoint {
+        try update(id, revision: revision) { value in
+            guard value.state == "executingForeground", value.operationID == operationID else { throw AgentCheckpointError.state }
+            value.state = "uncertainForeground"
+        }
+    }
+
+    /// Records data from a separately completed foreground operation. This is
+    /// not proof of success or approval: the caller must enforce exact-content
+    /// review, durable receipt and uncertainty rules. Even after interruption,
+    /// supplied evidence remains untrusted data. The frozen name, arguments and
+    /// revision must still match the claimed proposal byte for byte.
+    func continueAfterForeground(id: String, revision: String, operationID: String, toolName: String, argumentsJSON: String, resultJSON: String, outcome: ForegroundOutcome) throws -> AgentCheckpoint {
+        guard jsonObject(argumentsJSON, max: 16_384) != nil, jsonValue(resultJSON, max: 24_576) != nil else { throw AgentCheckpointError.invalid }
+        return try update(id, revision: revision) { value in
+            guard ["executingForeground", "uncertainForeground"].contains(value.state), value.operationID == operationID, let proposal = value.decision,
+                  proposal.toolName == toolName, proposal.argumentsJSON == argumentsJSON else { throw AgentCheckpointError.stale }
+            switch outcome {
+            case .uncertain:
+                guard let index = value.attempts?.firstIndex(where: { $0.id == operationID }) else { throw AgentCheckpointError.corrupt }
+                value.attempts?[index].uncertainEvidence = resultJSON
+                value.state = "uncertainForeground"
+            case .confirmed:
+                guard value.observations.count < 16 else { throw AgentCheckpointError.budget }
+                value.observations.append(CheckpointObservation(tool: toolName, argumentsJSON: argumentsJSON, valueJSON: resultJSON))
+                value.operationID = nil; value.decision = nil
+                value.state = value.stepCount == 16 ? "budgetExhausted" : "ready"
+            }
         }
     }
 
@@ -305,12 +416,12 @@ final class AgentCheckpointJournal {
         guard confirmedByUser else { throw AgentCheckpointError.state }
         return try update(id, revision: revision) { value in
             guard value.state == "interrupted" else { throw AgentCheckpointError.state }
-            value.state = "ready"
+            value.state = value.stepCount == 16 ? "budgetExhausted" : "ready"
         }
     }
     func cancel(id: String, revision: String) throws -> AgentCheckpoint {
         try update(id, revision: revision) { value in
-            guard !["answer", "cancelled"].contains(value.state) else { throw AgentCheckpointError.state }
+            guard !["answer", "cancelled", "executingForeground", "uncertainForeground"].contains(value.state) else { throw AgentCheckpointError.state }
             value.stepID = nil; value.decision = nil; value.state = "cancelled"
         }
     }
