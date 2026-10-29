@@ -23,24 +23,38 @@ private func probe() async -> Int32 {
     let canonical: (Locale) -> String = { $0.identifier.lowercased().replacingOccurrences(of: "_", with: "-") }
     let before = Set((await AssetInventory.reservedLocales).map(canonical))
     var reservationAdded: Bool?
+    var stage = "reserve"
     var exitCode: Int32 = 1
     do {
         print("INSTALL: requesting only es-MX DictationTranscriber assets on this ephemeral runner.")
         // false means the system already had this locale reservation. Its
         // reported identifier may be a variant, so preserve prior entries.
         reservationAdded = try await AssetInventory.reserve(locale: locale)
+        stage = "asset-request"
         if let request = try await AssetInventory.assetInstallationRequest(supporting: modules) {
+            stage = "asset-download"
             try await request.downloadAndInstall()
         }
+        stage = "asset-verification"
         guard await AssetInventory.status(forModules: modules) == .installed else { throw InstallProbeError.notInstalled }
         print("PASS: es-MX DictationTranscriber assets installed; beginning synthetic audio probe.")
-        let result = try await run(selected: .dictation(final, preview))
+        let result = try await run(selected: .dictation(final, preview)) { phase in
+            stage = phase
+            print("STAGE: \(phase)")
+        }
         print(result)
         // A skipped synthesis or unsupported analyzer is never a transcript pass.
         if result.hasPrefix("PASS: real DictationTranscriber") || result.hasPrefix("SKIP:") { exitCode = 0 }
         else { print("FAIL: no real synthetic transcript was confirmed.") }
     } catch {
-        print("FAIL: installation or synthetic transcription did not complete; no transcript was confirmed.")
+        // Only fixed phase names, known domains and bounded codes leave the
+        // probe. Never print NSError descriptions, paths or audio contents.
+        let native = error as NSError
+        let allowed = ["SFSpeechErrorDomain", "NSOSStatusErrorDomain", "NSCocoaErrorDomain", "AVFoundationErrorDomain"]
+        let domain = allowed.contains(native.domain) ? native.domain : "other"
+        let code = (-999_999...999_999).contains(native.code) ? String(native.code) : "out-of-range"
+        let reason = (error as? ProbeError)?.rawValue ?? (error is InstallProbeError ? "assets-not-installed" : "system-error")
+        print("FAIL: stage=\(stage) domain=\(domain) code=\(code) reason=\(reason); no transcript confirmed.")
     }
     let current = await AssetInventory.reservedLocales
     if reservationAdded == true {

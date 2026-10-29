@@ -60,7 +60,8 @@ private func candidate() async -> (Locale, LocalModule)? {
 }
 
 @available(macOS 26.0, *)
-func run(selected explicit: LocalModule? = nil) async throws -> String {
+func run(selected explicit: LocalModule? = nil, reportPhase: (String) -> Void = { _ in }) async throws -> String {
+    reportPhase("synthesis")
     guard let voice = AVSpeechSynthesisVoice.speechVoices().first(where: { $0.language.lowercased().hasPrefix("es-") && $0.quality == .default }) else {
         return "SKIP: no available default Spanish synthesis voice; no transcription was run."
     }
@@ -73,6 +74,7 @@ func run(selected explicit: LocalModule? = nil) async throws -> String {
     say.standardOutput = FileHandle.nullDevice; say.standardError = FileHandle.nullDevice
     try say.run(); say.waitUntilExit()
     guard say.terminationReason == .exit, say.terminationStatus == 0 else { throw ProbeError.synthesis }
+    reportPhase("read-synthetic-audio")
     let synthetic = try AVAudioFile(forReading: source)
     guard synthetic.length > 0, synthetic.processingFormat.sampleRate > 0 else { throw ProbeError.synthesis }
     // Exercise the actual conversion routine even when SpeechAnalyzer models
@@ -81,6 +83,7 @@ func run(selected explicit: LocalModule? = nil) async throws -> String {
     guard let sampleFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { throw ProbeError.noFormat }
     let formatProbeURL = root.appendingPathComponent("format-probe.caf")
     var usedConverter = false
+    reportPhase("verify-resampling")
     let formatProbe = try VoiceAudio.openForAnalysis(source: source, converted: formatProbeURL, format: sampleFormat, maximumSeconds: 90,
         diagnostic: { if $0 == "create-converter" { usedConverter = true } })
     let sourceDuration = Double(synthetic.length) / synthetic.processingFormat.sampleRate
@@ -101,8 +104,10 @@ func run(selected explicit: LocalModule? = nil) async throws -> String {
     if let explicit { selected = explicit }
     else if let (_, installed) = await candidate() { selected = installed }
     else { return "SKIP: no compatible module with installed Spanish assets; no transcription was run." }
+    reportPhase("analyzer-format")
     guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [selected.final]) else { throw ProbeError.noFormat }
     var convertedInput = false
+    reportPhase("open-analysis-audio")
     let file = try VoiceAudio.openForAnalysis(source: source, converted: converted, format: format, maximumSeconds: 90,
         diagnostic: { if $0 == "create-converter" { convertedInput = true } })
     guard file.length > 0, file.processingFormat.isEqual(format) else { throw ProbeError.audio }
@@ -125,15 +130,19 @@ func run(selected explicit: LocalModule? = nil) async throws -> String {
         return parts
     }
     defer { results.cancel() }
+    reportPhase("analyze")
     guard let lastSample = try await analyzer.analyzeSequence(from: file) else { throw ProbeError.audio }
+    reportPhase("finalize")
     try await analyzer.finalizeAndFinish(through: lastSample)
+    reportPhase("results")
     let parts = try await results.value
     let transcript = parts.map { $0.0 }.joined(separator: " ").lowercased()
+    reportPhase("validate-transcript")
     guard transcript.contains("prueba") else { throw ProbeError.transcript }
     return "PASS: real \(selected.name) synthetic Spanish transcription, finalization and timing; VoiceAudio \(convertedInput ? "converted" : "used matching format"). Not an iPhone test."
 }
 
-private enum ProbeError: Error { case noFormat, synthesis, audio, evidence, transcript }
+enum ProbeError: String, Error { case noFormat, synthesis, audio, evidence, transcript }
 #if !CAPRI_ASSET_INSTALL_PROBE
 @main struct SpeechAnalyzerSyntheticTests {
     static func main() async {
