@@ -1,0 +1,38 @@
+name: Capri speech asset probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit in ed-gz/gentle-dot
+        required: true
+        type: string
+      install:
+        description: Install the Spanish system asset on this ephemeral runner
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  speech-asset-probe:
+    runs-on: macos-26
+    timeout-minutes: 8
+    steps:
+      - name: Validate source identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: '[[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Checkout pinned source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ed-gz/gentle-dot
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Compile or run the isolated probe
+        env:
+          CAPRI_SPEECH_INSTALL_COMPILE_ONLY: ${{ inputs.install && '0' || '1' }}
+          CAPRI_EPHEMERAL_SPEECH_INSTALL: ${{ inputs.install && '1' || '0' }}
+        run: bash apps/ios/scripts/check-synthetic-speech-install.sh
