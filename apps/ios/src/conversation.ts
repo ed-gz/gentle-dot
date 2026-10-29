@@ -202,6 +202,9 @@ function conversationSnapshot(value: Conversation): Conversation {
     entries: cleanEntries(value.entries), draft: typeof value.draft === 'string' ? value.draft.slice(0, 8000) : '',
   };
 }
+/** Canonical representation used by the existing writer; exposed so an
+ * atomic voice insertion can reject corrupt state instead of discarding it. */
+export function canonicalConversationSnapshot(value: Conversation): Conversation { return conversationSnapshot(value); }
 export async function saveConversation(value: Conversation): Promise<void> {
   const next = conversationSnapshot(value);
   await access('readwrite', (store, fail) => {

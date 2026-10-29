@@ -76,6 +76,12 @@ function inputOf(record: VoiceReceipt): VoiceReceiptInput {
 }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const inputHash = (input: VoiceReceiptInput) => hashSourceBytes(new TextEncoder().encode(JSON.stringify(input)));
+/** Canonicalize before crossing an asynchronous boundary; callers still must
+ * independently verify the matching native recording and reader lease. */
+export async function prepareVoiceReceiptInput(value: VoiceReceiptInput): Promise<{ input: VoiceReceiptInput; inputSHA256: string }> {
+  const input = canonicalInput(value);
+  return { input, inputSHA256: await inputHash(input) };
+}
 async function verify(record: StoredVoiceReceipt): Promise<StoredVoiceReceipt> {
   if (record.state !== 'discarded' && await inputHash(inputOf(record)) !== record.inputSHA256) throw new Error('La huella del recibo no coincide; se conserva para revisión.');
   return record;
@@ -133,9 +139,7 @@ export function createVoiceReceiptStore(options: { databaseName?: string } = {})
     /** Idempotent only for the exact same native session, owner, destination,
      * source audio identity and full timed transcript. */
     async put(value: VoiceReceiptInput): Promise<StoredVoiceReceipt> {
-      let input: VoiceReceiptInput;
-      input = canonicalInput(value);
-      const digest = await inputHash(input);
+      const { input, inputSHA256: digest } = await prepareVoiceReceiptInput(value);
       return transaction('readwrite', (tx, done, fail) => {
         const store = tx.objectStore('receipts'), get = store.get(input.transcript.sessionId);
         get.onsuccess = () => guardCallback(fail, () => {
