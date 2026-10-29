@@ -40,6 +40,7 @@ test('the local conversation discovers and stores a proposal without invoking a 
 });
 
 test('conversation requires human review before a real MCP client dispatches a minute proposal', async ({ page }) => {
+  await page.setViewportSize({width:320,height:568}); await page.emulateMedia({reducedMotion:'reduce'});
   await page.addInitScript(() => {
     const state=globalThis as any; state.isTauri=true; state.steps=0; state.rpc=[];
     const decision=(kind:string,toolName:string,args:unknown,text='')=>({ok:true,decision:{kind,toolName,argumentsJSON:JSON.stringify(args),text}});
@@ -56,7 +57,7 @@ test('conversation requires human review before a real MCP client dispatches a m
       return {ok:true};
     }};
   });
-  await page.goto('/'); await expect(page.locator('#send')).toBeEnabled();
+  await page.goto('/'); await expect(page.locator('#send')).toBeEnabled(); await page.evaluate(() => { document.documentElement.style.fontSize='200%'; });
   const fixture=await page.evaluate(async()=>{
     const inbox=await import('/src/work-inbox.ts'), sync=await import('/src/work-sync.ts'), connections=await import('/src/external-connections.ts'), proposals=await import('/src/minute-proposals.ts');
     const conn=await connections.saveConnection({kind:'mcp',label:'Servicio fixture',endpoint:'https://fixture.example/mcp'});
@@ -73,8 +74,9 @@ test('conversation requires human review before a real MCP client dispatches a m
   await page.locator('#prompt').fill('Revisa la propuesta del acuerdo.'); await page.locator('#send').click();
   const review=page.locator('#requests .review-card'); await expect(review).toContainText('Reunión revisada'); await expect(review).toContainText('Seguimiento exacto');
   expect(await page.evaluate(()=>(globalThis as any).rpc.includes('tools/call'))).toBe(false);
-  await review.getByRole('button',{name:'Aprobar esta operación'}).click();
+  const approve=review.getByRole('button',{name:'Aprobar esta operación'}); await approve.focus(); await expect(approve).toBeFocused(); await page.keyboard.press('Enter');
   await expect(page.locator('.chat-card[data-role="assistant"]')).toContainText('Revisé el resultado de la propuesta.');
   const outcome=await page.evaluate(async ({id,proposalId})=>{const proposals=await import('/src/minute-proposals.ts');return {calls:(globalThis as any).rpc.filter((name:string)=>name==='tools/call').length,proposal:(await proposals.listMinuteProposals(id)).find(item=>item.id===proposalId)};},fixture);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
   expect(outcome.calls).toBe(1); expect(outcome.proposal).toMatchObject({state:'responded',responseReceived:true,executed:null});
 });
