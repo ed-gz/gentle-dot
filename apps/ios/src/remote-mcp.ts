@@ -90,7 +90,8 @@ async function hash(text: string): Promise<string> {
 }
 export function parseMCPResponse(response: HTTPSResponse, id: string, version?: string): unknown {
   if (response.status !== 200 || new TextEncoder().encode(response.body).length > 2 * 1024 * 1024) throw new Error(`MCP no confirmó la solicitud (HTTP ${response.status}).`);
-  const type = response.headers['content-type']?.split(';')[0]?.trim();
+  // HTTP media type tokens are case-insensitive; preserve the body unchanged.
+  const type = response.headers['content-type']?.split(';')[0]?.trim().toLowerCase();
   let messages: unknown[];
   if (type === 'text/event-stream') {
     const events = response.body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n\n');

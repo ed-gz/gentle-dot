@@ -254,6 +254,8 @@ test('finite SSE accepts correlated results but never executes server requests o
   const result = { content: [{ type: 'text', text: 'Listo' }] };
   const reply = { status: 200, headers: { 'content-type': 'text/event-stream' }, body: ': heartbeat\n\nevent: message\ndata: ' + JSON.stringify({ jsonrpc: '2.0', id: 'one', result }) + '\n\n' };
   assert.deepEqual(parseMCPResponse(reply, 'one'), result);
+  assert.deepEqual(parseMCPResponse({ ...reply, headers: { 'content-type': 'Text/Event-Stream; charset=UTF-8' } }, 'one'), result);
+  assert.deepEqual(parseMCPResponse({ status: 200, headers: { 'content-type': 'Application/JSON; Charset=UTF-8' }, body: JSON.stringify({ jsonrpc: '2.0', id: 'one', result }) }, 'one'), result);
   assert.throws(() => parseMCPResponse(reply, 'different'), /correlacionada/);
   assert.throws(() => parseMCPResponse({ ...reply, status: 302 }, 'one'));
   assert.throws(() => parseMCPResponse({ ...reply, body: 'data: {"jsonrpc":"2.0","id":"server","method":"sampling/createMessage"}\n\n' }, 'one'), /sampling/);
