@@ -131,7 +131,7 @@ export function createAgentRunner(options: {
             continue;
           }
           const key = JSON.stringify([decision.toolName, canonical(args)]);
-          const readOnly = new Set(['local_capabilities', 'work_list', 'work_read', 'file_list', 'file_read', 'file_ocr', 'session_list', 'session_read', 'work_result', 'work_proposals', 'connections_list', 'connection_tools', 'recall_history', 'search_memory']).has(decision.toolName);
+          const readOnly = new Set(['local_capabilities', 'work_list', 'work_read', 'file_list', 'file_read', 'file_ocr', 'session_list', 'session_read', 'session_delivery_list', 'work_result', 'work_proposals', 'connections_list', 'connection_tools', 'recall_history', 'search_memory']).has(decision.toolName);
           if (!readOnly && invoked.has(key)) throw new Error('Capri intentó repetir la misma operación. Conservé el resultado anterior; revisa el progreso antes de continuar.');
           invoked.add(key);
           const trace: AgentTrace = { id: localIdentifier(), name: decision.toolName, label: activityLabels[decision.toolName] ?? tool.definition.description.slice(0, 120), status: 'running' };

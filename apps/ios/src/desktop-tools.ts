@@ -1,12 +1,13 @@
 import { localIdentifier } from './local-identifiers.ts';
 import { DeviceBridgeError, httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import type { Tool, ToolContext } from './agent-tools.ts';
+import { createSessionJournal, sessionOperationKey, type SessionAttempt, type SessionJournal } from './desktop-session-journal.ts';
 
 export type DesktopConnection = { url: string; token: string; deviceId?: string };
 export type DesktopSession = { paneId: string; sessionId: string; label: string; state: string; connected: boolean; capabilities: { inspect: boolean; prompt: boolean; abort: boolean; deliveryReceipts: boolean } };
 export type DesktopDelivery = { id: string; status: 'accepted' | 'queued' | 'delivered' | 'unconfirmed'; acceptedAt: string; deliveredAt?: string; evidence?: 'correlated-v1'; preview: string; deliverAs: 'steer' | 'followUp' };
 export type DesktopPage = { sessionId: string; instanceId: string; messages: { id: string; role: string; text: string }[]; deliveries: DesktopDelivery[]; question?: { id: string; kind: string; title: string; message: string; expiresAt: string; action?: string; fingerprint?: string; requiresConfirmation: boolean; options?: { id: string; label: string; description?: string; effect?: string; consequence?: string }[] }; history: { hasEarlier: boolean; before?: string } };
-export type DesktopDependencies = { getConnection: () => DesktopConnection | undefined; request?: (request: HTTPSRequest) => Promise<HTTPSResponse> };
+export type DesktopDependencies = { getConnection: () => DesktopConnection | undefined; request?: (request: HTTPSRequest) => Promise<HTTPSResponse>; journal?: SessionJournal };
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 class DesktopPageTooLarge extends Error {}
 const string = (value: unknown, max: number, required = true): value is string => typeof value === 'string' && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value) && (!required || Boolean(value.trim()));
@@ -68,6 +69,7 @@ export function parseDesktopPage(value: unknown, sessionId: string): DesktopPage
 
 export function createDesktopSessionClient(dependencies: DesktopDependencies) {
   const request = dependencies.request ?? httpsRequest;
+  const journal = dependencies.journal ?? createSessionJournal();
   function connection(): DesktopConnection { const value = dependencies.getConnection(); if (!value) throw new Error('Vincula la laptop para consultar sus sesiones de Pi.'); endpoint(value); return { ...value }; }
   function unchanged(expected: DesktopConnection): void {
     const current = dependencies.getConnection();
@@ -125,27 +127,71 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
     async send(args: unknown, context: ToolContext) {
       const target = identity(args); const input = args as Record<string, unknown>; const text = field(input.text, 16000, 'Instrucción');
       const deliverAs = input.deliverAs ?? 'followUp'; if (deliverAs !== 'followUp' && deliverAs !== 'steer') throw new Error('Modo de entrega inválido.');
-      const conn = connection(); const session = parseDesktopSessions(await rpc(conn)).find(item => item.paneId === target.paneId && item.sessionId === target.sessionId);
+      context.signal.throwIfAborted();
+      const conn = connection(); const host = endpoint(conn); const key = sessionOperationKey(host, target.paneId, target.sessionId, text);
+      const prior = await journal.find(key); context.signal.throwIfAborted(); unchanged(conn);
+      if (prior) return { status:'unconfirmed', ...target, clientMessageId:prior.id, completed:false, message:'Ya existe un envío igual sin resolver. Revisa el historial del host y usa session_delivery_resolve para cerrar el aviso sin reenviar.' };
+      const session = parseDesktopSessions(await rpc(conn)).find(item => item.paneId === target.paneId && item.sessionId === target.sessionId);
       if (!session?.connected || !session.capabilities.prompt || !session.capabilities.deliveryReceipts) throw new Error('La sesión debe estar conectada y admitir confirmaciones de entrega antes de enviar.');
       const before = await inspect(conn, target, 1); const clientMessageId = localIdentifier();
       const payload = Object.freeze({ action: 'prompt', ...target, text, deliverAs, clientMessageId });
       await authorize(context, conn, `Enviar a ${session.label || 'sesión de Pi'}`, payload);
       const fresh = await inspect(conn, target, 1); if (fresh.instanceId !== before.instanceId) throw new Error('Pi se reinició desde la revisión. La instrucción no se envió.');
       context.signal.throwIfAborted();
+      const attempt: SessionAttempt = { id:clientMessageId, owner:localIdentifier(), key, host, ...(conn.deviceId ? {deviceId:conn.deviceId} : {}), ...target, instanceId:before.instanceId, text, deliverAs, state:'prepared', createdAt:Date.now() };
+      try { await journal.begin(attempt); }
+      catch (error) {
+        // A commit callback can be lost after reservation. No transport has
+        // begun, so this specific attempt may safely be cancelled if present.
+        try { await journal.cancelBeforeDispatch(attempt); } catch { /* No committed reservation, or storage is still unavailable. */ }
+        throw error;
+      }
+      try {
+        context.signal.throwIfAborted(); unchanged(conn);
+        await journal.dispatching(clientMessageId);
+        context.signal.throwIfAborted(); unchanged(conn);
+      } catch (error) {
+        try { await journal.cancelBeforeDispatch(attempt); } catch { throw new Error('No se inició el transporte, pero el registro local no confirmó la cancelación. Revisa los envíos pendientes.'); }
+        throw error;
+      }
+      const markUnconfirmed = async () => { try { await journal.unconfirmed(clientMessageId); } catch { /* The durable dispatching record continues to block replay. */ } };
       let ack: unknown;
       try { ack = await rpc(conn, payload); }
-      catch { return { status: 'uncertain', ...target, clientMessageId, message: 'El host no confirmó la recepción. Consulta session_read y busca este clientMessageId en deliveries; no repitas automáticamente.' }; }
-      if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== before.instanceId) return { status: 'uncertain', ...target, clientMessageId, message: 'La confirmación no corresponde a esta sesión. No se considera entregado ni completado.' };
+      catch { await markUnconfirmed(); return { status: 'uncertain', ...target, clientMessageId, message: 'El host no confirmó la recepción. Consulta session_read y busca este clientMessageId en deliveries; no repitas automáticamente.' }; }
+      if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== before.instanceId) { await markUnconfirmed(); return { status: 'uncertain', ...target, clientMessageId, message: 'La confirmación no corresponde a esta sesión. No se considera entregado ni completado.' }; }
       let receipt: DesktopDelivery | undefined;
       try {
         const observed = await inspect(conn, target, 1);
-        if (observed.instanceId !== before.instanceId) return { status: 'unconfirmed', ...target, clientMessageId, completed: false, message: 'Pi cambió después de aceptar la solicitud; revisa la sesión antes de reintentar.' };
+        if (observed.instanceId !== before.instanceId) { await markUnconfirmed(); return { status: 'unconfirmed', ...target, clientMessageId, completed: false, message: 'Pi cambió después de aceptar la solicitud; revisa la sesión antes de reintentar.' }; }
         receipt = observed.deliveries.find(item => item.id === clientMessageId);
       } catch {
-        try { unchanged(conn); } catch { return { status: 'unconfirmed', ...target, clientMessageId, completed: false, message: 'La conexión cambió después de aceptar la solicitud; revisa el host original antes de reintentar.' }; }
+        try { unchanged(conn); } catch { await markUnconfirmed(); return { status: 'unconfirmed', ...target, clientMessageId, completed: false, message: 'La conexión cambió después de aceptar la solicitud; revisa el host original antes de reintentar.' }; }
         // Accepted is weaker than consumed; preserve that distinction.
       }
+      if (receipt?.status === 'delivered') {
+        try { await journal.delivered(clientMessageId, before.instanceId); }
+        catch { return { status:'unconfirmed', ...target, clientMessageId, completed:false, message:'La sesión mostró evidencia correlacionada, pero no se pudo guardar su resolución. Revisa el envío antes de reintentar.' }; }
+      } else await markUnconfirmed();
       return { status: receipt?.status ?? 'accepted', ...target, clientMessageId, ...(receipt ? { receipt } : {}), completed: false, message: receipt?.status === 'delivered' ? 'La sesión confirmó la entrega con identidad correlacionada. Esto no confirma que el trabajo haya terminado.' : 'La recepción no confirma que Pi haya consumido la instrucción. Revisa la sesión antes de reintentar.' };
+    },
+    async listDeliveries(args: unknown = {}) {
+      if (!object(args) || Object.keys(args).some(key => !['offset','limit'].includes(key))) throw new Error('Rango de envíos no válido.');
+      const offset=args.offset ?? 0, limit=args.limit ?? 10;
+      if (!Number.isSafeInteger(offset) || Number(offset)<0 || Number(offset)>2000 || !Number.isSafeInteger(limit) || Number(limit)<1 || Number(limit)>20) throw new Error('Rango de envíos no válido.');
+      const conn=connection(); const records=await journal.list(endpoint(conn)); unchanged(conn);
+      const items=records.slice(Number(offset),Number(offset)+Number(limit)).map(item => ({...item,key:undefined,owner:undefined,text:item.text.slice(0,1000),textTruncated:item.text.length>1000}));
+      return {items,total:records.length,offset:Number(offset),...(Number(offset)+items.length<records.length ? {nextOffset:Number(offset)+items.length} : {})};
+    },
+    async resolveDelivery(args: unknown, context: ToolContext) {
+      if (!object(args) || Object.keys(args).some(key => key !== 'clientMessageId')) throw new Error('Indica el envío exacto que revisaste.');
+      const id=field(args.clientMessageId, 96, 'Envío'); const conn=connection();
+      const item=(await journal.list(endpoint(conn))).find(entry => entry.id === id); unchanged(conn);
+      if (!item) throw new Error('El envío pendiente ya cambió o pertenece a otro host.');
+      const {key:_key, owner:_owner, ...review} = item;
+      await authorize(context, conn, 'Cerrar aviso tras revisar el historial', { action:'review-delivery-without-resending', attempt:review, warning:'La solicitud anterior podría seguir en curso o haber sido recibida. Cerrar este aviso permite proponer un nuevo envío; no verifica, cancela ni reenvía la solicitud anterior.' });
+      context.signal.throwIfAborted(); unchanged(conn);
+      await journal.reviewed(item);
+      return { clientMessageId:id, reviewed:true, resent:false, message:'Aviso cerrado tras tu revisión. No se afirmó la entrega ni se reenvió el mensaje.' };
     },
     async abort(args: unknown, context: ToolContext) {
       const target = identity(args); const conn = connection(); const before = await inspect(conn, target, 1);
@@ -187,6 +233,8 @@ export function createDesktopTools(dependencies: DesktopDependencies): Tool[] {
   return [
     { definition: { name: 'session_list', description: 'Consulta sesiones Pi existentes de la laptop, su estado y capacidades. No crea sesiones.', parameters: schema({}, []) }, validate(args) { if (!object(args) || Object.keys(args).length) throw new Error('session_list no recibe argumentos.'); return {}; }, execute: async (args, context) => { context.signal.throwIfAborted(); if (!object(args) || Object.keys(args).length) throw new Error('Argumentos inválidos.'); return client.list(); } },
     { definition: { name: 'session_read', description: 'Lee mensajes, recibos de entrega y preguntas pendientes de una sesión existente. Las preguntas requieren respuesta humana; esta herramienta no las aprueba.', parameters: schema({ ...target, limit: { type: 'integer', minimum: 1, maximum: 100 }, before: { type: 'string' } }, ['paneId','sessionId']) }, validate(args) { identity(args); return args; }, execute: async (args, context) => { context.signal.throwIfAborted(); return client.read(args, context.signal); } },
+    { definition: { name:'session_delivery_list', description:'Consulta páginas de envíos anteriores a este host que siguen sin confirmar. No reenvía ni modifica nada.', parameters:schema({offset:{type:'integer',minimum:0,maximum:2000},limit:{type:'integer',minimum:1,maximum:20}}, []) }, validate(args) { if (!object(args) || Object.keys(args).some(key => !['offset','limit'].includes(key))) throw new Error('Rango no válido.'); return args; }, execute: async (args, context) => { context.signal.throwIfAborted(); return client.listDeliveries(args); } },
+    { definition: { name:'session_delivery_resolve', description:'Después de revisar manualmente el historial, propone cerrar un aviso incierto con aprobación humana explícita. No confirma entrega ni reenvía.', parameters:schema({clientMessageId:{type:'string'}}, ['clientMessageId']) }, validate(args) { if (!object(args) || Object.keys(args).some(key => key !== 'clientMessageId')) throw new Error('Indica el envío exacto.'); field(args.clientMessageId,96,'Envío'); return args; }, execute:(args, context) => client.resolveDelivery(args, context) },
     { definition: { name: 'session_send', description: 'Propone una instrucción exacta para una sesión Pi existente y solicita aprobación humana dentro de la conversación antes de enviarla. Devuelve clientMessageId y estado de recepción; no implica tarea terminada. Nunca reenvíes una entrega incierta automáticamente.', parameters: schema({ ...target, text: { type: 'string', maxLength: 16000 }, deliverAs: { type: 'string', enum: ['followUp', 'steer'] } }, ['paneId','sessionId','text']) }, validate(args) { identity(args); field((args as Record<string, unknown>).text, 16000, 'Instrucción'); return args; }, execute: (args, context) => client.send(args, context) },
     { definition: { name: 'session_abort', description: 'Solicita aprobación humana para detener el trabajo de una sesión Pi compartida concreta. Afecta también al trabajo visible en la laptop.', parameters: schema(target, ['paneId','sessionId']) }, validate: identity, execute: (args, context) => client.abort(args, context) },
   ];

@@ -8,9 +8,23 @@ const target = { paneId: 'pane-1', sessionId: 'session-1' };
 const session = { ...target, label: 'Operations', connected: true, state: 'idle', capabilities: { inspect: true, prompt: true, abort: true, deliveryReceipts: true } };
 const page = () => ({ sessionId: target.sessionId, instanceId: 'instance-1', messages: [{ id: 'message-1', role: 'assistant', content: [{ type: 'text', text: 'Waiting for instruction' }] }], deliveries: [], history: { hasEarlier: false } });
 const context = askApproval => ({ signal: new AbortController().signal, askApproval });
+function memoryJournal() {
+  const records = new Map(), pending = new Map();
+  const get = id => { const item = records.get(id); if (!item) throw new Error('Envío desconocido'); return item; };
+  return {
+    async find(key) { const id = pending.get(key); return id ? structuredClone(get(id)) : null; },
+    async begin(item) { if (pending.has(item.key)) throw new Error('Esta instrucción ya tiene un envío sin resolver.'); records.set(item.id, structuredClone(item)); pending.set(item.key,item.id); },
+    async dispatching(id) { get(id).state='dispatching'; },
+    async cancelBeforeDispatch(expected) { const item=get(expected.id); if (item.owner!==expected.owner) throw new Error('Dueño distinto'); item.state='cancelled'; pending.delete(item.key); },
+    async unconfirmed(id) { get(id).state='unconfirmed'; },
+    async delivered(id, instanceId) { const item=get(id); if (item.instanceId !== instanceId) throw new Error('Instancia distinta'); item.state='delivered'; pending.delete(item.key); },
+    async list(host) { return [...pending.values()].map(id => structuredClone(get(id))).filter(item => item.host===host); },
+    async reviewed(expected) { const item=get(expected.id); if (JSON.stringify(item)!==JSON.stringify(expected)) throw new Error('Envío cambió'); item.state='reviewed'; pending.delete(item.key); },
+  };
+}
 function fixture(overrides = {}) {
   const calls = []; let receipt; let current = conn;
-  const client = createDesktopSessionClient({ getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: overrides.journal ?? memoryJournal(), getConnection: () => current, request: async request => {
     calls.push(request); const payload = request.body ? JSON.parse(request.body) : undefined;
     let value;
     if (!payload) value = { available: true, sessions: [session], approvals: [{ secret: 'do-not-project' }] };
@@ -27,14 +41,14 @@ function fixture(overrides = {}) {
 }
 test('session tools reuse existing sessions and expose no create/answer/permission tool', async () => {
   const f = fixture(); const sessions = await f.client.list(); assert.equal(sessions.length, 1); assert.equal(sessions[0].label, 'Operations'); assert.equal(sessions[0].approvals, undefined);
-  assert.deepEqual(createDesktopTools({ getConnection: () => conn }).map(tool => tool.definition.name), ['session_list','session_read','session_send','session_abort']);
+  assert.deepEqual(createDesktopTools({ getConnection: () => conn }).map(tool => tool.definition.name), ['session_list','session_read','session_delivery_list','session_delivery_resolve','session_send','session_abort']);
   const history = await f.client.read(target); assert.equal(history.messages[0].text, 'Waiting for instruction');
   assert.equal(f.calls[0].url, 'https://computer.example.ts.net/orchestration'); assert.equal(f.calls[0].headers.Authorization, `Bearer ${conn.token}`);
 });
 test('a late session inventory cannot be attributed to a newly selected laptop', async () => {
   let current = conn;
   let resolveRequest;
-  const client = createDesktopSessionClient({ getConnection: () => current, request: () => new Promise(resolve => { resolveRequest = resolve; }) });
+  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => current, request: () => new Promise(resolve => { resolveRequest = resolve; }) });
   const listing = client.list();
   current = { ...conn, url: 'wss://other.example.ts.net/ws', deviceId: 'other-device' };
   resolveRequest({ status: 200, body: JSON.stringify({ available: true, sessions: [session] }), headers: {} });
@@ -84,7 +98,7 @@ test('a replacement Pi process cannot confirm a prior send', async () => {
 });
 test('a connection changed during post-ack inspection stays unconfirmed', async () => {
   let current = conn, sends = 0;
-  const client = createDesktopSessionClient({ getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => current, request: async request => {
     const payload = request.body ? JSON.parse(request.body) : undefined;
     if (!payload) return { status:200, headers:{}, body:JSON.stringify({available:true,sessions:[session]}) };
     if (payload.action === 'prompt') { sends++; return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:target.sessionId,instanceId:'instance-1'})}; }
@@ -111,10 +125,99 @@ test('lost or mismatched acknowledgement is uncertain and never retried automati
     assert.equal(f.calls.filter(call => call.body && JSON.parse(call.body).action === 'prompt').length, 1);
   }
 });
+test('an uncertain send remains blocked after client restart, while a distinct instruction is allowed', async () => {
+  const journal = memoryJournal();
+  const first = fixture({journal, failSend:true});
+  const uncertain = await first.client.send({...target,text:'Revisar compilación'},context(async () => true));
+  assert.equal(uncertain.status,'uncertain');
+  const restarted = fixture({journal}); let approvals=0;
+  const duplicate = await restarted.client.send({...target,text:'Revisar compilación',deliverAs:'steer'},context(async () => { approvals++; return true; }));
+  assert.equal(duplicate.status,'unconfirmed'); assert.equal(duplicate.clientMessageId,uncertain.clientMessageId);
+  assert.equal(approvals,0); assert.equal(restarted.calls.filter(call => call.body && JSON.parse(call.body).action==='prompt').length,0);
+  const different = await restarted.client.send({...target,text:'Revisar pruebas'},context(async () => true));
+  assert.equal(different.status,'queued');
+});
+test('review closes only the exact pending record with explicit approval and never sends', async () => {
+  const journal = memoryJournal(); const f = fixture({journal,failSend:true});
+  const result = await f.client.send({...target,text:'Revisar compilación'},context(async () => true));
+  const {items:[record]} = await f.client.listDeliveries(); assert.equal(record.id,result.clientMessageId);
+  const sends = f.calls.filter(call => call.body && JSON.parse(call.body).action==='prompt').length;
+  await assert.rejects(f.client.resolveDelivery({clientMessageId:record.id},context(async () => false)),/no fue aprobada/);
+  let review;
+  const resolved = await f.client.resolveDelivery({clientMessageId:record.id},context(async input => { review=JSON.parse(input.details); return true; }));
+  assert.equal(review.attempt.text,'Revisar compilación'); assert.equal(review.attempt.host,'https://computer.example.ts.net/orchestration');
+  assert.match(review.warning,/no.*reenvía/); assert.equal(review.token,undefined);
+  assert.equal(resolved.resent,false); assert.deepEqual((await f.client.listDeliveries()).items,[]);
+  assert.equal(f.calls.filter(call => call.body && JSON.parse(call.body).action==='prompt').length,sends);
+});
+test('review rejects changed records and a different host after approval', async () => {
+  const journal=memoryJournal(), f=fixture({journal,failSend:true});
+  const result=await f.client.send({...target,text:'Revisar antes'},context(async () => true));
+  await assert.rejects(f.client.resolveDelivery({clientMessageId:result.clientMessageId},context(async () => {
+    await journal.reviewed((await journal.list('https://computer.example.ts.net/orchestration'))[0]);
+    return true;
+  })),/cambió/);
+  const again=fixture({journal,failSend:true});
+  const second=await again.client.send({...target,text:'Revisar otra'},context(async () => true));
+  await assert.rejects(again.client.resolveDelivery({clientMessageId:second.clientMessageId},context(async () => {
+    again.changeConnection({...conn,deviceId:'otro'}); return true;
+  })),/conexión cambió/);
+  assert.equal((await journal.list('https://computer.example.ts.net/orchestration')).length,1);
+});
+test('storage failure prevents dispatch even after user approval', async () => {
+  const base=memoryJournal(), journal={...base,async begin() { throw new Error('Almacenamiento no disponible'); }};
+  const f=fixture({journal});
+  await assert.rejects(f.client.send({...target,text:'Sin registro'},context(async () => true)),/Almacenamiento/);
+  assert.equal(f.calls.filter(call => call.body && JSON.parse(call.body).action==='prompt').length,0);
+});
+test('a lost reservation callback cancels the known pre-transport attempt', async () => {
+  const base=memoryJournal(), journal={...base,async begin(item) { await base.begin(item); throw new Error('callback perdido'); }};
+  const f=fixture({journal});
+  await assert.rejects(f.client.send({...target,text:'Sin enviar'},context(async () => true)),/callback perdido/);
+  assert.deepEqual((await f.client.listDeliveries()).items,[]);
+  assert.equal(f.calls.filter(call => call.body && JSON.parse(call.body).action==='prompt').length,0);
+});
+test('cancellation before transport closes the reservation without calling prompt', async () => {
+  const base=memoryJournal(), controller=new AbortController();
+  const journal={...base,async dispatching(id) { await base.dispatching(id); controller.abort(); }};
+  const f=fixture({journal});
+  await assert.rejects(f.client.send({...target,text:'Cancelar antes'}, {signal:controller.signal,askApproval:async () => true}),{name:'AbortError'});
+  assert.deepEqual((await f.client.listDeliveries()).items,[]);
+  assert.equal(f.calls.filter(call => call.body && JSON.parse(call.body).action==='prompt').length,0);
+});
+test('cancellation after transport starts preserves uncertainty and prevents replay', async () => {
+  const journal=memoryJournal(), controller=new AbortController(); let sends=0;
+  const client=createDesktopSessionClient({journal,getConnection:()=>conn,request:async request => {
+    const payload=request.body?JSON.parse(request.body):undefined;
+    if (!payload) return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[session]})};
+    if (payload.action==='prompt') { sends++; controller.abort(); throw new Error('interrupted'); }
+    return {status:200,headers:{},body:JSON.stringify(page())};
+  }});
+  const result=await client.send({...target,text:'Ya empezó'}, {signal:controller.signal,askApproval:async()=>true});
+  assert.equal(result.status,'uncertain'); assert.equal(sends,1);
+  const restored=fixture({journal});
+  const duplicate=await restored.client.send({...target,text:'Ya empezó'},context(async()=>true));
+  assert.equal(duplicate.status,'unconfirmed');
+  assert.equal(restored.calls.filter(call=>call.body && JSON.parse(call.body).action==='prompt').length,0);
+});
+test('a different host cannot list the original host pending records', async () => {
+  const journal=memoryJournal(), f=fixture({journal,failSend:true});
+  await f.client.send({...target,text:'Trabajo original'},context(async()=>true));
+  f.changeConnection({...conn,url:'wss://other.example.ts.net/ws'});
+  assert.deepEqual((await f.client.listDeliveries()).items,[]);
+  f.changeConnection(conn);
+  assert.equal((await f.client.listDeliveries()).items.length,1);
+});
+test('concurrent identical approvals reserve at most one dispatch', async () => {
+  const journal=memoryJournal(), one=fixture({journal}), two=fixture({journal});
+  const results=await Promise.allSettled([one.client.send({...target,text:'Una sola'},context(async () => true)),two.client.send({...target,text:'Una sola'},context(async () => true))]);
+  assert.equal(results.filter(item => item.status==='fulfilled').length,1);
+  assert.equal([...one.calls,...two.calls].filter(call => call.body && JSON.parse(call.body).action==='prompt').length,1);
+});
 test('a session prompt whose connection changes in flight remains uncertain and is not retried', async () => {
   let current = conn;
   let sends = 0;
-  const client = createDesktopSessionClient({ getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => current, request: async request => {
     const payload = request.body ? JSON.parse(request.body) : undefined;
     if (!payload) return { status: 200, headers: {}, body: JSON.stringify({ available: true, sessions: [session] }) };
     if (payload.action === 'inspect') return { status: 200, headers: {}, body: JSON.stringify(page()) };
@@ -129,7 +232,7 @@ test('a session prompt whose connection changes in flight remains uncertain and 
 test('a late stop acknowledgement after switching laptops stays unconfirmed', async () => {
   let current = conn;
   let stops = 0;
-  const client = createDesktopSessionClient({ getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => current, request: async request => {
     const payload = JSON.parse(request.body);
     if (payload.action === 'inspect') return { status: 200, headers: {}, body: JSON.stringify(page()) };
     stops++;
@@ -170,7 +273,7 @@ test('cancellation during the post-approval reread prevents the pending mutation
 
 test('agent session read adapts valid large history while preserving cursor and reuses the safe limit', async () => {
   const calls = [];
-  const client = createDesktopSessionClient({ getConnection: () => conn, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => conn, request: async request => {
     const payload = JSON.parse(request.body); calls.push(payload);
     if (payload.limit === 50) throw new DeviceBridgeError('size_limit', 'native limit');
     return { status: 200, headers: {}, body: JSON.stringify({ ...page(),
@@ -187,7 +290,7 @@ test('agent session read adapts valid large history while preserving cursor and 
 test('agent session read never retries network failure, cancellation or a changed connection', async () => {
   let current = conn, calls = 0;
   const controller = new AbortController();
-  const client = createDesktopSessionClient({ getConnection: () => current, request: async () => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => current, request: async () => {
     calls++;
     if (calls === 1) throw new Error('offline');
     if (calls === 2) { controller.abort(); throw new DeviceBridgeError('size_limit', 'large'); }
@@ -201,7 +304,7 @@ test('agent session read never retries network failure, cancellation or a change
 
 test('agent session read does not retry malformed or oversized individual messages', async () => {
   let calls = 0;
-  const client = createDesktopSessionClient({ getConnection: () => conn, request: async () => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => conn, request: async () => {
     calls++;
     return { status: 200, headers: {}, body: JSON.stringify({ ...page(), messages: [{ id: 'm', role: 'assistant', content: 'x'.repeat(32001) }] }) };
   } });
@@ -210,7 +313,7 @@ test('agent session read does not retry malformed or oversized individual messag
 
 test('agent session read also adapts when the JavaScript response limit is exceeded', async () => {
   const limits = [];
-  const client = createDesktopSessionClient({ getConnection: () => conn, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => conn, request: async request => {
     const payload = JSON.parse(request.body); limits.push(payload.limit);
     return { status: 200, headers: {}, body: JSON.stringify({ ...page(),
       messages: Array.from({ length: payload.limit }, (_, index) => ({ id: `m${index}`, role: 'assistant', content: 'x'.repeat(25000) })) }) };
@@ -221,7 +324,7 @@ test('agent session read also adapts when the JavaScript response limit is excee
 
 test('an oversized response to a session mutation remains uncertain and is never replayed', async () => {
   let sends = 0;
-  const client = createDesktopSessionClient({ getConnection: () => conn, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => conn, request: async request => {
     const payload = request.body && JSON.parse(request.body);
     if (payload?.action === 'prompt') { sends++; throw new DeviceBridgeError('size_limit', 'large'); }
     return { status: 200, headers: {}, body: JSON.stringify(payload ? page() : { available: true, sessions: [session] }) };
