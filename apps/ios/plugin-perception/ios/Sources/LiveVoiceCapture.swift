@@ -238,6 +238,7 @@ final class LiveVoiceCapture {
     private let url: URL
     private let engine = AVAudioEngine()
     private let state: LiveCaptureState
+    private let preserveOnStartFailure: Bool
     private var running = false
     private var tapInstalled = false
     private var timer: DispatchWorkItem?
@@ -246,8 +247,9 @@ final class LiveVoiceCapture {
     var recording: Bool { running }
     var microphoneLevel: Double? { state.microphoneLevel }
 
-    init(url: URL, analyzerFormat: AVAudioFormat, onPreviewIssue: @escaping (String) -> Void) throws {
+    init(url: URL, analyzerFormat: AVAudioFormat, preserveOnStartFailure: Bool = false, onPreviewIssue: @escaping (String) -> Void) throws {
         self.url = url
+        self.preserveOnStartFailure = preserveOnStartFailure
         let source = engine.inputNode.outputFormat(forBus: 0)
         state = try LiveCaptureState(url: url, source: source, target: analyzerFormat) { message in
             DispatchQueue.main.async { onPreviewIssue(message) }
@@ -281,7 +283,7 @@ final class LiveVoiceCapture {
             // allowing the caller to create its recorder there.
             stopInput()
             try? await state.drain()
-            try? FileManager.default.removeItem(at: url)
+            if !preserveOnStartFailure { try? FileManager.default.removeItem(at: url) }
             throw error
         }
         let cutoff = DispatchWorkItem { [weak self] in self?.stopInput() }

@@ -295,6 +295,16 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "Enables the attach_retained_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-attach-retained-voice"
+        },
+        {
+          "description": "Denies the attach_retained_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-attach-retained-voice"
+        },
+        {
           "description": "Enables the cancel_document command without any pre-configured scope.",
           "type": "string",
           "const": "allow-cancel-document"
@@ -333,6 +343,26 @@
           "description": "Denies the check_voice command without any pre-configured scope.",
           "type": "string",
           "const": "deny-check-voice"
+        },
+        {
+          "description": "Enables the discard_retained_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-discard-retained-voice"
+        },
+        {
+          "description": "Denies the discard_retained_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-discard-retained-voice"
+        },
+        {
+          "description": "Enables the inspect_retained_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-inspect-retained-voice"
+        },
+        {
+          "description": "Denies the inspect_retained_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-inspect-retained-voice"
         },
         {
           "description": "Enables the prepare_voice command without any pre-configured scope.",

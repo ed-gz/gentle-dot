@@ -24,6 +24,10 @@ enum VoiceRecoveryMessage {
             message = "Apple todavía está cerrando la transcripción anterior. Reintenta en un momento."
         case "cleanup_failed":
             message = "No pude limpiar el audio temporal. Toca el micrófono para reintentar o descarta el audio."
+        case "retention_failed":
+            message = "No pude confirmar el audio guardado. Se conserva para revisión; no lo descarté."
+        case "capture_incomplete":
+            message = "El audio quedó incompleto. Se conserva para revisión y no se presentará como una grabación terminada."
         default:
             message = "Apple no pudo completar la transcripción. Toca el micrófono para reintentar."
         }

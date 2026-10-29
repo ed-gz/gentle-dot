@@ -34,6 +34,9 @@ struct VoiceReply: Encodable {
     var segments: [VoiceSegment]? = nil
     var durationSeconds: Double? = nil
     var source: String? = nil
+    /// Present only for an explicitly requested, verified journal copy. The
+    /// copy is not an acknowledgement that the draft was saved.
+    var retainedAudio: VoiceRecoveryRecord? = nil
 
     static func failure(_ error: String, _ message: String) -> VoiceReply {
         VoiceReply(message: message, error: error)
@@ -79,6 +82,11 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     private let finalDrain = PreviewDrain()
     private let cancellationBarrier = VoiceCancellationBarrier()
     private let startLatch = VoiceStartLatch()
+    private let retentionLatch = VoiceStartLatch()
+    private var retentionBinding: VoiceRetentionBinding?
+    private var retainedRecord: VoiceRecoveryRecord?
+    private var retainedLease: VoiceRecoveryReadLease?
+    private var retentionCaptureIncomplete = false
     private var pendingStartURL: URL?
     private var startupAudioActive = false
     private struct PendingCancellation {
@@ -86,6 +94,8 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         let owner: String?
         let url: URL?
         let live: LiveVoiceCapture?
+        let retention: VoiceRetentionBinding?
+        let lease: VoiceRecoveryReadLease?
     }
     private var pendingCancellation: PendingCancellation?
     private var finalOperation: Task<VoiceReply, Never>?
@@ -305,10 +315,15 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         }
     }
 
-    func start(ownerID: String? = nil) async -> VoiceReply {
+    func start(ownerID: String? = nil, retainDestination: String? = nil) async -> VoiceReply {
         guard !busy, sessionID == nil else { return .failure("busy", "Ya hay un comando de voz en curso.") }
         guard !previewDrain.active, !finalDrain.active, !cancellationBarrier.active, pendingCancellation == nil else { return .failure("busy", "Apple todavía está cerrando el dictado anterior. Intenta de nuevo en un momento.") }
         guard UIApplication.shared.applicationState == .active else { return .failure("not_foreground", "Abre Capri para dictar.") }
+        if retainDestination != nil {
+            guard let ownerID, UUID(uuidString: ownerID) != nil, VoiceRetentionBinding.validDestination(retainDestination) else {
+                return .failure("invalid_voice_retention", "No se pudo vincular el audio con su destino original.")
+            }
+        }
         if let ownerID, !owners.claim(ownerID) { return .failure("cancelled", "Ese dictado fue cancelado o sustituido.") }
         busy = true
         startLatch.begin()
@@ -338,7 +353,22 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             return .failure(epoch == generation ? "not_foreground" : "cancelled", "Vuelve a Capri para dictar.")
         }
         let id = UUID().uuidString
-        let url = Self.temporaryDirectory.appendingPathComponent(id).appendingPathExtension("caf")
+        var url = Self.temporaryDirectory.appendingPathComponent(id).appendingPathExtension("caf")
+        if let ownerID, let retainDestination {
+            guard let root = VoiceRetentionBinding.defaultRoot() else {
+                return .failure("retention_unavailable", "No pude preparar el audio guardado.")
+            }
+            let binding = VoiceRetentionBinding(id: id, owner: ownerID, destination: retainDestination, root: root)
+            let journalKind: VoiceRecoveryRecord.Kind
+            switch selected.kind { case .speech: journalKind = .speech; case .dictation: journalKind = .dictation }
+            do {
+                let (record, path) = try VoiceRecoveryJournal(root: root).reserve(id: id, owner: ownerID,
+                    destination: retainDestination, locale: selected.locale.identifier(.bcp47), kind: journalKind)
+                retentionBinding = binding; retainedRecord = record; retentionCaptureIncomplete = false; url = path
+            } catch {
+                return .failure("retention_unavailable", "No pude reservar el audio. Revisa si hay un dictado guardado.")
+            }
+        }
         pendingStartURL = url
         do {
             let audio = AVAudioSession.sharedInstance()
@@ -356,23 +386,28 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             var live: LiveVoiceCapture?
             if let previewFormat {
                 do {
-                    let candidate = try LiveVoiceCapture(url: url, analyzerFormat: previewFormat) { [weak self] message in
+                    let candidate = try LiveVoiceCapture(url: url, analyzerFormat: previewFormat, preserveOnStartFailure: retainDestination != nil) { [weak self] message in
                         guard self?.generation == epoch else { return }
                         self?.previewIssue = message
                     }
                     do { try await candidate.start(); live = candidate }
-                    catch { await candidate.cancel() }
-                } catch { /* Existing recorder remains the fallback before capture starts. */ }
+                    catch { if retainDestination != nil { throw error }; await candidate.cancel() }
+                } catch { if retainDestination != nil { throw error } /* Existing recorder remains the fallback before capture starts. */ }
             }
             guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
                 let cancelled = epoch != generation || Task.isCancelled
+                let keepCaptured = retainDestination != nil
                 cancel()
-                if let live { await live.cancel() }
+                if let live { if keepCaptured { try? await live.stop() } else { await live.cancel() } }
                 return .failure(cancelled ? "cancelled" : "not_foreground", cancelled ? "Dictado cancelado." : "Vuelve a Capri para dictar.")
             }
             if let live {
                 liveCapture = live
             } else {
+                // AVAudioRecorder's asynchronous completion callback can arrive
+                // after stop(). Until that completion is fenced, it cannot
+                // publish an opt-in recording as verified and complete.
+                guard retainDestination == nil else { throw NSError(domain: "CapriVoice", code: 3) }
                 guard VoiceFileCleanup.remove(url) else { throw NSError(domain: "CapriVoice", code: 2) }
                 previewIssue = "La vista previa no está disponible. El audio se transcribirá al terminar."
                 let capture = try AVAudioRecorder(url: url, settings: [
@@ -395,7 +430,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             recordedFormat = format
             if let live { beginPreview(preview, capture: live, session: id) }
             started = true
-            return VoiceReply(ok: true, sessionId: id, maxDurationSeconds: Int(maximumDuration))
+            return VoiceReply(ok: true, sessionId: id, maxDurationSeconds: Int(maximumDuration), retainedAudio: retainedRecord)
         } catch {
             // The normal cancellation fence owns the URL until all startup
             // candidates and writers have stopped and deletion is confirmed.
@@ -414,15 +449,34 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         return false
     }
 
-    func stop(id: String) async -> VoiceReply {
+    func stop(id: String, retainOwner: String? = nil, retainDestination: String? = nil) async -> VoiceReply {
         guard !busy, id == sessionID, let url = recordingURL, let locale = recordedLocale, let kind = recordedKind,
               let format = recordedFormat else { return .failure("invalid_voice_session", "Ese comando de voz ya terminó o fue cancelado.") }
+        let retainRequested = retainOwner != nil || retainDestination != nil
+        if retainRequested {
+            guard let retainOwner, UUID(uuidString: retainOwner) != nil,
+                  let active = owners.active, active.lowercased() == retainOwner.lowercased(),
+                  let binding = retentionBinding, binding.id.lowercased() == id.lowercased(),
+                  binding.owner.lowercased() == retainOwner.lowercased(), binding.destination == retainDestination,
+                  VoiceRetentionBinding.validDestination(retainDestination) else {
+                return .failure("invalid_voice_retention", "No se pudo vincular el audio con su destino original.")
+            }
+        }
+        if let binding = retentionBinding {
+            guard let retainOwner, let retainDestination, binding.id.lowercased() == id.lowercased(),
+                  binding.owner.lowercased() == retainOwner.lowercased(), binding.destination == retainDestination else {
+                return .failure("invalid_voice_retention", "El audio reservado pertenece a otro dictado.")
+            }
+        }
         if finalDrain.active {
             return pending(id, reason: "closing")
         }
         busy = true
         let epoch = generation
-        var preserve = false
+        // Opt-in bytes are never removed just because this async task was
+        // cancelled or a callback was lost. Only exact explicit discard may
+        // remove their journal record.
+        var preserve = retentionBinding != nil
         stoppingCapture = true
         recoveryPending = true
         recorder?.stop()
@@ -438,6 +492,10 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             catch {
                 liveCapture = nil
                 _ = await endPreview(); deactivateAudio()
+                if retentionBinding != nil {
+                    retentionCaptureIncomplete = true; preserve = true
+                    return pending(id, reason: "capture_incomplete")
+                }
                 return .failure("capture_incomplete", "No pude conservar todo el audio. Vuelve a dictarlo.")
             }
             guard epoch == generation, !Task.isCancelled else {
@@ -471,7 +529,51 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             return pending(id, reason: "background")
         }
         deactivateAudio()
+        if let retainOwner, let retainDestination {
+            guard let binding = retentionBinding, let record = retainedRecord,
+                  binding.owner.lowercased() == retainOwner.lowercased(), binding.destination == retainDestination else {
+                preserve = true; return pending(id, reason: "retention_failed")
+            }
+            if retentionCaptureIncomplete { preserve = true; return pending(id, reason: "capture_incomplete") }
+            // The writer has drained. Only now may the bound recording be
+            // published as ready; validation and hashing stay off main.
+            let existingLease = retainedLease
+            retentionLatch.begin()
+            let work = Task.detached(priority: .userInitiated) {
+                let journal = VoiceRecoveryJournal(root: binding.root)
+                let ready: VoiceRecoveryRecord
+                if record.state == .ready { ready = record } else { ready = try journal.publish(record) }
+                let lease: VoiceRecoveryReadLease
+                if let existingLease { lease = existingLease } else { lease = try journal.acquire(ready) }
+                do { try lease.verify(); return (ready, lease) } catch { lease.close(); throw error }
+            }
+            let copy = await work.result
+            retentionLatch.end()
+            guard epoch == generation, sessionID == id, !Task.isCancelled else {
+                    if case .success((let ready, let lease)) = copy {
+                        lease.close()
+                        if epoch == generation, sessionID == id { retainedRecord = ready; retainedLease = nil }
+                    }
+                return .failure("cancelled", "Dictado cancelado.")
+            }
+            switch copy {
+            case .success((let ready, let lease)): retainedRecord = ready; retainedLease = lease
+            case .failure:
+                retainedLease = nil
+                // Publication can succeed even if the following lease failed.
+                // Adopt only its exact identity; a later retry will verify it.
+                if let current = try? VoiceRecoveryJournal(root: binding.root).current(),
+                   binding.matches(current), current.state == .ready { retainedRecord = current }
+                preserve = true; return pending(id, reason: "retention_failed")
+            }
+            guard UIApplication.shared.applicationState == .active else {
+                preserve = true; return pending(id, reason: "background")
+            }
+        }
         let module = makeTranscriber(for: locale, kind: kind)
+        // Analyze the verified journal copy when retention was requested. The
+        // original can never be substituted for the identity in the receipt.
+        let analysisSource = retainedLease?.url ?? url
         let analysis = SpeechAnalyzer(modules: [module.module])
         analyzer = analysis
         let results = Task { @MainActor () throws -> [VoiceSegment] in
@@ -503,7 +605,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         finalResults = results
         let work = Task { @MainActor () -> VoiceReply in
             defer { results.cancel() }
-            let convertedURL = url.deletingPathExtension().appendingPathExtension("analysis.caf")
+            // Retained audio lives in Application Support. Conversion must use
+            // the temporary directory, never create an orphan inside its journal.
+            let convertedURL = Self.temporaryDirectory.appendingPathComponent("\(id).analysis.caf")
             defer { try? FileManager.default.removeItem(at: convertedURL) }
             var preparingAudio = true
             do {
@@ -511,7 +615,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                 // actor so timeout/background can release the UI promptly.
                 let limit = self.maximumDuration
                 let preparation = Task.detached(priority: .userInitiated) {
-                    try VoiceAudio.openForAnalysis(source: url, converted: convertedURL,
+                    try VoiceAudio.openForAnalysis(source: analysisSource, converted: convertedURL,
                         format: format, maximumSeconds: limit)
                 }
                 let audioFile = try await preparation.value
@@ -561,13 +665,34 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             preserve = true
             return pending(id, reason: "background")
         }
-        guard let result, result.ok else {
+        guard var result, result.ok else {
             requestFinalShutdown()
             preserve = true
             return pending(id, reason: result?.error ?? "transcription_timeout")
         }
         finalOperation = nil
         finalResults = nil
+        if let retainedRecord {
+            // The caller may later save a durable draft. Returning a reply is
+            // not such a receipt: retain the recording until explicit discard
+            // or a future exact, verified acknowledgement is implemented.
+            guard let lease = retainedLease else { preserve = true; return pending(id, reason: "retention_failed") }
+            retentionLatch.begin()
+            let verify = Task.detached(priority: .userInitiated) { try lease.verify() }
+            let verification = await verify.result
+            retentionLatch.end()
+            guard epoch == generation, sessionID == id, !Task.isCancelled else { return .failure("cancelled", "Dictado cancelado.") }
+            guard !finalInterrupted, UIApplication.shared.applicationState == .active else {
+                preserve = true; return pending(id, reason: "background")
+            }
+            if case .failure = verification { preserve = true; return pending(id, reason: "retention_failed") }
+            guard VoiceFileCleanup.remove(Self.temporaryDirectory.appendingPathComponent("\(id).analysis.caf")) else {
+                preserve = true; return pending(id, reason: "cleanup_failed")
+            }
+            preserve = true
+            result.retainedAudio = retainedRecord
+            return result
+        }
         // The converted file must disappear before the original. If cleanup
         // fails, retain the original and owner for an explicit retry/discard;
         // never return success and silently orphan captured audio.
@@ -609,6 +734,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         guard pendingCancellation == nil, !cancellationBarrier.active else { return }
         let cancelledOwner = owners.active
         let url = recordingURL ?? pendingStartURL
+        let retainedBinding = retentionBinding
+        let lease = retainedLease
+        retainedLease = nil
         generation += 1
         finalDeadline?.interrupt()
         recorder?.stop()
@@ -621,8 +749,8 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         requestPreviewShutdown()
         clearCapture()
         deactivateAudio()
-        if live != nil || url != nil || startLatch.active || previewDrain.active || finalDrain.active {
-            pendingCancellation = PendingCancellation(id: UUID(), owner: cancelledOwner, url: url, live: live)
+        if live != nil || url != nil || retainedBinding != nil || startLatch.active || retentionLatch.active || previewDrain.active || finalDrain.active {
+            pendingCancellation = PendingCancellation(id: UUID(), owner: cancelledOwner, url: url, live: live, retention: retainedBinding, lease: lease)
             beginPendingCancellation()
         }
     }
@@ -634,13 +762,27 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             // A locally-created capture may not yet have reached liveCapture.
             // The start latch closes only after its epoch fence drains it.
             while !(await self.startLatch.wait()) { }
-            if let live = pending.live { await live.cancel() }
+            while !(await self.retentionLatch.wait()) { }
+            if let live = pending.live {
+                if pending.retention != nil { try? await live.stop() }
+                else { await live.cancel() }
+            }
             while !(await self.previewDrain.wait()) { }
             while !(await self.finalDrain.wait()) { }
-            let removedAudio = VoiceFileCleanup.remove(pending.url)
-            let converted = pending.url?.deletingPathExtension().appendingPathExtension("analysis.caf")
+            // A journal source is removed only via the exclusive journal lock,
+            // after readers have drained and the lease has been released.
+            let journalSource = pending.retention.map { $0.root.appendingPathComponent("\($0.id.lowercased()).caf") }
+            let removedAudio = pending.url?.standardizedFileURL == journalSource?.standardizedFileURL
+                ? true : VoiceFileCleanup.remove(pending.url)
+            let converted = pending.retention.map { Self.temporaryDirectory.appendingPathComponent("\($0.id).analysis.caf") }
+                ?? pending.url?.deletingPathExtension().appendingPathExtension("analysis.caf")
             let removedConvertedAudio = VoiceFileCleanup.remove(converted)
             guard removedAudio, removedConvertedAudio else { return false }
+            pending.lease?.close()
+            // Cancel only stops capture/analysis. A retained journal copy is
+            // never treated as disposable merely because a callback or app
+            // lifecycle cancelled; it requires explicit discard or a future
+            // verified durable acknowledgement.
             if self.pendingCancellation?.id == pending.id { self.pendingCancellation = nil }
             return true
         }
@@ -662,6 +804,96 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         return cancellationBarrier.active ? .closing : .cleanupFailed
     }
 
+    /// Metadata only; a ready record is reported only after verifying its
+    /// bytes. A capturing record remains explicitly incomplete after a crash.
+    func inspectRetained() async -> VoiceReply {
+        guard let root = VoiceRetentionBinding.defaultRoot() else {
+            return .failure("retention_unavailable", "No pude abrir el audio guardado.")
+        }
+        let work = Task.detached(priority: .userInitiated) { () throws -> VoiceRecoveryRecord? in
+            let journal = VoiceRecoveryJournal(root: root)
+            guard let record = try journal.current() else { return nil }
+            if record.state == .ready {
+                let lease = try journal.acquire(record); defer { lease.close() }
+                try lease.verify()
+            }
+            return record
+        }
+        do { return VoiceReply(ok: true, retainedAudio: try await work.value) }
+        catch {
+            return .failure("retention_unavailable", "No pude verificar el audio guardado. Se conserva para revisión.")
+        }
+    }
+
+    /// Explicitly reconnect a verified, completed recording to its original
+    /// owner and destination. This never begins recording or transcribing.
+    func attachRetained(_ expected: VoiceRecoveryRecord) async -> VoiceReply {
+        guard expected.state == .ready, !busy, sessionID == nil, !startLatch.active,
+              !retentionLatch.active, !cancellationBarrier.active, pendingCancellation == nil,
+              !previewDrain.active, !finalDrain.active else {
+            return .failure("busy", "Termina el dictado actual antes de recuperar otro.")
+        }
+        guard UIApplication.shared.applicationState == .active, let root = VoiceRetentionBinding.defaultRoot(),
+              owners.claim(expected.owner) else {
+            return .failure("retention_unavailable", "Abre Capri para revisar el audio guardado.")
+        }
+        busy = true; startLatch.begin(); generation += 1
+        let epoch = generation
+        let binding = VoiceRetentionBinding(id: expected.id, owner: expected.owner,
+            destination: expected.destination, root: root)
+        retentionBinding = binding
+        var attached = false
+        defer {
+            startLatch.end(); busy = false
+            if !attached { owners.clearIfOwned(expected.owner); retentionBinding = nil; retainedRecord = nil }
+        }
+        let locale = Locale(identifier: expected.locale)
+        let kind: VoiceTranscriberKind
+        switch expected.kind { case .speech: kind = .speech; case .dictation: kind = .dictation }
+        guard await installed(locale, kind: kind) else {
+            return .failure("assets_required", "Prepara el idioma del audio para volver a transcribirlo.")
+        }
+        let module = makeTranscriber(for: locale, kind: kind)
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module.module]) else {
+            return .failure("audio_format_unavailable", "No hay un formato compatible para el audio guardado.")
+        }
+        guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
+            return .failure("cancelled", "La recuperación fue interrumpida; el audio se conserva.")
+        }
+        do {
+            let work = Task.detached(priority: .userInitiated) {
+                let lease = try VoiceRecoveryJournal(root: root).acquire(expected)
+                do { try lease.verify(); return lease } catch { lease.close(); throw error }
+            }
+            let lease = try await work.value
+            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
+                lease.close(); return .failure("cancelled", "La recuperación fue interrumpida; el audio se conserva.")
+            }
+            retainedLease = lease; retainedRecord = expected; recordingURL = lease.url
+            sessionID = expected.id; recordedLocale = locale; recordedKind = kind; recordedFormat = format
+            recoveryPending = true; attached = true
+            return VoiceReply(ok: true, sessionId: expected.id, ownerId: expected.owner, retainedAudio: expected)
+        } catch {
+            return .failure("retention_unavailable", "No pude verificar el audio guardado. Se conserva para revisión.")
+        }
+    }
+
+    /// This operation is intended only for an explicit user discard. It is
+    /// bound to the full record and refuses to race any live reader or capture.
+    func discardRetained(_ expected: VoiceRecoveryRecord) -> VoiceReply {
+        guard sessionID == nil, !busy, !startLatch.active, !retentionLatch.active,
+              !cancellationBarrier.active, pendingCancellation == nil,
+              let root = VoiceRetentionBinding.defaultRoot() else {
+            return .failure("busy", "Termina el dictado actual antes de descartarlo.")
+        }
+        do {
+            try VoiceRecoveryJournal(root: root).remove(expected)
+            return VoiceReply(ok: true)
+        } catch {
+            return .failure("retention_unconfirmed", "No pude confirmar que se descartó el audio. Se conserva para revisión.")
+        }
+    }
+
     private func clearCapture() {
         if let url = recordingURL { try? FileManager.default.removeItem(at: url) }
         recordingURL = nil
@@ -674,6 +906,10 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         recoveryPending = false
         recoveryIssue = nil
         owners.clear()
+        retentionBinding = nil
+        retainedRecord = nil
+        retainedLease?.close(); retainedLease = nil
+        retentionCaptureIncomplete = false
     }
 
     private func deactivateAudio() {

@@ -4,8 +4,9 @@ import Tauri
 import UIKit
 import WebKit
 
-private struct SessionArgs: Decodable { let sessionId: String }
-private struct VoiceOwnerArgs: Decodable { let ownerId: String? }
+private struct SessionArgs: Decodable { let sessionId: String; let ownerId: String?; let retainDestination: String? }
+private struct VoiceOwnerArgs: Decodable { let ownerId: String?; let retainDestination: String? }
+private struct RetainedVoiceArgs: Decodable { let record: VoiceRecoveryRecord }
 
 final class PerceptionPlugin: Plugin {
     private var voice: AnyObject?
@@ -67,20 +68,23 @@ final class PerceptionPlugin: Plugin {
         }
     }
     @objc func startVoice(_ invoke: Invoke) {
-        guard let args = try? invoke.parseArgs(VoiceOwnerArgs.self), args.ownerId == nil || UUID(uuidString: args.ownerId!) != nil else {
+        guard let args = try? invoke.parseArgs(VoiceOwnerArgs.self), args.ownerId == nil || UUID(uuidString: args.ownerId!) != nil,
+              args.retainDestination == nil || (args.ownerId != nil && VoiceRetentionBinding.validDestination(args.retainDestination)) else {
             invoke.resolve(VoiceReply.failure("invalid_voice_owner", "El comando de voz no es válido.")); return
         }
         Task { @MainActor in
-            if #available(iOS 26.0, *) { invoke.resolve(await controller().start(ownerID: args.ownerId)) }
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().start(ownerID: args.ownerId, retainDestination: args.retainDestination)) }
             else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
         }
     }
     @objc func stopVoice(_ invoke: Invoke) {
-        guard let args = try? invoke.parseArgs(SessionArgs.self), UUID(uuidString: args.sessionId) != nil else {
+        guard let args = try? invoke.parseArgs(SessionArgs.self), UUID(uuidString: args.sessionId) != nil,
+              (args.ownerId == nil && args.retainDestination == nil) ||
+              (args.ownerId.flatMap(UUID.init(uuidString:)) != nil && VoiceRetentionBinding.validDestination(args.retainDestination)) else {
             invoke.resolve(VoiceReply.failure("invalid_voice_session", "El comando de voz no es válido.")); return
         }
         Task { @MainActor in
-            if #available(iOS 26.0, *) { invoke.resolve(await controller().stop(id: args.sessionId)) }
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().stop(id: args.sessionId, retainOwner: args.ownerId, retainDestination: args.retainDestination)) }
             else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
         }
     }
@@ -105,6 +109,30 @@ final class PerceptionPlugin: Plugin {
                 }
             }
             invoke.resolve(VoiceReply(ok: true))
+        }
+    }
+    @objc func inspectRetainedVoice(_ invoke: Invoke) {
+        Task { @MainActor in
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().inspectRetained()) }
+            else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
+        }
+    }
+    @objc func discardRetainedVoice(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(RetainedVoiceArgs.self) else {
+            invoke.resolve(VoiceReply.failure("invalid_voice_retention", "El audio guardado no es válido.")); return
+        }
+        Task { @MainActor in
+            if #available(iOS 26.0, *) { invoke.resolve(controller().discardRetained(args.record)) }
+            else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
+        }
+    }
+    @objc func attachRetainedVoice(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(RetainedVoiceArgs.self), args.record.state == .ready else {
+            invoke.resolve(VoiceReply.failure("invalid_voice_retention", "El audio guardado no es válido.")); return
+        }
+        Task { @MainActor in
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().attachRetained(args.record)) }
+            else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
         }
     }
     @objc func recognizeDocument(_ invoke: Invoke) {

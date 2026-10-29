@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-inspect-retained-voice"
+description = "Enables the inspect_retained_voice command without any pre-configured scope."
+commands.allow = ["inspect_retained_voice"]
+
+[[permission]]
+identifier = "deny-inspect-retained-voice"
+description = "Denies the inspect_retained_voice command without any pre-configured scope."
+commands.deny = ["inspect_retained_voice"]

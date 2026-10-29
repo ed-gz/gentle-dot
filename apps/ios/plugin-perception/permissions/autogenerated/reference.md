@@ -7,6 +7,9 @@ Use local Apple speech transcription and Vision document recognition in Capri. M
 - `allow-start-voice`
 - `allow-stop-voice`
 - `allow-cancel-voice`
+- `allow-inspect-retained-voice`
+- `allow-discard-retained-voice`
+- `allow-attach-retained-voice`
 - `allow-recognize-document`
 - `allow-cancel-document`
 - `allow-scan-pairing-code`
@@ -20,6 +23,32 @@ Use local Apple speech transcription and Vision document recognition in Capri. M
 <th>Description</th>
 </tr>
 
+
+<tr>
+<td>
+
+`perception:allow-attach-retained-voice`
+
+</td>
+<td>
+
+Enables the attach_retained_voice command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:deny-attach-retained-voice`
+
+</td>
+<td>
+
+Denies the attach_retained_voice command without any pre-configured scope.
+
+</td>
+</tr>
 
 <tr>
 <td>
@@ -121,6 +150,58 @@ Enables the check_voice command without any pre-configured scope.
 <td>
 
 Denies the check_voice command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:allow-discard-retained-voice`
+
+</td>
+<td>
+
+Enables the discard_retained_voice command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:deny-discard-retained-voice`
+
+</td>
+<td>
+
+Denies the discard_retained_voice command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:allow-inspect-retained-voice`
+
+</td>
+<td>
+
+Enables the inspect_retained_voice command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:deny-inspect-retained-voice`
+
+</td>
+<td>
+
+Denies the inspect_retained_voice command without any pre-configured scope.
 
 </td>
 </tr>

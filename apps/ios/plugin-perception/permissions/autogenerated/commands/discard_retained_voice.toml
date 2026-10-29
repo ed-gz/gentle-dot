@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-discard-retained-voice"
+description = "Enables the discard_retained_voice command without any pre-configured scope."
+commands.allow = ["discard_retained_voice"]
+
+[[permission]]
+identifier = "deny-discard-retained-voice"
+description = "Denies the discard_retained_voice command without any pre-configured scope."
+commands.deny = ["discard_retained_voice"]

@@ -73,6 +73,7 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/VoiceRecoveryJournal.swift \
+  plugin-perception/ios/Sources/VoiceRetentionBinding.swift \
   test/native/VoiceRecoveryJournalTests.swift -o "$verification/voice-recovery-journal-tests"
 "$verification/voice-recovery-journal-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
@@ -146,6 +147,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/VoiceLevel.swift \
   plugin-perception/ios/Sources/VoiceRecoveryMessage.swift \
   plugin-perception/ios/Sources/VoiceRecoveryJournal.swift \
+  plugin-perception/ios/Sources/VoiceRetentionBinding.swift \
   plugin-perception/ios/Sources/VoiceTranscriptBounds.swift \
   plugin-perception/ios/Sources/VoiceOwners.swift \
   plugin-perception/ios/Sources/VoiceLocaleSelection.swift \

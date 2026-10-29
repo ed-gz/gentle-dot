@@ -14,6 +14,20 @@ struct DocumentRequest {
     file_name: String,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RetainedVoiceRecord {
+    id: String,
+    owner: String,
+    destination: String,
+    locale: String,
+    kind: String,
+    created_at: u64,
+    state: String,
+    byte_count: Option<u64>,
+    sha256: Option<String>,
+}
+
 fn valid_document(request: &DocumentRequest) -> bool {
     let bytes = request.base64.as_bytes();
     let padding = bytes.iter().rev().take_while(|b| **b == b'=').count();
@@ -51,6 +65,46 @@ fn valid_session_id(id: &str) -> bool {
             } else {
                 b.is_ascii_hexdigit()
             }
+        })
+}
+
+fn valid_retention_destination(value: &str) -> bool {
+    value == "chat"
+        || value.strip_prefix("session:").is_some_and(|hash| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+}
+
+fn valid_retained_voice(record: &RetainedVoiceRecord) -> bool {
+    let ready = record.state == "ready"
+        && record
+            .byte_count
+            .is_some_and(|n| n > 0 && n <= 128 * 1024 * 1024)
+        && record.sha256.as_deref().is_some_and(|hash| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        });
+    let capturing =
+        record.state == "capturing" && record.byte_count.is_none() && record.sha256.is_none();
+    let locale = record.locale.split('-').collect::<Vec<_>>();
+    (ready || capturing)
+        && valid_session_id(&record.id)
+        && valid_session_id(&record.owner)
+        && !record.id.eq_ignore_ascii_case(&record.owner)
+        && valid_retention_destination(&record.destination)
+        && record.created_at > 0
+        && matches!(record.kind.as_str(), "speech" | "dictation")
+        && locale
+            .first()
+            .is_some_and(|part| part.eq_ignore_ascii_case("es"))
+        && record.locale.len() <= 40
+        && locale.iter().all(|part| {
+            !part.is_empty() && part.len() <= 8 && part.bytes().all(|b| b.is_ascii_alphanumeric())
         })
 }
 
@@ -105,18 +159,41 @@ async fn prepare_voice<R: Runtime>(
 async fn start_voice<R: Runtime>(
     app: AppHandle<R>,
     owner_id: Option<String>,
+    retain_destination: Option<String>,
 ) -> Result<Value, String> {
     if owner_id.as_deref().is_some_and(|id| !valid_session_id(id)) {
         return Err("invalid_voice_owner".into());
     }
-    native_call(app, "startVoice", json!({"ownerId": owner_id})).await
+    if retain_destination
+        .as_deref()
+        .is_some_and(|destination| owner_id.is_none() || !valid_retention_destination(destination))
+    {
+        return Err("invalid_voice_retention".into());
+    }
+    native_call(
+        app,
+        "startVoice",
+        json!({"ownerId": owner_id, "retainDestination": retain_destination}),
+    )
+    .await
 }
 #[tauri::command]
-async fn stop_voice<R: Runtime>(app: AppHandle<R>, session_id: String) -> Result<Value, String> {
+async fn stop_voice<R: Runtime>(
+    app: AppHandle<R>,
+    session_id: String,
+    owner_id: Option<String>,
+    retain_destination: Option<String>,
+) -> Result<Value, String> {
     if !valid_session_id(&session_id) {
         return Err("invalid_voice_session".into());
     }
-    native_call(app, "stopVoice", json!({"sessionId": session_id})).await
+    match (&owner_id, &retain_destination) {
+        (None, None) => {}
+        (Some(owner), Some(destination))
+            if valid_session_id(owner) && valid_retention_destination(destination) => {}
+        _ => return Err("invalid_voice_retention".into()),
+    }
+    native_call(app, "stopVoice", json!({"sessionId": session_id, "ownerId": owner_id, "retainDestination": retain_destination})).await
 }
 #[tauri::command]
 async fn cancel_voice<R: Runtime>(
@@ -127,6 +204,33 @@ async fn cancel_voice<R: Runtime>(
         return Err("invalid_voice_owner".into());
     }
     native_call(app, "cancelVoice", json!({"ownerId": owner_id})).await
+}
+
+#[tauri::command]
+async fn inspect_retained_voice<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
+    native_call(app, "inspectRetainedVoice", json!({})).await
+}
+
+#[tauri::command]
+async fn discard_retained_voice<R: Runtime>(
+    app: AppHandle<R>,
+    record: RetainedVoiceRecord,
+) -> Result<Value, String> {
+    if !valid_retained_voice(&record) {
+        return Err("invalid_voice_retention".into());
+    }
+    native_call(app, "discardRetainedVoice", json!({"record": record})).await
+}
+
+#[tauri::command]
+async fn attach_retained_voice<R: Runtime>(
+    app: AppHandle<R>,
+    record: RetainedVoiceRecord,
+) -> Result<Value, String> {
+    if !valid_retained_voice(&record) || record.state != "ready" {
+        return Err("invalid_voice_retention".into());
+    }
+    native_call(app, "attachRetainedVoice", json!({"record": record})).await
 }
 #[tauri::command]
 async fn cancel_document<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
@@ -167,6 +271,9 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             start_voice,
             stop_voice,
             cancel_voice,
+            inspect_retained_voice,
+            discard_retained_voice,
+            attach_retained_voice,
             recognize_document,
             cancel_document,
             scan_pairing_code,
@@ -233,6 +340,46 @@ mod tests {
         ] {
             assert!(!valid_session_id(id));
         }
+    }
+    #[test]
+    fn retention_destinations_are_explicit_and_bounded() {
+        assert!(valid_retention_destination("chat"));
+        assert!(valid_retention_destination(&format!(
+            "session:{}",
+            "a".repeat(64)
+        )));
+        for invalid in ["", "../chat", "session:", "session:ABC", "session:../x"] {
+            assert!(!valid_retention_destination(invalid));
+        }
+    }
+    #[test]
+    fn retained_record_rejects_wrong_binding_or_unverified_bytes() {
+        let mut record = RetainedVoiceRecord {
+            id: "01234567-89ab-cdef-0123-456789abcdef".into(),
+            owner: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into(),
+            destination: "chat".into(),
+            locale: "es-MX".into(),
+            kind: "speech".into(),
+            created_at: 1,
+            state: "ready".into(),
+            byte_count: Some(3),
+            sha256: Some("a".repeat(64)),
+        };
+        assert!(valid_retained_voice(&record));
+        record.owner = record.id.clone();
+        assert!(!valid_retained_voice(&record));
+        record.owner = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into();
+        record.byte_count = Some(0);
+        assert!(!valid_retained_voice(&record));
+        record.byte_count = Some(3);
+        record.sha256 = Some("A".repeat(64));
+        assert!(!valid_retained_voice(&record));
+        record.state = "capturing".into();
+        record.byte_count = None;
+        record.sha256 = None;
+        assert!(valid_retained_voice(&record));
+        record.locale = "en-US".into();
+        assert!(!valid_retained_voice(&record));
     }
     #[test]
     fn pairing_accepts_only_bounded_image_requests() {

@@ -11,9 +11,9 @@ import Glibc
 /// This type is not yet connected to VoiceController or the WebView. Its locks
 /// protect cooperating journal users only; atomic rename is not an fsync
 /// guarantee. Integration requires acknowledgement of the exact saved draft.
-struct VoiceRecoveryRecord: Codable, Equatable {
-    enum State: String, Codable { case capturing, ready }
-    enum Kind: String, Codable { case speech, dictation }
+struct VoiceRecoveryRecord: Codable, Equatable, Sendable {
+    enum State: String, Codable, Sendable { case capturing, ready }
+    enum Kind: String, Codable, Sendable { case speech, dictation }
     let id: String
     let owner: String
     let destination: String
@@ -32,7 +32,7 @@ enum VoiceRecoveryJournalError: Error {
 /// Holds a process-shared read lock until explicitly closed or deinitialized.
 /// The URL is for AVAudioFile. Check exact file identity again after analysis
 /// and before acknowledging its transcript; it cannot prevent rogue writers.
-final class VoiceRecoveryReadLease {
+final class VoiceRecoveryReadLease: @unchecked Sendable {
     let url: URL
     private var lockFD: Int32
     private let guardLock = NSLock()
