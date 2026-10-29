@@ -76,6 +76,49 @@ async function selectSessionFile(page: Page, file: { name: string; mimeType: str
   await (await selecting).setFiles(file);
 }
 
+test('compact navigation keeps the session list, chat, and settings usable at phone sizes', async ({ page }, testInfo) => {
+  await linkedPhone(page);
+  const navigation = page.locator('.navigation');
+  await expect(navigation.getByRole('button', { name: /archivo/i })).toHaveCount(0);
+  for (const viewport of [{ width: 390, height: 844 }, { width: 320, height: 568 }, { width: 844, height: 390 }]) {
+    await page.setViewportSize(viewport);
+    for (const fontSize of ['100%', '200%']) {
+      await page.evaluate(size => { document.documentElement.style.fontSize = size; }, fontSize);
+      for (const panel of ['chat', 'agents', 'settings']) {
+        await page.locator(`[data-panel="${panel}"]`).click();
+        await expect(page.locator(`#panel-${panel}`)).toBeVisible();
+        if (panel === 'agents') await expect(page.locator('.agent-session')).toHaveCount(2);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        for (const button of await navigation.locator('button').all()) {
+          const rect = await button.boundingBox();
+          expect(rect!.width).toBeGreaterThanOrEqual(44);
+          expect(rect!.height).toBeGreaterThanOrEqual(44);
+          expect(rect!.x).toBeGreaterThanOrEqual(0);
+          expect(rect!.x + rect!.width).toBeLessThanOrEqual(viewport.width + 1);
+        }
+        if (fontSize === '100%' && viewport.width === 390) {
+          await page.locator(`#panel-${panel}`).evaluate(element => { element.scrollTop = 0; });
+          await page.screenshot({ path: testInfo.outputPath(`compact-${panel}.png`) });
+          if (panel === 'agents') {
+            await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+            await expect(page.getByText('Historial de session-0.', { exact: true })).toBeVisible();
+            const title = await page.locator('.agent-current-session h3').evaluate(element => ({ height: element.getBoundingClientRect().height, line: parseFloat(getComputedStyle(element).lineHeight) }));
+            expect(title.height).toBeLessThanOrEqual(title.line + 1);
+            await page.screenshot({ path: testInfo.outputPath('compact-session-detail.png') });
+            await page.getByRole('button', { name: 'Todos los agentes' }).click();
+          }
+        }
+        if (fontSize === '200%' && viewport.width === 320) {
+          await page.screenshot({ path: testInfo.outputPath(`large-text-${panel}.png`) });
+        }
+      }
+    }
+  }
+  // Removing the normal entry must not delete the stored-work view itself.
+  await expect(page.locator('#panel-inbox')).toBeAttached();
+  await expect(page.locator('#work-list')).toBeAttached();
+});
+
 test('main history and individual Herdr sessions are directly visible with earlier pages and separate drafts', async ({ page }) => {
   await linkedPhone(page);
   await page.locator('[data-panel="chat"]').click(); await expect(page.locator('#cards .chat-card')).toHaveCount(100);

@@ -1,10 +1,10 @@
 /* Grouped settings keep secondary forms out of the initial phone viewport. */
-#panel-settings { padding-top: 24px; scroll-padding-block: 20px; }
-.settings-heading { padding: 0 4px 24px; }
-.settings-heading h1 { font-size: 1.9rem; letter-spacing: -.03em; }
-.settings-heading p { color: var(--muted); margin-top: 8px; font-size: .9rem; }
-#panel-settings .surface { border: 0; border-radius: 18px; margin: 0; padding: 20px; }
-#panel-settings .settings-pairing { margin-bottom: 24px; }
+#panel-settings { padding-top: 12px; scroll-padding-block: 12px; }
+.settings-heading { padding: 0 2px 14px; }
+.settings-heading h1 { font-size: 1.6rem; letter-spacing: -.03em; }
+.settings-heading p { color: var(--muted); margin-top: 4px; font-size: .9rem; }
+#panel-settings .surface { border: 0; border-radius: 16px; margin: 0; padding: 16px; }
+#panel-settings .settings-pairing { margin-bottom: 16px; }
 .settings-pairing h2 { font-size: 1.1rem; margin-bottom: 8px; }
 .settings-pairing-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .settings-pairing-heading h2 { margin-top: 4px; }
@@ -22,7 +22,7 @@
 #panel-settings #pairing-manual > summary { color: var(--muted); font-size: .875rem; }
 .settings-group { overflow: clip; border-radius: 18px; background: var(--panel); }
 .settings-option + .settings-option { border-top: 1px solid var(--line); }
-.settings-option > summary { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 16px; list-style: none; }
+.settings-option > summary { display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 12px 16px; list-style: none; }
 .settings-option > summary::-webkit-details-marker { display: none; }
 .settings-option > summary::marker { content: ''; }
 .settings-option > summary > svg:first-child { color: var(--violet); }

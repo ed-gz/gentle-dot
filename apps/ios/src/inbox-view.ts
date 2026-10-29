@@ -101,7 +101,7 @@ function renderMinute(result: WorkResult, item: WorkItem): HTMLElement {
   return content;
 }
 
-export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<void>; saveDraft(text: string): Promise<void> } {
+export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<void>; saveDraft(text: string): Promise<void>; openWork(id: string): Promise<void>; openAll(): Promise<void> } {
   const find = <T extends HTMLElement>(id: string) => {
     const element = document.getElementById(id);
     if (!element) throw new Error(`Falta un elemento de la bandeja: ${id}`);
@@ -118,6 +118,7 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
   const saveButton = find<HTMLButtonElement>('save-draft');
   const prompt = find<HTMLTextAreaElement>('prompt');
   let loadingRevision = 0;
+  let selectedWork: string | undefined;
   let savingNew = false;
   const busyItems = new Set<string>();
   const downloadUrls = new Set<string>();
@@ -336,8 +337,20 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
       const items = await listWork();
       if (revision !== loadingRevision) return;
       const content = document.createDocumentFragment();
-      if (!items.length) content.append(node('p', 'Aún no tienes trabajos. Puedes crear uno aquí, guardar el texto que estás escribiendo o compartir material con Capri.', 'hint'));
-      for (const item of items) content.append(renderItem(item));
+      if (selectedWork) {
+        content.append(node('h1', 'Material guardado'));
+        const selected = items.find(item => item.id === selectedWork);
+        if (selected) content.append(renderItem(selected));
+        else content.append(node('p', 'El material seleccionado ya no está disponible en el iPhone.', 'hint'));
+        const remaining = items.filter(item => item.id !== selectedWork);
+        if (remaining.length) {
+          content.append(node('h2', 'Otros trabajos guardados'));
+          for (const item of remaining) content.append(renderItem(item));
+        }
+      } else {
+        if (!items.length) content.append(node('p', 'Aún no tienes trabajos. Puedes crear uno aquí, guardar el texto que estás escribiendo o compartir material con Capri.', 'hint'));
+        for (const item of items) content.append(renderItem(item));
+      }
       list.replaceChildren(content);
       count.textContent = String(items.length);
       count.setAttribute('aria-label', `${items.length} trabajos guardados`);
@@ -399,5 +412,9 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
     downloadUrls.clear();
   });
   void refresh();
-  return { refresh, saveDraft };
+  return {
+    refresh, saveDraft,
+    openWork(id) { selectedWork = id; document.getElementById('panel-inbox')!.dataset.contextual = 'true'; return refresh(); },
+    openAll() { selectedWork = undefined; delete document.getElementById('panel-inbox')!.dataset.contextual; return refresh(); },
+  };
 }

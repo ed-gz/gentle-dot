@@ -2,8 +2,15 @@
 #panel-agents { --reading-width: 100%; --surface-2: #211b2b; --line: #403347; --muted: #bcb3c8; --text: #f2edf7; --accent: #baff67; --bg: #111019; --surface: #19141f; --chat-font-size: 1rem; --red: #ff858f; --green: #baff67; min-height: 0; overflow: auto; }
 #laptop-root { min-height: 100%; }
 #panel-agents .orchestration { margin: 0; padding: 0; }
+#panel-agents .orchestration-heading h2 { margin: 0; font-size: 1.4rem; }
+#panel-agents .orchestration-section { margin-top: 8px; }
+#panel-agents .capri-session-group > summary { padding-block: 6px; }
 #panel-agents .agent-detail { display: flex; flex-direction: column; height: calc(var(--app-height, 100dvh) - 96px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); min-height: 220px; }
 #panel-agents .agent-detail-navigation { flex: none; }
+#panel-agents .agent-current-session { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 0 6px; }
+#panel-agents .agent-current-session h3 { grid-column: 2; grid-row: 1; }
+#panel-agents .agent-current-session > .agent-status-icon { grid-column: 1; grid-row: 1; width: 20px; height: 20px; }
+#panel-agents .agent-current-session > .capri-session-metadata { grid-column: 2; }
 #panel-agents .capri-session-metadata { display: block; color: var(--muted); font-size: .75rem; line-height: 1.3; overflow-wrap: anywhere; }
 #panel-agents .agent-detail-scroll { flex: 1; min-height: 0; overflow: auto; }
 #panel-agents .agent-reply { flex: none; }
@@ -42,9 +49,9 @@
 #panel-agents .agent-session { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 3px 10px; padding: 12px 0; text-align: left; }
 #panel-agents .capri-session-type { grid-column: 1; grid-row: 1 / span 3; color: var(--accent); }
 #panel-agents .agent-session-top, #panel-agents .capri-session-project, #panel-agents .agent-preview { grid-column: 2; }
-#panel-agents .agent-session-top { display: flex; flex-direction: row; justify-content: space-between; align-items: center; gap: 4px 12px; }
-#panel-agents .agent-session-top strong { min-width: 0; flex: 1; }
-#panel-agents .agent-session-state { flex: none; }
+#panel-agents .agent-session-top { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 12px; }
+#panel-agents .agent-session-top strong { min-width: 0; flex: 1 0 min(100%, 9rem); font-size: 1rem; }
+#panel-agents .agent-session-state { flex: none; font-size: .8rem; }
 #panel-agents .capri-session-project { font-size: .8rem; color: var(--muted); }
 #panel-agents .agent-preview { font-size: .85rem; }
 #panel-agents .session-refresh, #panel-agents .session-create-button { border: 0; background: transparent; }
