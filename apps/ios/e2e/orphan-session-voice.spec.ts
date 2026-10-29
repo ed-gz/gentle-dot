@@ -318,3 +318,31 @@ test('orphan language preparation is explicit and can be cancelled without chang
   expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record)).toEqual(info.saved);
   await expect(page.locator('#prompt')).toHaveValue('');
 });
+
+test('a foreground reinspection cannot overwrite an orphan audio export result', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(async () => {
+    const {sessionVoiceOrigin} = await import('/src/voice-origin.ts');
+    const destination = await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws', 'pane-0', 'session-0']));
+    sessionStorage.setItem('session-voice-fixture', JSON.stringify({record:{id:'ABCDEF01-ABCD-4BCD-8BCD-ABCDEF012345',owner:'abcdef02-abcd-4bcd-8bcd-abcdef012345',destination,locale:'es-MX',kind:'speech',createdAt:1,state:'capturing'},receipt:null}));
+    sessionStorage.setItem('missing-session','1');
+  });
+  await page.reload();
+  const button = page.getByRole('button', {name:'Exportar audio incompleto'});
+  await expect(button).toBeVisible();
+  for (const [mode, expected] of [['cancel','Exportación cancelada.'], ['error','No pude confirmar'], ['success','Audio incompleto exportado']]) {
+    await page.evaluate(value => { (globalThis as any).incompleteExportMode = value; }, mode);
+    await button.click(); await expect(page.locator('#voice-status')).toContainText(expected);
+    const before = await page.evaluate(() => (globalThis as any).sessionCalls.filter((call: any) => call.command.endsWith('inspect_retained_voice')).length);
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await expect.poll(() => page.evaluate(() => (globalThis as any).sessionCalls.filter((call: any) => call.command.endsWith('inspect_retained_voice')).length)).toBeGreaterThan(before);
+    await expect(page.locator('#voice-status')).toContainText(expected);
+  }
+  await page.evaluate(() => {
+    const stored = JSON.parse(sessionStorage.getItem('session-voice-fixture')!);
+    stored.record.owner = 'abcdef03-abcd-4bcd-8bcd-abcdef012345';
+    sessionStorage.setItem('session-voice-fixture', JSON.stringify(stored));
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect(page.locator('#voice-status')).toContainText('Audio incompleto de otra sesión');
+});

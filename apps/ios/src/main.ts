@@ -615,6 +615,7 @@ let voiceStopping = false;
 let foreignVoiceOwner: string | undefined;
 let voiceStarting = false;
 let retainedVoiceRecord: RetainedVoiceRecord | undefined;
+let incompleteVoiceExportNotice: { id: string; owner: string; message: string } | undefined;
 let retainedVoiceNeedsAttach = false;
 let retainedVoicePreparing = false;
 let voicePreparingAssets = false;
@@ -1492,7 +1493,9 @@ async function recoverPendingVoice() {
         voiceSession = undefined; voiceRetry = false;
         foreignVoiceOwner = retained.owner;
         retainedDiscardPending = inspection.state === 'discard-pending';
-        element('voice-status').textContent = receipt ? 'Hay un dictado guardado de otra sesión. Puedes revisarlo aquí.' : retained.state === 'capturing' ? 'Audio incompleto de otra sesión; podría no reproducirse.' : 'Hay un audio guardado de otra sesión.';
+        element('voice-status').textContent = receipt ? 'Hay un dictado guardado de otra sesión. Puedes revisarlo aquí.' : retained.state === 'capturing'
+          ? (incompleteVoiceExportNotice?.id === retained.id && incompleteVoiceExportNotice.owner === retained.owner ? incompleteVoiceExportNotice.message : 'Audio incompleto de otra sesión; podría no reproducirse.')
+          : 'Hay un audio guardado de otra sesión.';
         setDiscardVoiceRetry(retainedDiscardPending);
         element('discard-voice').hidden = Boolean(receipt) && !retainedDiscardPending;
         foreignAudioButton.hidden = Boolean(receipt) || retainedDiscardPending || retained.state !== 'ready';
@@ -1623,10 +1626,15 @@ incompleteAudioButton.addEventListener('click', () => {
   element<HTMLButtonElement>('dictate').disabled = true; element<HTMLButtonElement>('discard-voice').disabled = true; updateControls();
   element('voice-status').textContent = 'Preparando el audio incompleto…';
   void retainedVoiceBridge.exportIncomplete(record).then(result => {
-    if (generation === voiceGeneration) element('voice-status').textContent = result === 'exported'
-      ? 'Audio incompleto exportado; podría no reproducirse.' : 'Exportación cancelada.';
+    if (generation === voiceGeneration) {
+      const message = result === 'exported' ? 'Audio incompleto exportado; podría no reproducirse.' : 'Exportación cancelada.';
+      incompleteVoiceExportNotice = { id: record.id, owner: record.owner, message }; element('voice-status').textContent = message;
+    }
   }).catch(() => {
-    if (generation === voiceGeneration) element('voice-status').textContent = 'No pude confirmar la exportación del audio incompleto. Vuelve a intentarlo.';
+    if (generation === voiceGeneration) {
+      const message = 'No pude confirmar la exportación del audio incompleto. Vuelve a intentarlo.';
+      incompleteVoiceExportNotice = { id: record.id, owner: record.owner, message }; element('voice-status').textContent = message;
+    }
   }).finally(() => {
     if (generation === voiceGeneration) { voiceStarting = false; voiceStopping = false; }
     foreignAudioBusy = false; incompleteAudioButton.disabled = false; element<HTMLButtonElement>('dictate').disabled = false; element<HTMLButtonElement>('discard-voice').disabled = false; updateControls();
