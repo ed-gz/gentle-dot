@@ -182,6 +182,26 @@ export function createConversationArchive(options: { databaseName?: string; maxi
       }, fail);
     });
   }
+  /** Verify a bounded batch in one read transaction. Used by the experimental
+   * journal before releasing its staged copy; no stored value is changed. */
+  function verifyExactBatch(values: readonly ChatEntry[], revision: number): Promise<boolean> {
+    if (!Array.isArray(values) || values.length > ARCHIVE_LIMITS.batch || !natural(revision)) return Promise.reject(new ArchiveError('invalid', 'La verificación de archivo no es válida.'));
+    let expected: ArchiveEntry[];
+    try { expected = values.map(value => archiveEntry(value)); } catch (error) { return Promise.reject(error); }
+    return access('readonly', (tx, done, fail) => {
+      const entries = tx.objectStore('entries'); let offset = 0;
+      const next = () => {
+        const candidate = expected[offset++]; if (!candidate) { done(true); return; }
+        read(entries.get(keyOf(candidate)), raw => {
+          if (raw === undefined) { done(false); return; }
+          const actual = stored(raw);
+          if (actual.snapshotRevision !== revision || JSON.stringify(archiveEntry(actual, actual.scope)) !== JSON.stringify(candidate)) { done(false); return; }
+          next();
+        }, fail);
+      };
+      next();
+    });
+  }
   async function page(options: ArchiveQuery = {}, query?: string): Promise<ArchivePage> {
     const limit = options.limit ?? 20;
     if (!Number.isInteger(limit) || limit < 1 || limit > ARCHIVE_LIMITS.page || (options.scope !== undefined && !validScope(options.scope)) || (options.engine !== undefined && !['iphone','gentle'].includes(options.engine)) || (options.roles !== undefined && (!Array.isArray(options.roles) || options.roles.length > 3 || options.roles.some(role => !['user','assistant','notice'].includes(role))))) throw new ArchiveError('invalid', 'Filtros o tamaño de página inválidos.');
@@ -251,7 +271,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
     }, fail));
   }
   return {
-    upsert, restoreState,
+    upsert, restoreState, verifyExactBatch,
     restoreWindow: async (entries: readonly ChatEntry[]) => (await restoreState({ entries: [...entries] })).entries,
     page: (options?: ArchiveQuery) => page(options),
     search: (query: string, options?: ArchiveQuery) => page(options, query),

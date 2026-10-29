@@ -1,0 +1,229 @@
+import { archiveEntry, conversationArchive, type ArchiveWrite } from './conversation-archive.ts';
+import { canonicalConversationSnapshot, type ChatEntry, type Conversation } from './conversation.ts';
+
+/** Experimental coordinator for the existing conversation and archive schemas.
+ * It must not be enabled until every writer (including voice and every WebView)
+ * participates and the UI can recover a pending journal without discarding
+ * live state. The caller must bind each in-memory snapshot to the exact base
+ * from which it was captured; reading a new base just before saving does not
+ * prove that an older snapshot includes its changes. Concurrent writers which
+ * bypass this journal can still alter the archive between verification and
+ * window commit. It never executes tools or acknowledges native work. */
+type Archive = { upsert(entries: readonly ChatEntry[], scope?: string, visible?: readonly ChatEntry[], revision?: number): Promise<ArchiveWrite>; verifyExactBatch(entries: readonly ChatEntry[], revision: number): Promise<boolean> };
+export type ConversationJournal = { schema: 'capri-conversation-journal/v1'; id: string; baseRevision: number; base?: Conversation; revision: number; snapshot: Conversation; pending: ChatEntry[] };
+/** A receipt is evidence of a past commit, not proof that its contents are
+ * still current. Only the most recent receipt is retained. It must not be used
+ * to acknowledge native results or delete audio. */
+export type JournalCommit = { id: string; revision: number; alreadyCommitted: boolean };
+const JOURNAL = 'conversation-journal:v1', COMMITTED = 'conversation-journal:last-committed:v1';
+const LIMIT = 10_000, MAX_BYTES = 64 * 1024 * 1024;
+const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+const natural = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+const uuid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
+function same(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, index) => same(item, b[index]));
+  if (!object(a) || !object(b)) return false;
+  const left = Object.keys(a).sort(), right = Object.keys(b).sort();
+  return left.length === right.length && left.every((key, index) => key === right[index] && same(a[key], b[key]));
+}
+function cleanConversation(value: unknown): Conversation {
+  if (!object(value) || Object.keys(value).some(key => !['entries', 'draft', 'attachedWork', 'revision'].includes(key)) || !Array.isArray(value.entries)
+    || value.entries.length > 120 || typeof value.draft !== 'string' || value.draft.length > 8000 || (value.revision !== undefined && !natural(value.revision))) throw new Error('La conversación requiere revisión; no se modificó.');
+  const normalized = canonicalConversationSnapshot(value as Conversation);
+  if (!same(value, normalized)) throw new Error('La conversación contiene datos que no se pueden conservar; no se modificó.');
+  return normalized;
+}
+function cleanPending(value: unknown): ChatEntry[] {
+  if (!Array.isArray(value) || value.length > LIMIT) throw new Error('Hay demasiados mensajes pendientes; conserva la fuente y exporta antes de continuar.');
+  const keys = new Set<string>();
+  return value.map(item => {
+    if (!object(item) || Object.keys(item).some(key => !['id', 'engine', 'role', 'state', 'text', 'at', 'localCancelled', 'replyTo', 'activities', 'transportText'].includes(key))) throw new Error('Un mensaje pendiente requiere revisión; no se modificó.');
+    const archived = archiveEntry(item); const { scope, ...entry } = archived;
+    if (item.transportText !== undefined && (typeof item.transportText !== 'string' || item.transportText.length > 32000)) throw new Error('El transporte de un mensaje no es válido.');
+    const normalized: ChatEntry = { ...entry, ...(typeof item.transportText === 'string' ? { transportText: item.transportText } : {}) };
+    if (!same(item, normalized)) throw new Error('Un mensaje pendiente contiene campos que no se pueden conservar.');
+    const key = JSON.stringify([entry.engine, scope, entry.id]);
+    if (keys.has(key)) throw new Error('La reserva contiene un mensaje duplicado.');
+    keys.add(key); return normalized;
+  });
+}
+function entryKey(value: ChatEntry): string { const entry = archiveEntry(value); return JSON.stringify([entry.engine, entry.scope, entry.id]); }
+function includeVisible(pending: ChatEntry[], visible: ChatEntry[]): ChatEntry[] {
+  const result = [...pending], byKey = new Map(result.map(entry => [entryKey(entry), entry])), seen = new Set<string>();
+  for (const entry of visible) {
+    const key = entryKey(entry), existing = byKey.get(key);
+    if (seen.has(key)) throw new Error('La ventana contiene mensajes duplicados; se conserva la fuente.');
+    seen.add(key);
+    if (existing && !same(existing, entry)) throw new Error('La ventana y el archivo pendiente difieren; se conservan ambas copias.');
+    if (!existing) { result.push(entry); byKey.set(key, entry); }
+  }
+  return cleanPending(result);
+}
+function includeBase(pending: ChatEntry[], base: Conversation | undefined, visible: ChatEntry[]): ChatEntry[] {
+  const result = [...pending], byKey = new Map(result.map(entry => [entryKey(entry), entry])), visibleKeys = new Set(visible.map(entryKey));
+  for (const entry of base?.entries ?? []) {
+    const key = entryKey(entry), existing = byKey.get(key);
+    if (!existing) { result.push(entry); byKey.set(key, entry); continue; }
+    if (!visibleKeys.has(key) && !same(entry, existing)) throw new Error('Un mensaje podado difiere de su base; se conservan ambas copias.');
+    if ((entry.replyTo && entry.replyTo !== existing.replyTo) || (entry.localCancelled && !existing.localCancelled)
+      || (entry.transportText !== undefined && entry.transportText !== existing.transportText)) throw new Error('El mensaje anterior contiene datos que no coinciden; se conservan ambas copias.');
+  }
+  return cleanPending(result);
+}
+function verifyRetainedTransport(pending: ChatEntry[], visible: ChatEntry[]): void {
+  const byKey = new Map(visible.map(entry => [entryKey(entry), entry]));
+  for (const entry of pending) {
+    if (entry.transportText !== undefined && byKey.get(entryKey(entry))?.transportText !== entry.transportText) throw new Error('El archivo aún no conserva el contexto de un mensaje podado; se conserva la fuente.');
+  }
+}
+function validate(value: unknown): ConversationJournal {
+  if (!object(value) || Object.keys(value).some(key => !['schema', 'id', 'baseRevision', 'base', 'revision', 'snapshot', 'pending'].includes(key))
+    || value.schema !== 'capri-conversation-journal/v1' || !uuid(value.id) || !natural(value.baseRevision) || value.baseRevision >= Number.MAX_SAFE_INTEGER
+    || value.revision !== value.baseRevision + 1) throw new Error('La reserva de conversación es inválida; no se eliminó.');
+  const base = value.base === undefined ? undefined : cleanConversation(value.base);
+  const snapshot = cleanConversation(value.snapshot), pending = cleanPending(value.pending);
+  if ((base?.revision ?? 0) !== value.baseRevision) throw new Error('La base reservada no coincide; no se eliminó.');
+  if (snapshot.revision !== value.revision) throw new Error('La revisión reservada no coincide; no se eliminó.');
+  if (includeVisible(pending, snapshot.entries).length !== pending.length) throw new Error('La reserva perdió mensajes visibles; no se eliminó.');
+  if (includeBase(pending, base, snapshot.entries).length !== pending.length) throw new Error('La reserva perdió mensajes anteriores; no se eliminó.');
+  verifyRetainedTransport(pending, snapshot.entries);
+  const result: ConversationJournal = { schema: value.schema, id: value.id, baseRevision: value.baseRevision, ...(base ? { base } : {}), revision: value.revision, snapshot, pending };
+  if (new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_BYTES) throw new Error('La reserva supera el límite; conserva y exporta la conversación.');
+  return result;
+}
+function transaction<T>(name: string, mode: IDBTransactionMode, work: (store: IDBObjectStore, done: (value: T) => void, fail: (error: Error) => void) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let db: IDBDatabase | undefined, tx: IDBTransaction | undefined, result: T, produced = false, settled = false, issue: Error | undefined;
+    const finish = (error?: Error) => { if (settled) return; settled = true; clearTimeout(timer); db?.close(); if (error) reject(error); else if (produced) resolve(result); else reject(new Error('No se confirmó la reserva.')); };
+    const fail = (error: Error) => { issue = error; if (!tx) { finish(error); return; } try { tx.abort(); } catch { finish(error); } };
+    const timer = setTimeout(() => { try { tx?.abort(); } catch { /* Already closed. */ } finish(new Error('La reserva no respondió. Las fuentes se conservan.')); }, 12000);
+    try {
+      const opening = indexedDB.open(name, 1);
+      opening.onupgradeneeded = () => { if (settled) { opening.transaction?.abort(); return; } opening.result.createObjectStore('conversation'); };
+      opening.onerror = () => finish(new Error('No se pudo abrir la conversación.'));
+      opening.onblocked = () => finish(new Error('Otra versión mantiene abierta la conversación.'));
+      opening.onsuccess = () => {
+        db = opening.result; if (settled) { db.close(); return; } db.onversionchange = () => db?.close();
+        try {
+          tx = db.transaction('conversation', mode); tx.oncomplete = () => finish();
+          tx.onabort = () => finish(issue ?? new Error('La reserva no se confirmó.'));
+          tx.onerror = () => { issue ??= new Error('La reserva no se confirmó.'); };
+          const store = tx.objectStore('conversation');
+          if (store.keyPath !== null || store.autoIncrement) throw new Error('El esquema cambió; los datos se conservan.');
+          work(store, value => { result = value; produced = true; }, fail);
+        } catch (error) { fail(error instanceof Error ? error : new Error('No se pudo iniciar la reserva.')); }
+      };
+    } catch (error) { finish(error instanceof Error ? error : new Error('No se pudo abrir la conversación.')); }
+  });
+}
+function safely(fail: (error: Error) => void, action: () => void) { try { action(); } catch (error) { fail(error instanceof Error ? error : new Error('No se confirmó la operación.')); } }
+function matchesBase(value: unknown, base: Conversation | undefined): boolean {
+  if (value === undefined || base === undefined) return value === undefined && base === undefined;
+  return same(cleanConversation(value), base);
+}
+
+export function createConversationJournal(options: { databaseName?: string; archive?: Archive } = {}) {
+  const name = options.databaseName ?? 'capri-ios-conversation', archive = options.archive ?? conversationArchive;
+  if (!name || name.length > 256) throw new Error('El almacén de conversación no es válido.');
+  async function pending(): Promise<ConversationJournal | undefined> {
+    return transaction(name, 'readonly', (store, done, fail) => {
+      const request = store.get(JOURNAL);
+      request.onsuccess = () => safely(fail, () => done(request.result === undefined ? undefined : validate(request.result)));
+    });
+  }
+  async function pendingForResume(): Promise<ConversationJournal | undefined> {
+    return transaction(name, 'readonly', (store, done, fail) => {
+      const request = store.get(JOURNAL);
+      request.onsuccess = () => safely(fail, () => {
+        if (request.result === undefined) { done(undefined); return; }
+        const journal = validate(request.result), current = store.get('current');
+        current.onsuccess = () => safely(fail, () => {
+          if (!matchesBase(current.result, journal.base)) throw new Error('La conversación cambió antes del archivo; la reserva se conserva.');
+          done(journal);
+        });
+      });
+    });
+  }
+  return {
+    /** Reserve the exact base and persist the entire snapshot plus every
+     * pending message before performing any archive write. */
+    async begin(input: { id: string; baseRevision: number; base?: Conversation; snapshot: Conversation; pending: ChatEntry[] }): Promise<ConversationJournal> {
+      const original = structuredClone(input), snapshot = cleanConversation(original.snapshot);
+      const base = original.base === undefined ? undefined : cleanConversation(original.base);
+      const pending = includeBase(includeVisible(cleanPending(original.pending), snapshot.entries), base, snapshot.entries);
+      const safe = validate({ schema: 'capri-conversation-journal/v1', ...original, snapshot, pending, revision: original.baseRevision + 1 });
+      return transaction(name, 'readwrite', (store, done, fail) => {
+        const previous = store.get(JOURNAL);
+        previous.onsuccess = () => safely(fail, () => {
+          if (previous.result !== undefined) {
+            const existing = validate(previous.result);
+            if (same(existing, safe)) {
+              const current = store.get('current');
+              current.onsuccess = () => safely(fail, () => {
+                if (!matchesBase(current.result, safe.base)) throw new Error('La conversación cambió; la reserva se conserva para revisión.');
+                done(existing);
+              }); return;
+            }
+            throw new Error('Hay una reserva pendiente; recupérala antes de guardar otra.');
+          }
+          const current = store.get('current');
+          current.onsuccess = () => safely(fail, () => {
+            if (!matchesBase(current.result, safe.base)) throw new Error('La conversación cambió; conserva el borrador y vuelve a cargarla.');
+            const marker = store.get(COMMITTED);
+            marker.onsuccess = () => safely(fail, () => {
+              if (marker.result !== undefined && (!object(marker.result) || Object.keys(marker.result).some(key => !['id', 'revision'].includes(key)) || !uuid(marker.result.id) || !natural(marker.result.revision))) throw new Error('La confirmación anterior no es válida; se conserva para revisión.');
+              if (object(marker.result) && marker.result.id === safe.id) throw new Error('Esta identidad ya se confirmó; no se reutilizó.');
+              store.put(safe, JOURNAL); done(safe);
+            });
+          });
+        });
+      });
+    },
+    pending,
+    /** Every batch is replayable. On quota, failure or termination the full
+     * journal remains durable; no second revision can be reserved. */
+    async resume(id: string): Promise<JournalCommit> {
+      if (!uuid(id)) throw new Error('La identidad de reserva no es válida.');
+      const journal = await pendingForResume();
+      if (!journal) {
+        return transaction(name, 'readonly', (store, done, fail) => {
+          const marker = store.get(COMMITTED);
+          marker.onsuccess = () => safely(fail, () => {
+            if (!object(marker.result) || marker.result.id !== id || !natural(marker.result.revision)) throw new Error('No encontré la reserva. No se asumió una confirmación.');
+            done({ id, revision: marker.result.revision, alreadyCommitted: true });
+          });
+        });
+      }
+      if (journal.id !== id) throw new Error('La reserva pertenece a otra operación.');
+      for (let offset = 0; offset < Math.max(1, journal.pending.length); offset += 500) {
+        await archive.upsert(journal.pending.slice(offset, offset + 500), undefined, offset + 500 >= journal.pending.length ? journal.snapshot.entries : undefined, journal.revision);
+      }
+      // The archive preserves the original timestamp on update and excludes
+      // transport aliases. Compare its actual durable projection before the
+      // journal can be released; a disagreement leaves both copies available.
+      for (let offset = 0; offset < journal.pending.length; offset += 500) {
+        if (!await archive.verifyExactBatch(journal.pending.slice(offset, offset + 500), journal.revision)) throw new Error('El archivo no conservó exactamente un mensaje; la reserva permanece para revisión.');
+      }
+      return transaction(name, 'readwrite', (store, done, fail) => {
+        const request = store.get(JOURNAL);
+        request.onsuccess = () => safely(fail, () => {
+          if (request.result === undefined) {
+            const marker = store.get(COMMITTED);
+            marker.onsuccess = () => safely(fail, () => {
+              if (!object(marker.result) || marker.result.id !== id || marker.result.revision !== journal.revision) throw new Error('La reserva ya no coincide; conserva las copias.');
+              done({ id, revision: journal.revision, alreadyCommitted: true });
+            }); return;
+          }
+          if (!same(validate(request.result), journal)) throw new Error('La reserva cambió; conserva las copias.');
+          const current = store.get('current');
+          current.onsuccess = () => safely(fail, () => {
+            if (!matchesBase(current.result, journal.base)) throw new Error('La conversación cambió durante el archivo; la reserva se conserva.');
+            store.put(journal.snapshot, 'current'); store.put({ id, revision: journal.revision }, COMMITTED); store.delete(JOURNAL);
+            done({ id, revision: journal.revision, alreadyCommitted: false });
+          });
+        });
+      });
+    },
+  };
+}
