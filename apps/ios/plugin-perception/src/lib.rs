@@ -424,6 +424,37 @@ mod tests {
         assert!(!valid_retained_voice(&record));
     }
     #[test]
+    fn discard_pending_record_survives_the_rust_to_swift_contract() {
+        let base = json!({
+            "id": "01234567-89ab-cdef-0123-456789abcdef",
+            "owner": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "destination": "chat", "locale": "es-MX", "kind": "speech",
+            "createdAt": 1, "state": "capturing"
+        });
+        for record in [
+            base.clone(),
+            json!({
+                "id": base["id"], "owner": base["owner"], "destination": "chat",
+                "locale": "es-MX", "kind": "speech", "createdAt": 1,
+                "state": "ready", "byteCount": 3, "sha256": "a".repeat(64)
+            }),
+        ] {
+            let parsed: RetainedVoiceRecord = serde_json::from_value(record.clone()).unwrap();
+            assert!(valid_retained_voice(&parsed));
+            let forwarded = json!({"record": parsed});
+            assert_eq!(forwarded["record"]["id"], record["id"]);
+            assert_eq!(forwarded["record"]["state"], record["state"]);
+            assert_eq!(forwarded["record"]["byteCount"], record["byteCount"]);
+            assert_eq!(forwarded["record"]["sha256"], record["sha256"]);
+            let response = json!({"ok": true, "discardPending": record});
+            assert!(response.get("retainedAudio").is_none());
+            assert!(response["discardPending"].is_object());
+        }
+        let mut injected = base;
+        injected["unexpected"] = json!(true);
+        assert!(serde_json::from_value::<RetainedVoiceRecord>(injected).is_err());
+    }
+    #[test]
     fn pairing_accepts_only_bounded_image_requests() {
         let mut image = request();
         assert!(valid_pairing_image(&image));

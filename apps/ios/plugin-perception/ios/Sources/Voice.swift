@@ -31,6 +31,9 @@ struct VoiceReply: Encodable {
     /// Present only for an explicitly requested, verified journal copy. The
     /// copy is not an acknowledgement that the draft was saved.
     var retainedAudio: VoiceRecoveryRecord? = nil
+    /// An explicitly authorized discard needs completion; this is not audio
+    /// that may be reattached or transcribed.
+    var discardPending: VoiceRecoveryRecord? = nil
     var failureDiagnostic: VoiceFailureDiagnostic? = nil
 
     static func failure(_ error: String, _ message: String) -> VoiceReply {
@@ -885,16 +888,13 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         guard let root = VoiceRetentionBinding.defaultRoot() else {
             return .failure("retention_unavailable", "No pude abrir el audio guardado.")
         }
-        let work = Task.detached(priority: .userInitiated) { () throws -> VoiceRecoveryRecord? in
-            let journal = VoiceRecoveryJournal(root: root)
-            guard let record = try journal.current() else { return nil }
-            if record.state == .ready {
-                let lease = try journal.acquire(record); defer { lease.close() }
-                try lease.verify()
-            }
-            return record
+        let work = Task.detached(priority: .userInitiated) { () throws -> VoiceRetainedInspection in
+            try VoiceRetainedInspection.inspect(VoiceRecoveryJournal(root: root))
         }
-        do { return VoiceReply(ok: true, retainedAudio: try await work.value) }
+        do {
+            let result = try await work.value
+            return VoiceReply(ok: true, retainedAudio: result.retainedAudio, discardPending: result.discardPending)
+        }
         catch {
             return .failure("retention_unavailable", "No pude verificar el audio guardado. Se conserva para revisión.")
         }
@@ -955,14 +955,16 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
 
     /// This operation is intended only for an explicit user discard. It is
     /// bound to the full record and refuses to race any live reader or capture.
-    func discardRetained(_ expected: VoiceRecoveryRecord) -> VoiceReply {
+    func discardRetained(_ expected: VoiceRecoveryRecord) async -> VoiceReply {
         guard sessionID == nil, !busy, !startLatch.active, !retentionLatch.active,
               !cancellationBarrier.active, pendingCancellation == nil,
               let root = VoiceRetentionBinding.defaultRoot() else {
             return .failure("busy", "Termina el dictado actual antes de descartarlo.")
         }
+        busy = true; startLatch.begin()
+        defer { startLatch.end(); busy = false }
         do {
-            try VoiceRecoveryJournal(root: root).remove(expected)
+            try await Task.detached { try VoiceRecoveryJournal(root: root).discardDurably(expected) }.value
             return VoiceReply(ok: true)
         } catch {
             return .failure("retention_unconfirmed", "No pude confirmar que se descartó el audio. Se conserva para revisión.")

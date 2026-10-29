@@ -124,7 +124,7 @@ final class PerceptionPlugin: Plugin {
             invoke.resolve(VoiceReply.failure("invalid_voice_retention", "El audio guardado no es válido.")); return
         }
         Task { @MainActor in
-            if #available(iOS 26.0, *) { invoke.resolve(controller().discardRetained(args.record)) }
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().discardRetained(args.record)) }
             else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
         }
     }

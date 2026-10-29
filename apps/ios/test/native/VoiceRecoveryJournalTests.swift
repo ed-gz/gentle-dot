@@ -33,6 +33,10 @@ struct VoiceRecoveryJournalTests {
         check(reject { _ = try journal.reserve(id: "../other", owner: owner, destination: "chat", locale: "es-MX", kind: .speech) })
         let (reserved, file) = try journal.reserve(id: id, owner: owner, destination: "session:" + String(repeating: "a", count: 64), locale: "es-MX", kind: .speech)
         check(reserved.state == .capturing && reserved.owner == owner && reserved.destination.hasPrefix("session:"))
+        var rustCapture = try JSONSerialization.jsonObject(with: JSONEncoder().encode(reserved)) as! [String: Any]
+        rustCapture["byteCount"] = NSNull(); rustCapture["sha256"] = NSNull()
+        check(try JSONDecoder().decode(VoiceRecoveryRecord.self, from: JSONSerialization.data(withJSONObject: rustCapture)) == reserved,
+            "Swift accepts Rust's explicit optional null fields on a capturing record")
         check(try second.current() == reserved, "relaunch sees the bound but unconfirmed capture")
         check(reject { _ = try second.acquire(reserved) }, "incomplete audio cannot be opened as ready")
         check(reject { _ = try second.publish(reserved) }, "missing audio cannot be published")
@@ -43,6 +47,10 @@ struct VoiceRecoveryJournalTests {
         let ready = try journal.publish(reserved)
         let reloadedReady = try second.current()
         check(ready.state == .ready && reloadedReady == ready)
+        let readyInspection = try VoiceRetainedInspection.inspect(second)
+        let readyJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(readyInspection)) as! [String: Any]
+        check(readyInspection.retainedAudio == ready && readyInspection.discardPending == nil && readyJSON["discardPending"] == nil && readyJSON["retainedAudio"] != nil,
+            "normal ready audio retains the existing encoded contract")
         let binding = VoiceRetentionBinding(id: id, owner: owner, destination: reserved.destination, root: root)
         check(binding.matches(ready) && VoiceRetentionBinding.validDestination("chat"))
         check(!VoiceRetentionBinding.validDestination("session:../bad") && !VoiceRetentionBinding.validDestination(nil))
@@ -60,6 +68,7 @@ struct VoiceRecoveryJournalTests {
         // A writer outside the journal can still replace the private file; the
         // post-analysis verification must detect that before any future ACK.
         try Data([3, 2, 1]).write(to: file, options: .atomic)
+        check(reject { _ = try VoiceRetainedInspection.inspect(second) }, "inspection never advertises changed ready bytes")
         check(reject { try lease.verify() }, "a replaced file cannot retain the acquired identity")
         lease.close()
         check(reject { _ = try second.acquire(ready) }, "changed bytes cannot be acquired as the recorded audio")
@@ -101,6 +110,10 @@ struct VoiceRecoveryJournalTests {
         check(try discard.pendingDiscard() == discardReady, "an exact durable intent remains visible for recovery")
         let pendingView = try discard.inspectWithDiscard()
         check(pendingView.record == nil && pendingView.discardPending == discardReady, "atomic inspection distinguishes pending discard from an empty journal")
+        let interruptedView = try VoiceRetainedInspection.inspect(discard)
+        let pendingJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(interruptedView)) as! [String: Any]
+        check(interruptedView.retainedAudio == nil && interruptedView.discardPending == discardReady && pendingJSON["retainedAudio"] == nil && pendingJSON["discardPending"] != nil,
+            "the plugin contract exposes pending discard without advertising transcribable audio")
         check(reject { _ = try discard.current() } && !fm.fileExists(atPath: discardFile.path), "inspection must not call an unfinished discard empty")
         check(reject { _ = try discard.acquire(discardReady) } && reject { try discard.releaseExact(discardReady) }, "other journal operations cannot bypass a pending discard")
         check(reject { _ = try discard.reserve(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-MX", kind: .speech) }, "pending discard blocks a new reservation")
@@ -123,6 +136,8 @@ struct VoiceRecoveryJournalTests {
         check(try discard.pendingDiscard() == nil && !fm.fileExists(atPath: discardFile.path), "exact recovery completes the discard")
         let emptyView = try discard.inspectWithDiscard()
         check(emptyView.record == nil && emptyView.discardPending == nil, "completed discard inspects as empty")
+        let emptyInspection = try VoiceRetainedInspection.inspect(discard)
+        check(emptyInspection.retainedAudio == nil && emptyInspection.discardPending == nil, "empty inspection remains backward compatible")
         let (newCapture, newFile) = try discard.reserve(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-MX", kind: .speech)
         try Data([12]).write(to: newFile)
         check(reject { try discard.discardDurably(discardReady) }, "a stale retry cannot remove a new capture")
