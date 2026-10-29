@@ -49,6 +49,51 @@ test('send displays exact target and text before one mutation, then correlates a
   assert.equal(result.status, 'queued'); assert.equal(result.completed, false); assert.equal(result.clientMessageId, reviewed.clientMessageId);
   const sends = f.calls.filter(call => call.body && JSON.parse(call.body).action === 'prompt'); assert.equal(sends.length, 1); assert.equal(JSON.parse(sends[0].body).clientMessageId, result.receipt.id);
 });
+test('legacy delivered receipts stay unconfirmed despite identical text from another client', async () => {
+  for (const evidence of [undefined, 'correlated-v0', true]) {
+    const f = fixture({ inspect: (calls, value) => {
+      if (!calls.some(call => call.body && JSON.parse(call.body).action === 'prompt')) return value;
+      return { ...value, messages: [{ id:'other-client', role:'user', content:'Analyze deploy risks' }], deliveries: value.deliveries.map(receipt => ({...receipt,status:'delivered',evidence,deliveredAt:'2026-10-27T20:01:00Z'})) };
+    } });
+    const result = await f.client.send({ ...target, text: 'Analyze deploy risks' }, context(async () => true));
+    assert.equal(result.status, 'unconfirmed');
+    assert.equal(result.receipt.status, 'unconfirmed');
+    assert.equal(result.receipt.evidence, undefined);
+    assert.equal(result.receipt.deliveredAt, undefined);
+    assert.match(result.message, /no confirma que Pi haya consumido/);
+    assert.equal(f.calls.filter(call => call.body && JSON.parse(call.body).action === 'prompt').length, 1);
+    const read = await f.client.read(target);
+    assert.equal(read.deliveries[0].status, 'unconfirmed');
+  }
+});
+test('only an exact correlated receipt confirms delivery, not task completion', async () => {
+  const f = fixture({ inspect: (calls, value) => calls.some(call => call.body && JSON.parse(call.body).action === 'prompt')
+    ? { ...value, deliveries: value.deliveries.map(receipt => ({...receipt,status:'delivered',evidence:'correlated-v1',deliveredAt:'2026-10-27T20:01:00Z'})) }
+    : value });
+  const result = await f.client.send({ ...target, text: 'Analyze deploy risks' }, context(async () => true));
+  assert.equal(result.status, 'delivered'); assert.equal(result.receipt.evidence, 'correlated-v1');
+  assert.equal(result.completed, false); assert.match(result.message, /no confirma que el trabajo haya terminado/);
+});
+test('a replacement Pi process cannot confirm a prior send', async () => {
+  const f = fixture({ inspect: (calls, value) => calls.some(call => call.body && JSON.parse(call.body).action === 'prompt')
+    ? { ...value, instanceId:'new-process', deliveries:value.deliveries.map(receipt => ({...receipt,status:'delivered',evidence:'correlated-v1'})) }
+    : value });
+  const result = await f.client.send({ ...target, text: 'Analyze deploy risks' }, context(async () => true));
+  assert.equal(result.status, 'unconfirmed'); assert.equal(result.receipt, undefined);
+  assert.equal(f.calls.filter(call => call.body && JSON.parse(call.body).action === 'prompt').length, 1);
+});
+test('a connection changed during post-ack inspection stays unconfirmed', async () => {
+  let current = conn, sends = 0;
+  const client = createDesktopSessionClient({ getConnection: () => current, request: async request => {
+    const payload = request.body ? JSON.parse(request.body) : undefined;
+    if (!payload) return { status:200, headers:{}, body:JSON.stringify({available:true,sessions:[session]}) };
+    if (payload.action === 'prompt') { sends++; return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:target.sessionId,instanceId:'instance-1'})}; }
+    if (sends) current = {...conn, deviceId:'new-device'};
+    return {status:200,headers:{},body:JSON.stringify(page())};
+  } });
+  const result = await client.send({...target,text:'Analyze deploy risks'},context(async () => true));
+  assert.equal(result.status, 'unconfirmed'); assert.match(result.message, /host original/); assert.equal(sends, 1);
+});
 test('missing/denied approval, changed connection and replaced Pi process prevent mutation', async () => {
   for (const ask of [undefined, async () => false]) {
     const f = fixture(); await assert.rejects(f.client.send({ ...target, text: 'Do work' }, context(ask)), /no fue aprobada/);

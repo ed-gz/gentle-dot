@@ -4,7 +4,7 @@ import type { Tool, ToolContext } from './agent-tools.ts';
 
 export type DesktopConnection = { url: string; token: string; deviceId?: string };
 export type DesktopSession = { paneId: string; sessionId: string; label: string; state: string; connected: boolean; capabilities: { inspect: boolean; prompt: boolean; abort: boolean; deliveryReceipts: boolean } };
-export type DesktopDelivery = { id: string; status: 'accepted' | 'queued' | 'delivered' | 'unconfirmed'; acceptedAt: string; deliveredAt?: string; preview: string; deliverAs: 'steer' | 'followUp' };
+export type DesktopDelivery = { id: string; status: 'accepted' | 'queued' | 'delivered' | 'unconfirmed'; acceptedAt: string; deliveredAt?: string; evidence?: 'correlated-v1'; preview: string; deliverAs: 'steer' | 'followUp' };
 export type DesktopPage = { sessionId: string; instanceId: string; messages: { id: string; role: string; text: string }[]; deliveries: DesktopDelivery[]; question?: { id: string; kind: string; title: string; message: string; expiresAt: string; action?: string; fingerprint?: string; requiresConfirmation: boolean; options?: { id: string; label: string; description?: string; effect?: string; consequence?: string }[] }; history: { hasEarlier: boolean; before?: string } };
 export type DesktopDependencies = { getConnection: () => DesktopConnection | undefined; request?: (request: HTTPSRequest) => Promise<HTTPSResponse> };
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -45,7 +45,8 @@ export function parseDesktopPage(value: unknown, sessionId: string): DesktopPage
   if (value.deliveries !== undefined && (!Array.isArray(value.deliveries) || value.deliveries.length > 500)) throw new Error('Los recibos de sesión son inválidos.');
   for (const receipt of (value.deliveries ?? []) as unknown[]) {
     if (!object(receipt) || !string(receipt.id, 96) || !['accepted', 'queued', 'delivered', 'unconfirmed'].includes(receipt.status as string) || !string(receipt.acceptedAt, 80) || !Number.isFinite(Date.parse(receipt.acceptedAt)) || !string(receipt.preview, 2000, false) || !['steer','followUp'].includes(receipt.deliverAs as string) || (receipt.deliveredAt !== undefined && (!string(receipt.deliveredAt, 80) || !Number.isFinite(Date.parse(receipt.deliveredAt))))) throw new Error('El host devolvió una confirmación de entrega inválida.');
-    deliveries.push({ id: receipt.id, status: receipt.status as DesktopDelivery['status'], acceptedAt: receipt.acceptedAt, ...(typeof receipt.deliveredAt === 'string' ? { deliveredAt: receipt.deliveredAt } : {}), preview: receipt.preview, deliverAs: receipt.deliverAs as DesktopDelivery['deliverAs'] });
+    const verified = receipt.status === 'delivered' && receipt.evidence === 'correlated-v1';
+    deliveries.push({ id: receipt.id, status: receipt.status === 'delivered' && !verified ? 'unconfirmed' : receipt.status as DesktopDelivery['status'], acceptedAt: receipt.acceptedAt, ...(verified && typeof receipt.deliveredAt === 'string' ? { deliveredAt: receipt.deliveredAt } : {}), ...(verified ? { evidence: 'correlated-v1' as const } : {}), preview: receipt.preview, deliverAs: receipt.deliverAs as DesktopDelivery['deliverAs'] });
   }
   const history = object(value.history) ? value.history : {};
   const page: DesktopPage = { sessionId, instanceId: value.instanceId, messages, deliveries, history: { hasEarlier: history.hasEarlier === true, ...(string(history.before, 256) ? { before: history.before } : {}) } };
@@ -136,8 +137,15 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       catch { return { status: 'uncertain', ...target, clientMessageId, message: 'El host no confirmó la recepción. Consulta session_read y busca este clientMessageId en deliveries; no repitas automáticamente.' }; }
       if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== before.instanceId) return { status: 'uncertain', ...target, clientMessageId, message: 'La confirmación no corresponde a esta sesión. No se considera entregado ni completado.' };
       let receipt: DesktopDelivery | undefined;
-      try { receipt = (await inspect(conn, target, 1)).deliveries.find(item => item.id === clientMessageId); } catch { /* Accepted is weaker than consumed; preserve that distinction. */ }
-      return { status: receipt?.status ?? 'accepted', ...target, clientMessageId, ...(receipt ? { receipt } : {}), completed: false, message: 'La aceptación confirma recepción; sólo delivered confirma consumo por Pi. Consulta la sesión para conocer el resultado.' };
+      try {
+        const observed = await inspect(conn, target, 1);
+        if (observed.instanceId !== before.instanceId) return { status: 'unconfirmed', ...target, clientMessageId, completed: false, message: 'Pi cambió después de aceptar la solicitud; revisa la sesión antes de reintentar.' };
+        receipt = observed.deliveries.find(item => item.id === clientMessageId);
+      } catch {
+        try { unchanged(conn); } catch { return { status: 'unconfirmed', ...target, clientMessageId, completed: false, message: 'La conexión cambió después de aceptar la solicitud; revisa el host original antes de reintentar.' }; }
+        // Accepted is weaker than consumed; preserve that distinction.
+      }
+      return { status: receipt?.status ?? 'accepted', ...target, clientMessageId, ...(receipt ? { receipt } : {}), completed: false, message: receipt?.status === 'delivered' ? 'La sesión confirmó la entrega con identidad correlacionada. Esto no confirma que el trabajo haya terminado.' : 'La recepción no confirma que Pi haya consumido la instrucción. Revisa la sesión antes de reintentar.' };
     },
     async abort(args: unknown, context: ToolContext) {
       const target = identity(args); const conn = connection(); const before = await inspect(conn, target, 1);
