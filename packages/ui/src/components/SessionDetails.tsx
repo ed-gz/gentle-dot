@@ -472,6 +472,10 @@ export function SessionDetails({
 					) : null}
 					{metadata ? (
 						<>
+							{metadata.gentleReview ? <>
+								<dt>Revisión Gentle</dt>
+								<dd>{stale ? "Última lectura: activa" : "Activa en esta sesión"}</dd>
+							</> : null}
 							<dt>Modelo principal</dt>
 							<dd>
 								{metadata?.model ? (

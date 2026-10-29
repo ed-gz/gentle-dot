@@ -278,6 +278,8 @@ export interface AgentMetadata {
 	skills?: { name: string; description?: string }[];
 	/** The currently configured profile; model reports the actual session runtime. */
 	profile?: { name: string; source: "global" | "local" | "repo" | "session" };
+	/** Evidence for this particular tool only; does not identify the launcher. */
+	gentleReview?: { tool: "gentle_review"; evidence: "source-hash" };
 	mcp?: { name: string; status: "configured" | "disabled" | "available"; tools: number }[];
 }
 
@@ -292,6 +294,8 @@ export function parseAgentMetadata(value: unknown): AgentMetadata | undefined {
 		typeof value === "string" && value.length > 0 && value.length <= 200;
 	const number = (value: unknown): value is number =>
 		typeof value === "number" && Number.isFinite(value) && value >= 0;
+	if (item.source === "live" && object(item.gentleReview) && item.gentleReview.tool === "gentle_review" && item.gentleReview.evidence === "source-hash")
+		result.gentleReview = { tool: "gentle_review", evidence: "source-hash" };
 	if (object(item.model) && text(item.model.id) && text(item.model.name) && text(item.model.provider))
 		result.model = {
 			id: item.model.id,

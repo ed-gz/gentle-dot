@@ -147,6 +147,15 @@ describe("session information", () => {
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 
+	it("shows only a reported active Gentle review integration without asserting the launcher", () => {
+		render(<SessionDetails session={session} conversation={{ ...conversation, metadata: {
+			version: 1, source: "live", gentleReview: { tool: "gentle_review", evidence: "source-hash" },
+		} }} stale={false} close={() => {}} />);
+		expect(screen.getByText("Revisión Gentle")).toBeVisible();
+		expect(screen.getByText("Activa en esta sesión")).toBeVisible();
+		expect(screen.queryByText("Gentle Shell")).not.toBeInTheDocument();
+	});
+
 	it("labels only the explicitly selected session profile as active", () => {
 		render(
 			<SessionDetails

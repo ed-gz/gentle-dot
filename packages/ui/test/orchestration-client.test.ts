@@ -81,6 +81,11 @@ describe("agent HTTP transport", () => {
 		).toMatchObject({ source: "history", model: { source: "live" }, context: { source: "live" } });
 	});
 	it("accepts only public metadata and leaves unknown usage unknown", () => {
+		expect(parseAgentMetadata({ version: 1, source: "live", gentleReview: { tool: "gentle_review", evidence: "source-hash", token: "secret" } })).toEqual({
+			version: 1, source: "live", gentleReview: { tool: "gentle_review", evidence: "source-hash" },
+		});
+		expect(parseAgentMetadata({ version: 1, source: "history", gentleReview: { tool: "gentle_review", evidence: "source-hash" } })).toEqual({ version: 1, source: "history" });
+		expect(parseAgentMetadata({ version: 1, source: "live", gentleReview: { tool: "gentle_review", evidence: "unchecked" } })).toEqual({ version: 1, source: "live" });
 		expect(
 			parseAgentMetadata({
 				version: 1,

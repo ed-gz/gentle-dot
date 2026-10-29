@@ -1,5 +1,6 @@
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 import type { Model } from "@earendil-works/pi-ai";
 import {
 	createAgentSession,
@@ -21,6 +22,32 @@ import {
 	publicSessionMetadata,
 } from "../src/orchestration/session-info.ts";
 import { tempDir } from "./helpers.ts";
+
+it("reports only the active version-pinned Gentle review integration, not the launcher", () => {
+	const dir = tempDir();
+	const verified = createRequire(import.meta.url).resolve("gentle-pi/extensions/gentle-ai.ts");
+	const copied = join(dir, "review-copy.ts");
+	writeFileSync(copied, readFileSync(verified));
+	const other = join(dir, "unverified.ts");
+	writeFileSync(other, "export const different = true;\n");
+	const ctx = { cwd: dir, sessionManager: { getSessionId: () => "session" } } as ExtensionContext;
+	let active = ["gentle_review"];
+	let source = verified;
+	const pi = {
+		getActiveTools: () => active,
+		getAllTools: () => [{ name: "gentle_review", sourceInfo: { path: source } }],
+	} as unknown as ExtensionAPI;
+	const read = createSessionMetadata(pi, ctx, { PI_CODING_AGENT_DIR: dir });
+	expect(read()?.gentleReview).toEqual({ tool: "gentle_review", evidence: "source-hash" });
+	expect(JSON.stringify(read())).not.toContain(verified);
+	active = []; expect(read()?.gentleReview).toBeUndefined();
+	active = ["gentle_review"]; source = other; expect(read()?.gentleReview).toBeUndefined();
+	source = copied; expect(read()?.gentleReview).toEqual({ tool: "gentle_review", evidence: "source-hash" });
+	const changed = readFileSync(copied); changed[changed.length - 1] = changed.at(-1)! ^ 1; writeFileSync(copied, changed);
+	expect(read()?.gentleReview).toBeUndefined();
+	expect(publicSessionMetadata({ version: 1, source: "history", gentleReview: { tool: "gentle_review", evidence: "source-hash" } })?.gentleReview).toBeUndefined();
+	expect(publicSessionMetadata({ version: 1, source: "live", gentleReview: { tool: "gentle_review", evidence: "unchecked" } })?.gentleReview).toBeUndefined();
+});
 
 it("preserves only documented resource arguments, never credentials or another session selector", () => {
 	expect(

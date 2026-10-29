@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { record } from "./herdr.ts";
+import { isNativeReviewSource } from "./review-consent.ts";
 
 export interface SessionMetadata {
 	version: 1;
@@ -14,6 +15,8 @@ export interface SessionMetadata {
 	tools?: { active: string[]; available: number };
 	skills?: { name: string; description?: string }[];
 	profile?: { name: string; source: "session" | "global" | "local" | "repo" };
+	/** One verified integration, not a claim about the launcher or other tools. */
+	gentleReview?: { tool: "gentle_review"; evidence: "source-hash" };
 	/** Available means exposed tools, not a verified live transport connection. */
 	mcp?: { name: string; status: "configured" | "disabled" | "available"; tools: number }[];
 }
@@ -43,6 +46,9 @@ export function publicSessionMetadata(value: unknown): SessionMetadata | undefin
 	if (!record(value) || value.version !== 1) return undefined;
 	const result: SessionMetadata = { version: 1 };
 	if (value.source === "live" || value.source === "history") result.source = value.source;
+	if (value.source === "live" && record(value.gentleReview) &&
+		value.gentleReview.tool === "gentle_review" && value.gentleReview.evidence === "source-hash")
+		result.gentleReview = { tool: "gentle_review", evidence: "source-hash" };
 	const model = value.model;
 	if (record(model) && name(model.id) && name(model.provider))
 		result.model = {
@@ -192,10 +198,33 @@ export function sessionProfilePaths(env: NodeJS.ProcessEnv) {
 /** Runtime selectors only; a changed global default does not change an existing session's profile. */
 export function createSessionMetadata(pi: ExtensionAPI, ctx: ExtensionContext, env: NodeJS.ProcessEnv) {
 	const paths = sessionProfilePaths(env);
+	let reviewCache: { path: string; fingerprint: string; verified: boolean } | undefined;
+	const reviewSource = (path: unknown): boolean => {
+		if (typeof path !== "string") return false;
+		try {
+			const fingerprint = () => {
+				const file = statSync(path);
+				return file.isFile() && file.size <= 1024 * 1024
+					? `${file.dev}:${file.ino}:${file.size}:${file.mtimeMs}:${file.ctimeMs}` : undefined;
+			};
+			const before = fingerprint();
+			if (!before) return false;
+			if (reviewCache?.path === path && reviewCache.fingerprint === before) return reviewCache.verified;
+			const verified = isNativeReviewSource(path);
+			if (fingerprint() !== before) { reviewCache = undefined; return false; }
+			reviewCache = { path, fingerprint: before, verified };
+			return verified;
+		} catch { reviewCache = undefined; return false; }
+	};
 	return () => {
 		// Optional runtime APIs can fail independently during reload or with an older SDK.
 		const all = readOptional(() => pi.getAllTools?.()) ?? [];
 		const active = readOptional(() => pi.getActiveTools?.());
+		// The terminal provider is not the agent runtime. Publish only evidence
+		// of the exact active, version-pinned review integration, never a guess
+		// that the enclosing process was launched by Gentle Shell.
+		const gentleReview = active?.includes("gentle_review") && all.some(tool =>
+			tool.name === "gentle_review" && reviewSource(tool.sourceInfo?.path));
 		const commands = readOptional(() => pi.getCommands?.());
 		const usage = readOptional(() => ctx.getContextUsage?.());
 		const model = readOptional(() => ctx.model);
@@ -249,6 +278,7 @@ export function createSessionMetadata(pi: ExtensionAPI, ctx: ExtensionContext, e
 		return publicSessionMetadata({
 			version: 1,
 			source: "live",
+			...(gentleReview ? { gentleReview: { tool: "gentle_review", evidence: "source-hash" } } : {}),
 			...(model
 				? {
 						model: {
