@@ -138,17 +138,68 @@ test('unsupported versions stop after initialization without advertising readine
     assert.equal(f.journal.length, 0);
   }
 });
-test('a modern-only server rejecting legacy initialization does not trigger a tool call or fallback', async () => {
+test('a modern-only server must confirm discovery before exposing tools', async () => {
   const f = fixture(); let requests = 0;
   f.services.request = async request => {
     requests++;
     const rpc = JSON.parse(request.body);
-    assert.equal(rpc.method, 'initialize');
+    assert.equal(rpc.method, requests === 1 ? 'initialize' : 'server/discover');
     return { status: 400, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: rpc.id,
-      error: { code: -32602, message: 'Missing per-request metadata' } }) };
+      error: { code: requests === 1 ? -32602 : -32021, message: 'Not available' } }) };
   };
-  await assert.rejects(discoverMCPTools(id, f.services), /HTTP 400/);
-  assert.equal(requests, 1); assert.equal(f.journal.length, 0);
+  await assert.rejects(discoverMCPTools(id, f.services), /rechazó la negociación/);
+  assert.equal(requests, 2); assert.equal(f.journal.length, 0);
+});
+
+function modernFixture() {
+  const f = fixture(), requests = [], original = f.services.request; let omitCallResultType = false;
+  f.services.request = async request => {
+    const rpc = JSON.parse(request.body); requests.push({ request, rpc });
+    if (rpc.method === 'initialize') return { status: 400, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc:'2.0', id:rpc.id, error:{code:-32020,message:'missing headers'} }) };
+    assert.equal(request.headers['MCP-Protocol-Version'], '2026-07-28');
+    assert.equal(request.headers['Mcp-Method'], rpc.method);
+    assert.equal(request.headers['Mcp-Session-Id'], undefined);
+    assert.equal(rpc.params._meta['io.modelcontextprotocol/protocolVersion'], '2026-07-28');
+    assert.deepEqual(rpc.params._meta['io.modelcontextprotocol/clientCapabilities'], {});
+    if (rpc.method === 'server/discover') return { status:200, headers:{'content-type':'application/json'}, body:JSON.stringify({ jsonrpc:'2.0', id:rpc.id, result:{ resultType:'complete', supportedVersions:['2026-07-28'], capabilities:{tools:{}}, ttlMs:0, cacheScope:'private' } }) };
+    if (rpc.method === 'tools/call') assert.equal(request.headers['Mcp-Name'], rpc.params.name);
+    const response = await original(request);
+    const message = JSON.parse(response.body);
+    if (message.result && message.result.resultType === undefined && !(rpc.method === 'tools/call' && omitCallResultType)) message.result.resultType = 'complete';
+    return { ...response, body:JSON.stringify(message) };
+  };
+  return { ...f, requests, omitCallResultType: () => { omitCallResultType = true; } };
+}
+test('modern-only MCP preserves review, catalog refresh, journal and exact request metadata', async () => {
+  const f = modernFixture(), [tool] = await discoverMCPTools(id, f.services);
+  assert.deepEqual(f.requests.slice(0, 3).map(item => item.rpc.method), ['initialize', 'server/discover', 'tools/list']);
+  assert.deepEqual(await tool.execute({text:'mensaje'}, context(async () => false)), {executed:false,approved:false});
+  assert.equal(f.journal.length, 0); assert.equal(f.requests.some(item => item.rpc.method === 'tools/call'), false);
+  let review;
+  const result = await tool.execute({text:'mensaje'}, context(async value => { review = JSON.parse(value.details); return true; }));
+  assert.deepEqual(review.arguments, {text:'mensaje'}); assert.equal(review.endpoint, base().endpoint);
+  assert.equal(result.confirmed, true); assert.equal(f.journal[0].state, 'succeeded');
+  assert.equal(f.requests.filter(item => item.rpc.method === 'tools/call').length, 1);
+  assert.equal(f.requests.filter(item => item.rpc.method === 'tools/list').length, 2);
+  assert.equal(f.requests.some(item => item.rpc.method === 'notifications/initialized'), false);
+});
+test('modern input_required, missing and unknown result types stay uncertain and cannot trigger replay', async () => {
+  for (const resultType of ['input_required', 'unknown', undefined]) {
+    const f = modernFixture(); f.setCallResult({resultType, content:[], inputRequests:{}});
+    if (resultType === undefined) f.omitCallResultType();
+    const [tool] = await discoverMCPTools(id, f.services);
+    await assert.rejects(tool.execute({text:'irreversible'}, context(async () => true)), /sin confirmar/);
+    assert.equal(f.journal[0].state, 'uncertain');
+    await assert.rejects(tool.execute({text:'irreversible'}, context(async () => true)), /replay blocked/);
+    assert.equal(f.requests.filter(item => item.rpc.method === 'tools/call').length, 1);
+  }
+});
+test('modern unsupported header annotations never reach approval or the network call', async () => {
+  const f = modernFixture(); f.setInputSchema({type:'object',properties:{region:{type:'string','x-mcp-header':'Region'}}});
+  const [tool] = await discoverMCPTools(id, f.services); let reviewed = false;
+  await assert.rejects(tool.execute({region:'mx'}, context(async () => { reviewed = true; return true; })), /no compatibles/);
+  assert.equal(reviewed, false); assert.equal(f.journal.length, 0);
+  assert.equal(f.requests.some(item => item.rpc.method === 'tools/call'), false);
 });
 test('MCP 2025-03-26 accepts correlated batches while preserving review and journal ordering', async () => {
   const f = fixture('2025-03-26'); f.setBatchResponses(true);

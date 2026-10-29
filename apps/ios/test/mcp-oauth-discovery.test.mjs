@@ -32,6 +32,38 @@ test('MCP discovery follows the challenged resource and issuer with no existing 
   assert.equal(f.calls[1].method, 'GET');
 });
 
+test('modern-only protected MCP can issue an OAuth challenge after a validated discovery probe', async () => {
+  const f = fixture();
+  const request = async input => {
+    if (input.url === resource && JSON.parse(input.body).method === 'initialize') {
+      f.calls.push(input);
+      return {status:400, headers:{'content-type':'application/json'}, body:JSON.stringify({jsonrpc:'2.0',id:'capri-oauth-discovery',error:{code:-32020,message:'headers'}})};
+    }
+    if (input.url === resource) {
+      assert.equal(input.headers['Mcp-Method'], 'server/discover');
+      assert.equal(input.headers['MCP-Protocol-Version'], '2026-07-28');
+      assert.equal(JSON.parse(input.body).params._meta['io.modelcontextprotocol/protocolVersion'], '2026-07-28');
+    }
+    return f.request(input);
+  };
+  const found = await discoverMCPAuthorization(resource, signal(), request);
+  assert.deepEqual(found.scopes, ['files:read']);
+  assert.deepEqual(f.calls.slice(0,2).map(call => JSON.parse(call.body).method), ['initialize','server/discover']);
+  assert.ok(f.calls.every(call => !Object.hasOwn(call.headers, 'Authorization')));
+});
+
+test('modern OAuth probe refuses ambiguous errors, mismatched IDs and server failures without bypassing authorization', async () => {
+  for (const response of [
+    {status:400, headers:{}, body:''},
+    {status:400, headers:{}, body:JSON.stringify({jsonrpc:'2.0',id:'other',error:{code:-32020,message:'headers'}})},
+    {status:500, headers:{}, body:''},
+  ]) {
+    let calls = 0;
+    await assert.rejects(discoverMCPAuthorization(resource, signal(), async () => { calls++; return response; }));
+    assert.equal(calls,1);
+  }
+});
+
 test('resource path/root and OAuth/OIDC discovery fall back in documented order', async () => {
   const f = fixture({
     [resource]: { status: 405, headers: {}, body: '' },

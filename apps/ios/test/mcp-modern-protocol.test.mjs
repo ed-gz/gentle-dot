@@ -62,7 +62,7 @@ test('only explicit legacy 400 outcomes can fall back; modern errors and auth ne
 
 test('intermediate MRTR is distinct from completed result, and unknown result types fail closed', () => {
   assert.equal(classifyModernResult({ resultType: 'complete', content: [] }), 'complete');
-  assert.equal(classifyModernResult({ content: [] }), 'complete');
+  assert.throws(() => classifyModernResult({ content: [] }));
   assert.equal(classifyModernResult({ resultType: 'input_required', inputRequests: {} }), 'input_required');
   for (const result of [null, [], { resultType: 'pending' }, { resultType: null }]) assert.throws(() => classifyModernResult(result));
 });

@@ -1,5 +1,6 @@
 import { httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { validEndpoint } from './external-connections.ts';
+import { classifyModernDiscovery, legacyHandshakeRejectedAsModern, modernMCPRequest } from './mcp-modern-protocol.ts';
 
 export type MCPAuthorizationServer = {
   resource: string;
@@ -80,11 +81,20 @@ export async function discoverMCPAuthorization(resourceInput: string, signal: Ab
   signal.throwIfAborted();
   // A GET may open an indefinite SSE stream. An unauthenticated initialize has
   // a finite response and cannot invoke a remote tool.
-  const probe = await request({ url: resource, method: 'POST', headers: { Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json' },
+  let probe = await request({ url: resource, method: 'POST', headers: { Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 'capri-oauth-discovery', method: 'initialize', params: {
       protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'Capri iOS', version: '0.1.0' },
     } }) });
   signal.throwIfAborted();
+  if (legacyHandshakeRejectedAsModern(probe, 'capri-oauth-discovery')) {
+    // Some modern-only resources validate headers before issuing a challenge.
+    // The probe has no credential and cannot invoke a tool.
+    const modern = modernMCPRequest('capri-oauth-modern-discovery', 'server/discover');
+    probe = await request({ url: resource, ...modern });
+    signal.throwIfAborted();
+    if (probe.status === 200 && classifyModernDiscovery(probe, 'capri-oauth-modern-discovery') !== 'modern') throw new Error('El servidor no confirmó el descubrimiento MCP moderno.');
+    if (![200, 401, 403].includes(probe.status)) throw new Error('El servidor no confirmó el acceso MCP moderno.');
+  }
   if (![200, 401, 403, 405].includes(probe.status)) throw new Error('El endpoint MCP no confirmó cómo autorizar el acceso.');
   const challenge = [401, 403].includes(probe.status) ? mcpChallenge(probe.headers['www-authenticate']) : {};
   const resourcePaths = challenge.metadata ? [challenge.metadata] : [...new Set([

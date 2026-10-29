@@ -2,25 +2,14 @@ import { httpsRequest, nativeSHA256, type HTTPSRequest, type HTTPSResponse } fro
 import { getConnection, connectionToken, beginRemoteExecution, finishRemoteExecution, type ExternalConnection, type RemoteExecution } from './external-connections.ts';
 import { localIdentifier } from './local-identifiers.ts';
 import { prepareMCPAccess } from './mcp-oauth-store.ts';
+import { classifyModernDiscovery, classifyModernResult, legacyHandshakeRejectedAsModern, modernMCPRequest, MODERN_MCP_VERSION } from './mcp-modern-protocol.ts';
 import type { Tool, ToolContext } from './agent-tools.ts';
+import { canonicalJSON, parseMCPResponse } from './mcp-json.ts';
+export { canonicalJSON, parseMCPResponse } from './mcp-json.ts';
 
 const PREFERRED_VERSION = '2025-11-25';
 const SUPPORTED_VERSIONS = new Set([PREFERRED_VERSION, '2025-06-18', '2025-03-26']);
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-export function canonicalJSON(value: unknown): string {
-  function normalize(input: unknown, depth = 0): unknown {
-    if (depth > 24) throw new Error('JSON demasiado profundo.');
-    if (input === null || typeof input === 'boolean' || typeof input === 'string') return input;
-    if (typeof input === 'number' && Number.isFinite(input)) return input;
-    if (Array.isArray(input)) return input.map(item => normalize(item, depth + 1));
-    if (object(input)) return Object.fromEntries(Object.keys(input).sort().map(key => {
-      if (['__proto__', 'constructor', 'prototype'].includes(key)) throw new Error('Propiedad JSON no permitida.');
-      return [key, normalize(input[key], depth + 1)];
-    }));
-    throw new Error('Sólo se permiten valores JSON.');
-  }
-  return JSON.stringify(normalize(value));
-}
 /** Fail closed for unsupported validation keywords. No remote refs or regular-expression execution. */
 export function validateMCPArguments(schema: Record<string, unknown>, value: unknown, maximumBytes = 16 * 1024): Record<string, unknown> {
   // A branch that does not match is different from a branch whose schema we
@@ -129,45 +118,6 @@ async function hash(text: string): Promise<string> {
   if (!globalThis.crypto?.subtle) return nativeSHA256(text);
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
-export function parseMCPResponse(response: HTTPSResponse, id: string, version?: string): unknown {
-  if (response.status !== 200 || new TextEncoder().encode(response.body).length > 2 * 1024 * 1024) throw new Error(`MCP no confirmó la solicitud (HTTP ${response.status}).`);
-  // HTTP media type tokens are case-insensitive; preserve the body unchanged.
-  const type = response.headers['content-type']?.split(';')[0]?.trim().toLowerCase();
-  let messages: unknown[];
-  if (type === 'text/event-stream') {
-    const events = response.body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n\n');
-    if (events.length > 1000) throw new Error('Demasiados eventos MCP.');
-    messages = events.flatMap(event => { const data = event.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n'); return data ? [JSON.parse(data)] : []; });
-  } else if (type === 'application/json') messages = [JSON.parse(response.body)];
-  else throw new Error('El servidor no respondió JSON o SSE finito.');
-  // Only the 2025-03-26 transport permits batched JSON-RPC responses. During
-  // initialization, confirm the offered revision after matching the response.
-  const flattened: unknown[] = [];
-  let batched = false;
-  for (const message of messages) {
-    if (Array.isArray(message)) {
-      if ((version !== undefined && version !== '2025-03-26') || message.length === 0 || flattened.length + message.length > 1000) throw new Error('Lote MCP no admitido o demasiado grande.');
-      batched = true;
-      flattened.push(...message);
-    } else flattened.push(message);
-    if (flattened.length > 1000) throw new Error('Demasiados mensajes MCP.');
-  }
-  let found: Record<string, unknown> | undefined;
-  for (const message of flattened) {
-    if (!object(message) || message.jsonrpc !== '2.0') throw new Error('Mensaje MCP inválido.');
-    if (typeof message.method === 'string') {
-      if ('id' in message) throw new Error('Capri no habilita solicitudes del servidor, sampling, roots ni elicitación.');
-      continue; // Notifications are data; they never execute application code.
-    }
-    if (message.id !== id || found) throw new Error('Respuesta MCP no correlacionada o duplicada.');
-    found = message;
-  }
-  if (!found || ('error' in found) === ('result' in found)) throw new Error('El servidor no devolvió un resultado MCP verificable.');
-  if (batched && version === undefined && (!object(found.result) || found.result.protocolVersion !== '2025-03-26')) throw new Error('Lote MCP no admitido durante la inicialización.');
-  if ('error' in found) throw new Error('El servidor MCP rechazó la solicitud.');
-  return found.result;
-}
-
 export async function discoverMCPTools(connectionId: string, overrides: Partial<MCPServices> = {}): Promise<Tool[]> {
   const service: MCPServices = { prepare: prepareMCPAccess, getConnection, token: connectionToken, request: httpsRequest, begin: beginRemoteExecution, finish: finishRemoteExecution, hash, ...overrides };
   const connection = await service.prepare(connectionId);
@@ -177,6 +127,8 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
   let session: string | undefined;
   let initialized = false;
   let negotiatedVersion: string | undefined;
+  let modern = false;
+  class ModernProbeNeeded extends Error {}
   async function current(): Promise<void> {
     if (canonicalJSON(await service.getConnection(connectionId)) !== expected) throw new Error('La conexión cambió; vuelve a descubrir las herramientas.');
     if (await service.token(connection) !== token || canonicalJSON(await service.getConnection(connectionId)) !== expected) throw new Error('El acceso cambió; vuelve a descubrir las herramientas.');
@@ -184,11 +136,21 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
   async function rpc(method: string, params: unknown, id = localIdentifier()): Promise<unknown> {
     await current();
     if (method !== 'initialize' && !initialized) throw new Error('La sesión MCP caducó. Actualiza las conexiones para iniciar otra; no se repitió ninguna operación.');
+    if (modern) {
+      if ((method !== 'tools/list' && method !== 'tools/call') || !object(params)) throw new Error('Solicitud MCP moderna no compatible.');
+      const request = modernMCPRequest(id, method, params);
+      if (token) request.headers.Authorization = `Bearer ${token}`;
+      const response = await service.request({ url: connection!.endpoint, ...request });
+      const value = parseMCPResponse(response, id, MODERN_MCP_VERSION);
+      if (classifyModernResult(value) !== 'complete') throw new Error('El servidor solicita información adicional que Capri aún no puede revisar.');
+      return value;
+    }
     const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
     if (token) headers.Authorization = `Bearer ${token}`;
     if (session) headers['Mcp-Session-Id'] = session;
     if (initialized && negotiatedVersion) headers['MCP-Protocol-Version'] = negotiatedVersion;
     const result = await service.request({ url: connection!.endpoint, method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
+    if (method === 'initialize' && legacyHandshakeRejectedAsModern(result, id)) throw new ModernProbeNeeded();
     if (result.status === 404 && session) { session = undefined; initialized = false; throw new Error('La sesión MCP caducó. Vuelve a descubrir las herramientas.'); }
     if (method === 'initialize') {
       const value = result.headers['mcp-session-id'];
@@ -197,18 +159,30 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
     }
     return parseMCPResponse(result, id, negotiatedVersion);
   }
-  const init = await rpc('initialize', { protocolVersion: PREFERRED_VERSION, capabilities: {}, clientInfo: { name: 'Capri iOS', version: '0.1.0' } });
-  if (!object(init) || typeof init.protocolVersion !== 'string' || !SUPPORTED_VERSIONS.has(init.protocolVersion))
-    throw new Error('El servidor ofreció una versión MCP no compatible. Capri admite 2025-11-25, 2025-06-18 y 2025-03-26.');
-  if (!object(init.capabilities) || !object(init.capabilities.tools)) throw new Error('El servidor no ofrece la capacidad de herramientas MCP.');
-  negotiatedVersion = init.protocolVersion;
-  initialized = true;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': negotiatedVersion };
-  if (token) headers.Authorization = `Bearer ${token}`;
-  if (session) headers['Mcp-Session-Id'] = session;
-  await current();
-  const ready = await service.request({ url: connection.endpoint, method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
-  if (ready.status !== 202) throw new Error('El servidor no confirmó la inicialización MCP.');
+  let init: unknown;
+  try { init = await rpc('initialize', { protocolVersion: PREFERRED_VERSION, capabilities: {}, clientInfo: { name: 'Capri iOS', version: '0.1.0' } }); }
+  catch (error) {
+    if (!(error instanceof ModernProbeNeeded)) throw error;
+    const id = localIdentifier(), request = modernMCPRequest(id, 'server/discover');
+    if (token) request.headers.Authorization = `Bearer ${token}`;
+    await current();
+    const result = await service.request({ url: connection.endpoint, ...request });
+    if (classifyModernDiscovery(result, id) !== 'modern') throw new Error('El servidor no confirmó el protocolo MCP moderno.');
+    await current(); modern = true; initialized = true; negotiatedVersion = MODERN_MCP_VERSION;
+  }
+  if (!modern) {
+    if (!object(init) || typeof init.protocolVersion !== 'string' || !SUPPORTED_VERSIONS.has(init.protocolVersion))
+      throw new Error('El servidor ofreció una versión MCP no compatible. Capri admite 2025-11-25, 2025-06-18 y 2025-03-26.');
+    if (!object(init.capabilities) || !object(init.capabilities.tools)) throw new Error('El servidor no ofrece la capacidad de herramientas MCP.');
+    negotiatedVersion = init.protocolVersion;
+    initialized = true;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': negotiatedVersion };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (session) headers['Mcp-Session-Id'] = session;
+    await current();
+    const ready = await service.request({ url: connection.endpoint, method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
+    if (ready.status !== 202) throw new Error('El servidor no confirmó la inicialización MCP.');
+  }
   async function catalog(): Promise<RemoteTool[]> {
     const all: RemoteTool[] = []; const cursors = new Set<string>(); const names = new Set<string>(); let cursor: string | undefined;
     for (let page = 0; page < 10; page++) {

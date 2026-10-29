@@ -3,8 +3,9 @@
 Capri puede descubrir herramientas de un servidor MCP remoto configurado por el
 usuario. No hay una lista fija de proveedores. El endpoint usa HTTPS; la credencial
 Bearer opcional se guarda en Keychain y nunca se entrega al modelo. También se puede autorizar un cliente OAuth público nativo previamente registrado por el servicio. Los servicios
-deben ofrecer Streamable HTTP y negociar MCP `2025-11-25`, `2025-06-18` o `2025-03-26`, con
-respuestas JSON o SSE que terminen dentro de 30 segundos y 2 MiB. Esto requiere
+deben ofrecer Streamable HTTP y negociar MCP `2025-11-25`, `2025-06-18` o `2025-03-26`;
+la fuente también incluye una ruta experimental limitada para `2026-07-28`.
+Las respuestas JSON o SSE deben terminar dentro de 30 segundos y 2 MiB. Esto requiere
 internet; no depende de la PC.
 
 ## Configuración y almacenamiento
@@ -42,8 +43,8 @@ El cliente propone `2025-11-25` al inicializar. Acepta una contraoferta
 notificación y todas las solicitudes posteriores. Si el servidor ofrece otra
 versión, no envía la notificación de inicialización ni consultas o llamadas a
 herramientas. No reintenta la inicialización en respuesta a errores HTTP genéricos.
-El protocolo `2026-07-28` cambia el ciclo de conexión y todavía no está
-implementado; no se considera compatible sólo por tener una fecha más reciente.
+La fuente incluye además una ruta experimental acotada para servidores sólo
+`2026-07-28`; sus límites y pruebas se detallan más abajo.
 
 Para admitir `2026-07-28` se necesita otro transporte lógico: la versión y las
 capacidades viajan en `_meta` en cada solicitud y también se reflejan en HTTP;
@@ -65,17 +66,26 @@ La evaluación de compatibilidad de `2026-07-28` debe comprobar, como mínimo:
 4. Compatibilidad anterior: servidor dual con versión moderna, servidor sólo moderno, servidor 2025, error `UnsupportedProtocolVersion`, discrepancia de cabeceras, ausencia de capacidad y 401 OAuth deben probarse por separado; un error moderno reconocido no habilita un downgrade silencioso. OAuth debe revisarse independientemente y no requiere credenciales para los fixtures.
 5. La especificación exige JSON Schema 2020-12 completo; Capri sólo implementa un subconjunto y rechaza restricciones que no puede evaluar. Ampliarlo y probarlo contra casos oficiales es requisito para afirmar conformidad completa. Referencias: [mensajes y esquema](https://modelcontextprotocol.io/specification/2026-07-28/basic), [cabeceras y retrocompatibilidad HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http), [herramientas](https://modelcontextprotocol.io/specification/2026-07-28/server/tools) y [autorización](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization).
 
-`mcp-modern-protocol.ts` es un prototipo puro, no conectado al cliente de la app:
-construye las cabeceras básicas y `_meta`, clasifica descubrimiento y distingue un
-resultado `input_required`. Sus pruebas no ejecutan llamadas ni autorizaciones.
-La clasificación conservadora rechaza un HTTP 400 vacío y un error `-32601` en
-HTTP 200 en lugar de asumir que son legados: eso evita bajar de protocolo ante
-una respuesta ambigua, pero puede impedir la conexión con algunos servidores 2025.
-Una contraoferta moderna `-32022` se conserva como error tipado sin elegir ni
-reintentar otra versión automáticamente.
-No acepta aún parámetros `x-mcp-header` ni constituye soporte MCP 2026; la
-integración debe mantener revisión/journal, límites, OAuth y control de resultados
-inciertos, además de pruebas de interoperabilidad con un servidor real.
+La ruta experimental intenta primero el handshake 2025 para preservar los
+servidores existentes. Sólo ante ciertos errores HTTP 400 correlacionados prueba
+`server/discover`; si éste confirma `2026-07-28`, usa solicitudes sin sesión con
+`_meta` y cabeceras modernas. Un servidor dual que acepte 2025 permanece en ese
+protocolo. Un error ambiguo no provoca cambio de protocolo y una contraoferta
+moderna `-32022` no se elige ni reintenta automáticamente. Es una política
+conservadora: puede no conectar con servidores modernos que rechacen el handshake
+de otra forma.
+
+La ruta experimental conserva aprobación, revisión del catálogo y journal de
+la llamada. Un resultado moderno `input_required`, desconocido o sin discriminador
+queda incierto tras la ejecución y no se repite automáticamente. La prueba
+opcional `bash apps/ios/scripts/check-official-mcp-sdk.sh` instala el SDK oficial
+2.4.0 y Zod 4.6.7 en un directorio temporal con el lockfile específico de la
+fixture y scripts desactivados; usa su servidor moderno en el mismo proceso
+con datos sintéticos; comprueba rechazo de aprobación, una ejecución y journal.
+No prueba URLSession, OAuth, TLS ni el iPhone. Un fixture adicional comprueba el
+desafío OAuth de un servidor sólo moderno después de un rechazo correlacionado;
+no autoriza una cuenta real. Las herramientas que requieren `x-mcp-header`
+todavía se rechazan antes de aprobación y no se afirma conformidad MCP 2026 completa.
 
 El descubrimiento admite hasta 64 herramientas, diez páginas y 512 KiB de catálogo.
 Cada esquema individual puede ocupar 16 KiB. Se validan tipos, propiedades,

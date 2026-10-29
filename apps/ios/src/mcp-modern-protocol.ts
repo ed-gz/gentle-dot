@@ -1,6 +1,6 @@
-/** Pure wire prototype for MCP 2026-07-28. No network or tool execution.
- * The production client does not yet import this module. */
-import { canonicalJSON, parseMCPResponse } from './remote-mcp.ts';
+/** Bounded wire helpers for the experimental MCP 2026-07-28 path.
+ * No network or tool execution takes place in this module. */
+import { canonicalJSON, parseMCPResponse } from './mcp-json.ts';
 import type { HTTPSResponse } from './device-bridge.ts';
 
 export const MODERN_MCP_VERSION = '2026-07-28';
@@ -9,6 +9,17 @@ const bytes = (value: string) => new TextEncoder().encode(value).length;
 export class MCPModernVersionUnsupported extends Error {
   readonly supportedVersions: string[];
   constructor(supportedVersions: string[]) { super('El servidor MCP no admite esta versión; no se cambió de protocolo.'); this.supportedVersions = supportedVersions; }
+}
+
+/** A correlated rejection of the legacy handshake can justify a harmless
+ * modern discovery probe. It never authorizes a tool call or a downgrade. */
+export function legacyHandshakeRejectedAsModern(response: HTTPSResponse, id: string): boolean {
+  if (response.status !== 400 || bytes(response.body) > 64 * 1024) return false;
+  try {
+    const message: unknown = JSON.parse(response.body);
+    return object(message) && message.jsonrpc === '2.0' && message.id === id && !('result' in message) && object(message.error) &&
+      typeof message.error.message === 'string' && typeof message.error.code === 'number' && [-32020, -32022, -32602].includes(message.error.code);
+  } catch { return false; }
 }
 
 /** These methods are the only ones modelled by this prototype. Validation,
@@ -39,7 +50,7 @@ export function classifyModernDiscovery(response: HTTPSResponse, id: string): 'm
   if (bytes(response.body) > 2 * 1024 * 1024) throw new Error('Respuesta MCP demasiado grande.');
   if (response.status === 200) {
     const result = parseMCPResponse(response, id, MODERN_MCP_VERSION);
-    if (!object(result) || (result.resultType !== undefined && result.resultType !== 'complete') ||
+    if (!object(result) || result.resultType !== 'complete' ||
       !Array.isArray(result.supportedVersions) || !result.supportedVersions.length || result.supportedVersions.length > 64 ||
       result.supportedVersions.some(v => typeof v !== 'string' || !v || v.length > 128) ||
       !result.supportedVersions.includes(MODERN_MCP_VERSION) || !object(result.capabilities) || !object(result.capabilities.tools))
@@ -67,7 +78,7 @@ export function classifyModernDiscovery(response: HTTPSResponse, id: string): 'm
 /** MRTR is not yet wired to a review UI; never mistake it for a completed call. */
 export function classifyModernResult(result: unknown): 'complete' | 'input_required' {
   if (!object(result)) throw new Error('Resultado MCP moderno inválido.');
-  if (result.resultType === undefined || result.resultType === 'complete') return 'complete';
+  if (result.resultType === 'complete') return 'complete';
   if (result.resultType === 'input_required') return 'input_required';
   throw new Error('Tipo de resultado MCP moderno no admitido.');
 }
