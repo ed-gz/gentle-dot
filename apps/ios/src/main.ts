@@ -1,6 +1,6 @@
 import { localIdentifier } from './local-identifiers.ts';
 import { waitForForeground } from './foreground.ts';
-import { pickDocuments, listDocumentImports, importDocumentItem } from './document-import.ts';
+import { pickDocuments, listDocumentImports, importDocumentItemStreamed } from './document-import.ts';
 import { createEngineAsync, frameAt } from '@gentle-dot/ui/src/capri2d/engine.ts';
 import { RoamDirector, type RoamPosition } from '@gentle-dot/ui/src/capri2d/roam.ts';
 import { occupiedPhoneSpace, phonePerches, phonePositionFree } from './companion-space.ts';
@@ -45,11 +45,11 @@ import { createConversationRequests } from './conversation-requests.ts';
 import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCancelWithDeadline, voiceAvailabilityNote, VoiceCancelUnconfirmed, VoiceRetryPending } from './perception.ts';
 import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, markVoiceCancellation, clearVoiceCancellation, pendingVoiceCancellation } from './voice-origin.ts';
 import { isTauri } from '@tauri-apps/api/core';
-import { listSharedImports, importSharedItem, recoverImportBatch } from './device-bridge.ts';
+import { listSharedImports, importSharedItemStreamed, recoverImportBatch } from './device-bridge.ts';
 import { parseInvitation, pairDevice } from './device-pairing.ts';
 import { ConnectionSelectionAmbiguous, ConnectionSelectionPending, createConnectionSelectionStore, type SelectedConnection } from './connection-selection.ts';
 import { mountPairingSaveRecovery } from './pairing-save-recovery.ts';
-import { createWork, createImportedWork } from './work-inbox.ts';
+import { createWork, createStreamedImportedWork, cancelStreamedImport, resumeStreamedImport } from './work-inbox.ts';
 import { companionBounds, constrainCompanion, mountPhoneViewport } from './companion-layout.ts';
 import { connectionHealth, healthActionLabel, type HealthAction } from './connection-health.ts';
 import { createConversationView } from './conversation-view.ts';
@@ -1803,6 +1803,35 @@ retryPendingAccess.addEventListener('click', () => void (async () => {
   } catch (error) { element('pairing-status').textContent = errorText(error); }
   finally { if (!waitingForManual) connectionLock(false); }
 })());
+const importRecovery = document.createElement('div');
+importRecovery.setAttribute('aria-label', 'Recuperación de archivos');
+importRecovery.setAttribute('role', 'group');
+element('chat-notice').after(importRecovery);
+const importRecoveryPanels = { share: document.createElement('div'), document: document.createElement('div') };
+importRecovery.hidden = true; importRecoveryPanels.share.hidden = true; importRecoveryPanels.document.hidden = true;
+importRecovery.append(importRecoveryPanels.share, importRecoveryPanels.document);
+function showImportRecovery(kind: 'share' | 'document', failures: { id: string; title: string; message: string }[]): void {
+  const root = importRecoveryPanels[kind]; root.replaceChildren();
+  const first = failures[0]; root.hidden = !first;
+  importRecovery.hidden = importRecoveryPanels.share.hidden && importRecoveryPanels.document.hidden;
+  if (!first) return;
+  const message = document.createElement('p'); message.setAttribute('role', 'status');
+  message.textContent = `No se pudo guardar ${first.title}${failures.length > 1 ? ` y ${failures.length - 1} archivo(s) más` : ''}. El original se conserva. ${first.message}`;
+  const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Reintentar';
+  const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Liberar copia incompleta';
+  const source = `${kind}:${first.id}`;
+  retry.addEventListener('click', () => {
+    retry.disabled = cancel.disabled = true;
+    void resumeStreamedImport(source).then(() => kind === 'share' ? importSharedFiles() : importDocumentFiles(true))
+      .catch(error => { message.textContent = errorText(error); }).finally(() => { retry.disabled = cancel.disabled = false; });
+  });
+  cancel.addEventListener('click', () => {
+    retry.disabled = cancel.disabled = true;
+    void cancelStreamedImport(source).then(() => { message.textContent = 'Copia incompleta liberada. El original sigue guardado y puedes reintentar.'; cancel.hidden = true; })
+      .catch(error => { message.textContent = errorText(error); }).finally(() => { retry.disabled = cancel.disabled = false; });
+  });
+  root.append(message, retry, cancel);
+}
 function importSharedFiles(): Promise<void> {
   if (!isTauri()) return Promise.resolve();
   if (sharedImports) return sharedImports.then(() => importSharedFiles());
@@ -1810,18 +1839,17 @@ function importSharedFiles(): Promise<void> {
   sharedImports = (async () => {
     try {
       const result = await recoverImportBatch(await listSharedImports(), async item => {
-        await importSharedItem(item, async ({ sourceId, files }) => {
-          const work = await createImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: item.notes || 'Material compartido con Capri. Pendiente de instrucciones.', files });
+        await importSharedItemStreamed(item, async ({ sourceId, read }) => {
+          const files = item.files.map(file => ({ id: file.id, name: file.name, type: file.mime, size: file.size, sha256: file.sha256 }));
+          const work = await createStreamedImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: item.notes || 'Material compartido con Capri. Pendiente de instrucciones.', files },
+            (file, offset, length) => read(item.files.find(candidate => candidate.id === file.id)!, offset, length));
           showAttachedWork(work.id, work.title);
           notice(`Recibí ${work.title}. Material guardado localmente como trabajo ${work.id}; dime qué hacemos con él.`, 'iphone', `shared:${item.id}`);
           await persist(); await releaseAttachedWork(work.id);
         });
       });
       await inbox.refresh();
-      if (result.failures.length) {
-        const first = result.failures[0]!;
-        element('chat-notice').textContent = `No se pudo recuperar ${first.title}${result.failures.length > 1 ? ` y ${result.failures.length - 1} material(es) más` : ''}; siguen pendientes. ${first.message}`;
-      }
+      showImportRecovery('share', result.failures);
     } catch (error) { element('chat-notice').textContent = errorText(error); }
   })().finally(() => { sharedImports = undefined; });
   return sharedImports;
@@ -1833,21 +1861,20 @@ function importDocumentFiles(fresh = false): Promise<void> {
   documentImports = (async () => {
     try {
       const result = await recoverImportBatch(await listDocumentImports(), async item => {
-        await importDocumentItem(item, async ({ sourceId, files }) => {
-          const work = await createImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task',
+        await importDocumentItemStreamed(item, async ({ sourceId, read }) => {
+          const files = item.files.map(file => ({ id: file.id, name: file.name, type: file.mime, size: file.size, sha256: file.sha256 }));
+          const work = await createStreamedImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task',
             // The source identity must remain stable if native acknowledgement fails
             // and the user edits their message before the next recovery attempt.
-            instruction: 'Material adjunto a la conversación de Capri.', files });
+            instruction: 'Material adjunto a la conversación de Capri.', files },
+            (file, offset, length) => read(item.files.find(candidate => candidate.id === file.id)!, offset, length));
           showAttachedWork(work.id, `${files.length} archivo${files.length === 1 ? '' : 's'} · ${work.title}`);
           notice(`Conservé ${work.title} en este iPhone. Dime qué hacemos con el material.`, 'iphone', `document:${item.id}`);
           await persist(); await releaseAttachedWork(work.id);
         });
       });
       await inbox.refresh();
-      if (result.failures.length) {
-        const first = result.failures[0]!;
-        element('chat-notice').textContent = `No se pudieron recuperar ${result.failures.length} documento(s); siguen pendientes. ${first.title}: ${first.message}`;
-      }
+      showImportRecovery('document', result.failures);
     } catch (error) { element('chat-notice').textContent = errorText(error); }
   })().finally(() => { documentImports = undefined; });
   return documentImports;

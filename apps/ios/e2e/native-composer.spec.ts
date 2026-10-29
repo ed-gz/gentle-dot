@@ -20,7 +20,7 @@ async function fixture(page: Page) {
         if (state.holdDocumentsList) { state.holdDocumentsList = false; return new Promise(resolve => { state.releaseDocumentScan = () => resolve({ ok: true, items: [] }); }); }
         return { ok: true, items: state.documentItems };
       }
-      if (name === 'documents_read') return { ok: true, data: btoa('Contenido importado') };
+      if (name === 'documents_read') { if (state.failDocumentsRead) throw Error('Espacio insuficiente'); return { ok: true, data: btoa('Contenido importado') }; }
       if (name === 'documents_ack') { state.documentItems = []; return { ok: true, persisted: true }; }
       if (name === 'share_list') return { ok: true, items: [] };
       return { ok: true };
@@ -56,6 +56,20 @@ test('a document already imported by iOS is saved locally before acknowledgement
   await expect(page.locator('#attachment-context')).toHaveText('Material guardado en este iPhone');
   await page.locator('#view-material').click();
   await expect(page.locator('#work-list')).toContainText('Reunión.txt');
+});
+test('failed native import offers explicit cleanup and retry while preserving the original', async ({ page }) => {
+  await fixture(page); await page.goto('/');
+  await expect(page.locator('#history-loading')).toBeHidden();
+  await page.evaluate(async () => { (globalThis as any).failDocumentsRead = true; await (globalThis as any).__TAURI_INTERNALS__.invoke('plugin:device-bridge|documents_pick'); document.dispatchEvent(new Event('visibilitychange')); });
+  const recovery = page.getByRole('group', { name: 'Recuperación de archivos' });
+  await expect(recovery.getByText(/El original se conserva/)).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as any).calls.includes('documents_ack'))).toBe(false);
+  await recovery.getByRole('button', { name: 'Liberar copia incompleta' }).click();
+  await expect(recovery.getByText(/Copia incompleta liberada/)).toBeVisible();
+  await page.evaluate(() => { (globalThis as any).failDocumentsRead = false; });
+  await recovery.getByRole('button', { name: 'Reintentar' }).click();
+  await expect(page.locator('#attachment-context')).toContainText('Reunión.txt');
+  await expect.poll(() => page.evaluate(() => (globalThis as any).calls.includes('documents_ack'))).toBe(true);
 });
 test('background visibility no longer aborts an in-flight native answer; explicit Stop still exists', async ({ page }) => {
   await fixture(page); await page.goto('/');

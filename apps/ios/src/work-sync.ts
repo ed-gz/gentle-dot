@@ -1,21 +1,35 @@
 import { localIdentifier } from './local-identifiers.ts';
 import { canonicalWorkManifest, parseWorkSyncReply, WORK_SYNC_LIMITS, type WorkSyncManifest, type WorkSyncReply, type WorkSyncRequest, type WorkProcessing } from '@gentle-dot/protocol';
-import { beginWorkTransfer, readWork, readWorkFile, settleWorkTransfer, saveWorkResult, type WorkItem, type WorkTransfer } from './work-inbox.ts';
+import { beginWorkTransfer, readWork, readWorkFile, readWorkFileSize, readWorkFileSlice, settleWorkTransfer, saveWorkResult, type WorkItem, type WorkTransfer } from './work-inbox.ts';
 import { blobSHA256 } from './blob-sha256.ts';
+import { Hash } from 'fast-sha256';
 
 export type WorkExchange = (request: WorkSyncRequest) => Promise<WorkSyncReply>;
 async function sha256(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   if (!globalThis.crypto?.subtle) return (await import('./device-bridge.ts')).nativeSHA256Bytes(bytes);
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
-export async function prepareWorkTransfer(item: WorkItem, host: string, getFile = readWorkFile, signal?: AbortSignal): Promise<WorkTransfer> {
+async function storedSHA256(workId: string, fileId: string, size: number, signal?: AbortSignal): Promise<string> {
+  if (await readWorkFileSize(workId, fileId) !== size) throw new Error('Falta un archivo local o sus bytes cambiaron.');
+  const hash = new Hash();
+  try {
+    for (let offset = 0; offset < size; offset += 256 * 1024) {
+      signal?.throwIfAborted();
+      const bytes = await readWorkFileSlice(workId, fileId, offset, Math.min(256 * 1024, size - offset));
+      signal?.throwIfAborted(); hash.update(bytes);
+    }
+    return Array.from(hash.digest(), byte => byte.toString(16).padStart(2, '0')).join('');
+  } finally { hash.clean(); }
+}
+export async function prepareWorkTransfer(item: WorkItem, host: string, getFile?: typeof readWorkFile, signal?: AbortSignal): Promise<WorkTransfer> {
   signal?.throwIfAborted();
   if (item.status !== 'approved') throw new Error('Aprueba el contenido exacto antes de enviarlo al host.');
   const manifest: WorkSyncManifest = { schema: 1, workId: item.id, revision: item.revision, title: item.title, kind: item.kind, instruction: item.instruction, files: [] };
   for (const file of item.files) {
-    const blob = await getFile(item.id, file.id);
-    if (!blob || blob.size !== file.size) throw new Error('Falta un archivo local o sus bytes cambiaron.');
-    manifest.files.push({ id: file.id, name: file.name, mime: file.type.split(';')[0]!.trim(), bytes: blob.size, sha256: await blobSHA256(blob, signal), role: 'attachment' });
+    const blob = getFile ? await getFile(item.id, file.id) : undefined;
+    if (getFile && (!blob || blob.size !== file.size)) throw new Error('Falta un archivo local o sus bytes cambiaron.');
+    const sha = blob ? await blobSHA256(blob, signal) : await storedSHA256(item.id, file.id, file.size, signal);
+    manifest.files.push({ id: file.id, name: file.name, mime: file.type.split(';')[0]!.trim(), bytes: file.size, sha256: sha, role: 'attachment' });
   }
   for (const version of item.versions) {
     signal?.throwIfAborted();
@@ -52,12 +66,14 @@ export function createWorkDispatcher(exchange: WorkExchange, host: string) {
       if (reply.state !== 'uploading') throw new Error('El host no confirmó la transferencia.');
       for (const file of transfer.manifest.files) {
         const version = file.role === 'version' ? item.versions.find(v => `version-${v.id}` === file.id) : undefined;
-        const blob = file.role === 'version' ? (version ? new Blob([version.text], { type: 'text/plain' }) : undefined) : await readWorkFile(item.id, file.id);
-        if (!blob || blob.size !== file.bytes || await blobSHA256(blob, signal) !== file.sha256) throw new Error('Los bytes locales ya no coinciden con la versión aprobada.');
+        const blob = file.role === 'version' && version ? new Blob([version.text], { type: 'text/plain' }) : undefined;
+        const actualHash = file.role === 'version' ? (blob && blob.size === file.bytes ? await blobSHA256(blob, signal) : undefined) : await storedSHA256(item.id, file.id, file.bytes, signal);
+        if (actualHash !== file.sha256) throw new Error('Los bytes locales ya no coinciden con la versión aprobada.');
         let offset = reply.offsets[file.id];
         if (offset === undefined || offset > file.bytes) throw new Error('El desplazamiento confirmado por el host no es válido.');
         while (offset < file.bytes) {
-          const bytes = new Uint8Array(await blob.slice(offset, offset + WORK_SYNC_LIMITS.chunkBytes).arrayBuffer());
+          const length = Math.min(WORK_SYNC_LIMITS.chunkBytes, file.bytes - offset);
+          const bytes = blob ? new Uint8Array(await blob.slice(offset, offset + length).arrayBuffer()) : await readWorkFileSlice(item.id, file.id, offset, length);
           const next = await request({ operation: 'chunk', fileId: file.id, offset, data: base64(bytes) });
           if (next.state !== 'uploading' || next.offsets[file.id] !== offset + bytes.length) throw new Error('El host no confirmó los bytes del archivo.');
           reply = next; offset += bytes.length;
@@ -91,7 +107,7 @@ export function createWorkDispatcher(exchange: WorkExchange, host: string) {
       signal?.throwIfAborted();
       const item = await readWork(id);
       if (item.revision !== revision) throw new Error('El trabajo cambió. Revisa la versión actual antes de enviar.');
-      const transfer = await prepareWorkTransfer(item, host, readWorkFile, signal);
+      const transfer = await prepareWorkTransfer(item, host, undefined, signal);
       if (approvedManifestHash !== undefined && transfer.manifestHash !== approvedManifestHash) throw new Error('El contenido cambió después de aprobar la transferencia. Revisa de nuevo antes de enviar.');
       signal?.throwIfAborted();
       return run(await beginWorkTransfer(id, revision, transfer), true, signal);

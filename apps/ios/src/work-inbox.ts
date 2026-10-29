@@ -1,6 +1,7 @@
 import { localIdentifier } from './local-identifiers.ts';
 import type { Proposal } from './minute-proposals.ts';
 import { blobSHA256 } from './blob-sha256.ts';
+import { Hash } from 'fast-sha256';
 import { canonicalWorkManifest, parseWorkSyncManifest, parseWorkResult, type WorkSyncManifest, type WorkSyncReceipt, type WorkResult } from '@gentle-dot/protocol';
 export type WorkTransfer = { host: string; transferId: string; manifest: WorkSyncManifest; manifestHash: string; receipt?: WorkSyncReceipt };
 export type WorkStatus = 'local' | 'prepared' | 'approved' | 'sending' | 'sent' | 'uncertain' | 'failed';
@@ -32,6 +33,21 @@ export type WorkInput = {
   instruction: string;
   files?: File[];
 };
+type ChunkFile = { id: string; name: string; type: string; size: number; sha256: string };
+type ChunkPointer = { kind: 'chunks-v1'; sourceId: string; fileId: string; size: number; sha256: string };
+type ChunkStage = { kind: 'chunk-stage-v1'; size: number; sha256: string; published: boolean; refs?: number };
+const CHUNK_BYTES = 256 * 1024;
+function chunkReferences(stage: ChunkStage, pointer: Pick<ChunkPointer, 'size' | 'sha256'>): number {
+  if (stage.kind !== 'chunk-stage-v1' || stage.size !== pointer.size || stage.sha256 !== pointer.sha256 || !stage.published || !Number.isSafeInteger(stage.refs) || stage.refs! < 1 || stage.refs! > WORK_LIMITS.items * WORK_LIMITS.files) throw new Error('No se pueden verificar las referencias del archivo. Los datos se conservan.');
+  return stage.refs!;
+}
+function isChunkPointer(value: unknown): value is ChunkPointer {
+  const p = value as Partial<ChunkPointer> | null;
+  return !!p && p.kind === 'chunks-v1' && typeof p.sourceId === 'string' && /^(?:share|document):[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(p.sourceId)
+    && typeof p.fileId === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(p.fileId)
+    && Number.isSafeInteger(p.size) && p.size! > 0 && p.size! <= WORK_LIMITS.fileBytes
+    && typeof p.sha256 === 'string' && /^[a-f0-9]{64}$/.test(p.sha256);
+}
 
 const DATABASE = 'capri-ios-work-inbox';
 const ITEMS = 'items';
@@ -65,17 +81,21 @@ function textWithin(value: string, limit: number, label: string, required = fals
 /** File names and MIME types are metadata, not proof of content safety. Never execute attachments. */
 export function validateWorkFiles(files: readonly File[]): void {
   if (!Array.isArray(files) || files.length > WORK_LIMITS.files) throw new Error('Máximo 10 archivos por trabajo.');
+  if (files.some(file => !(file instanceof File))) throw new Error('Adjunta archivos válidos.');
+  validateWorkMetadata(files);
+}
+function validateWorkMetadata(files: readonly { name: string; type: string; size: number }[]): void {
+  if (!Array.isArray(files) || files.length > WORK_LIMITS.files) throw new Error('Máximo 10 archivos por trabajo.');
   let total = 0;
   for (const file of files) {
-    if (!(file instanceof File)) throw new Error('Adjunta archivos válidos.');
-    if (!file.name.trim() || file.name.length > 255 || /[\u0000-\u001f\u007f]/.test(file.name)) {
+    if (typeof file.name !== 'string' || !file.name.trim() || file.name.length > 255 || /[\u0000-\u001f\u007f]/.test(file.name)) {
       throw new Error('El nombre del archivo no es válido.');
     }
-    const mime = file.type.split(';')[0]?.trim() ?? '';
+    const mime = typeof file.type === 'string' ? file.type.split(';')[0]?.trim() ?? '' : '';
     if (!/^(audio|text|image)\/[a-z0-9.+_-]+$/.test(mime) && !['application/pdf', 'application/json', 'application/x-subrip'].includes(mime)) {
       throw new Error('Adjunta audio, texto, PDF o imágenes con un tipo de archivo reconocido.');
     }
-    if (file.size === 0 || file.size > WORK_LIMITS.fileBytes) throw new Error('Cada archivo debe contener datos y pesar hasta 25 MiB.');
+    if (!Number.isSafeInteger(file.size) || file.size <= 0 || file.size > WORK_LIMITS.fileBytes) throw new Error('Cada archivo debe contener datos y pesar hasta 25 MiB.');
     total += file.size;
   }
   if (total > WORK_LIMITS.totalFileBytes) throw new Error('Los archivos de un trabajo pueden sumar hasta 50 MiB.');
@@ -258,6 +278,49 @@ function whenReady<T>(request: IDBRequest<T>, success: (value: T) => void, fail:
   request.onerror = () => fail(request.error ?? new Error('No se pudo leer la bandeja local.'));
   request.onsuccess = () => { try { success(request.result); } catch (error) { fail(error); } };
 }
+function whenImportActive(transaction: IDBTransaction, sourceId: string, generation: number, run: () => void, fail: (error: unknown) => void): void {
+  whenReady<unknown>(transaction.objectStore(FILES).get(['cancel', sourceId]), cancelled => {
+    if (cancelled !== undefined) throw new Error('La importación está cancelada. El original se conserva.');
+    whenReady<unknown>(transaction.objectStore(FILES).get(['generation', sourceId]), current => {
+      if (generationValue(current) !== generation) throw new Error('La importación anterior fue cancelada. El original se conserva.');
+      run();
+    }, fail);
+  }, fail);
+}
+function generationValue(value: unknown): number {
+  if (value === undefined) return 0;
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) >= Number.MAX_SAFE_INTEGER) throw new Error('No se puede verificar la importación pendiente. El original se conserva.');
+  return value as number;
+}
+function importSourceId(value: string): string {
+  if (!/^(?:share|document):[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)) throw new Error('El identificador de la importación no es válido.');
+  return value.toLowerCase();
+}
+/** Verify reference counts against actual stored pointers before reclaiming bytes. */
+function verifyChunkReferences(tx: IDBTransaction, target: ChunkPointer, expected: number, done: () => void, fail: (error: unknown) => void): void {
+  const files = tx.objectStore(FILES); let references = 0;
+  const request = files.openKeyCursor();
+  request.onerror = () => fail(request.error);
+  request.onsuccess = () => {
+    try {
+      const cursor = request.result;
+      if (!cursor) {
+        if (references !== expected) throw new Error('Las referencias del archivo no coinciden. Se conservan los datos.');
+        done(); return;
+      }
+      const key = cursor.key;
+      if (!Array.isArray(key) || key.length !== 2 || key[0] === 'cancel' || key[0] === 'generation') { cursor.continue(); return; }
+      whenReady<Blob | ChunkPointer | undefined>(files.get(key), value => {
+        if (value !== undefined && !(value instanceof Blob) && !isChunkPointer(value)) throw new Error('No se pueden verificar las referencias del archivo. Se conservan los datos.');
+        if (isChunkPointer(value) && value.sourceId === target.sourceId && value.fileId === target.fileId) {
+          if (value.size !== target.size || value.sha256 !== target.sha256) throw new Error('Las referencias del archivo son incompatibles. Se conservan los datos.');
+          references++;
+        }
+        cursor.continue();
+      }, fail);
+    } catch (error) { fail(error); }
+  };
+}
 
 function requireItem(value: WorkItem | undefined): WorkItem {
   if (!value) throw new Error('El trabajo ya no existe.');
@@ -364,9 +427,17 @@ export async function createWorkFromResult(id: string, expectedRevision: number)
         let pending = source.files.length;
         const finish = () => { store.add(next); result(next); };
         if (!pending) { finish(); return; }
-        for (const file of source.files) whenReady<Blob | undefined>(transaction.objectStore(FILES).get([id, file.id]), blob => {
-          if (!(blob instanceof Blob) || blob.size !== file.size) throw new Error('Falta un adjunto original para conservar la trazabilidad.');
-          transaction.objectStore(FILES).add(blob, [nextId, file.id]); if (--pending === 0) finish();
+        for (const file of source.files) whenReady<Blob | ChunkPointer | undefined>(transaction.objectStore(FILES).get([id, file.id]), blob => {
+          if (!(blob instanceof Blob) && !isChunkPointer(blob) || blob.size !== file.size) throw new Error('Falta un adjunto original para conservar la trazabilidad.');
+          const files = transaction.objectStore(FILES);
+          const copy = () => { files.add(blob, [nextId, file.id]); if (--pending === 0) finish(); };
+          if (isChunkPointer(blob)) {
+            const key = ['stage', blob.sourceId, blob.fileId];
+            whenReady<ChunkStage | undefined>(files.get(key), stage => {
+              if (!stage) throw new Error('Falta el registro del archivo. Se conserva el original.');
+              files.put({ ...stage, refs: chunkReferences(stage, blob) + 1 }, key); copy();
+            }, fail);
+          } else copy();
         }, fail);
       }, fail);
     }, fail);
@@ -418,13 +489,172 @@ export async function createImportedWork(sourceId: string, input: WorkInput): Pr
   return insertWork(safe, { id: sourceId.toLowerCase(), hash });
 }
 
-export function readWorkFile(workId: string, fileId: string): Promise<Blob | undefined> {
+/** Persist native imports in bounded chunks; the native original remains until publication succeeds. */
+export async function createStreamedImportedWork(sourceId: string, input: {
+  title: string; kind: WorkItem['kind']; instruction: string; files: ChunkFile[];
+}, read: (file: ChunkFile, offset: number, length: number) => Promise<Uint8Array>, signal?: AbortSignal): Promise<WorkItem> {
+  sourceId = importSourceId(sourceId);
+  if (input.kind !== 'task' && input.kind !== 'meeting') throw new Error('Tipo de trabajo no válido.');
+  const title = textWithin(input.title, WORK_LIMITS.title, 'Título', true);
+  const instruction = textWithin(input.instruction, WORK_LIMITS.instruction, 'Instrucción');
+  if (!Array.isArray(input.files)) throw new Error('Los archivos compartidos no son válidos.');
+  const files = input.files.map(file => Object.freeze({ id: file.id, name: file.name, type: file.type, size: file.size, sha256: file.sha256 }));
+  const kind = input.kind;
+  validateWorkMetadata(files);
+  if (!files.length || new Set(files.map(file => file.id)).size !== files.length || files.some(file => !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(file.id) || !/^[a-f0-9]{64}$/.test(file.sha256))) throw new Error('Los archivos compartidos no son válidos.');
+  const digest = new Hash();
+  const content = JSON.stringify({ title, kind, instruction, files: files.map(f => ({ name: f.name, type: f.type, size: f.size, hash: f.sha256 })) });
+  const sourceHash = Array.from(digest.update(new TextEncoder().encode(content)).digest(), byte => byte.toString(16).padStart(2, '0')).join(''); digest.clean();
+  const generation = await transact<number>('readonly', (tx, done, fail) => {
+    const store = tx.objectStore(FILES);
+    whenReady<unknown>(store.get(['cancel', sourceId]), cancelled => {
+      if (cancelled !== undefined) throw new Error('La importación está cancelada. El original se conserva.');
+      whenReady<unknown>(store.get(['generation', sourceId]), value => done(generationValue(value)), fail);
+    }, fail);
+  });
+  for (const file of files) {
+    signal?.throwIfAborted();
+    const stageKey = ['stage', sourceId, file.id];
+    await transact('readwrite', (tx, done, fail) => {
+      const store = tx.objectStore(FILES);
+      whenImportActive(tx, sourceId, generation, () => whenReady<ChunkStage | undefined>(store.get(stageKey), stage => {
+        if (stage && (stage.kind !== 'chunk-stage-v1' || stage.size !== file.size || stage.sha256 !== file.sha256)) throw new Error('La importación pendiente contiene otros datos. Se conserva el original.');
+        if (!stage) store.add({ kind: 'chunk-stage-v1', size: file.size, sha256: file.sha256, published: false } satisfies ChunkStage, stageKey);
+        done(undefined);
+      }, fail), fail);
+    });
+    const hash = new Hash();
+    try {
+      for (let offset = 0; offset < file.size; offset += CHUNK_BYTES) {
+        signal?.throwIfAborted(); const length = Math.min(CHUNK_BYTES, file.size - offset);
+        const bytes = await read(file, offset, length); signal?.throwIfAborted();
+        if (!(bytes instanceof Uint8Array) || bytes.byteLength !== length) throw new Error('El archivo compartido llegó incompleto. Se conserva el original.');
+        hash.update(bytes);
+        await transact('readwrite', (tx, done, fail) => {
+          const store = tx.objectStore(FILES); const key = ['chunk', sourceId, file.id, offset];
+          whenImportActive(tx, sourceId, generation, () => whenReady<ChunkStage | undefined>(store.get(stageKey), stage => {
+            if (!stage || stage.kind !== 'chunk-stage-v1' || stage.size !== file.size || stage.sha256 !== file.sha256) throw new Error('La importación cambió. Se conserva el original.');
+            whenReady<Uint8Array | undefined>(store.get(key), existing => {
+              if (existing !== undefined) {
+                if (!(existing instanceof Uint8Array) || existing.byteLength !== bytes.byteLength || existing.some((byte, index) => byte !== bytes[index])) throw new Error('Un fragmento guardado contiene otros datos. Se conserva el original.');
+              } else {
+                if (stage.published) throw new Error('Falta un fragmento publicado. Se conserva el original.');
+                store.add(bytes, key);
+              }
+              done(undefined);
+            }, fail);
+          }, fail), fail);
+        });
+      }
+      if (Array.from(hash.digest(), byte => byte.toString(16).padStart(2, '0')).join('') !== file.sha256) throw new Error('El adjunto no coincide con su huella. El original se conserva.');
+    } finally { hash.clean(); }
+  }
+  signal?.throwIfAborted();
+  const now = Date.now();
+  const item: WorkItem = { id: localIdentifier(), title, kind, instruction, createdAt: now, updatedAt: now, status: 'local', revision: 1,
+    files: files.map(file => ({ id: localIdentifier(), name: file.name, type: file.type, size: file.size })), versions: [], source: { id: sourceId, hash: sourceHash } };
+  return transact('readwrite', (tx, done, fail) => {
+    const items = tx.objectStore(ITEMS), fileStore = tx.objectStore(FILES);
+    whenImportActive(tx, sourceId, generation, () => whenReady<WorkItem[]>(items.getAll(), existing => {
+      const prior = existing.find(value => value.source?.id === sourceId);
+      if (prior) { if (prior.source?.hash !== sourceHash) throw new Error('El mismo identificador de importación contiene datos diferentes. Conserva ambos originales antes de reintentar.'); done(prior); return; }
+      if (existing.length >= WORK_LIMITS.items) throw new Error('La bandeja admite 100 trabajos. Elimina uno antes de crear otro.');
+      let pending = files.length;
+      files.forEach((file, index) => whenReady<ChunkStage | undefined>(fileStore.get(['stage', sourceId, file.id]), stage => {
+        if (!stage || stage.kind !== 'chunk-stage-v1' || stage.size !== file.size || stage.sha256 !== file.sha256) throw new Error('La importación cambió. Se conserva el original.');
+        // Validate the actual persisted chunks inside this publication transaction,
+        // so a partial write or corruption cannot cause native acknowledgement.
+        const hash = new Hash();
+        const verify = (offset: number) => {
+          if (offset === file.size) {
+            const actual = Array.from(hash.digest(), byte => byte.toString(16).padStart(2, '0')).join(''); hash.clean();
+            if (actual !== file.sha256) throw new Error('La copia local no coincide con su huella. Se conserva el original.');
+            const refs = stage.published ? chunkReferences(stage, { size: file.size, sha256: file.sha256 }) : 0;
+            fileStore.put({ ...stage, published: true, refs: refs + 1 }, ['stage', sourceId, file.id]);
+            fileStore.add({ kind: 'chunks-v1', sourceId, fileId: file.id, size: file.size, sha256: file.sha256 } satisfies ChunkPointer, [item.id, item.files[index]!.id]);
+            if (--pending === 0) { items.add(item); done(item); }
+            return;
+          }
+          whenReady<Uint8Array | undefined>(fileStore.get(['chunk', sourceId, file.id, offset]), chunk => {
+            const length = Math.min(CHUNK_BYTES, file.size - offset);
+            if (!(chunk instanceof Uint8Array) || chunk.length !== length) throw new Error('Falta un fragmento local. Se conserva el original.');
+            hash.update(chunk); verify(offset + length);
+          }, fail);
+        };
+        verify(0);
+      }, fail));
+    }, fail), fail);
+  });
+}
+
+/** Explicitly cancel incomplete staging; published work and native source are untouched. */
+export function cancelStreamedImport(sourceId: string): Promise<void> {
+  sourceId = importSourceId(sourceId);
+  return transact('readwrite', (tx, done, fail) => {
+    const files = tx.objectStore(FILES);
+    whenReady<unknown>(files.get(['generation', sourceId]), value => {
+      files.put(generationValue(value) + 1, ['generation', sourceId]);
+      const stages = files.openCursor(IDBKeyRange.bound(['stage', sourceId], ['stage', sourceId, []]));
+      files.put(true, ['cancel', sourceId]);
+      stages.onerror = () => fail(stages.error);
+      stages.onsuccess = () => {
+      try {
+        const cursor = stages.result;
+        if (!cursor) { done(undefined); return; }
+        const stage = cursor.value as ChunkStage; const key = cursor.key;
+        if (!Array.isArray(key) || typeof key[2] !== 'string' || stage?.kind !== 'chunk-stage-v1' || stage.published !== false || !Number.isSafeInteger(stage.size) || stage.size <= 0 || stage.size > WORK_LIMITS.fileBytes) throw new Error('La importación ya fue publicada o no se puede verificar. Los datos se conservan.');
+        files.delete(IDBKeyRange.bound(['chunk', sourceId, key[2], 0], ['chunk', sourceId, key[2], stage.size]));
+        cursor.delete(); cursor.continue();
+      } catch (error) { fail(error); }
+      };
+    }, fail);
+  });
+}
+/** Only an explicit retry removes the cancellation fence; the native source must still exist. */
+export function resumeStreamedImport(sourceId: string): Promise<void> {
+  sourceId = importSourceId(sourceId);
+  return transact('readwrite', (tx, done, fail) => {
+    const files = tx.objectStore(FILES);
+    whenReady<unknown>(files.get(['generation', sourceId]), value => {
+      files.put(generationValue(value) + 1, ['generation', sourceId]); files.delete(['cancel', sourceId]); done(undefined);
+    }, fail);
+  });
+}
+
+async function readStoredFile(workId: string, fileId: string): Promise<Blob | ChunkPointer | undefined> {
   return transact('readonly', (transaction, result, fail) => {
-    whenReady<Blob | undefined>(transaction.objectStore(FILES).get([workId, fileId]), blob => {
-      if (blob !== undefined && !(blob instanceof Blob)) throw new Error('El archivo local no es válido.');
+    whenReady<Blob | ChunkPointer | undefined>(transaction.objectStore(FILES).get([workId, fileId]), blob => {
+      if (blob !== undefined && !(blob instanceof Blob) && !isChunkPointer(blob)) throw new Error('El archivo local no es válido.');
       result(blob);
     }, fail);
   });
+}
+export async function readWorkFileSize(workId: string, fileId: string): Promise<number | undefined> {
+  return (await readStoredFile(workId, fileId))?.size;
+}
+/** Bounded read for transfers. Old Blob records and new chunk references are supported. */
+export async function readWorkFileSlice(workId: string, fileId: string, offset: number, length: number): Promise<Uint8Array> {
+  const source = await readStoredFile(workId, fileId);
+  if (!source || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || length > CHUNK_BYTES || offset + length > source.size) throw new Error('El rango del archivo local no es válido.');
+  if (source instanceof Blob) return new Uint8Array(await source.slice(offset, offset + length).arrayBuffer());
+  const output = new Uint8Array(length); let copied = 0;
+  while (copied < length) {
+    const position = offset + copied; const start = Math.floor(position / CHUNK_BYTES) * CHUNK_BYTES;
+    const chunk = await transact<Uint8Array | undefined>('readonly', (tx, done, fail) => whenReady(tx.objectStore(FILES).get(['chunk', source.sourceId, source.fileId, start]), done, fail));
+    const expected = Math.min(CHUNK_BYTES, source.size - start);
+    if (!(chunk instanceof Uint8Array) || chunk.length !== expected) throw new Error('Falta un fragmento del archivo local. Se conserva la información restante.');
+    const count = Math.min(length - copied, expected - (position - start));
+    output.set(chunk.subarray(position - start, position - start + count), copied); copied += count;
+  }
+  return output;
+}
+export async function readWorkFile(workId: string, fileId: string): Promise<Blob | undefined> {
+  const source = await readStoredFile(workId, fileId); if (!source || source instanceof Blob) return source;
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  for (let offset = 0; offset < source.size; offset += CHUNK_BYTES) chunks.push(await readWorkFileSlice(workId, fileId, offset, Math.min(CHUNK_BYTES, source.size - offset)) as Uint8Array<ArrayBuffer>);
+  const blob = new Blob(chunks);
+  if (await blobSHA256(blob) !== source.sha256) throw new Error('El archivo local no coincide con su huella. Se conserva la información restante.');
+  return blob;
 }
 
 export function reviseWork(id: string, expectedRevision: number, instruction: string): Promise<WorkItem> {
@@ -452,9 +682,28 @@ export function deleteWork(id: string, expectedRevision: number): Promise<void> 
       const item = requireItem(current);
       assertWorkRevision(item, expectedRevision);
       if (item.status === 'sending') throw new Error('Resuelve el envío en curso antes de eliminar el trabajo.');
-      for (const file of item.files) transaction.objectStore(FILES).delete([id, file.id]);
-      store.delete(id);
-      result(undefined);
+      const files = transaction.objectStore(FILES);
+      let pending = item.files.length;
+      const finish = () => { store.delete(id); result(undefined); };
+      if (!pending) { finish(); return; }
+      for (const file of item.files) whenReady<Blob | ChunkPointer | undefined>(files.get([id, file.id]), value => {
+        if (!value || (!(value instanceof Blob) && !isChunkPointer(value)) || value.size !== file.size) throw new Error('No se puede verificar el adjunto. Se conservan los datos.');
+        const removePointer = () => { files.delete([id, file.id]); if (--pending === 0) finish(); };
+        if (isChunkPointer(value)) {
+          const key = ['stage', value.sourceId, value.fileId];
+          whenReady<ChunkStage | undefined>(files.get(key), stage => {
+            if (!stage) throw new Error('No se puede verificar el archivo. Se conservan los datos.');
+            const refs = chunkReferences(stage, value);
+            verifyChunkReferences(transaction, value, refs, () => {
+              if (refs === 1) {
+                files.delete(IDBKeyRange.bound(['chunk', value.sourceId, value.fileId, 0], ['chunk', value.sourceId, value.fileId, value.size]));
+                files.delete(key);
+              } else files.put({ ...stage, refs: refs - 1 }, key);
+              removePointer();
+            }, fail);
+          }, fail);
+        } else removePointer();
+      }, fail);
     }, fail);
   });
 }

@@ -114,16 +114,21 @@ export async function listSharedImports(call: DeviceInvoker = deviceInvoke): Pro
   if (!Array.isArray(reply.items) || reply.items.length > 100 || !reply.items.every(validSharedImport)) throw new Error('La bandeja compartida contiene un manifiesto inválido.');
   return reply.items;
 }
+export async function readSharedFileChunk(item: SharedImport, file: SharedFile, offset: number, length: number, call: DeviceInvoker = deviceInvoke): Promise<Uint8Array<ArrayBuffer>> {
+  if (!validSharedImport(item) || !item.files.some(candidate => candidate.id === file.id && candidate.sha256 === file.sha256 && candidate.size === file.size)
+    || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || length > 256 * 1024 || offset + length > file.size) throw new Error('Adjunto compartido inválido.');
+  const reply = requireNative(await call<NativeReply & { data?: string }>('share_read', { id: item.id, fileId: file.id, offset, length }));
+  if (typeof reply.data !== 'string' || reply.data.length > Math.ceil(length / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(reply.data)) throw new Error('El adjunto llegó incompleto.');
+  const binary = atob(reply.data);
+  if (binary.length !== length) throw new Error('El adjunto llegó incompleto.');
+  return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
 export async function readSharedFile(item: SharedImport, file: SharedFile, call: DeviceInvoker = deviceInvoke): Promise<File> {
   if (!validSharedImport(item) || !item.files.some(candidate => candidate.id === file.id && candidate.sha256 === file.sha256 && candidate.size === file.size)) throw new Error('Adjunto compartido inválido.');
   const chunks: Uint8Array<ArrayBuffer>[] = [];
   for (let offset = 0; offset < file.size;) {
     const length = Math.min(256 * 1024, file.size - offset);
-    const reply = requireNative(await call<NativeReply & { data?: string }>('share_read', { id: item.id, fileId: file.id, offset, length }));
-    if (typeof reply.data !== 'string' || reply.data.length > Math.ceil(length / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(reply.data)) throw new Error('El adjunto llegó incompleto.');
-    const binary = atob(reply.data);
-    if (binary.length !== length) throw new Error('El adjunto llegó incompleto.');
-    chunks.push(Uint8Array.from(binary, char => char.charCodeAt(0))); offset += length;
+    chunks.push(await readSharedFileChunk(item, file, offset, length, call)); offset += length;
   }
   const result = new File(chunks, file.name, { type: file.mime, lastModified: item.createdAt });
   // Verify reconstructed bytes even on WKWebView origins without WebCrypto.
@@ -143,14 +148,21 @@ export async function importSharedItem(item: SharedImport,
   await save({ sourceId: `share:${item.id}`, item, files });
   await acknowledgeSharedImport(item.id, call);
 }
+/** The caller commits all chunks before returning; a failed save never acknowledges native storage. */
+export async function importSharedItemStreamed(item: SharedImport,
+  save: (input: { sourceId: string; item: SharedImport; read: (file: SharedFile, offset: number, length: number) => Promise<Uint8Array> }) => Promise<void>, call: DeviceInvoker = deviceInvoke): Promise<void> {
+  if (!validSharedImport(item)) throw new Error('Importación inválida.');
+  await save({ sourceId: `share:${item.id}`, item, read: (file, offset, length) => readSharedFileChunk(item, file, offset, length, call) });
+  await acknowledgeSharedImport(item.id, call);
+}
 
 /** A damaged item must not prevent independent, later items from being recovered. */
-export async function recoverImportBatch(items: SharedImport[], importItem: (item: SharedImport) => Promise<void>): Promise<{ recovered: number; failures: { title: string; message: string }[] }> {
-  const failures: { title: string; message: string }[] = [];
+export async function recoverImportBatch(items: SharedImport[], importItem: (item: SharedImport) => Promise<void>): Promise<{ recovered: number; failures: { id: string; title: string; message: string }[] }> {
+  const failures: { id: string; title: string; message: string }[] = [];
   let recovered = 0;
   for (const item of items) {
     try { await importItem(item); recovered++; }
-    catch (error) { failures.push({ title: item.title, message: error instanceof Error ? error.message : 'No se pudo completar la importación.' }); }
+    catch (error) { failures.push({ id: item.id, title: item.title, message: error instanceof Error ? error.message : 'No se pudo completar la importación.' }); }
   }
   return { recovered, failures };
 }
