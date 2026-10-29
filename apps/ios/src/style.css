@@ -209,3 +209,8 @@ main { width: 100%; min-width: 0; }
   overscroll-behavior: contain;
   scroll-padding-block: 4px;
 }
+@media (orientation: portrait) {
+  :root[data-keyboard="true"][data-large-text="true"] #panel-chat #composer {
+    max-height: max(72px, calc(var(--app-height, 100dvh) * .42));
+  }
+}
