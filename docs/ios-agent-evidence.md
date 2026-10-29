@@ -1,0 +1,9 @@
+# Evidencia de herramientas del agente local
+
+Capri guarda la actividad de cada herramienta antes de iniciar su ejecución y guarda el resultado acotado antes de pedir otro paso al modelo. Si no puede guardar el inicio, la herramienta no se ejecuta. Si falla el guardado después del efecto, no repite la herramienta ni interpreta el fallo de almacenamiento como un fallo del efecto: conserva la actividad en memoria y detiene el agente para revisión o exportación.
+
+La actividad de conversación conserva hasta 4.000 caracteres del resultado y señala si está recortado; no sustituye los registros completos de la herramienta o el servicio. Una respuesta no serializable se presenta sin evidencia legible y detiene el agente. Los estados `uncertain` y `unconfirmed` no se muestran como actividad completada. La cancelación después de un efecto conserva la observación antes de terminar el turno; la aplicación advierte si la copia local no pudo confirmarse. Cerrar el proceso antes de resolver un fallo de cuota puede perder los datos que sólo estén en memoria.
+
+El contexto local se reconstruye desde la conversación reciente dentro del presupuesto del bridge, con herramientas de consulta del archivo para material anterior. La ejecución del agente en WebView no se reanuda automáticamente tras la terminación del proceso; la recuperación nativa conserva el resultado disponible y no vuelve a ejecutar herramientas. No se ha validado la inferencia real de Foundation Models ni el consumo de memoria en el iPhone con esta corrección.
+
+Verificación: 27 pruebas Node focales y 13 escenarios Chromium aislados pasan, incluidos un efecto local real con cuota simulada, el bloqueo del siguiente paso, cancelación durante el guardado y resultados nativos simulados. Para revertir la unidad se revierte el commit que incluye la barrera de `agent-runner.ts`, el callback de `main.ts` y sus pruebas; no requiere deshacer los journals de almacenamiento ni los conectores.

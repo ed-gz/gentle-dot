@@ -44,7 +44,7 @@ function recentObservations(observations: Observation[], budget: number): string
 function failedObservation(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const result = value as Record<string, unknown>;
-  return result.isError === true || result.approved === false || result.accepted === false || result.status === 'uncertain'
+  return result.isError === true || result.approved === false || result.accepted === false || result.status === 'uncertain' || result.status === 'unconfirmed'
     || (result.result !== undefined && failedObservation(result.result))
     || (result.processing !== undefined && failedObservation(result.processing)) || result.status === 'failed';
 }
@@ -65,7 +65,7 @@ const activityLabels: Record<string, string> = {
 export function createAgentRunner(options: {
   tools: Tool[];
   step(prompt: string): Promise<{ ok: boolean; decision?: Decision; message?: string }>;
-  onTrace(trace: AgentTrace): void;
+  onTrace(trace: AgentTrace): void | Promise<void>;
   waitUntilActive?(signal: AbortSignal): Promise<void>;
 }) {
   const tools = new Map(options.tools.map(tool => [tool.definition.name, tool]));
@@ -135,21 +135,37 @@ export function createAgentRunner(options: {
           if (!readOnly && invoked.has(key)) throw new Error('Capri intentó repetir la misma operación. Conservé el resultado anterior; revisa el progreso antes de continuar.');
           invoked.add(key);
           const trace: AgentTrace = { id: localIdentifier(), name: decision.toolName, label: activityLabels[decision.toolName] ?? tool.definition.description.slice(0, 120), status: 'running' };
-          options.onTrace(trace);
+          try { await options.onTrace(trace); }
+          catch (error) {
+            // A tool must not start if its initial activity could not be
+            // saved. Keep the visible state honest even if storage is full.
+            try { await options.onTrace({ ...trace, status:'failed', detail:'No se confirmó el guardado; la herramienta no se ejecutó.' }); } catch { /* The in-memory copy remains available for rescue. */ }
+            throw error;
+          }
+          let result: unknown;
           try {
             check();
             await options.waitUntilActive?.(run.signal);
             check();
-            const result = await tool.execute(args, { signal: run.signal, ...(run.askApproval ? { askApproval: run.askApproval } : {}) });
-            // A completed operation is recorded even when cancellation arrived during it.
-            options.onTrace({ ...trace, status: failedObservation(result) ? 'failed' : 'done', detail: bounded(JSON.stringify(result) ?? 'Completado', 4000) });
-            observations.push({ tool: decision.toolName, arguments: args, result });
+            result = await tool.execute(args, { signal: run.signal, ...(run.askApproval ? { askApproval: run.askApproval } : {}) });
           } catch (error) {
             const failure = error instanceof Error ? bounded(error.message, 500) : 'No se confirmó la operación.';
-            options.onTrace({ ...trace, status: 'failed', detail: run.signal.aborted ? 'Interrumpido. Verifica el resultado antes de repetir.' : failure });
+            await options.onTrace({ ...trace, status: 'failed', detail: run.signal.aborted ? 'Interrumpido. Verifica el resultado antes de repetir.' : failure });
             check();
             observations.push({ tool: decision.toolName, arguments: args, result: { error: failure, instruction: 'La operación falló o quedó sin confirmar. No la repitas automáticamente; informa al usuario.' } });
+            continue;
           }
+          // The side effect may have happened even if cancellation arrives.
+          // Persist its bounded activity before allowing another model step;
+          // storage failure must not turn a confirmed effect into a failure.
+          let serialized: string | undefined;
+          try { serialized = JSON.stringify(result); } catch { /* A tool must return serializable evidence. */ }
+          if (serialized === undefined) {
+            await options.onTrace({ ...trace, status:'failed', detail:'La herramienta respondió sin evidencia legible. Revisa su resultado antes de repetir.' });
+            throw new Error('No pude conservar el resultado de la herramienta. Revisa su estado antes de continuar.');
+          }
+          await options.onTrace({ ...trace, status: failedObservation(result) ? 'failed' : 'done', detail: bounded(serialized, 4000) });
+          observations.push({ tool: decision.toolName, arguments: args, result });
           check();
         }
         throw new Error('Se alcanzó el límite de pasos de esta instrucción. El progreso quedó en la conversación; puedes continuar desde aquí.');

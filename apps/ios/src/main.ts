@@ -1224,7 +1224,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
         if (operation === 'process' && !linked.supportsMeetingDrafts()) throw new Error('Este Gentle Dot no tiene disponible el procesamiento de reuniones. El material confirmado se conserva.');
         const approvedHost = host;
         return createWorkDispatcher(request => linked.exchange(request, approvedHost), approvedHost, linked.workSyncLimits());
-      } }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct', 'work_propose_action', 'work_proposals', 'work_review_action'].includes(tool.definition.name))], step: prompt => agentStep(prompt, id, allowBackground), onTrace(trace) {
+      } }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct', 'work_propose_action', 'work_proposals', 'work_review_action'].includes(tool.definition.name))], step: prompt => agentStep(prompt, id, allowBackground), async onTrace(trace) {
         const entry = entries.find(item => item.id === id) ?? turnEntry;
         const activities = [...entry.activities ?? []]; const at = activities.findIndex(item => item.id === trace.id);
         const activity = { id: trace.id, kind: 'other' as const, title: trace.label, status: trace.status, detail: trace.detail };
@@ -1232,6 +1232,8 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
         turnEntry = { ...entry, activities, state: generation !== localGeneration && entry.state === 'pending' ? 'interrupted' : entry.state };
         add(turnEntry);
         if (generation === localGeneration) { element('active-tool').textContent = trace.status === 'running' ? trace.label : ''; setIntent({ working: trace.status === 'running', thinking: trace.status !== 'running' }); observeLocalActivity(id, trace.status === 'running' ? 'working' : 'thinking'); }
+        await persist();
+        if (persistence.status().blocked || persistence.status().pending) throw new Error('No pude confirmar el guardado de la actividad. Conserva Capri abierta o exporta antes de continuar.');
       } });
       const text = await runner.run({ instruction: promptText, context, signal: controller.signal, askApproval: async request => {
         if (generation === localGeneration) { setIntent({ alert: true }); observeLocalActivity(id, 'attention'); }

@@ -74,13 +74,49 @@ test('an uncertain failure cannot be automatically replayed', async () => {
 });
 
 test('rejected and uncertain service receipts stay failed in the conversation activity', async () => {
-  for (const receipt of [{ accepted: false }, { approved: false, executed: false }, { result: { isError: true } }, { processing: { status: 'failed' } }, { status: 'uncertain' }]) {
+  for (const receipt of [{ accepted: false }, { approved: false, executed: false }, { result: { isError: true } }, { processing: { status: 'failed' } }, { status: 'uncertain' }, { status: 'unconfirmed' }]) {
     const f = sequence([call('tool_describe', { name: 'save_note' }), call('save_note', { title: 'T', text: 'X' }),
       prompt => { assert.ok(prompt.includes(JSON.stringify(receipt))); return answer('No se confirmó.'); }],
       { tools: [tool(async () => receipt)] });
     assert.equal(await f.runner.run(run()), 'No se confirmó.');
     assert.deepEqual(f.traces.map(trace => trace.status), ['running', 'failed']);
   }
+});
+
+test('a failed initial activity save stops the tool before it can execute', async () => {
+  let executions=0, steps=0; const traces=[];
+  const runner=createAgentRunner({tools:[tool(async()=>{executions++;return {savedLocally:true};})],step:async()=>++steps===1?call('tool_describe',{name:'save_note'}):call('save_note',{title:'T',text:'X'}),
+    onTrace:async trace=>{traces.push(trace);throw new Error('Cuota');}});
+  await assert.rejects(runner.run(run()),/Cuota/);
+  assert.equal(executions,0);assert.equal(steps,2);
+  assert.deepEqual(traces.map(trace=>trace.status),['running','failed']);
+  assert.match(traces[1].detail,/no se ejecutó/);
+});
+
+test('a failed receipt save stops the next model step without relabeling a confirmed effect', async () => {
+  let executions=0, steps=0; const traces=[];
+  const runner=createAgentRunner({tools:[tool(async()=>{executions++;return {savedLocally:true,id:'exacto'};})],step:async()=>++steps===1?call('tool_describe',{name:'save_note'}):call('save_note',{title:'T',text:'X'}),
+    onTrace:async trace=>{traces.push(trace);if(trace.status==='done')throw new Error('Cuota');}});
+  await assert.rejects(runner.run(run()),/Cuota/);
+  assert.equal(executions,1);assert.equal(steps,2);
+  assert.deepEqual(traces.map(trace=>trace.status),['running','done']);assert.match(traces[1].detail,/exacto/);
+});
+
+test('cancellation between the effect and its delayed durable receipt never starts another step', async () => {
+  const controller=new AbortController();let finish, reached, executions=0, steps=0;const traces=[];
+  const waiting=new Promise(resolve=>{reached=resolve;});
+  const runner=createAgentRunner({tools:[tool(async()=>{executions++;return {savedLocally:true,id:'guardado'};})],step:async()=>++steps===1?call('tool_describe',{name:'save_note'}):call('save_note',{title:'T',text:'X'}),
+    onTrace:trace=>{traces.push(trace);if(trace.status==='done'){reached();return new Promise(resolve=>{finish=resolve;});}}});
+  const active=runner.run(run(controller));await waiting;controller.abort();assert.equal(steps,2);finish();
+  await assert.rejects(active,{name:'AbortError'});assert.equal(executions,1);assert.equal(steps,2);
+  assert.deepEqual(traces.map(trace=>trace.status),['running','done']);assert.match(traces[1].detail,/guardado/);
+});
+
+test('a tool result without serializable evidence never triggers another model step', async () => {
+  let executions=0, steps=0;const traces=[], cyclic={};cyclic.self=cyclic;
+  const runner=createAgentRunner({tools:[tool(async()=>{executions++;return cyclic;})],step:async()=>++steps===1?call('tool_describe',{name:'save_note'}):call('save_note',{title:'T',text:'X'}),onTrace:trace=>traces.push(trace)});
+  await assert.rejects(runner.run(run()),/no pude conservar/i);assert.equal(executions,1);assert.equal(steps,2);
+  assert.deepEqual(traces.map(trace=>trace.status),['running','failed']);assert.match(traces[1].detail,/revisa su resultado/i);
 });
 
 test('a prepared draft is not presented as a failed action just because execution is pending', async () => {
