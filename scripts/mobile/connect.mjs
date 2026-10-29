@@ -61,7 +61,7 @@ if (args.includes("--list")) {
 		throw new Error("The Tailscale URL does not reach this Gentle Dot daemon. Check tailscale serve status.");
 	const { code, expiresAt } = await api("code", {});
 	const link = `gentledot://pair?${new URLSearchParams({ url: url.origin, code, name: "Gentle Dot" })}`;
-	console.log(`Scan in Gentle Dot Android. Expires ${expiresAt}. Keep the QR private.`);
+	console.log(`Scan in Capri on iPhone or Gentle Dot mobile. Expires ${expiresAt}. Keep the QR private.`);
 	const rendered = spawnSync("qrencode", ["-t", "ANSIUTF8"], { input: link, encoding: "utf8" });
 	if (rendered.status === 0) process.stdout.write(rendered.stdout);
 	else console.log("Install qrencode for a terminal QR.");
