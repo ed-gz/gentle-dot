@@ -4,12 +4,19 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { canonicalWorkManifest, type WorkSyncManifest, type WorkResult, type WorkSyncRequest } from '@gentle-dot/protocol';
 import { expect, it } from 'vitest';
-import { createMeetingProcessor } from '../src/work-meeting.ts';
+import { checkMeetingContextBudget, createMeetingProcessor } from '../src/work-meeting.ts';
 import { WorkProcessorFailure, WorkSyncStore } from '../src/work-sync.ts';
 import { tempDir } from './helpers.ts';
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 const minutes = { title: 'Release review', summary: 'Revisar el despliegue; todavía falta una fecha confirmada.', items: [{ kind: 'task', certainty: 'confirmed', text: 'Ana revisará los logs.', owner: 'Ana', due: null, evidenceIds: ['audio-0'] }, { kind: 'risk', certainty: 'inference', text: 'El ruido puede afectar la evidencia.', owner: null, due: null, evidenceIds: ['apple-0'] }] };
+it('budgets the complete prompt against the selected model without silently truncating it', () => {
+  expect(() => checkMeetingContextBudget('á'.repeat(12000), 32768)).toThrow('no cabe');
+  expect(() => checkMeetingContextBudget('x'.repeat(1000), 32768)).not.toThrow();
+  expect(() => checkMeetingContextBudget('x'.repeat(1000), 4096, 512)).not.toThrow();
+  expect(() => checkMeetingContextBudget('x', 4096, 0)).toThrow('no cabe');
+  expect(() => checkMeetingContextBudget('x', 0)).toThrow('no cabe');
+});
 it.skipIf(spawnSync('ffmpeg', ['-version']).status !== 0 || spawnSync('ffprobe', ['-version']).status !== 0)('real ffmpeg decoding splits a 31-second WAV into bounded local-transcriber segments', async () => {
   const directory = tempDir(); const dataBytes = 31 * 16000 * 2; const wav = Buffer.alloc(44 + dataBytes);
   wav.write('RIFF', 0); wav.writeUInt32LE(36 + dataBytes, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(16000, 24); wav.writeUInt32LE(32000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(dataBytes, 40);
@@ -108,6 +115,15 @@ it('reports the version budget failure through the durable processing status', a
   const send=(operation:object)=>store.handle('device',{type:'work_sync',requestId:randomUUID(),transferId:'t',...operation} as WorkSyncRequest);
   await send({operation:'begin',manifest,manifestHash});await send({operation:'commit'});await send({operation:'process',approvedManifestHash:manifestHash});
   await expect.poll(async()=>{const value=await send({operation:'result'});return value.state==='processing'&&value.processing.status==='failed'?value.processing.message:'';}).toContain('superan 200000 caracteres');
+  await store.close();
+});
+
+it('reports the selected model context limit without exposing arbitrary processor errors', async () => {
+  const directory=join(tempDir(),'inbox');const manifest:WorkSyncManifest={schema:1,workId:'context-failure',revision:1,kind:'meeting',title:'Reunión',instruction:'',files:[]};const manifestHash=hash(canonicalWorkManifest(manifest));
+  const store=new WorkSyncStore(directory,async()=>{throw new WorkProcessorFailure('model-context-too-small');});
+  const send=(operation:object)=>store.handle('device',{type:'work_sync',requestId:randomUUID(),transferId:'t',...operation} as WorkSyncRequest);
+  await send({operation:'begin',manifest,manifestHash});await send({operation:'commit'});await send({operation:'process',approvedManifestHash:manifestHash});
+  await expect.poll(async()=>{const value=await send({operation:'result'});return value.state==='processing'&&value.processing.status==='failed'?value.processing.message:'';}).toContain('presupuesto conservador');
   await store.close();
 });
 

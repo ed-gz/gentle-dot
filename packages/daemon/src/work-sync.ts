@@ -9,8 +9,8 @@ type RecordFile = { manifest: WorkSyncManifest; manifestHash: string; receipt?: 
 
 /** Only fixed, non-sensitive messages may cross the processing boundary. */
 export class WorkProcessorFailure extends Error {
-  readonly reason: 'versions-too-large';
-  constructor(reason: 'versions-too-large') { super('Las versiones anteriores superan 200000 caracteres. Conserva los originales y crea otro trabajo con sólo las versiones necesarias.'); this.reason = reason; }
+  readonly reason: 'versions-too-large' | 'model-context-too-small';
+  constructor(reason: WorkProcessorFailure['reason']) { super(reason === 'versions-too-large' ? 'Las versiones anteriores superan 200000 caracteres. Conserva los originales y crea otro trabajo con sólo las versiones necesarias.' : 'El contenido completo no cabe en el presupuesto conservador del modelo seleccionado. Conserva los originales y prepara trabajos más pequeños.'); this.reason = reason; }
 }
 export type WorkProcessor = (input: { directory: string; manifest: WorkSyncManifest; receipt: WorkSyncReceipt }, signal: AbortSignal) => Promise<WorkResult>;
 class WorkStorageError extends Error {
@@ -144,7 +144,7 @@ export class WorkSyncStore {
           processing = { status: 'ready', result };
         } catch (error) {
           if (controller.signal.aborted) return;
-          processing = { status: 'failed', message: error instanceof WorkProcessorFailure && error.reason === 'versions-too-large' ? 'Las versiones anteriores superan 200000 caracteres. Conserva los originales y crea otro trabajo con sólo las versiones necesarias.' : 'No se pudo completar una minuta verificable. Comprueba el transcriptor de la PC, ffmpeg y el modelo conectado. Los archivos originales están conservados.' };
+          processing = { status: 'failed', message: error instanceof WorkProcessorFailure && error.reason === 'versions-too-large' ? 'Las versiones anteriores superan 200000 caracteres. Conserva los originales y crea otro trabajo con sólo las versiones necesarias.' : error instanceof WorkProcessorFailure && error.reason === 'model-context-too-small' ? 'El contenido completo no cabe en el presupuesto conservador del modelo seleccionado. Conserva los originales y prepara trabajos más pequeños.' : 'No se pudo completar una minuta verificable. Comprueba el transcriptor de la PC, ffmpeg y el modelo conectado. Los archivos originales están conservados.' };
         }
         const save = this.queue.then(async () => { committed.processing = processing; await atomicRecord(directory, committed); });
         this.queue = save.catch(() => {}); await save;

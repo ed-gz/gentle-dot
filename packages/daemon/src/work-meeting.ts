@@ -10,6 +10,8 @@ import type { LocalVoice } from './local-voice.ts';
 import { isImportedTranscript, parseImportedTranscript } from './imported-transcript.ts';
 
 const run = promisify(execFile);
+const MEETING_SYSTEM_PROMPT = 'Eres Capri. Produce documentación verificable en español. Sólo transforma evidencia en un borrador JSON; nunca ejecutas herramientas ni acciones.';
+const MEETING_OUTPUT_TOKENS = 8000;
 type AudioSegment = { startMs: number; endMs: number; bytes: Buffer };
 type Generate = (prompt: string, signal: AbortSignal) => Promise<{ text: string; model: string; sessionId?: string }>;
 export type MeetingDependencies = { voice?: Pick<LocalVoice, 'available' | 'transcribe'>; generate: Generate; audio?: (path: string, signal: AbortSignal) => AsyncIterable<AudioSegment> };
@@ -92,6 +94,14 @@ export function createMeetingProcessor(dependencies: MeetingDependencies): WorkP
 }
 
 /** Reuse Pi's selected model/account while disabling every tool at the inference boundary. */
+export function checkMeetingContextBudget(prompt: string, contextWindow: number, outputTokens = MEETING_OUTPUT_TOKENS): void {
+  // Byte count is a deliberately conservative proxy, not a tokenizer or an
+  // exact count. Reserve output and framing; never drop prior versions to fit.
+  const bytes = Buffer.byteLength(prompt, 'utf8') + Buffer.byteLength(MEETING_SYSTEM_PROMPT, 'utf8');
+  if (!Number.isSafeInteger(outputTokens) || outputTokens <= 0 || !Number.isSafeInteger(contextWindow) || contextWindow <= outputTokens + 2048 || bytes > contextWindow - outputTokens - 2048)
+    throw new WorkProcessorFailure('model-context-too-small');
+}
+
 export function createPiMeetingGenerator(agentHome: string, supervisor: AgentSupervisor): Generate {
   return async (prompt, signal) => {
     const state = await supervisor.request({ type: 'get_state' });
@@ -104,7 +114,9 @@ export function createPiMeetingGenerator(agentHome: string, supervisor: AgentSup
     const { createNanProviderConfig } = await jiti.import<{ createNanProviderConfig: () => unknown }>('gentle-pi/lib/nan-provider.ts');
     runtime.registerNativeProvider(createNanProviderConfig() as never);
     const model = runtime.getModel(selected.provider, selected.id); if (!model) throw new Error('El modelo actual de Pi no está disponible para generar la minuta.');
-    const response = await runtime.completeSimple(model, { systemPrompt: 'Eres Capri. Produce documentación verificable en español. Sólo transforma evidencia en un borrador JSON; nunca ejecutas herramientas ni acciones.', messages: [{ role: 'user', content: prompt, timestamp: Date.now() }], tools: [] }, { signal, maxTokens: 8000 });
+    const outputTokens = Math.min(MEETING_OUTPUT_TOKENS, model.maxTokens);
+    checkMeetingContextBudget(prompt, model.contextWindow, outputTokens);
+    const response = await runtime.completeSimple(model, { systemPrompt: MEETING_SYSTEM_PROMPT, messages: [{ role: 'user', content: prompt, timestamp: Date.now() }], tools: [] }, { signal, maxTokens: outputTokens });
     if (response.stopReason !== 'stop' || response.content.some(block => block.type === 'toolCall')) throw new Error('El modelo no entregó un borrador completo.');
     return { text: response.content.filter(block => block.type === 'text').map(block => block.text).join(''), model: `${selected.provider}/${selected.id}`, ...(supervisor.sessionId ? { sessionId: supervisor.sessionId } : {}) };
   };
