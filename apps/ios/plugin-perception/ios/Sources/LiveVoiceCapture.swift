@@ -80,20 +80,34 @@ final class LiveCaptureState {
         var stop = false
         lock.lock()
         guard lifecycle.accepting else { lock.unlock(); return }
-        if !buffer.format.isEqual(sourceFormat) || buffer.frameLength > 8_192 {
+        if !buffer.format.isEqual(sourceFormat) {
             failure = .recordingInterrupted; lifecycle.close(); stop = true
             issueMessage = "Cambió el micrófono y la grabación se interrumpió. Vuelve a intentarlo."
+        } else if buffer.frameLength > 65_536 {
+            failure = .captureOverflow; lifecycle.close(); stop = true
+            issueMessage = "El bloque de audio fue demasiado grande. Vuelve a dictarlo."
         } else if buffer.frameLength == 0 {
             // No samples arrived. This is not a failed copy or lost audio;
             // keep accepting the next buffer and preserve the current meter.
             lock.unlock(); return
-        } else if writePending >= queueLimit {
-            failure = .captureOverflow; lifecycle.close(); stop = true
-            issueMessage = "No pude conservar todo el audio. Vuelve a dictarlo."
         } else {
             level = VoiceLevel.measure(buffer)
-            let frames = AVAudioFrameCount(min(Int64(buffer.frameLength), remainingFrames))
-            if let copy = LiveAudioBuffer.copy(buffer, frames: frames) {
+            var offset: AVAudioFrameCount = 0
+            // Apple may deliver more frames than requested. Copy bounded
+            // chunks in order, never holding the engine's reusable buffer.
+            while offset < buffer.frameLength && remainingFrames > 0 {
+                if writePending >= queueLimit {
+                    failure = .captureOverflow; lifecycle.close(); stop = true
+                    issueMessage = "No pude conservar todo el audio. Vuelve a dictarlo."
+                    break
+                }
+                let frames = AVAudioFrameCount(min(Int64(min(buffer.frameLength - offset, 8_192)), remainingFrames))
+                guard let copy = LiveAudioBuffer.copy(buffer, offset: offset, frames: frames) else {
+                    failure = .cannotCopy; lifecycle.close(); stop = true
+                    issueMessage = "No pude conservar todo el audio. Vuelve a dictarlo."
+                    break
+                }
+                offset += frames
                 remainingFrames -= Int64(frames)
                 writePending += 1
                 // Enqueue under the lock so drain() cannot overtake this buffer.
@@ -114,11 +128,8 @@ final class LiveCaptureState {
                         }
                     }
                 }
-                if remainingFrames == 0 { lifecycle.close(); stop = true }
-            } else {
-                failure = .cannotCopy; lifecycle.close(); stop = true
-                issueMessage = "No pude conservar todo el audio. Vuelve a dictarlo."
             }
+            if remainingFrames == 0 { lifecycle.close(); stop = true }
         }
         let stopAction = stopEngine
         lock.unlock()

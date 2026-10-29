@@ -35,8 +35,14 @@ un buffer PCM vacío se trataba como fallo de copia e impedía conservar las mue
 siguientes. La corrección ignora ese buffer sin declarar pérdida de audio; sigue
 rechazando formatos cambiados y buffers sobredimensionados. El fixture usa buffers
 sintéticos, no el micrófono, y por sí solo no demuestra que este fuera el origen
-del error observado en el iPhone. La ejecución posterior de la corrección debe
-verificarse antes de dar por superada la regresión.
+del error observado en el iPhone. El run público 40867535660 pasó la regresión
+corregida y los fixtures nativos de captura, conservación y cancelación, además
+del typecheck iOS con stubs de Tauri; no ejecutó la app ni el micrófono del teléfono.
+Apple permite que el tap entregue bloques de un tamaño distinto al solicitado.
+La fuente posterior divide bloques de hasta 65 536 frames en copias acotadas;
+ante un bloque mayor o una cola llena marca la captura incompleta. La nueva
+regresión de bloques grandes queda pendiente de ejecución macOS al escribir esto;
+el rendimiento del callback y los tamaños que entrega el iPhone no están medidos.
 
 La selección prioriza un transcriptor ya instalado en español para permitir dictar sin descargar recursos; si hay varios, prefiere `SpeechTranscriber`. También consulta `DictationTranscriber`, que Apple documenta como transcripción local para más dispositivos y locales. Cuando ninguno está instalado, prefiere descargar el modelo de `SpeechTranscriber` si es compatible. La preparación de assets, elección de formato y transcripción usan el mismo módulo seleccionado, opciones de entrega final y el atributo `audioTimeRange`. Si ninguno ofrece español, se indica que no está disponible. Esta ampliación requiere compilación con el SDK y prueba real de ambos caminos; las pruebas Node/Rust no verifican el reconocimiento nativo.
 
