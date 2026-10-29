@@ -144,17 +144,23 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         // Check every supported Spanish candidate before asking for a download.
         // es-MX may be supported but not installed while es-ES is already on
         // the device. Stopping at the first supported locale broke offline use.
-        var choices: [(value: (locale: Locale, kind: VoiceTranscriberKind), installed: Bool)] = []
+        var choices: [(value: (locale: Locale, kind: VoiceTranscriberKind), state: VoiceAssetState)] = []
         for candidate in candidates {
-            choices.append((candidate, await installed(candidate.locale, kind: candidate.kind)))
+            choices.append((candidate, await assetState(candidate.locale, kind: candidate.kind)))
         }
         return VoiceLocaleSelection.preferred(choices)
     }
 
-    private func installed(_ locale: Locale, kind: VoiceTranscriberKind) async -> Bool {
+    private func assetState(_ locale: Locale, kind: VoiceTranscriberKind) async -> VoiceAssetState {
         let finalModule = makeTranscriber(for: locale, kind: kind)
         let preview = makeTranscriber(for: locale, kind: kind, incremental: true)
-        return await AssetInventory.status(forModules: [finalModule.module, preview.module]) == .installed
+        switch await AssetInventory.status(forModules: [finalModule.module, preview.module]) {
+        case .installed: return .installed
+        case .supported: return .supported
+        case .downloading: return .downloading
+        case .unsupported: return .unsupported
+        @unknown default: return .unknown
+        }
     }
 
     // Use the shipping initializer, with the same configuration for asset
@@ -281,9 +287,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         guard let selected = await preferredTranscriber() else {
             return VoiceReply(available: false, status: "unsupported_language", microphonePermission: permission)
         }
-        let assets = await installed(selected.locale, kind: selected.kind)
-        return VoiceReply(ok: true, available: assets, status: assets ? "available" : "assets_required",
-            locale: selected.locale.identifier(.bcp47), assetsInstalled: assets, microphonePermission: permission,
+        let assets = await assetState(selected.locale, kind: selected.kind)
+        return VoiceReply(ok: true, available: assets == .installed, status: assets.status,
+            locale: selected.locale.identifier(.bcp47), assetsInstalled: assets == .installed, microphonePermission: permission,
             recording: recorder?.isRecording ?? false, readyToTranscribe: sessionID != nil && !(recorder?.isRecording ?? false),
             busy: busy, sessionId: sessionID, maxDurationSeconds: Int(maximumDuration))
     }
@@ -335,7 +341,8 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         guard let selected = await preferredTranscriber() else {
             return .failure("unsupported_language", "SpeechAnalyzer no está disponible en español en este iPhone.")
         }
-        guard await installed(selected.locale, kind: selected.kind) else { return .failure("assets_required", "Prepara los modelos de voz antes de dictar sin conexión.") }
+        let assets = await assetState(selected.locale, kind: selected.kind)
+        guard assets == .installed else { return .failure(assets.status, assets.message) }
         guard epoch == generation, !Task.isCancelled else { return .failure("cancelled", "Dictado cancelado.") }
         let module = makeTranscriber(for: selected.locale, kind: selected.kind)
         let preview = makeTranscriber(for: selected.locale, kind: selected.kind, incremental: true)
@@ -902,7 +909,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         let locale = Locale(identifier: expected.locale)
         let kind: VoiceTranscriberKind
         switch expected.kind { case .speech: kind = .speech; case .dictation: kind = .dictation }
-        guard await installed(locale, kind: kind) else {
+        guard await assetState(locale, kind: kind) == .installed else {
             return .failure("assets_required", "Prepara el idioma del audio para volver a transcribirlo.")
         }
         let module = makeTranscriber(for: locale, kind: kind)

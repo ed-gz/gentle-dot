@@ -313,6 +313,34 @@ test('a refused session microphone leaves the typed instruction available to sen
   await expect(page.getByRole('button', { name: 'Enviar instrucción' })).toBeEnabled();
 });
 
+test('session dictation distinguishes voice assets downloading and incompatible configuration', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
+    state.voiceAssetStatus = 'assets_downloading'; state.voiceStarts = 0;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: false, status: state.voiceAssetStatus,
+        assetsInstalled: false, microphonePermission: 'granted', recording: false };
+      if (command.endsWith('start_voice')) state.voiceStarts++;
+      return original(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const mic = page.getByRole('button', { name: 'Dictar mensaje' });
+  await expect(page.getByText(/Apple está preparando la voz/)).toBeVisible();
+  await expect(mic).toBeEnabled();
+  await mic.click();
+  await expect(page.getByText(/Apple está preparando la voz/)).toBeVisible();
+  await expect(mic).toBeEnabled();
+  expect(await page.evaluate(() => (globalThis as any).voiceStarts)).toBe(0);
+  await page.evaluate(() => (globalThis as any).voiceAssetStatus = 'unsupported_configuration');
+  await mic.click();
+  await expect(page.getByText('La configuración de voz en español no está disponible en este iPhone.')).toBeVisible();
+  await expect(mic).toBeDisabled();
+  expect(await page.evaluate(() => (globalThis as any).voiceStarts)).toBe(0);
+});
+
 test('session dictation displays provisional text without adding it to the draft', async ({ page }) => {
   await linkedPhone(page);
   await page.evaluate(() => {

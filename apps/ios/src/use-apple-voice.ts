@@ -8,9 +8,16 @@ function availabilityNote(value: VoiceAvailability): string | undefined {
   if (value.microphonePermission === 'denied') return 'Activa el micrófono para Capri en Ajustes del iPhone.';
   if (value.available || value.status === 'assets_required') return undefined;
   if (value.status === 'unsupported_language') return 'La transcripción local en español no está disponible en este iPhone.';
+  if (value.status === 'unsupported_configuration') return 'La configuración de voz en español no está disponible en este iPhone.';
+  if (value.status === 'assets_downloading') return 'Apple está preparando la voz o esperando condiciones para descargarla. Inténtalo de nuevo en un momento.';
+  if (value.status === 'asset_status_unknown') return 'No pude comprobar el estado de la voz de Apple. Toca el micrófono para intentarlo de nuevo.';
   if (value.status === 'os_unsupported') return 'El dictado local necesita iOS 26 o posterior.';
   if (value.status === 'device_not_supported') return 'La transcripción local no está disponible en este dispositivo.';
   return 'No pude preparar el dictado local. Cierra y vuelve a abrir esta sesión para intentarlo.';
+}
+
+function retryableVoiceStatus(value: VoiceAvailability | undefined): boolean {
+  return Boolean(value?.available || value?.status === 'assets_required' || value?.status === 'assets_downloading' || value?.status === 'asset_status_unknown');
 }
 
 // A final result arriving after navigation remains scoped to its original
@@ -197,7 +204,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       return;
     }
     if (state.enabled && state.retry && state.session && !state.pending) { stop(); return; }
-    if (!state.enabled || state.pending || state.session || !(retryAvailability || availability?.available || availability?.status === 'assets_required')) return;
+    if (!state.enabled || state.pending || state.session || !(retryAvailability || retryableVoiceStatus(availability))) return;
     const epoch = ++state.epoch, ownerId = localIdentifier(); state.ownerId = ownerId; state.pending = true; setPreparing(true); setNote(undefined); setDraft(undefined);
     void (async () => {
       if (!destination) throw new Error('Abre una sesión antes de dictar.');
@@ -221,7 +228,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
         const prepared = await prepareVoice(ownerId);
         if (state.epoch !== epoch || !state.enabled) return;
         setAvailability(prepared);
-        if (!prepared.available) throw new Error('Apple aún no terminó de preparar la voz. Comprueba la conexión y vuelve a intentarlo.');
+        if (!prepared.available) throw new Error(availabilityNote(prepared) ?? 'Apple aún no terminó de preparar la voz. Comprueba la conexión y vuelve a intentarlo.');
       }
       setNote('Iniciando el micrófono. Si iOS pide permiso, acéptalo para dictar.');
       const value = await startVoice(ownerId);
@@ -236,7 +243,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       state.ownerId = ''; setNote(error.message);
     } }).finally(() => { if (state.epoch === epoch) { state.pending = false; setPreparing(false); } });
   }, [availability, destination, retryAvailability, stop]);
-  return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : retryCancellation || retryAvailability || availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
+  return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : retryCancellation || retryAvailability || retryableVoiceStatus(availability) ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
     phase, inputBusy: preparing, elapsed, level, partial, note, draft, start, stop, cancel, retryPending, discarding, discardPending,
     draftTaken: id => setDraft(value => value?.id === id ? undefined : value),
     speaking: false, muted: true, stopSpeaking() {}, setMuted() {}, typed() {}, sent() {}, sendOnStop: false, setSendOnStop() {} };
