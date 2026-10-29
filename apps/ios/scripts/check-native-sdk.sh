@@ -64,6 +64,7 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-device-bridge/ios/Sources/KeychainStore.swift \
+  plugin-device-bridge/ios/Sources/SelectionCAS.swift \
   plugin-device-bridge/ios/Sources/BoundedHTTP.swift \
   plugin-device-bridge/ios/Sources/SessionUpload.swift \
   test/native/SessionUploadTests.swift -o "$verification/session-upload-tests"
@@ -89,6 +90,11 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   plugin-device-bridge/ios/Sources/PairingCameraGate.swift \
   test/native/PairingCameraGateTests.swift -o "$verification/pairing-camera-gate-tests"
 "$verification/pairing-camera-gate-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-device-bridge/ios/Sources/SelectionCAS.swift \
+  test/native/SelectionCASTests.swift -o "$verification/selection-cas-tests"
+"$verification/selection-cas-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -target "$(uname -m)-apple-macosx12.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/VoiceAudio.swift \
@@ -234,6 +240,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-device-bridge/ios/Sources/BoundedHTTP.swift \
   plugin-device-bridge/ios/Sources/HTTPReceiptJournal.swift \
   plugin-device-bridge/ios/Sources/KeychainStore.swift \
+  plugin-device-bridge/ios/Sources/SelectionCAS.swift \
   plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
   plugin-device-bridge/ios/Sources/SharedInbox.swift \
   share-extension/ShareViewController.swift \

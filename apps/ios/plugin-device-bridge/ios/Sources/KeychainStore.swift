@@ -12,6 +12,13 @@ enum DeviceFailure: Error {
 
 enum KeychainStore {
     static let scopes: Set<String> = ["daemon-pairing", "daemon-manual", "external-connections"]
+    static let selectionAccount = "capri.selected-connection.v1"
+    private static let selectionCAS = SelectionCAS()
+    static func compareSelection(_ expected: String?, _ value: String) throws -> Bool {
+        try selectionCAS.compareAndSet(expected: expected, value: value,
+            read: { try get("daemon-manual", selectionAccount) },
+            write: { try set("daemon-manual", selectionAccount, $0) })
+    }
     static func query(_ scope: String, _ account: String) throws -> [String: Any] {
         guard scopes.contains(scope), !account.isEmpty, account.utf8.count <= 2048,
               !account.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {

@@ -40,10 +40,17 @@ async function fixture(page: import('@playwright/test').Page, options: { rejectM
       }
       if (command.endsWith('|secret_set')) {
         const values = JSON.parse(localStorage.getItem(key)!);
-        if (args.request.account === 'capri.selected-connection.v1' && JSON.parse(args.request.value).state === 'active' && state.failActive)
+        if (state.loseNextCAS && args.request.account === 'capri.selected-connection.v1') {
+          state.loseNextCAS=false;
+          state.releaseLostCAS=()=>{const current=JSON.parse(localStorage.getItem(key)!);const k=`daemon-manual:${args.request.account}`;if((current[k] ?? null)!==(args.request.expected ?? null))return false;current[k]=args.request.value;localStorage.setItem(key,JSON.stringify(current));return true;};
+          throw new Error('synthetic callback loss before native execution');
+        }
+        if (args.request.account === 'capri.selected-connection.v1' && args.request.compare !== true) return {ok:false,error:'invalid_request'};
+        if (args.request.account === 'capri.selected-connection.v1' && (values[`daemon-manual:${args.request.account}`] ?? null) !== (args.request.expected ?? null)) return {ok:true,persisted:false};
+        if (args.request.account === 'capri.selected-connection.v1' && JSON.parse(args.request.value).state === 'active' && state.failActive && args.request.expected && JSON.parse(args.request.expected).state === 'pending')
           return { ok: false, error: 'storage' };
         values[`${args.request.scope}:${args.request.account}`] = args.request.value;
-        localStorage.setItem(key, JSON.stringify(values)); return { ok: true };
+        localStorage.setItem(key, JSON.stringify(values)); return { ok: true, persisted: true };
       }
       if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: invitation };
       if (command.endsWith('|pair_device')) {
@@ -123,6 +130,18 @@ test('an uncertain pairing response preserves the attempt and does not redeem th
   await page.reload();await page.locator('[data-panel="settings"]').click();
   await expect(page.locator('#retry-pending-access')).toBeVisible();await expect(page.locator('#recover-previous-access')).toBeVisible();
   expect(hellos).toEqual([manualToken]);
+});
+
+test('a lost CAS callback blocks connection changes and disconnect fences the delayed write', async ({page}) => {
+  const hellos=await fixture(page);await settings(page);await expect.poll(()=>hellos.length).toBe(1);
+  await page.evaluate(()=>{(globalThis as any).loseNextCAS=true;});await manual(page);
+  await expect(page.locator('#status')).toContainText('No se confirmó el guardado');
+  await page.locator('#connection button[type="submit"]').click();
+  await expect(page.locator('#status')).toContainText('Desconecta antes');
+  await page.locator('#disconnect').click();await expect(page.locator('#status')).toHaveText('Sin conexión');
+  expect(await page.evaluate(()=>(globalThis as any).releaseLostCAS())).toBe(false);
+  await page.reload();await expect(page.locator('#status')).toHaveText('Sin conexión');
+  expect(hellos).toEqual([pairedToken]);
 });
 
 test('rejected manual token restores the previous paired connection', async ({ page }) => {

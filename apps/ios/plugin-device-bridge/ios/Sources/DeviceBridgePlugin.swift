@@ -36,7 +36,7 @@ private struct BridgeReply: Encodable {
     var cancelled: Bool? = nil
     var receiptState: String? = nil
 }
-private struct SecretInput: Decodable { let scope: String; let account: String; let value: String? }
+private struct SecretInput: Decodable { let scope: String; let account: String; let value: String?; let compare: Bool?; let expected: String? }
 private struct PairInput: Decodable { let origin: String; let code: String; let deviceName: String; let attemptId: String }
 private struct UnpairInput: Decodable { let origin: String; let token: String? }
 private struct OAuthInput: Decodable { let authorizationUrl: String; let callbackScheme: String }
@@ -124,12 +124,17 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
         work(invoke) {
             let args = try invoke.parseArgs(SecretInput.self)
             guard let value = args.value else { throw DeviceFailure.invalid("Falta la credencial.") }
+            if args.scope == "daemon-manual" && args.account == KeychainStore.selectionAccount {
+                guard args.compare == true else { throw DeviceFailure.invalid("El acceso seleccionado requiere una revisión atómica.") }
+                return BridgeReply(persisted: try KeychainStore.compareSelection(args.expected, value))
+            }
+            guard args.compare != true else { throw DeviceFailure.invalid("Comparación de credencial no admitida.") }
             try KeychainStore.set(args.scope, args.account, value)
             return BridgeReply(persisted: true)
         }
     }
     @objc func secretDelete(_ invoke: Invoke) {
-        work(invoke) { let args = try invoke.parseArgs(SecretInput.self); try KeychainStore.delete(args.scope, args.account); return BridgeReply() }
+        work(invoke) { let args = try invoke.parseArgs(SecretInput.self); guard args.scope != "daemon-manual" || args.account != KeychainStore.selectionAccount else { throw DeviceFailure.invalid("El acceso seleccionado requiere una revisión atómica.") }; try KeychainStore.delete(args.scope, args.account); return BridgeReply() }
     }
     @objc func httpsRequest(_ invoke: Invoke) {
         do {

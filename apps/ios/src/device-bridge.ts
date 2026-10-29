@@ -36,6 +36,13 @@ export async function secretSet(scope: SecretScope, account: string, value: stri
   if (!value || new TextEncoder().encode(value).length > 16384) throw new Error('La credencial supera 16 KiB.');
   requireNative(await deviceInvoke('secret_set', { scope, account, value }));
 }
+/** Exact compare-and-set for the one selected-connection marker. */
+export async function compareConnectionSelection(expected: string | null, value: string): Promise<boolean> {
+  if (!value || new TextEncoder().encode(value).length > 16384 || (expected !== null && new TextEncoder().encode(expected).length > 16384)) throw new Error('El acceso supera el límite de Keychain.');
+  const reply = requireNative(await deviceInvoke<NativeReply & { persisted?: unknown }>('secret_set', { scope:'daemon-manual', account:'capri.selected-connection.v1', value, compare:true, expected }));
+  if (typeof reply.persisted !== 'boolean') throw new Error('No se confirmó la revisión del acceso.');
+  return reply.persisted;
+}
 export async function secretDelete(scope: SecretScope, account: string): Promise<void> {
   requireNative(await deviceInvoke('secret_delete', { scope, account }));
 }

@@ -6,10 +6,15 @@ const url = 'wss://laptop.example.ts.net/ws';
 const origin = 'https://laptop.example.ts.net';
 const paired = { url, token: 'pair_fixture_token_1234567890ABCDEFG', deviceId: 'phone-a', name: 'Capri' };
 const manual = { source: 'manual', url, token: 'manual_fixture_only' };
+const compare = data => async (expected, value) => {
+  const key = 'daemon-manual:capri.selected-connection.v1';
+  if ((data.get(key) ?? null) !== expected) return false;
+  data.set(key, value); return true;
+};
 function fixture() {
   const data = new Map(); const store = createConnectionSelectionStore({
     get: async (scope, account) => data.get(`${scope}:${account}`) ?? null,
-    set: async (scope, account, value) => { data.set(`${scope}:${account}`, value); },
+    compare: compare(data),
     pairing: async () => data.has('pair') ? paired : null,
   });
   return { data, store };
@@ -50,7 +55,7 @@ test('a staged candidate can be retried or the prior connection explicitly recov
   await assert.rejects(store.restore(), error => error.name === 'ConnectionSelectionPending' && error.hasPrevious && error.hasCandidate);
   const reloaded = createConnectionSelectionStore({
     get: async (scope, account) => data.get(`${scope}:${account}`) ?? null,
-    set: async (scope, account, value) => { data.set(`${scope}:${account}`, value); },
+    compare: compare(data),
   });
   const recovery = await reloaded.recoverCandidate(); assert.equal(recovery.connection.token, manual.token);
   assert.deepEqual(await reloaded.recoverPrevious(), { source: 'paired', ...paired });
@@ -65,7 +70,7 @@ test('an interrupted pairing recovers only the exact precommitted attempt and re
   const unrelated = 'd3dba896-4b5c-4c1c-98c9-4e60238fe6ba';
   data.set(`daemon-pairing:attempt:${unrelated}`, JSON.stringify(paired));
   const reopened = createConnectionSelectionStore({ get: async (scope, account) => data.get(`${scope}:${account}`) ?? null,
-    set: async (scope, account, value) => { data.set(`${scope}:${account}`, value); } });
+    compare: compare(data) });
   await assert.rejects(reopened.restore(), error => error.name === 'ConnectionSelectionPending' && error.hasPrevious && error.hasCandidate);
   assert.equal(await reopened.recoverCandidate(), null);
   data.set(`daemon-pairing:attempt:${attempt}`, JSON.stringify(paired));
@@ -104,12 +109,24 @@ test('an older candidate cannot commit or roll back a newer attempt for the same
   data.set(`daemon-pairing:attempt:${attemptA}`, JSON.stringify(paired));
   const prior = await store.recoverCandidate();
   const other = createConnectionSelectionStore({ get: async (scope, account) => data.get(`${scope}:${account}`) ?? null,
-    set: async (scope, account, value) => { data.set(`${scope}:${account}`, value); } });
+    compare: compare(data) });
   await other.begin(url, manual, attemptB);
   await assert.rejects(store.commit(prior.ticket, prior.connection), /cambió/);
   await assert.rejects(store.stage(prior.ticket, prior.connection), /cambió/);
   await assert.rejects(store.rollback(prior.ticket, true), /cambió/);
   await assert.rejects(other.restore(), error => error.name === 'ConnectionSelectionPending' && error.hasCandidate);
+});
+
+test('a prior manual operation cannot stage or commit into a newer operation for the same host', async () => {
+  const {data,store} = fixture();
+  const first=await store.begin(url);
+  const other=createConnectionSelectionStore({get:async (scope,account)=>data.get(`${scope}:${account}`) ?? null,compare:compare(data)});
+  const second=await other.begin(url);
+  await assert.rejects(store.stage(first,manual),/cambió/);
+  await assert.rejects(store.commit(first,manual),/cambió/);
+  await assert.rejects(store.rollback(first,true),/cambió/);
+  await other.stage(second,manual);await other.commit(second,manual);
+  assert.deepEqual(await other.restore(),manual);
 });
 
 test('disconnect uses a durable tombstone and never falls back to legacy credentials', async () => {
@@ -120,6 +137,7 @@ test('disconnect uses a durable tombstone and never falls back to legacy credent
 test('legacy migration accepts only unambiguous, validated credentials', async () => {
   const { data, store } = fixture(); data.set('pair', true);
   assert.deepEqual(await store.restore(url), { source: 'paired', ...paired });
+  data.delete('daemon-manual:capri.selected-connection.v1'); // Independent legacy installation.
   data.set(`daemon-manual:${origin}`, manual.token);
   await assert.rejects(store.restore(url), /dos accesos/);
   data.delete('pair'); assert.deepEqual(await store.restore(url), manual);
@@ -140,7 +158,67 @@ test('superseded callbacks and concurrent writes cannot overwrite the current se
   await assert.rejects(store.commit(old, manual), /cambió/);
   await store.commit(current, { source: 'paired', ...paired });
   assert.deepEqual(await store.restore(url), { source: 'paired', ...paired });
-  let release; const blocked = createConnectionSelectionStore({ get: async () => null, set: () => new Promise(resolve => { release = resolve; }) });
+  let release, stored = null; const blocked = createConnectionSelectionStore({ get: async () => stored, compare: (_expected, value) => new Promise(resolve => { release = () => { stored = value; resolve(true); }; }) });
   const first = blocked.begin(url); await assert.rejects(blocked.disconnect(), /Espera/);
   await Promise.resolve(); release(); await first;
+});
+
+test('two views compare the exact marker and a delayed writer cannot overwrite the winner', async () => {
+  const {data,store} = fixture();
+  let release, entered;
+  const enteredPromise = new Promise(resolve => { entered = resolve; });
+  const delayed = createConnectionSelectionStore({ get: async (scope, account) => data.get(`${scope}:${account}`) ?? null,
+    compare: async (expected,value) => { entered(); await new Promise(resolve => { release = resolve; }); return compare(data)(expected,value); } });
+  const stale = delayed.begin(url); await enteredPromise;
+  const ticket = await store.begin(url); await store.commit(ticket, manual);
+  release(); await assert.rejects(stale, /cambió/);
+  assert.deepEqual(await store.restore(), manual);
+});
+
+test('lost callback is verified only against the unique exact committed marker', async () => {
+  const {data} = fixture();
+  const selection = createConnectionSelectionStore({get: async (scope, account) => data.get(`${scope}:${account}`) ?? null,
+    compare: async (expected,value) => { assert.equal(await compare(data)(expected,value), true); throw new Error('callback lost'); }});
+  const ticket = await selection.begin(url); await selection.commit(ticket, manual);
+  assert.deepEqual(await selection.restore(), manual);
+  const old = data.get('daemon-manual:capri.selected-connection.v1');
+  const other = createConnectionSelectionStore({get: async (scope, account) => data.get(`${scope}:${account}`) ?? null, compare: compare(data)});
+  await other.disconnect(); const newMarker = data.get('daemon-manual:capri.selected-connection.v1');
+  assert.notEqual(old,newMarker); assert.equal(await compare(data)(old,old),false);
+});
+
+test('a late success callback cannot confirm an operation superseded by another view', async () => {
+  const {data} = fixture(); let release, entered;
+  const enteredPromise = new Promise(resolve => { entered = resolve; });
+  const get = async (scope, account) => data.get(`${scope}:${account}`) ?? null;
+  const stale = createConnectionSelectionStore({get, compare: async (expected,value) => {
+    assert.equal(await compare(data)(expected,value),true); entered(); await new Promise(resolve => { release=resolve; }); return true;
+  }});
+  const first = stale.begin(url); await enteredPromise;
+  const other = createConnectionSelectionStore({get,compare:compare(data)});
+  const ticket=await other.begin(url);await other.commit(ticket,manual);
+  release();await assert.rejects(first,/cambió/);
+  assert.deepEqual(await other.restore(),manual);
+});
+
+test('a failed callback before native CAS stays uncertain and restart fences its delayed write', async () => {
+  const {data,store} = fixture(); const ticket=await store.begin(url); await store.commit(ticket,manual);
+  let delayed, uncertain=false;
+  const get = async (scope, account) => data.get(`${scope}:${account}`) ?? null;
+  const abandoned = createConnectionSelectionStore({get, onUncertain:()=>{uncertain=true;}, compare: async (expected,value) => {
+    delayed=()=>compare(data)(expected,value); throw new Error('bridge callback lost before native execution');
+  }});
+  await assert.rejects(abandoned.begin('wss://other.example.ts.net/ws'), error => error.name==='ConnectionSelectionUncertain');
+  assert.equal(uncertain,true);
+  const reopened=createConnectionSelectionStore({get,compare:compare(data)});
+  assert.deepEqual(await reopened.restore(),manual);
+  assert.equal(await delayed(),false);
+  assert.deepEqual(await reopened.restore(),manual);
+});
+
+test('a missing native callback times out and reports an uncertain selection', async () => {
+  let uncertain=false;
+  const store=createConnectionSelectionStore({get:async()=>null,compare:()=>new Promise(()=>{}),timeoutMs:5,onUncertain:()=>{uncertain=true;}});
+  await assert.rejects(store.begin(url),error=>error.name==='ConnectionSelectionUncertain');
+  assert.equal(uncertain,true);
 });

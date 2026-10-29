@@ -501,7 +501,11 @@ async function releaseAttachedWork(id: string | undefined) {
 }
 retryMaterial.addEventListener('click', () => { retryMaterial.disabled = true; void persist().finally(() => { retryMaterial.disabled = false; }); });
 let connectionEpoch = 0;
-const connectionSelection = createConnectionSelectionStore();
+const connectionSelection = createConnectionSelectionStore({ onUncertain: () => {
+  restorationUncertain = true;
+  element('status').textContent = 'No se confirmó el guardado. Desconecta antes de conectar otro acceso.';
+  element('pairing-status').textContent = 'No se confirmó el guardado. Desconecta antes de vincular otro acceso.';
+} });
 type ManualAttempt = { connection: SelectedConnection & { source: 'manual' }; ticket: number; epoch: number; previous?: SelectedConnection };
 let manualAttempt: ManualAttempt | undefined;
 let manualSavePending: ManualAttempt | undefined;
@@ -1088,16 +1092,16 @@ async function commitManualSelection(attempt: ManualAttempt) {
     element('status').textContent = 'Vinculado a Gentle Dot. Acceso guardado en Keychain.';
   } catch {
     if (attempt.epoch === connectionEpoch && runtimeConnection === attempt.connection) {
-      manualSavePending = attempt; retryManualSave.hidden = false;
-      element('status').textContent = 'Conectado, pero no pude guardar el acceso. Puedes reintentarlo mientras Capri siga abierta.';
+      manualSavePending = attempt; retryManualSave.hidden = restorationUncertain;
+      element('status').textContent = restorationUncertain ? 'No se confirmó el guardado. Desconecta antes de conectar otro acceso.' : 'Conectado, pero no pude guardar el acceso. Puedes reintentarlo mientras Capri siga abierta.';
     }
   } finally { if (attempt.epoch === connectionEpoch) connectionLock(false); }
 }
 async function restorePreviousSelection(attempt: ManualAttempt) {
   let restored: SelectedConnection | null = null;
-  try { restored = await connectionSelection.rollback(attempt.ticket); } catch { /* The pending marker prevents an unsafe automatic restore. */ }
+  try { restored = await connectionSelection.rollback(attempt.ticket); } catch { /* Preserve the pending marker and do not guess the previous selection. */ }
   if (attempt.epoch !== connectionEpoch) return;
-  const previous = restored ?? attempt.previous;
+  const previous = restored ?? undefined;
   runtimeConnection = previous;
   manualSavePending = undefined; retryManualSave.hidden = true; connectionLock(false);
   if (previous) {
@@ -1106,7 +1110,7 @@ async function restorePreviousSelection(attempt: ManualAttempt) {
     notice('No se confirmó el nuevo acceso. Recuperé la conexión anterior.');
   } else { linked.disconnect(); element('status').textContent = 'No se confirmó el acceso. Revisa la conexión y vuelve a intentarlo.'; }
 }
-retryManualSave.addEventListener('click', () => { if (manualSavePending && !connectionBusy) void commitManualSelection(manualSavePending); });
+retryManualSave.addEventListener('click', () => { if (manualSavePending && !connectionBusy && !restorationUncertain) void commitManualSelection(manualSavePending); });
 function startPairingHandshake(pending: PairingPending): Promise<void> {
   return new Promise((resolve, reject) => {
     if (pending.epoch !== connectionEpoch || pairingAttempt) { reject(new Error('La conexión cambió.')); return; }
@@ -1127,7 +1131,7 @@ async function finishPairingHandshake(attempt: NonNullable<typeof pairingAttempt
     attempt.resolve();
   } catch {
     pairingSavePending = attempt;
-    attempt.reject(new Error('La laptop aceptó el acceso, pero no pude confirmar su guardado.'));
+    attempt.reject(new Error(restorationUncertain ? 'No se confirmó el guardado. Desconecta antes de vincular otro acceso.' : 'La laptop aceptó el acceso, pero no pude confirmar su guardado.'));
   }
 }
 function failPairingHandshake(attempt: NonNullable<typeof pairingAttempt>) {
@@ -1379,7 +1383,7 @@ element<HTMLFormElement>('connection').addEventListener('submit', async event =>
     linked.connect(nextHost, token);
     if (!isTauri()) saveSelectedURL(host);
   } catch (error) {
-    if (ticket !== undefined) try { await connectionSelection.rollback(ticket); } catch { /* The pending marker remains fail-closed. */ }
+    if (ticket !== undefined && !restorationUncertain) try { await connectionSelection.rollback(ticket); } catch { /* The pending marker remains fail-closed. */ }
     runtimeConnection = previous; connectionLock(false); element('status').textContent = errorText(error);
   }
 });
@@ -1946,6 +1950,7 @@ const pairingSaveRecovery = mountPairingSaveRecovery({
   manualForm: element<HTMLFormElement>('connection'), disconnect: element('disconnect'),
   current: () => pairingSavePending?.connection ?? runtimeConnection, epoch: () => connectionEpoch,
   save: async (_origin, connection) => {
+    if (restorationUncertain) throw new Error('Desconecta antes de volver a guardar el acceso.');
     const pending = pairingSavePending;
     if (!pending || pending.epoch !== connectionEpoch || pending.connection !== connection) throw new Error('La conexión cambió.');
     await connectionSelection.stage(pending.ticket, pending.connection);
@@ -1982,9 +1987,9 @@ element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
     element('pairing-status').textContent = 'La laptop entregó el acceso. Comprobando la conexión…';
     await startPairingHandshake(pending);
   } catch (error) {
-    if (ticket !== undefined && !accepted && error instanceof PairingRejected) try { await connectionSelection.rollback(ticket, true); } catch { /* Keep the pending marker rather than restoring another credential. */ }
-    else if (ticket !== undefined && !accepted) { retryPendingAccess.hidden = false; recoverPreviousAccess.hidden = !previous; }
-    if (accepted && pairingSavePending) {
+    if (ticket !== undefined && !accepted && error instanceof PairingRejected && !restorationUncertain) try { await connectionSelection.rollback(ticket, true); } catch { /* Keep the pending marker rather than restoring another credential. */ }
+    else if (ticket !== undefined && !accepted && !restorationUncertain) { retryPendingAccess.hidden = false; recoverPreviousAccess.hidden = !previous; }
+    if (accepted && pairingSavePending && !restorationUncertain) {
       const pending = pairingSavePending;
       pairingSaveRecovery.offer(new URL(pending.connection.url.replace(/^wss:/, 'https:')).origin, pending.connection, pending.epoch);
       recoverPreviousAccess.hidden = !pending.previous;
@@ -2025,7 +2030,7 @@ async function restoreDeviceConnection() {
   } finally { clearTimeout(timer); connectionLock(false); }
 }
 recoverPreviousAccess.addEventListener('click', () => void (async () => {
-  if (connectionBusy) return;
+  if (connectionBusy || restorationUncertain) return;
   connectionLock(true);
   try {
     const previous = await connectionSelection.recoverPrevious();
@@ -2039,7 +2044,7 @@ recoverPreviousAccess.addEventListener('click', () => void (async () => {
   finally { connectionLock(false); }
 })());
 retryPendingAccess.addEventListener('click', () => void (async () => {
-  if (connectionBusy) return;
+  if (connectionBusy || restorationUncertain) return;
   connectionLock(true);
   let waitingForManual = false;
   try {

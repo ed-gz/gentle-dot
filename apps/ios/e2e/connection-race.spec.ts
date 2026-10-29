@@ -36,7 +36,7 @@ for (const disconnect of [false, true]) {
           return await new Promise(resolve => { state.releaseOldKeychain = () => resolve({ ok: true, value: 'fixture-token-A' }); });
         }
         if (command.endsWith('secret_get') && args.request.account === 'capri.selected-connection.v1') return { ok: true, value: state.selectionMarker };
-        if (command.endsWith('secret_set') && args.request.account === 'capri.selected-connection.v1') { state.selectionMarker = args.request.value; return { ok: true }; }
+        if (command.endsWith('secret_set') && args.request.account === 'capri.selected-connection.v1') { if (args.request.compare !== true) return {ok:false}; if ((state.selectionMarker ?? null) !== (args.request.expected ?? null)) return {ok:true,persisted:false}; state.selectionMarker = args.request.value; return { ok: true, persisted:true }; }
         return { ok: true };
       } };
     });
