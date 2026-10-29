@@ -134,7 +134,14 @@ export function createConversationArchive(options: { databaseName?: string; maxi
             const verifyWindow = () => {
               const key = windowKeys[index++];
               if (key === undefined) { metas.put({ keys: windowKeys, savedAt: Date.now(), revision: snapshotRevision ?? 0 }, 'window'); complete(); return; }
-              read(entries.get(key), raw => { if (raw === undefined) throw new ArchiveError('corrupt', 'La ventana contiene un mensaje que no fue archivado.'); stored(raw); verifyWindow(); }, fail);
+              read(entries.get(key), raw => {
+                if (raw === undefined) throw new ArchiveError('corrupt', 'La ventana contiene un mensaje que no fue archivado.');
+                const visible = stored(raw);
+                // Unchanged visible entries may not occur in this write batch.
+                // Fence them at the snapshot revision in the same transaction.
+                if (snapshotRevision !== undefined && snapshotRevision > visible.snapshotRevision) entries.put({ ...visible, snapshotRevision });
+                verifyWindow();
+              }, fail);
             };
             verifyWindow(); return;
           }
@@ -144,7 +151,15 @@ export function createConversationArchive(options: { databaseName?: string; maxi
             // Arrival order and original event time stay stable when a stream completes later.
             const entry = previous ? { ...candidate, at: previous.at } : candidate;
             const bytes = byteLength(JSON.stringify(entry));
-            if (previous && JSON.stringify(archiveEntry(previous, previous.scope)) === JSON.stringify(entry)) { unchanged++; next(); return; }
+            const identical = previous && JSON.stringify(archiveEntry(previous, previous.scope)) === JSON.stringify(entry);
+            if (identical) {
+              // The content may be unchanged while the durable snapshot advances.
+              // Fence that revision too, otherwise a competing writer with the
+              // same revision could later change an apparently older record.
+              if (snapshotRevision !== undefined && snapshotRevision > previous.snapshotRevision) entries.put({ ...previous, snapshotRevision });
+              unchanged++; next(); return;
+            }
+            if (snapshotRevision !== undefined && previous && snapshotRevision === previous.snapshotRevision) throw new ArchiveError('invalid', 'La revisión archivada ya contiene otro mensaje.');
             const count = meta.entries + (previous ? 0 : 1); const total = meta.bytes - (previous?.bytes ?? 0) + bytes;
             if (count > maximumEntries || total > maximumBytes) throw new ArchiveError('quota', `El archivo alcanzó su cuota (${maximumEntries} mensajes / ${maximumBytes} bytes). Exporta el historial y conserva los mensajes pendientes; no se borró nada automáticamente.`);
             const now = Date.now(); const record: ArchiveRecord = { ...entry, key: keyOf(entry), sequence: previous?.sequence ?? meta.nextSequence++, storedAt: previous?.storedAt ?? now, updatedAt: now, bytes, snapshotRevision: snapshotRevision ?? previous?.snapshotRevision ?? 0 };
@@ -155,6 +170,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
         else read(metas.get('window'), window => {
           if (window !== undefined && (!object(window) || (window.revision !== undefined && !natural(window.revision)))) throw new ArchiveError('corrupt', 'La revisión de la ventana no es válida.');
           if (object(window) && snapshotRevision < Number(window.revision ?? 0)) throw new ArchiveError('invalid', 'La ventana archivada ya tiene una revisión más reciente.');
+          if (object(window) && windowKeys && snapshotRevision === Number(window.revision ?? 0) && JSON.stringify(window.keys) !== JSON.stringify(windowKeys)) throw new ArchiveError('invalid', 'La revisión archivada ya contiene otra ventana.');
           next();
         }, fail);
       }, fail);

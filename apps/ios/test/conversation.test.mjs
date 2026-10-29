@@ -15,13 +15,22 @@ function storage(saved) {
         opening.result = {
           close() {},
           transaction() {
-            const transaction = { objectStore: () => ({
-              get: () => request(stored),
-              put: value => { stored = structuredClone(value); return request('current'); },
-            }) };
-            function request(result) {
-              queueMicrotask(() => transaction.oncomplete());
-              return { result };
+            let pending = 0, aborted = false;
+            const transaction = {
+              abort() { aborted = true; queueMicrotask(() => transaction.onabort?.()); },
+              objectStore: () => ({
+                get: () => request(() => stored),
+                put: value => request(() => { stored = structuredClone(value); return 'current'; }),
+              }),
+            };
+            function request(read) {
+              const result = {}; pending++;
+              queueMicrotask(() => {
+                if (aborted) return;
+                result.result = read(); result.onsuccess?.(); pending--;
+                if (!pending && !aborted) queueMicrotask(() => { if (!aborted && !pending) transaction.oncomplete?.(); });
+              });
+              return result;
             }
             return transaction;
           },
@@ -129,6 +138,19 @@ test('saved conversations contain only the declared content fields and bounded d
   const read = storage();
   await saveConversation({ entries: [entry('safe', { token: 'secret', nativePayload: { secret: true } })], draft: 'd'.repeat(9000), credentials: 'secret' });
   assert.deepEqual(read(), { entries: [entry('safe')], draft: 'd'.repeat(8000) });
+});
+
+test('a stale or conflicting snapshot cannot replace a confirmed conversation revision', async () => {
+  const original = { entries: [entry('safe')], draft: 'Confirmado', revision: 12 };
+  const read = storage(original);
+  await assert.rejects(saveConversation({ ...original, draft: 'Antiguo', revision: 11 }), /revisión anterior/);
+  await assert.rejects(saveConversation({ ...original, draft: 'Conflicto' }), /otros cambios/);
+  await assert.rejects(saveConversation({ entries: [], draft: '' }), /revisión anterior/);
+  assert.deepEqual(read(), original);
+  await saveConversation(original);
+  await saveConversation({ ...original, draft: 'Nuevo', revision: 13 });
+  assert.equal(read().draft, 'Nuevo');
+  assert.equal(read().revision, 13);
 });
 
 test('transport text survives storage for history reconciliation but stays bounded and out of context', async () => {

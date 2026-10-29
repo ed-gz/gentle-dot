@@ -138,7 +138,7 @@ export function linkedPrompt(entries: ChatEntry[], instruction: string): string 
   }
   return instruction;
 }
-async function access<T>(mode: IDBTransactionMode, operation: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+async function access<T>(mode: IDBTransactionMode, operation: (store: IDBObjectStore, fail: (error: Error) => void) => IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     let database: IDBDatabase | undefined;
     let transaction: IDBTransaction | undefined;
@@ -166,7 +166,10 @@ async function access<T>(mode: IDBTransactionMode, operation: (store: IDBObjectS
         database.onversionchange = () => database?.close();
         try {
           transaction = database.transaction('conversation', mode);
-          const request = operation(transaction.objectStore('conversation'));
+          const request = operation(transaction.objectStore('conversation'), error => {
+            try { transaction?.abort(); } catch { /* Already completed. */ }
+            finish(error);
+          });
           transaction.oncomplete = () => finish(undefined, request.result);
           transaction.onabort = () => finish(transaction?.error ?? new Error('No se guardó la conversación.'));
           transaction.onerror = () => finish(transaction?.error ?? new Error('No se guardó la conversación.'));
@@ -185,10 +188,31 @@ export async function loadConversation(): Promise<Conversation> {
     draft: typeof saved.draft === 'string' ? saved.draft.slice(0, 8000) : '',
   };
 }
-export async function saveConversation(value: Conversation): Promise<void> {
-  await access('readwrite', store => store.put({
+function conversationSnapshot(value: Conversation): Conversation {
+  return {
     ...(typeof value.attachedWork === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value.attachedWork) ? { attachedWork: value.attachedWork } : {}),
     ...(Number.isSafeInteger(value.revision) && Number(value.revision) >= 0 ? { revision: Number(value.revision) } : {}),
     entries: cleanEntries(value.entries), draft: typeof value.draft === 'string' ? value.draft.slice(0, 8000) : '',
-  }, 'current'));
+  };
+}
+export async function saveConversation(value: Conversation): Promise<void> {
+  const next = conversationSnapshot(value);
+  await access('readwrite', (store, fail) => {
+    // Check and write inside the same transaction. A stale secondary window
+    // must never replace a newer revision, even across separate WebViews.
+    const request = store.get('current');
+    request.onsuccess = () => {
+      try {
+        const current: unknown = request.result;
+        if (record(current) && current.revision !== undefined) {
+          if (!Number.isSafeInteger(current.revision) || Number(current.revision) < 0) throw new Error('La revisión de la conversación guardada no es válida.');
+          const previous = Number(current.revision);
+          if (next.revision === undefined || next.revision < previous) throw new Error('Una revisión anterior no puede reemplazar la conversación guardada.');
+          if (next.revision === previous && JSON.stringify(conversationSnapshot(current as Conversation)) !== JSON.stringify(next)) throw new Error('La revisión de la conversación ya contiene otros cambios.');
+        }
+        store.put(next, 'current');
+      } catch (error) { fail(error instanceof Error ? error : new Error('No se guardó la conversación.')); }
+    };
+    return request;
+  });
 }

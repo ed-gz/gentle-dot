@@ -1,6 +1,50 @@
 import { expect, test } from './fixtures.ts';
 import { readFile } from 'node:fs/promises';
 
+test('the visible conversation rejects stale and competing equal-revision writes', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const path = '/src/conversation.ts';
+    const { loadConversation, saveConversation } = await import(path);
+    const base = { entries: [{ id: 'race', engine: 'iphone', role: 'user', state: 'complete', text: 'original', at: 1000 }], draft: 'durable', revision: 1000000 };
+    await saveConversation(base);
+    const competing = await Promise.allSettled([
+      saveConversation({ ...base, draft: 'first', revision: 1000001 }),
+      saveConversation({ ...base, draft: 'second', revision: 1000001 }),
+    ]);
+    const stale = await Promise.allSettled([saveConversation({ ...base, draft: 'stale' })]);
+    const final = await loadConversation();
+    return { competing: competing.map(item => item.status), stale: stale[0].status, final };
+  });
+  expect(result.competing.sort()).toEqual(['fulfilled', 'rejected']);
+  expect(result.stale).toBe('rejected');
+  expect(result.final.revision).toBe(1000001);
+  expect(['first', 'second']).toContain(result.final.draft);
+});
+
+test('an archive revision fences unchanged entries and its visible window', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const path = '/src/conversation-archive.ts';
+    const { createConversationArchive } = await import(path);
+    const archive = createConversationArchive({ databaseName: 'archive-revision-fencing' });
+    const original = { id: 'fence', engine: 'iphone', role: 'assistant', state: 'pending', text: '', at: 1000 };
+    await archive.upsert([original], undefined, [original], 1);
+    await archive.upsert([], undefined, [original], 2);
+    const conflicting = await Promise.allSettled([
+      archive.upsert([{ ...original, text: 'competing content' }], undefined, [original], 2),
+      archive.upsert([], undefined, [], 2),
+    ]);
+    const saved = await archive.load(JSON.stringify(['iphone', 'iphone:main', 'fence']));
+    const restored = await archive.restoreState({ entries: [], revision: 0 });
+    return { outcomes: conflicting.map(item => item.status), saved, restored };
+  });
+  expect(result.outcomes).toEqual(['rejected', 'rejected']);
+  expect(result.saved).toMatchObject({ text: '', snapshotRevision: 2 });
+  expect(result.restored.entries).toHaveLength(1);
+  expect(result.restored.revision).toBe(2);
+});
+
 test('archive retains more than the visible window, reloads, and idempotently completes streamed messages', async ({ page }) => {
   await page.goto('/');
   const created = await page.evaluate(async () => {
@@ -226,9 +270,9 @@ test('legacy archive hydration keeps a newer receipt and rescue exports visible 
     const { saveConversation } = await import('/src/conversation.ts');
     // Capture-phase handler simulates losing the old WebView without a final save.
     window.addEventListener('pagehide', event => event.stopImmediatePropagation(), true);
-    await saveConversation({ entries: [{ id: 'rescue-visible', engine: 'iphone', role: 'user', state: 'complete', text: 'Mensaje visible para rescatar', at: 1000 }], draft: '' });
+    await saveConversation({ entries: [{ id: 'rescue-visible', engine: 'iphone', role: 'user', state: 'complete', text: 'Mensaje visible para rescatar', at: 1000 }], draft: '', revision: 100 });
     const { conversationArchive } = await import('/src/conversation-archive.ts');
-    await conversationArchive.upsert([{ id: 'rescue-visible', engine: 'iphone', role: 'user', state: 'complete', text: 'Mensaje visible para rescatar', at: 1000 }], undefined, [{ id: 'rescue-visible', engine: 'iphone', role: 'user', state: 'complete', text: 'Mensaje visible para rescatar', at: 1000 }]);
+    await conversationArchive.upsert([{ id: 'rescue-visible', engine: 'iphone', role: 'user', state: 'complete', text: 'Mensaje visible para rescatar', at: 1000 }], undefined, [{ id: 'rescue-visible', engine: 'iphone', role: 'user', state: 'complete', text: 'Mensaje visible para rescatar', at: 1000 }], 100);
   });
   await page.reload(); await expect(page.locator('#cards')).toContainText('Mensaje visible para rescatar');
   await page.evaluate(async () => { (await import('/src/conversation-archive.ts')).conversationArchive.export = async () => { throw new Error('Lectura no disponible (fixture).'); }; });
