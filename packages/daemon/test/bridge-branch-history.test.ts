@@ -39,6 +39,39 @@ it('serves only the live Pi branch, with source-bound IDs and branch-aware pagin
   expect(f.calls()).toBe(4);
 });
 
+it('correlates pages and errors to the requested conversation while preserving legacy responses', async () => {
+  const f = setup();
+  expect(f.received[0]).toMatchObject({ type: 'ready', features: { historyPaging: 1 } });
+  const conversationId = (f.received[0] as Extract<ServerPayload, { type: 'ready' }>).conversationId!;
+  await f.bridge.handle(f.client, { type: 'get_history' });
+  const history = f.received.findLast(message => message.type === 'history'); if (history?.type !== 'history') throw Error('history');
+  const before = history.messages[0]!.id;
+  await f.bridge.handle(f.client, { type: 'get_earlier', before, requestId: 'page-1', conversationId });
+  expect(f.received.at(-1)).toMatchObject({ type: 'earlier', before, requestId: 'page-1', conversationId, messages: [{ text: 'Root' }] });
+  await f.bridge.handle(f.client, { type: 'get_earlier', before, requestId: 'page-2', conversationId: 'other.jsonl' });
+  expect(f.received.at(-1)).toMatchObject({ type: 'error', code: 'history_unavailable', requestId: 'page-2', conversationId: 'other.jsonl' });
+  await f.bridge.handle(f.client, { type: 'get_earlier', before: 'stale-cursor', requestId: 'stale', conversationId });
+  expect(f.received.at(-1)).toMatchObject({ type: 'error', code: 'history_unavailable', requestId: 'stale', conversationId });
+  await f.bridge.handle(f.client, { type: 'get_earlier', before, requestId: 'page-3', conversationId });
+  expect(f.received.at(-1)).toMatchObject({ type: 'earlier', requestId: 'page-3', conversationId });
+  await f.bridge.handle(f.client, { type: 'get_earlier', before });
+  expect(f.received.at(-1)).toMatchObject({ type: 'earlier', before });
+  expect(f.received.at(-1)).not.toHaveProperty('requestId'); expect(f.received.at(-1)).not.toHaveProperty('conversationId');
+});
+
+it('rejects an older page if the session changes while its read is in flight', async () => {
+  const f = setup(); const internal = f.bridge as any;
+  const conversationId = (f.received[0] as Extract<ServerPayload, { type: 'ready' }>).conversationId!;
+  let release!: () => void; let started!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  vi.spyOn(internal, 'currentHistory').mockImplementation(async () => { started(); await wait; return { messages: [], hasEarlier: false }; });
+  const pending = f.bridge.handle(f.client, { type: 'get_earlier', before: 's0-0', requestId: 'in-flight', conversationId });
+  await reading; f.supervisor.sessionFile = join(tempDir(), 'different.jsonl'); release(); await pending;
+  expect(f.received.at(-1)).toMatchObject({ type: 'error', code: 'history_unavailable', requestId: 'in-flight', conversationId });
+  expect(f.received.some(message => message.type === 'earlier')).toBe(false);
+});
+
 it('retries when the live leaf changes without an append and refuses an old branch cursor', async () => {
   const f = setup(); f.setLeaves([f.current, f.root, f.root, f.root]);
   await f.bridge.handle(f.client, { type: 'get_history' });

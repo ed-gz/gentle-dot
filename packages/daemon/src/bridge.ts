@@ -386,7 +386,7 @@ export class DotBridge {
 			clientId,
 			...this.conversationRef(),
 			...(this.supervisor.model ? { model: this.supervisor.model } : {}),
-			features: { conversations: this.features.conversations, historyRefresh: true, sendAccepted: 1,
+			features: { conversations: this.features.conversations, historyRefresh: true, historyPaging: 1, sendAccepted: 1,
 				...(client.workSync ? { workSync: 1, ...(client.workSync.limits ? { workSyncAudioBytes: client.workSync.limits.audioBytes, workSyncAttachmentBytes: client.workSync.limits.attachmentBytes } : {}), ...(client.workSync.meetingDrafts ? { meetingDrafts: 1 } : {}) } : {}) },
 			...(this.options.voice ? { voice: this.options.voice.capability() } : {}),
 			...(this.options.pin && !this.options.app?.connected ? { pin: this.options.pin.status() } : {}),
@@ -761,13 +761,21 @@ export class DotBridge {
 					...(await this.currentHistory()),
 				}); } catch { this.deliver(client, { type: "error", code: "history_unavailable", message: "No pude verificar la rama actual de la conversación. El historial guardado se conserva." }); }
 				return;
-			case "get_earlier":
-				try { this.deliver(client, {
-					type: "earlier",
-					before: message.before,
-					...(await this.currentHistory(message.before)),
-				}); } catch { this.deliver(client, { type: "error", code: "history_unavailable", message: "No pude verificar la rama anterior. El historial guardado se conserva." }); }
+			case "get_earlier": {
+				const file = this.supervisor.sessionFile;
+				const sessionId = this.supervisor.sessionId;
+				const conversationId = this.conversationRef().conversationId;
+				const correlated = message.requestId !== undefined || message.conversationId !== undefined;
+				const ref = { ...(message.requestId !== undefined ? { requestId: message.requestId } : {}),
+					...(correlated && (message.conversationId ?? conversationId) !== undefined ? { conversationId: message.conversationId ?? conversationId } : {}) };
+				try {
+					if (message.conversationId !== undefined && message.conversationId !== conversationId) throw new Error("Conversation changed");
+					const page = await this.currentHistory(message.before);
+					if (this.supervisor.sessionFile !== file || this.supervisor.sessionId !== sessionId || this.conversationRef().conversationId !== conversationId) throw new Error("Conversation changed");
+					this.deliver(client, { type: "earlier", before: message.before, ...ref, ...page });
+				} catch { this.deliver(client, { type: "error", code: "history_unavailable", message: "No pude verificar la rama anterior. El historial guardado se conserva.", ...ref }); }
 				return;
+			}
 		}
 	}
 

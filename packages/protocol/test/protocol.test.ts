@@ -104,6 +104,13 @@ describe("protocol", () => {
 			before: "s0-12",
 		});
 	});
+
+	it("validates optional older-page correlation without changing legacy requests", () => {
+		expect(parseClientMessage(JSON.stringify({ type: "get_earlier", before: "s0-12", requestId: "page-1", conversationId: "sessions/a.jsonl" }))).toEqual({ type: "get_earlier", before: "s0-12", requestId: "page-1", conversationId: "sessions/a.jsonl" });
+		for (const extra of [{ requestId: "" }, { requestId: "x".repeat(201) }, { requestId: 3 }, { conversationId: "" }, { conversationId: "x".repeat(2049) }, { conversationId: null }]) {
+			expect(parseClientMessage(JSON.stringify({ type: "get_earlier", before: "s0-12", ...extra }))).toBeUndefined();
+		}
+	});
 });
 
 describe("queue", () => {

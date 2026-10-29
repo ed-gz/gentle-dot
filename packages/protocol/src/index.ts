@@ -90,6 +90,8 @@ export interface Features {
 	conversations: boolean;
 	/** Correlates background history refreshes so a late response cannot move a reader. */
 	historyRefresh?: boolean;
+	/** Correlated older-page responses and errors with an optional conversation guard. */
+	historyPaging?: 1;
 	/** Optional per-request notice after a successful engine response; not durable storage or message identity. */
 	sendAccepted?: 1;
 	/** Durable inbox RPC version. Absent means unsupported; chat remains compatible. */
@@ -371,7 +373,7 @@ export type ClientMessage =
 	| { type: "open_conversation"; conversationId: string }
 	| { type: "get_history"; requestId?: string }
 	/** The page of messages before `before`, the id of the oldest message the window shows. */
-	| { type: "get_earlier"; before: string }
+	| { type: "get_earlier"; before: string; requestId?: string; conversationId?: string }
 	| { type: "auth_list" }
 	| { type: "auth_login"; providerId: string; method: AuthMethod }
 	| { type: "auth_reply"; flowId: string; value?: string; cancelled?: boolean }
@@ -480,11 +482,11 @@ export type ServerPayload =
 			/** Current Pi branch verified; older local cards need separate identity proof. */
 			branchVerified?: true;
 	  }
-	| { type: "earlier"; before: string; messages: HistoryMessage[]; hasEarlier: boolean; branchVerified?: true }
+	| { type: "earlier"; before: string; requestId?: string; conversationId?: string; messages: HistoryMessage[]; hasEarlier: boolean; branchVerified?: true }
 	| { type: "conversations"; conversations: ConversationSummary[]; activeId?: string }
 	| { type: "interrupted" }
 	| ({ type: "queue" } & MessageQueue)
-	| { type: "error"; code: string; message: string }
+	| { type: "error"; code: string; message: string; requestId?: string; conversationId?: string }
 	/** `voice` changes with the accounts: an OpenAI API key turns it on. */
 	| { type: "auth_providers"; providers: AuthProvider[]; open?: boolean; voice?: VoiceCapability }
 	| { type: "auth_prompt"; prompt: AuthPrompt }
@@ -687,7 +689,9 @@ export function parseClientMessage(raw: string): ClientMessage | undefined {
 			return { type: "auth_list" };
 		case "get_earlier":
 			return isString(m.before) && m.before.length <= 200
-				? { type: "get_earlier", before: m.before }
+				&& (m.requestId === undefined || (isShortString(m.requestId) && !!m.requestId))
+				&& (m.conversationId === undefined || (isString(m.conversationId) && !!m.conversationId && m.conversationId.length <= 2048))
+				? { type: "get_earlier", before: m.before, ...(m.requestId !== undefined ? { requestId: m.requestId } : {}), ...(m.conversationId !== undefined ? { conversationId: m.conversationId } : {}) }
 				: undefined;
 		case "open_conversation":
 			return isString(m.conversationId)
