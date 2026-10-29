@@ -2,6 +2,7 @@ name: Capri public iOS archive verification
 
 # A change to this file triggers one public, anonymous-source, archive-only
 # verification. No personal art, account credentials, signing or upload.
+# This run also compiles the current bounded microphone buffer handling.
 on:
   push:
     branches:
