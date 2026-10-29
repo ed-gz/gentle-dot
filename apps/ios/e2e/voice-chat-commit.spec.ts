@@ -196,3 +196,109 @@ test('a modified transcript is not accepted as the original receipt', async ({ p
   }, fixture());
   expect(result).toEqual(['rejected', 'rejected']);
 });
+
+test('explicit recovery appends only the dictation and reuses its action after a lost callback', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async input => {
+    const path = '/src/voice-chat-commit.ts', { createVoiceChatCommit } = await import(path);
+    const name = `voice-chat-restore-${crypto.randomUUID()}`, store = createVoiceChatCommit({ databaseName: name });
+    const original = await store.apply(input, { draft: '', revision: 0 });
+    await new Promise<void>((resolve, reject) => {
+      const open = indexedDB.open(name); open.onerror = () => reject(open.error);
+      open.onsuccess = () => { const db = open.result, tx = db.transaction('conversation', 'readwrite');
+        tx.objectStore('conversation').put({ entries: [], draft: 'Mis notas nuevas', revision: 2 }, 'current');
+        tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = () => { db.close(); reject(tx.error); }; };
+    });
+    const action = crypto.randomUUID(), base = { draft: 'Mis notas nuevas', revision: 2 };
+    await store.prepareRestore(original.receipt, action);
+    const restored = await store.restore(original.receipt, base, action);
+    // The user may continue typing before a lost callback is retried.
+    await new Promise<void>((resolve, reject) => {
+      const open = indexedDB.open(name); open.onerror = () => reject(open.error);
+      open.onsuccess = () => { const db = open.result, tx = db.transaction('conversation', 'readwrite');
+        tx.objectStore('conversation').put({ entries: [], draft: `${restored.currentDraft}\nOtra nota`, revision: 4 }, 'current');
+        tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = () => { db.close(); reject(tx.error); }; };
+    });
+    const reopened = createVoiceChatCommit({ databaseName: name });
+    const retried = await reopened.restore(original.receipt, { draft: 'Mis notas nuevas\nRevisa el error.\nOtra nota', revision: 4 }, action);
+    const wrong = await Promise.allSettled([store.restore({ ...original.receipt, inputSHA256: 'b'.repeat(64) }, base, action)]);
+    return { restored, retried, wrong: wrong[0].status, receipt: await store.inspect(input.transcript.sessionId) };
+  }, fixture());
+  expect(result.restored).toMatchObject({ currentDraft: 'Mis notas nuevas\nRevisa el error.', currentRevision: 3, outcome: 'inserted' });
+  expect(result.retried).toMatchObject({ currentDraft: 'Mis notas nuevas\nRevisa el error.\nOtra nota', currentRevision: 4, outcome: 'replayed-action' });
+  expect(result.wrong).toBe('rejected');
+  expect(JSON.stringify(result.receipt)).not.toContain('Mis notas nuevas');
+});
+
+test('recovery abort preserves the original notes and can retry the same action', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async input => {
+    const path = '/src/voice-chat-commit.ts', { createVoiceChatCommit } = await import(path);
+    const name = `voice-chat-restore-abort-${crypto.randomUUID()}`, store = createVoiceChatCommit({ databaseName: name });
+    const original = await store.apply(input, { draft: '', revision: 0 }), action = crypto.randomUUID();
+    await new Promise<void>((resolve, reject) => {
+      const open = indexedDB.open(name); open.onerror = () => reject(open.error);
+      open.onsuccess = () => { const db = open.result, tx = db.transaction('conversation', 'readwrite');
+        tx.objectStore('conversation').put({ entries: [], draft: 'Notas nuevas', revision: 2 }, 'current');
+        tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = () => { db.close(); reject(tx.error); }; };
+    });
+    const base = { draft: 'Notas nuevas', revision: 2 };
+    await store.prepareRestore(original.receipt, action);
+    const previous = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (...args) {
+      const request = previous.apply(this, args);
+      if (this.transaction.db.name === name && typeof args[1] === 'string' && args[1].startsWith('voice-restore:')) throw new Error('abort after restore requests');
+      return request;
+    };
+    const failed = await Promise.allSettled([store.restore(original.receipt, base, action)]);
+    IDBObjectStore.prototype.put = previous;
+    const retry = await store.restore(original.receipt, base, action);
+    return { status: failed[0].status, retry };
+  }, fixture());
+  expect(result.status).toBe('rejected');
+  expect(result.retry).toMatchObject({ currentDraft: 'Notas nuevas\nRevisa el error.', currentRevision: 3, outcome: 'inserted' });
+});
+
+test('explicit recovery does not duplicate a dictation already present as a full line', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async input => {
+    const path = '/src/voice-chat-commit.ts', { createVoiceChatCommit } = await import(path);
+    const name = `voice-chat-present-${crypto.randomUUID()}`, store = createVoiceChatCommit({ databaseName: name });
+    const original = await store.apply(input, { draft: '', revision: 0 }), action = crypto.randomUUID();
+    const base = { draft: original.currentDraft, revision: original.currentRevision };
+    await store.prepareRestore(original.receipt, action);
+    const first = await store.restore(original.receipt, base, action);
+    const retry = await store.restore(original.receipt, base, action);
+    return { first, retry };
+  }, fixture());
+  expect(result.first).toEqual({ currentDraft: 'Revisa el error.', currentRevision: 1, outcome: 'matching-text' });
+  expect(result.retry).toEqual({ currentDraft: 'Revisa el error.', currentRevision: 1, outcome: 'replayed-action' });
+});
+
+test('a durable recovery intent survives restart and distinguishes pending, insertion and replay', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async input => {
+    const path = '/src/voice-chat-commit.ts', { createVoiceChatCommit } = await import(path);
+    const name = `voice-chat-intent-${crypto.randomUUID()}`, initial = createVoiceChatCommit({ databaseName: name });
+    const first = await initial.apply(input, { draft: '', revision: 0 }), action = crypto.randomUUID();
+    const prepared = await initial.prepareRestore(first.receipt, action);
+    await new Promise<void>((resolve, reject) => {
+      const open = indexedDB.open(name); open.onerror = () => reject(open.error);
+      open.onsuccess = () => { const db = open.result, tx = db.transaction('conversation', 'readwrite');
+        tx.objectStore('conversation').put({ entries: [], draft: 'Notas tras reiniciar', revision: 2 }, 'current');
+        tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = () => { db.close(); reject(tx.error); }; };
+    });
+    const reopened = createVoiceChatCommit({ databaseName: name });
+    const before = await reopened.listRestores(first.receipt);
+    const inserted = await reopened.restore(first.receipt, { draft: 'Notas tras reiniciar', revision: 2 }, action);
+    const after = await createVoiceChatCommit({ databaseName: name }).listRestores(first.receipt);
+    const replay = await reopened.restore(first.receipt, { draft: inserted.currentDraft, revision: inserted.currentRevision }, action);
+    return { prepared, before, inserted, after, replay };
+  }, fixture());
+  expect(result.prepared.state).toBe('pending');
+  expect(result.before).toHaveLength(1); expect(result.before[0].state).toBe('pending');
+  expect(result.inserted).toMatchObject({ currentDraft: 'Notas tras reiniciar\nRevisa el error.', currentRevision: 3, outcome: 'inserted' });
+  expect(result.after).toHaveLength(1); expect(result.after[0]).toMatchObject({ state: 'applied', outcome: 'inserted' });
+  expect(JSON.stringify(result.after)).not.toContain('Notas tras reiniciar');
+  expect(result.replay).toMatchObject({ currentDraft: 'Notas tras reiniciar\nRevisa el error.', currentRevision: 3, outcome: 'replayed-action' });
+});

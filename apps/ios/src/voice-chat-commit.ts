@@ -6,9 +6,13 @@ import { prepareVoiceReceiptInput, type VoiceReceiptInput } from './voice-receip
  * object store, but is not yet called by the UI or authorized to ACK audio.
  * An immutable receipt retains only the transcript and hashes, never a copy
  * of unrelated draft text. Hashes are assertions, not authentication; once
- * the draft changes they cannot prove that old text is still available. A caller still needs a
- * native source/lease match, cancellation fencing, coordinator for in-memory
- * edits, retention policy and an accessible recovery view before activation. */
+ * the draft changes they cannot prove that old text is still available. The
+ * existing conversation writer accepts a higher-revision stale snapshot, so
+ * it can overwrite an insertion after this transaction commits. An applied
+ * intent is therefore not proof that text is present and must never trigger
+ * an audio ACK. Activation still needs native source/lease matching,
+ * cancellation fencing, cross-window and in-memory coordination, an explicit
+ * retention/discard policy and an accessible recovery view. */
 export type VoiceChatBase = { draft: string; revision: number };
 export type VoiceChatCommit = {
   schema: 'capri-voice-chat-commit/v1';
@@ -20,6 +24,10 @@ export type VoiceChatCommit = {
   committedDraftSHA256: string;
 };
 export type VoiceChatResult = { receipt: VoiceChatCommit; currentDraft: string; currentRevision: number; alreadyApplied: boolean };
+export type VoiceChatRestore = { currentDraft: string; currentRevision: number; outcome: 'inserted' | 'matching-text' | 'replayed-action' };
+export type VoiceChatRestoreIntent = { schema: 'capri-voice-chat-restore/v2'; actionId: string; sessionId: string; inputSHA256: string; state: 'pending' }
+  | { schema: 'capri-voice-chat-restore/v2'; actionId: string; sessionId: string; inputSHA256: string; state: 'applied';
+      baseRevision: number; appliedRevision: number; baseDraftSHA256: string; resultDraftSHA256: string; outcome: 'inserted' | 'matching-text' };
 const MAX_RECEIPTS = 100;
 const natural = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -29,6 +37,7 @@ const uuid = (value: unknown): value is string => typeof value === 'string' && /
 const digest = (text: string) => hashSourceBytes(new TextEncoder().encode(JSON.stringify(text)));
 const receiptKey = (id: string) => `voice-receipt:${id}`;
 const ownerKey = (id: string) => `voice-owner:${id}`;
+const restoreKey = (id: string) => `voice-restore:${id}`;
 function deepSame(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((item, i) => deepSame(item, b[i]));
@@ -52,6 +61,17 @@ function validReceipt(value: unknown): value is VoiceChatCommit {
     || typeof value.baseDraftSHA256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.baseDraftSHA256)
     || typeof value.committedDraftSHA256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.committedDraftSHA256)) return false;
   return true;
+}
+function validRestore(value: unknown): value is VoiceChatRestoreIntent {
+  if (!object(value) || value.schema !== 'capri-voice-chat-restore/v2' || !uuid(value.actionId) || value.actionId !== value.actionId.toLowerCase()
+    || !uuid(value.sessionId) || value.sessionId !== value.sessionId.toLowerCase() || typeof value.inputSHA256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.inputSHA256)) return false;
+  const base = ['schema', 'actionId', 'sessionId', 'inputSHA256', 'state'];
+  if (value.state === 'pending') return Object.keys(value).sort().join(',') === base.sort().join(',');
+  if (value.state !== 'applied' || !['inserted', 'matching-text'].includes(String(value.outcome)) || !natural(value.baseRevision) || !natural(value.appliedRevision)
+    || value.appliedRevision !== value.baseRevision + (value.outcome === 'inserted' ? 1 : 0)
+    || typeof value.baseDraftSHA256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.baseDraftSHA256)
+    || typeof value.resultDraftSHA256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.resultDraftSHA256)) return false;
+  return Object.keys(value).sort().join(',') === [...base, 'baseRevision', 'appliedRevision', 'baseDraftSHA256', 'resultDraftSHA256', 'outcome'].sort().join(',');
 }
 async function verifyReceipt(value: VoiceChatCommit, sessionId: string): Promise<VoiceChatCommit> {
   const { input, inputSHA256 } = await prepareVoiceReceiptInput(value.input);
@@ -140,6 +160,113 @@ export function createVoiceChatCommit(options: { databaseName?: string } = {}) {
                 const owner = store.put(input.transcript.sessionId, ownerKey(input.ownerId));
                 owner.onsuccess = () => done({ receipt, currentDraft: next.draft, currentRevision: revision + 1, alreadyApplied: false });
               });
+            });
+          });
+        });
+      });
+    },
+    /** Persist an action identity before attempting recovery. This stores no
+     * draft or transcript copy and does not apply text or acknowledge audio.
+     * Callers must discover and reuse unresolved actions after interruption:
+     * this API permits several action IDs per receipt. The bounded history has
+     * no compaction, and its draft hashes remain potentially sensitive. */
+    async prepareRestore(receiptValue: VoiceChatCommit, actionId: string): Promise<VoiceChatRestoreIntent> {
+      const receipt = structuredClone(receiptValue);
+      if (!validReceipt(receipt) || !object(receipt.input) || !object(receipt.input.transcript) || !uuid(receipt.input.transcript.sessionId) || !uuid(actionId)) throw new Error('La recuperación no es válida.');
+      const verified = await verifyReceipt(receipt, receipt.input.transcript.sessionId);
+      const action = actionId.toLowerCase(), sessionId = verified.input.transcript.sessionId;
+      return transact(name, 'readwrite', (store, done, fail) => {
+        const getReceipt = store.get(receiptKey(sessionId));
+        getReceipt.onsuccess = () => safely(fail, () => {
+          if (!deepSame(getReceipt.result, verified)) throw new Error('El recibo cambió; no se preparó la recuperación.');
+          const owner = store.get(ownerKey(verified.input.ownerId));
+          owner.onsuccess = () => safely(fail, () => {
+            if (owner.result !== sessionId) throw new Error('El dueño del dictado cambió; no se preparó.');
+            const existing = store.get(restoreKey(action));
+            existing.onsuccess = () => safely(fail, () => {
+              if (existing.result !== undefined) {
+                if (!validRestore(existing.result) || existing.result.actionId !== action || existing.result.sessionId !== sessionId || existing.result.inputSHA256 !== verified.inputSHA256) throw new Error('La identidad de recuperación ya corresponde a otra acción.');
+                done(existing.result); return;
+              }
+              const count = store.count(IDBKeyRange.bound('voice-restore:', 'voice-restore:\uffff'));
+              count.onsuccess = () => safely(fail, () => {
+                if (count.result >= MAX_RECEIPTS) throw new Error('El historial de recuperaciones alcanzó su límite; el dictado se conserva.');
+                const intent: VoiceChatRestoreIntent = { schema: 'capri-voice-chat-restore/v2', actionId: action, sessionId, inputSHA256: verified.inputSHA256, state: 'pending' };
+                const put = store.put(intent, restoreKey(action)); put.onsuccess = () => done(intent);
+              });
+            });
+          });
+        });
+      });
+    },
+    /** A user gesture may append a saved dictation to the exact current draft.
+     * Reusing its durable actionId returns the prior outcome without reapplying.
+     * A matching text line is reported separately; it is not proof of origin. */
+    async restore(receiptValue: VoiceChatCommit, baseValue: VoiceChatBase, actionId: string): Promise<VoiceChatRestore> {
+      const receipt = structuredClone(receiptValue), base = structuredClone(baseValue);
+      if (!validReceipt(receipt) || !object(receipt.input) || !object(receipt.input.transcript) || !uuid(receipt.input.transcript.sessionId)
+        || !base || typeof base.draft !== 'string' || base.draft.length > 8000 || !natural(base.revision) || !uuid(actionId)) throw new Error('La recuperación no es válida.');
+      const verified = await verifyReceipt(receipt, receipt.input.transcript.sessionId);
+      const text = verified.input.transcript.text;
+      const present = base.draft === text || base.draft.startsWith(`${text}\n`) || base.draft.endsWith(`\n${text}`) || base.draft.includes(`\n${text}\n`);
+      const merged = present ? base.draft : `${base.draft}${base.draft.trim() ? '\n' : ''}${text}`;
+      const baseDraftSHA256 = await digest(base.draft), resultDraftSHA256 = await digest(merged);
+      const action = actionId.toLowerCase(), sessionId = verified.input.transcript.sessionId;
+      return transact(name, 'readwrite', (store, done, fail) => {
+        const getReceipt = store.get(receiptKey(sessionId));
+        getReceipt.onsuccess = () => safely(fail, () => {
+          if (!deepSame(getReceipt.result, verified)) throw new Error('El recibo cambió; no se recuperó el dictado.');
+          const getOwner = store.get(ownerKey(verified.input.ownerId));
+          getOwner.onsuccess = () => safely(fail, () => {
+            if (getOwner.result !== sessionId) throw new Error('El dueño del dictado cambió; no se recuperó.');
+            const getAction = store.get(restoreKey(action));
+            getAction.onsuccess = () => safely(fail, () => {
+              const intent = getAction.result;
+              if (!validRestore(intent) || intent.actionId !== action || intent.sessionId !== sessionId || intent.inputSHA256 !== verified.inputSHA256) throw new Error('Falta la intención durable de recuperación.');
+              const getCurrent = store.get('current');
+              getCurrent.onsuccess = () => safely(fail, () => {
+                const old = current(getCurrent.result), revision = old.revision ?? 0;
+                if (intent.state === 'applied') { done({ currentDraft: old.draft, currentRevision: revision, outcome: 'replayed-action' }); return; }
+                if (old.draft !== base.draft || revision !== base.revision) throw new Error('El borrador cambió; vuelve a revisar el dictado.');
+                if (merged.length > 8000) throw new Error('El dictado no cabe en el borrador. La transcripción se conserva.');
+                if (!present && revision >= Number.MAX_SAFE_INTEGER) throw new Error('La revisión alcanzó su límite.');
+                const next: Conversation = present ? old : { ...old, draft: merged, revision: revision + 1 };
+                const marker: VoiceChatRestoreIntent = { ...intent, state: 'applied', baseRevision: revision, appliedRevision: revision + (present ? 0 : 1),
+                  outcome: present ? 'matching-text' : 'inserted', baseDraftSHA256, resultDraftSHA256 };
+                if (!present) store.put(next, 'current');
+                const write = store.put(marker, restoreKey(action));
+                write.onsuccess = () => done({ currentDraft: next.draft, currentRevision: revision + (present ? 0 : 1), outcome: marker.outcome });
+              });
+            });
+          });
+        });
+      });
+    },
+    /** Snapshot discovery only. An applied action records a prior event, not
+     * whether the user has since edited or removed the dictation. */
+    async listRestores(receiptValue: VoiceChatCommit): Promise<VoiceChatRestoreIntent[]> {
+      const receipt = structuredClone(receiptValue);
+      if (!validReceipt(receipt) || !object(receipt.input) || !object(receipt.input.transcript) || !uuid(receipt.input.transcript.sessionId)) throw new Error('La recuperación no es válida.');
+      const verified = await verifyReceipt(receipt, receipt.input.transcript.sessionId), sessionId = verified.input.transcript.sessionId;
+      return transact(name, 'readonly', (store, done, fail) => {
+        const getReceipt = store.get(receiptKey(sessionId));
+        getReceipt.onsuccess = () => safely(fail, () => {
+          if (!deepSame(getReceipt.result, verified)) throw new Error('El recibo cambió; se conservan los datos.');
+          const owner = store.get(ownerKey(verified.input.ownerId));
+          owner.onsuccess = () => safely(fail, () => {
+            if (owner.result !== sessionId) throw new Error('El dueño del dictado cambió.');
+            const result: VoiceChatRestoreIntent[] = [];
+            let count = 0;
+            const cursor = store.openCursor(IDBKeyRange.bound('voice-restore:', 'voice-restore:\uffff'));
+            cursor.onsuccess = () => safely(fail, () => {
+              const item = cursor.result;
+              if (!item) { done(result); return; }
+              if (++count > MAX_RECEIPTS || !validRestore(item.value) || item.key !== restoreKey(item.value.actionId)) throw new Error('El historial de recuperaciones no es válido.');
+              if (item.value.sessionId === sessionId) {
+                if (item.value.inputSHA256 !== verified.inputSHA256) throw new Error('La recuperación no corresponde al dictado.');
+                result.push(item.value);
+              }
+              item.continue();
             });
           });
         });
