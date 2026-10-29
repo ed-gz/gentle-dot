@@ -15,7 +15,7 @@ function fixture(version = '2025-06-18') {
     getConnection: async () => connection,
     token: async () => token,
     hash: async text => createHash('sha256').update(text).digest('hex'),
-    begin: async value => { if (journal.some(entry => entry.fingerprint === value.fingerprint && entry.state !== 'succeeded')) throw new Error('uncertain replay blocked'); journal.push({ ...value }); },
+    receiptState: async () => 'terminal', begin: async value => { if (journal.some(entry => entry.fingerprint === value.fingerprint && entry.state !== 'succeeded')) throw new Error('uncertain replay blocked'); journal.push({ ...value }); },
     finish: async (requestId, state, resultJSON) => { const entry = journal.find(item => item.requestId === requestId); assert.equal(entry.state, 'executing'); entry.state = state; entry.resultJSON = resultJSON; },
     request: async request => {
       const rpc = JSON.parse(request.body); calls.push({ ...request, rpc });

@@ -32,7 +32,7 @@ test('agent reports a real MCP tool error as failed after exact review, even whe
   const [tool] = await discoverMCPTools(connection.id, {
     prepare: async () => connection, getConnection: async () => connection, token: async () => 'fixture-token',
     hash: async text => createHash('sha256').update(text).digest('hex'),
-    begin: async value => { journal.push(value); }, finish: async (id, state, value) => { journal[0].state = state; journal[0].resultJSON = value; },
+    receiptState: async () => 'terminal', begin: async value => { journal.push(value); }, finish: async (id, state, value) => { journal[0].state = state; journal[0].resultJSON = value; },
     request: async request => {
       // Test-only loopback proxy; production remains restricted to HTTPS.
       const response = await fetch(`http://127.0.0.1:${port}/mcp`, { method: request.method, headers: request.headers, body: request.body });
@@ -82,7 +82,7 @@ test('paginating one MCP catalog preserves the session and previously discovered
   const mcp = {
     prepare: async () => connection, getConnection: async () => connection, token: async () => 'fixture-token',
     hash: async text => createHash('sha256').update(text).digest('hex'),
-    begin: async () => {}, finish: async () => {},
+    receiptState: async () => 'terminal', begin: async () => {}, finish: async () => {},
     request: async request => {
       const response = await fetch(`http://127.0.0.1:${port}/mcp`, { method: request.method, headers: request.headers, body: request.body });
       return { status: response.status, headers: Object.fromEntries(response.headers), body: await response.text() };

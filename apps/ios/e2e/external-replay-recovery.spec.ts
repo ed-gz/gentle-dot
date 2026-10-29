@@ -123,3 +123,46 @@ test('live and orphaned network operations stay blocked until transport durably 
   expect(await check()).toMatchObject({approvals:0,blocked:true,directBlocked:true,duplicate:true,record:{state:'executing'}});
   await other.close();
 });
+
+test('native terminal evidence recovers an orphan only as uncertain, while missing requires a tombstone',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+  const s=await import('/src/external-connections.ts'),c=await s.saveConnection({kind:'mcp',label:'Servicio',endpoint:'https://fixture.example/mcp'},'');
+  const make=(text:string)=>({requestId:crypto.randomUUID(),owner:crypto.randomUUID(),nativeReceipt:1 as const,fingerprint:'c'.repeat(64),connectionId:c.id,connectionRevision:c.revision,endpoint:c.endpoint,toolName:'send',schemaJSON:'{"type":"object"}',argumentsJSON:JSON.stringify({text}),state:'executing' as const,createdAt:1,updatedAt:1});
+  const first=make('a');await s.beginRemoteExecution(first);let activeBlocked=false;
+  try{await s.recoverRemoteExecution(first,{state:async()=> 'active',cancel:async()=>{throw new Error('unexpected');}});}catch{activeBlocked=true;}
+  const recovered=await s.recoverRemoteExecution(first,{state:async()=> 'terminal',cancel:async()=>{throw new Error('unexpected');}});
+  let duplicate=false;try{await s.beginRemoteExecution({...first,requestId:crypto.randomUUID()});}catch{duplicate=true;}
+  const second=make('b');await s.beginRemoteExecution(second);let raceBlocked=false;try{await s.recoverRemoteExecution(second,{state:async()=> 'missing',cancel:async()=>{throw new Error('transport started');}});}catch{raceBlocked=true;}
+  const kept=await s.getRemoteExecution(second.requestId);let tombstones=0;
+  const cancelled=await s.recoverRemoteExecution(second,{state:async()=> 'missing',cancel:async()=>{tombstones++;}});
+  return {activeBlocked,recovered:recovered.state,duplicate,raceBlocked,kept:kept?.state,cancelled:cancelled.state,tombstones};
+ });
+ expect(result).toEqual({activeBlocked:true,recovered:'uncertain',duplicate:true,raceBlocked:true,kept:'executing',cancelled:'cancelled',tombstones:1});
+});
+
+test('remote caller does not mark an early transport error terminal',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+  const s=await import('/src/external-connections.ts'),p=await import('/src/provider-tools.ts'),c=await s.saveConnection({kind:'https-api',provider:'github',label:'Servicio',endpoint:'https://api.github.com/'},'');let sent:any;
+  const tools=await p.createProviderTools(c.id,{getConnection:async()=>c,access:async()=>({connection:c,accessToken:'fixture'}),hash:async()=> 'b'.repeat(64),receiptState:async()=> 'active',request:async req=>{sent=req;throw new Error('early cancellation');}});
+  try{await tools.find(tool=>tool.definition.name.endsWith('_create_issue'))!.execute({repository:'org/repo',title:'Exacto',text:'Texto',labels:[]},{signal:new AbortController().signal,askApproval:async()=>true});}catch{}
+  const entry=(await s.listRemoteExecutions())[0];return {state:entry.state,tracked:entry.nativeReceipt,idMatches:sent.receiptId===entry.requestId,ownerMatches:sent.receiptOwner===entry.owner};
+ });
+ expect(result).toEqual({state:'executing',tracked:1,idMatches:true,ownerMatches:true});
+});
+
+test('late HTTP result cannot overwrite reviewed recovery and legacy entries stay blocked',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+  const s=await import('/src/external-connections.ts'),c=await s.saveConnection({kind:'mcp',label:'Servicio',endpoint:'https://fixture.example/mcp'},'');
+  const base={fingerprint:'d'.repeat(64),connectionId:c.id,connectionRevision:c.revision,endpoint:c.endpoint,toolName:'send',schemaJSON:'{"type":"object"}',state:'executing' as const,createdAt:1,updatedAt:1};
+  const current={...base,requestId:crypto.randomUUID(),owner:crypto.randomUUID(),nativeReceipt:1 as const,argumentsJSON:'{"text":"nuevo"}'};await s.beginRemoteExecution(current);
+  const recovered=await s.recoverRemoteExecution(current,{state:async()=> 'terminal',cancel:async()=>{throw new Error('unexpected');}});await s.reviewRemoteExecution(recovered);
+  let lateBlocked=false;try{await s.finishRemoteExecution(current.requestId,'succeeded','{}');}catch{lateBlocked=true;}
+  const legacy={...base,requestId:crypto.randomUUID(),argumentsJSON:'{"text":"legacy"}'};await s.beginRemoteExecution(legacy);let legacyBlocked=false;
+  try{await s.recoverRemoteExecution(legacy,{state:async()=> 'terminal',cancel:async()=>{}});}catch{legacyBlocked=true;}
+  return {lateBlocked,legacyBlocked,newState:(await s.getRemoteExecution(current.requestId))?.state,legacyState:(await s.getRemoteExecution(legacy.requestId))?.state};
+ });
+ expect(result).toEqual({lateBlocked:true,legacyBlocked:true,newState:'reviewed',legacyState:'executing'});
+});

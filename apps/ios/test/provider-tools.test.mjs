@@ -16,7 +16,7 @@ function fixture(provider, extra = {}) {
     getConnection: async () => connection,
     access: async () => ({ connection, accessToken: 'credential-never-in-model' }), hash,
     attachment: async () => attachment,
-    begin: async record => { if (journal.some(entry => entry.fingerprint === record.fingerprint && entry.state !== 'succeeded')) throw new Error('uncertain replay blocked'); journal.push({ ...record }); events.push('durable'); },
+    receiptState: async () => 'terminal', begin: async record => { if (journal.some(entry => entry.fingerprint === record.fingerprint && entry.state !== 'succeeded')) throw new Error('uncertain replay blocked'); journal.push({ ...record }); events.push('durable'); },
     finish: async (requestId, state, resultJSON) => { const record = journal.find(entry => entry.requestId === requestId); assert.equal(record.state, 'executing'); record.state = state; record.resultJSON = resultJSON; },
     request: async request => {
       calls.push(request);

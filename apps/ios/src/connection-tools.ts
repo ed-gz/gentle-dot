@@ -1,6 +1,6 @@
 import type { Tool } from './agent-tools.ts';
 import { createProviderTools } from './provider-tools.ts';
-import { getConnection, listConnections, listPendingRemoteExecutions, getRemoteExecution, reviewRemoteExecution, validEndpoint, type RemoteExecution } from './external-connections.ts';
+import { getConnection, listConnections, listPendingRemoteExecutions, getRemoteExecution, reviewRemoteExecution, recoverRemoteExecution, validEndpoint, type RemoteExecution } from './external-connections.ts';
 import { discoverMCPTools } from './remote-mcp.ts';
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -11,8 +11,8 @@ function connection(value: unknown) {
 }
 /** Discover tools on demand: dozens of services must not exhaust the local model's context. */
 export function createConnectionTools(overrides: Partial<{ getConnection: typeof getConnection; listConnections: typeof listConnections;
-  discoverMCPTools: typeof discoverMCPTools; createProviderTools: typeof createProviderTools; listPendingRemoteExecutions: typeof listPendingRemoteExecutions; getRemoteExecution: typeof getRemoteExecution; reviewRemoteExecution: typeof reviewRemoteExecution }> = {}): Tool[] {
-  const services = { getConnection, listConnections, discoverMCPTools, createProviderTools, listPendingRemoteExecutions, getRemoteExecution, reviewRemoteExecution, ...overrides };
+  discoverMCPTools: typeof discoverMCPTools; createProviderTools: typeof createProviderTools; listPendingRemoteExecutions: typeof listPendingRemoteExecutions; getRemoteExecution: typeof getRemoteExecution; reviewRemoteExecution: typeof reviewRemoteExecution; recoverRemoteExecution: typeof recoverRemoteExecution }> = {}): Tool[] {
+  const services = { getConnection, listConnections, discoverMCPTools, createProviderTools, listPendingRemoteExecutions, getRemoteExecution, reviewRemoteExecution, recoverRemoteExecution, ...overrides };
   const cache = new Map<string, { tools: Tool[]; identity: string }>();
   const identity = (value: NonNullable<Awaited<ReturnType<typeof getConnection>>>) => JSON.stringify([
     value.id, value.revision, value.kind, value.provider ?? null, value.endpoint, value.enabled, value.credentialAccount ?? null, value.label,
@@ -39,8 +39,11 @@ export function createConnectionTools(overrides: Partial<{ getConnection: typeof
       validate(value) { if (!object(value)||Object.keys(value).some(key=>key!=='requestId')||typeof value.requestId!=='string'||!/^[a-f0-9-]{36}$/.test(value.requestId)) throw new Error('Indica el ID exacto de la operación.');return {requestId:value.requestId}; },
       async execute(value,context) {
         const {requestId}=value as {requestId:string};context.signal.throwIfAborted();
-        const current=await services.getRemoteExecution(requestId);context.signal.throwIfAborted();
-        if (current?.state === 'executing') throw new Error('Esta operación sigue en curso o perdió su comprobante de transporte. Permanece bloqueada; revisa el servicio.');
+        let current=await services.getRemoteExecution(requestId);context.signal.throwIfAborted();
+        if (current?.state === 'executing') {
+          current=await services.recoverRemoteExecution(current);context.signal.throwIfAborted();
+          if(current.state==='cancelled') return {requestId,cancelledBeforeStart:true,resent:false,confirmed:false,message:'El transporte no inició y quedó bloqueado frente a un envío tardío.'};
+        }
         if (!current || current.state !== 'uncertain' || typeof current.endpoint!=='string' || validEndpoint(current.endpoint)!==current.endpoint || typeof current.toolName!=='string' || !current.toolName || current.toolName.length>256 || typeof current.argumentsJSON!=='string' || current.argumentsJSON.length>100_000 || typeof current.schemaJSON!=='string' || current.schemaJSON.length>100_000) throw new Error('El registro requiere revisión y no se modificó.');
         let args:unknown, definition:unknown;try {args=JSON.parse(current.argumentsJSON);definition=JSON.parse(current.schemaJSON);} catch {throw new Error('El registro requiere revisión y no se modificó.');}
         if (!object(args) || !object(definition)) throw new Error('El registro requiere revisión y no se modificó.');

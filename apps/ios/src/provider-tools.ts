@@ -1,7 +1,7 @@
 import type { Tool, ToolContext, ToolDefinition } from './agent-tools.ts';
 import { validateOperation, type Operation, type AttachmentRef } from './external-actions.ts';
 import { getConnection, beginRemoteExecution, finishRemoteExecution, type ExternalConnection } from './external-connections.ts';
-import { httpsRequest, nativeSHA256Bytes, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
+import { httpsRequest, httpsReceiptState, nativeSHA256Bytes, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { readWork, readWorkFile } from './work-inbox.ts';
 import { canonicalJSON } from './remote-mcp.ts';
 import { localIdentifier } from './local-identifiers.ts';
@@ -14,6 +14,7 @@ export type ProviderServices = {
   request(request: HTTPSRequest): Promise<HTTPSResponse>;
   begin: typeof beginRemoteExecution;
   finish: typeof finishRemoteExecution;
+  receiptState: typeof httpsReceiptState;
   attachment(ref: AttachmentRef): Promise<Uint8Array>;
   hash(bytes: Uint8Array): Promise<string>;
 };
@@ -51,7 +52,7 @@ async function hashBytes(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes)))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 const defaults: ProviderServices = {
-  getConnection, request: httpsRequest, begin: beginRemoteExecution, finish: finishRemoteExecution, hash: hashBytes,
+  getConnection, request: httpsRequest, begin: beginRemoteExecution, finish: finishRemoteExecution, receiptState: httpsReceiptState, hash: hashBytes,
   async access(id) { const oauth = await import('./provider-oauth-store.ts'); return oauth.getValidProviderAccess(id); },
   async attachment(ref) {
     const work = await readWork(ref.workId); const stored = work.files.find(file => file.id === ref.fileId);
@@ -145,13 +146,13 @@ export async function createProviderTools(connectionId: string, overrides: Parti
       context.signal.throwIfAborted(); await same(connection);
       if (operation.kind === 'gmail.message') for (const ref of operation.attachments) await attachmentBytes(ref);
       context.signal.throwIfAborted(); await same(connection);
-      const requestId = localIdentifier(); const argumentsJSON = canonicalJSON(operation); const schemaJSON = canonicalJSON(definition.parameters);
+      const requestId = localIdentifier(), owner = localIdentifier(); const argumentsJSON = canonicalJSON(operation); const schemaJSON = canonicalJSON(definition.parameters);
       const fingerprint = await service.hash(new TextEncoder().encode(canonicalJSON({ connectionId, endpoint: connection.endpoint, kind, operation })));
       context.signal.throwIfAborted(); const time = Date.now();
-      await service.begin({ requestId, fingerprint, connectionId, connectionRevision: connection.revision, endpoint: connection.endpoint, toolName: kind, schemaJSON, argumentsJSON, state: 'executing', createdAt: time, updatedAt: time });
+      await service.begin({ requestId, fingerprint, connectionId, connectionRevision: connection.revision, endpoint: connection.endpoint, toolName: kind, schemaJSON, argumentsJSON, state: 'executing', createdAt: time, updatedAt: time, nativeReceipt:1, owner });
       try {
         await same(connection); context.signal.throwIfAborted();
-        const response = await service.request(outgoing);
+        const response = await service.request({...outgoing,receiptId:requestId,receiptOwner:owner});
         if ([400, 401, 403, 404, 422, 429].includes(response.status)) {
           const result = { accepted: false, httpStatus: response.status, message: 'El proveedor rechazó la solicitud. Corrige la conexión o el contenido antes de un nuevo intento.' };
           await service.finish(requestId, 'succeeded', canonicalJSON(result)); return { requestId, confirmed: true, ...result };
@@ -174,7 +175,7 @@ export async function createProviderTools(connectionId: string, overrides: Parti
         }
         await service.finish(requestId, 'succeeded', canonicalJSON(result)); return { requestId, confirmed: true, result };
       } catch {
-        await service.finish(requestId, 'uncertain').catch(() => {});
+        if (await service.receiptState(requestId,owner).catch(()=>undefined) === 'terminal') await service.finish(requestId, 'uncertain').catch(() => {});
         throw new Error('El envío quedó sin confirmar. Conservé el registro y no lo repetiré automáticamente. Revisa el servicio.');
       }
     } };

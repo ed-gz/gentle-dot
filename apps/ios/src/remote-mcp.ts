@@ -1,4 +1,4 @@
-import { httpsRequest, nativeSHA256, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
+import { httpsRequest, httpsReceiptState, nativeSHA256, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { getConnection, connectionToken, beginRemoteExecution, finishRemoteExecution, type ExternalConnection, type RemoteExecution } from './external-connections.ts';
 import { localIdentifier } from './local-identifiers.ts';
 import { prepareMCPAccess } from './mcp-oauth-store.ts';
@@ -114,6 +114,7 @@ export type MCPServices = {
   request: (request: HTTPSRequest) => Promise<HTTPSResponse>;
   begin: (execution: RemoteExecution) => Promise<void>;
   finish: typeof finishRemoteExecution;
+  receiptState: typeof httpsReceiptState;
   hash: (text: string) => Promise<string>;
 };
 async function hash(text: string): Promise<string> {
@@ -121,7 +122,7 @@ async function hash(text: string): Promise<string> {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 export async function discoverMCPTools(connectionId: string, overrides: Partial<MCPServices> = {}): Promise<Tool[]> {
-  const service: MCPServices = { prepare: prepareMCPAccess, getConnection, token: connectionToken, request: httpsRequest, begin: beginRemoteExecution, finish: finishRemoteExecution, hash, ...overrides };
+  const service: MCPServices = { prepare: prepareMCPAccess, getConnection, token: connectionToken, request: httpsRequest, begin: beginRemoteExecution, finish: finishRemoteExecution, receiptState: httpsReceiptState, hash, ...overrides };
   const connection = await service.prepare(connectionId);
   if (!connection || !connection.enabled || connection.kind !== 'mcp') throw new Error('La conexión MCP no está habilitada.');
   const expected = canonicalJSON(connection);
@@ -135,7 +136,7 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
     if (canonicalJSON(await service.getConnection(connectionId)) !== expected) throw new Error('La conexión cambió; vuelve a descubrir las herramientas.');
     if (await service.token(connection) !== token || canonicalJSON(await service.getConnection(connectionId)) !== expected) throw new Error('El acceso cambió; vuelve a descubrir las herramientas.');
   }
-  async function rpc(method: string, params: unknown, id = localIdentifier(), parameterHeaders: Record<string, string> = {}): Promise<unknown> {
+  async function rpc(method: string, params: unknown, id = localIdentifier(), parameterHeaders: Record<string, string> = {}, receipt?: {receiptId:string;receiptOwner:string}): Promise<unknown> {
     await current();
     if (method !== 'initialize' && !initialized) throw new Error('La sesión MCP caducó. Actualiza las conexiones para iniciar otra; no se repitió ninguna operación.');
     if (modern) {
@@ -143,7 +144,7 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
       const request = modernMCPRequest(id, method, params, parameterHeaders);
       if (token) request.headers.Authorization = `Bearer ${token}`;
       validateModernHTTPHeaders(request.headers);
-      const response = await service.request({ url: connection!.endpoint, ...request });
+      const response = await service.request({ url: connection!.endpoint, ...request, ...receipt });
       const value = parseMCPResponse(response, id, MODERN_MCP_VERSION);
       if (classifyModernResult(value) !== 'complete') throw new Error('El servidor solicita información adicional que Capri aún no puede revisar.');
       return value;
@@ -152,7 +153,7 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
     if (token) headers.Authorization = `Bearer ${token}`;
     if (session) headers['Mcp-Session-Id'] = session;
     if (initialized && negotiatedVersion) headers['MCP-Protocol-Version'] = negotiatedVersion;
-    const result = await service.request({ url: connection!.endpoint, method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
+    const result = await service.request({ url: connection!.endpoint, method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }), ...receipt });
     if (method === 'initialize' && legacyHandshakeRejectedAsModern(result, id)) throw new ModernProbeNeeded();
     if (result.status === 404 && session) { session = undefined; initialized = false; throw new Error('La sesión MCP caducó. Vuelve a descubrir las herramientas.'); }
     if (method === 'initialize') {
@@ -247,15 +248,15 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
         if (!fresh || canonicalJSON(fresh.inputSchema) !== schemaJSON || canonicalJSON(fresh.outputSchema ?? null) !== outputSchemaJSON ||
           fresh.description !== remote.description || fresh.taskSupport !== remote.taskSupport) throw new Error('La herramienta cambió después de revisarla. Descúbrela y aprueba de nuevo.');
         context.signal.throwIfAborted(); await current();
-        const requestId = localIdentifier();
+        const requestId = localIdentifier(), owner = localIdentifier();
         // Schema and credential revisions invalidate approvals, but cannot erase
         // uncertainty about the same operation's previous network outcome.
         const fingerprint = await service.hash(canonicalJSON({ connectionId, endpoint: connection.endpoint, tool: remote.name, arguments: args }));
         const time = Date.now();
-        await service.begin({ requestId, fingerprint, connectionId, connectionRevision: connection.revision, endpoint: connection.endpoint, toolName: remote.name, schemaJSON, argumentsJSON, state: 'executing', createdAt: time, updatedAt: time });
+        await service.begin({ requestId, fingerprint, connectionId, connectionRevision: connection.revision, endpoint: connection.endpoint, toolName: remote.name, schemaJSON, argumentsJSON, state: 'executing', createdAt: time, updatedAt: time, nativeReceipt:1, owner });
         try {
           context.signal.throwIfAborted();
-          const result = await rpc('tools/call', { name: remote.name, arguments: args }, requestId, parameterHeaders);
+          const result = await rpc('tools/call', { name: remote.name, arguments: args }, requestId, parameterHeaders, {receiptId:requestId,receiptOwner:owner});
           if (!object(result) || !Array.isArray(result.content) || (result.structuredContent !== undefined && !object(result.structuredContent)) ||
             (result.isError !== undefined && typeof result.isError !== 'boolean')) throw new Error('Resultado de herramienta MCP inválido.');
           let outputValidation: 'not_declared' | 'valid' | 'unverified' = 'not_declared';
@@ -268,7 +269,7 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
           return { requestId, confirmed: true, toolFailed: result.isError === true, result, outputValidation, untrustedContent: true,
             ...(outputValidation === 'unverified' ? { outputWarning: 'El servidor respondió, pero su salida estructurada no pudo verificarse contra el esquema. No la presentes como validada.' } : {}) };
         } catch {
-          await service.finish(requestId, 'uncertain').catch(() => {});
+          if (await service.receiptState(requestId,owner).catch(()=>undefined) === 'terminal') await service.finish(requestId, 'uncertain').catch(() => {});
           throw new Error('La operación MCP quedó sin confirmar. Conservé su registro y no la repetiré automáticamente.');
         }
       },

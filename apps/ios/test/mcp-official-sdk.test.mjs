@@ -24,7 +24,7 @@ test('official MCP SDK v2 modern-only server preserves approval and journal', { 
   }, { legacy:'reject' });
   const [tool] = await discoverMCPTools(id, {
     prepare:async()=>connection, getConnection:async()=>connection, token:async()=>null,
-    hash:async text=>createHash('sha256').update(text).digest('hex'), begin:async entry=>journal.push(entry),
+    hash:async text=>createHash('sha256').update(text).digest('hex'), receiptState:async () => 'terminal', begin:async entry=>journal.push(entry),
     finish:async (requestId,state)=>{journal.find(entry=>entry.requestId===requestId).state=state;},
     request:async request=>{
       const rpc = JSON.parse(request.body); methods.push(rpc.method); requests.push(request);
