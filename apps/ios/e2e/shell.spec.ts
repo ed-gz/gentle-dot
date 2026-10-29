@@ -826,6 +826,7 @@ test('character artwork persists; appearance and motion controls fit small and l
     return c.toDataURL().split(',')[1];
   });
   await page.locator('[data-panel="settings"]').click();
+  await expect(page.locator('#panel-settings')).toBeVisible();
   await page.locator('#art').setInputFiles({ name: 'capri-test.png', mimeType: 'image/png', buffer: Buffer.from(png!, 'base64') });
   await expect(page.locator('#settings-status')).toHaveText('Arte guardado en este dispositivo.');
   await page.locator('#settings-character > summary').click();
