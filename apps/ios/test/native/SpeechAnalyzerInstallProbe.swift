@@ -69,6 +69,8 @@ private func probe() async -> Int32 {
         if result.hasPrefix("PASS: real DictationTranscriber") {
             stage = "captured-formats"
             try await runCaptureFormatProbe(locale: locale)
+            stage = "preview-buffers"
+            try await runPreviewBufferProbe(locale: locale)
             exitCode = 0
         } else if result.hasPrefix("SKIP:") { exitCode = 0 }
         else { print("FAIL: no real synthetic transcript was confirmed.") }
