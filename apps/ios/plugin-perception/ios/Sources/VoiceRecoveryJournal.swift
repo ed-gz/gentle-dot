@@ -217,7 +217,8 @@ final class VoiceRecoveryJournal {
     private func audioIdentity(_ record: VoiceRecoveryRecord) throws -> (URL, AudioIdentity) {
         let file = audio(record)
         guard try exists(file) else { throw VoiceRecoveryJournalError.missingAudio }
-        let fd = file.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+        // Reject FIFOs/devices after fstat without blocking forever on open.
+        let fd = file.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK) }
         guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         defer { try? handle.close() }
@@ -279,7 +280,7 @@ final class VoiceRecoveryJournal {
             guard valid(expected), expected.state == .capturing,
                   try readRecord(discardMarker) == nil, try read() == expected else { throw VoiceRecoveryJournalError.changed }
             let (source, before) = try audioIdentity(expected)
-            let sourceFD = source.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+            let sourceFD = source.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK) }
             guard sourceFD >= 0 else { throw VoiceRecoveryJournalError.invalidAudio }
             let input = FileHandle(fileDescriptor: sourceFD, closeOnDealloc: true)
             defer { try? input.close() }
