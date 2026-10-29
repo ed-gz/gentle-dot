@@ -1330,7 +1330,7 @@ export class DotBridge {
 				return branched ? pageBranchHistory(chain, this.pageSize(), first.leaf, before) : pageHistory(chain, this.pageSize(), before);
 			});
 			const second = await getLeaf();
-			if (!second.changed && second.leaf === first.leaf && this.nextMessage === seen && this.supervisor.sessionFile === active && this.supervisor.sessionId === sessionId && JSON.stringify(this.chain()) === JSON.stringify(chain)) return branched ? { ...page, branchVerified: true } : page;
+			if (!second.changed && second.leaf === first.leaf && this.nextMessage === seen && this.supervisor.sessionFile === active && this.supervisor.sessionId === sessionId && JSON.stringify(this.chain()) === JSON.stringify(chain)) return { ...page, branchVerified: true };
 		}
 		throw new Error("Pi branch changed while reading");
 	}

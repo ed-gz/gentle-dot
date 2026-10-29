@@ -41,15 +41,32 @@ it('serves only the live Pi branch, with source-bound IDs and branch-aware pagin
 
 it('correlated linear pages reject invalid cursors without changing legacy behavior', async () => {
   const f = setup(false);
+  expect(f.received[0]).toMatchObject({ type: 'ready', features: { conversations: false, historyPaging: 1 } });
   const conversationId = (f.received[0] as Extract<ServerPayload, { type: 'ready' }>).conversationId!;
+  expect(conversationId).toBeTruthy(); expect(conversationId).not.toBe('default');
+  await f.bridge.handle(f.client, { type: 'get_history' });
+  expect(f.received.at(-1)).toMatchObject({ type: 'history', branchVerified: true, messages: [{ id: 's0-3', text: 'Current' }] });
   for (const before of ['s0-9999', 's0-0', 's00-1', 's0-xabc', 's999999999999999999999-1']) {
     await f.bridge.handle(f.client, { type: 'get_earlier', before, requestId: 'req-' + before, conversationId });
     expect(f.received.at(-1)).toMatchObject({ type: 'error', code: 'history_unavailable', requestId: 'req-' + before, conversationId });
   }
   await f.bridge.handle(f.client, { type: 'get_earlier', before: 's0-2', requestId: 'valid', conversationId });
-  expect(f.received.at(-1)).toMatchObject({ type: 'earlier', requestId: 'valid', messages: [{ text: 'Root' }], hasEarlier: false });
+  expect(f.received.at(-1)).toMatchObject({ type: 'earlier', requestId: 'valid', branchVerified: true, messages: [{ text: 'Root' }], hasEarlier: false });
   await f.bridge.handle(f.client, { type: 'get_earlier', before: 's0-xabc' });
   expect(f.received.at(-1)).toMatchObject({ type: 'earlier', messages: [], hasEarlier: false });
+});
+
+it('an empty continuous conversation offers no page and never invents a default session identity', async () => {
+  const f = setup(false); f.supervisor.sessionFile = undefined;
+  const received: ServerPayload[] = []; const client = { send: (message: ServerPayload) => received.push(message) };
+  f.bridge.attach(client);
+  expect(received[0]).toMatchObject({ type: 'ready', features: { conversations: false, historyPaging: 1 } });
+  expect(received[0]).not.toHaveProperty('conversationId');
+  await f.bridge.handle(client, { type: 'get_history' });
+  expect(received.at(-1)).toMatchObject({ type: 'history', messages: [], hasEarlier: false });
+  expect(received.at(-1)).not.toHaveProperty('conversationId');
+  await f.bridge.handle(client, { type: 'get_earlier', before: 's0-1', requestId: 'empty', conversationId: 'default' });
+  expect(received.at(-1)).toMatchObject({ type: 'error', code: 'history_unavailable', requestId: 'empty', conversationId: 'default' });
 });
 
 it('correlates pages and errors to the requested conversation while preserving legacy responses', async () => {
