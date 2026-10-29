@@ -72,6 +72,31 @@ it('rejects an older page if the session changes while its read is in flight', a
   expect(f.received.some(message => message.type === 'earlier')).toBe(false);
 });
 
+it('never labels a latest snapshot with a different session when it changes during the read', async () => {
+  const f = setup(); const internal = f.bridge as any;
+  const conversationId = (f.received[0] as Extract<ServerPayload, { type: 'ready' }>).conversationId!;
+  let release!: () => void; let started!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; }); const reading = new Promise<void>(resolve => { started = resolve; });
+  vi.spyOn(internal, 'currentHistory').mockImplementation(async () => { started(); await wait; return { messages: [{ id: 'other', role: 'user', text: 'Other session', activities: [] }], hasEarlier: false }; });
+  const pending = f.bridge.handle(f.client, { type: 'get_history', requestId: 'refresh-1' });
+  await reading; f.supervisor.sessionFile = join(tempDir(), 'different.jsonl'); release(); await pending;
+  expect(f.received.at(-1)).toMatchObject({ type: 'error', code: 'history_unavailable', requestId: 'refresh-1', conversationId });
+  expect(f.received.some(message => message.type === 'history')).toBe(false);
+  expect(JSON.stringify(f.received)).not.toContain('Other session');
+});
+
+it('does not broadcast a rotation snapshot under a stale session identity', async () => {
+  const f = setup(); const internal = f.bridge as any;
+  let release!: () => void; let started!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; }); const reading = new Promise<void>(resolve => { started = resolve; });
+  vi.spyOn(internal.rotator, 'maybeRotate').mockResolvedValue(true);
+  vi.spyOn(internal, 'currentHistory').mockImplementation(async () => { started(); await wait; return { messages: [{ id: 'other', role: 'user', text: 'Other session', activities: [] }], hasEarlier: false }; });
+  internal.rotateWhenIdle(); await reading; f.supervisor.sessionFile = join(tempDir(), 'different.jsonl'); release();
+  await vi.waitFor(() => expect(f.received.at(-1)).toMatchObject({ type: 'error', code: 'history_unavailable' }));
+  expect(f.received.some(message => message.type === 'history')).toBe(false);
+  expect(JSON.stringify(f.received)).not.toContain('Other session');
+});
+
 it('retries when the live leaf changes without an append and refuses an old branch cursor', async () => {
   const f = setup(); f.setLeaves([f.current, f.root, f.root, f.root]);
   await f.bridge.handle(f.client, { type: 'get_history' });

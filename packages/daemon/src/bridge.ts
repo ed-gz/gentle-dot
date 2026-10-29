@@ -751,16 +751,16 @@ export class DotBridge {
 			case "profile_save_current":
 				await this.profileCommand(client, message);
 				return;
-			case "get_history":
+			case "get_history": {
 				// Windows ask for history as soon as they connect, often while the agent starts.
 				await this.whenReady();
-				try { this.deliver(client, {
-					type: "history",
-					...(message.requestId !== undefined ? { requestId: message.requestId } : {}),
-					...this.conversationRef(),
-					...(await this.currentHistory()),
-				}); } catch { this.deliver(client, { type: "error", code: "history_unavailable", message: "No pude verificar la rama actual de la conversación. El historial guardado se conserva." }); }
+				const ref = this.conversationRef();
+				try {
+					const checked = await this.checkedHistory();
+					this.deliver(client, { type: "history", ...(message.requestId !== undefined ? { requestId: message.requestId } : {}), ...checked.ref, ...checked.page });
+				} catch { this.deliver(client, { type: "error", code: "history_unavailable", message: "No pude verificar la rama actual de la conversación. El historial guardado se conserva.", ...(message.requestId !== undefined ? { requestId: message.requestId, ...ref } : {}) }); }
 				return;
+			}
 			case "get_earlier": {
 				const file = this.supervisor.sessionFile;
 				const sessionId = this.supervisor.sessionId;
@@ -1273,10 +1273,19 @@ export class DotBridge {
 	private rotateWhenIdle(): void {
 		void this.changeConversation(async () => {
 			if (!(await this.rotator.maybeRotate())) return;
-			this.broadcast({ type: "history", ...this.conversationRef(), ...(await this.currentHistory()) });
+			const { ref, page } = await this.checkedHistory();
+			this.broadcast({ type: "history", ...ref, ...page });
 		}).catch(() => {
 			this.broadcast({ type: "error", code: "history_unavailable", message: "La sesión cambió, pero no pude verificar su historial. La conversación anterior se conserva; vuelve a cargarla antes de continuar." });
 		});
+	}
+
+	/** Bind an async history read to the session whose identity will label it. */
+	private async checkedHistory(): Promise<{ ref: { conversationId?: string }; page: HistoryPage }> {
+		const file = this.supervisor.sessionFile, sessionId = this.supervisor.sessionId, ref = this.conversationRef();
+		const page = await this.currentHistory();
+		if (this.supervisor.sessionFile !== file || this.supervisor.sessionId !== sessionId || this.conversationRef().conversationId !== ref.conversationId) throw new Error("Conversation changed");
+		return { ref, page };
 	}
 
 	/**
