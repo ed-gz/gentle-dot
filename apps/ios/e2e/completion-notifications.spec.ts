@@ -95,6 +95,31 @@ test('foreground refresh during permission dialog cannot overwrite the user choi
   await expect(page.locator(message)).toContainText('sin mostrar su contenido');
 });
 
+for (const order of ['visibility-first', 'pageshow-first']) test(`foreground recovery runs once when ${order}`, async ({ page }) => {
+  await nativeNotifications(page);
+  const count = () => page.evaluate(() => (globalThis as any).notificationCalls.filter((call: any) => call.command === 'status').length);
+  const before = await count();
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  if (order === 'visibility-first') {
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(await count()).toBe(before);
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  } else {
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+    });
+    expect(await count()).toBe(before);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+  }
+  await expect.poll(count).toBe(before + 1);
+  await page.waitForTimeout(200); expect(await count()).toBe(before + 1);
+});
+
 test('a permission sheet that outlives the deadline is reconciled from the real native status', async ({ page }) => {
   await nativeNotifications(page, { hold: true });
   await page.clock.install();

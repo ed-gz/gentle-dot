@@ -79,3 +79,21 @@ test('backgrounding or resizing ends the theater immediately', async ({ page }) 
   await page.setViewportSize({ width: 844, height: 390 });
   await expect(page.locator('[data-capri-theater]')).toHaveCount(0);
 });
+
+test('pagehide stops theater and blocks late replay until a visible pageshow', async ({ page }) => {
+  await mount(page);
+  expect(await page.evaluate(() => (globalThis as any).theater.startIntro())).toBe(true);
+  await page.clock.runFor(100);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  await expect(page.locator('[data-capri-theater]')).toHaveCount(0);
+  expect(await page.evaluate(() => (globalThis as any).theater.startIntro(true))).toBe(false);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false })));
+  expect(await page.evaluate(() => (globalThis as any).theater.startIntro(true))).toBe(false);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  expect(await page.evaluate(() => (globalThis as any).theater.startIntro(true))).toBe(false);
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); });
+  expect(await page.evaluate(() => (globalThis as any).theater.startIntro(true))).toBe(true);
+});

@@ -137,8 +137,12 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     // A native permission dialog may obscure the web view before a capture is
     // established. The native controller handles real background transitions.
     const hidden = () => { if (document.hidden && (owner.current.preparingRetained || owner.current.preparingAssets)) cancelPending(); else if (document.hidden && owner.current.session && !owner.current.retry) cancel(); };
+    // pagehide can precede visibilitychange or unload a WebView while the
+    // app itself remains active. Fence a pending start as well as capture.
+    const pagehide = () => { if (owner.current.ownerId && (!owner.current.retry || owner.current.pending)) cancelPending(); };
     document.addEventListener('visibilitychange', hidden);
-    return () => document.removeEventListener('visibilitychange', hidden);
+    window.addEventListener('pagehide', pagehide);
+    return () => { document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', pagehide); };
   }, [cancel, cancelPending]);
   const stop = useCallback(() => {
     const state = owner.current;

@@ -46,6 +46,20 @@ test('short dictation commits text and identity, releases audio, and does not re
   await expect(page.getByRole('button', { name: 'Revisar dictado' })).toBeHidden();
 });
 
+test('pagehide fences the chat microphone once and preserves the retained recording', async ({ page }) => {
+  await native(page, 'Sin enviar'); await page.goto('/'); await expect(page.locator('#send')).toBeEnabled();
+  await page.locator('#dictate').click(); await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  await page.evaluate(() => { const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke; state.chatPagehideCancels = [];
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => { if (command.endsWith('cancel_voice')) state.chatPagehideCancels.push(args.ownerId); return previous(command, args); }; });
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  await expect.poll(() => page.evaluate(() => (globalThis as any).chatPagehideCancels.length)).toBe(1);
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(() => (globalThis as any).chatPagehideCancels.length)).toBe(1);
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('protected-voice-fixture')!).record?.state)).toBe('capturing');
+  await expect(page.locator('#prompt')).toHaveValue('');
+});
+
 test('an interrupted authorized discard can be retried without presenting audio as transcribable', async ({ page }) => {
   await native(page, 'Sin uso'); await page.goto('/');
   await page.evaluate(() => { const state = { record: { id: 'ABCDEF01-ABCD-4BCD-8BCD-ABCDEF012345', owner: 'abcdef02-abcd-4bcd-8bcd-abcdef012345', destination: 'chat', locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'capturing' }, receipt: null, lossUsed: false, discardPending: true }; sessionStorage.setItem('protected-voice-fixture', JSON.stringify(state)); });

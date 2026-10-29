@@ -104,6 +104,37 @@ async function selectSessionFile(page: Page, file: { name: string; mimeType: str
   await (await selecting).setFiles(file);
 }
 
+test('pagehide cancels the active session microphone once without waiting for visibilitychange', async ({page}) => {
+ await linkedPhone(page);
+ await page.evaluate(() => { const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke; state.pagehideVoiceCancels = [];
+  state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => { if (command.endsWith('cancel_voice')) state.pagehideVoiceCancels.push(args.ownerId); return previous(command, args); }; });
+ await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+ await page.getByRole('button',{name:'Dictar mensaje'}).click(); await expect(page.getByRole('button',{name:'Terminar y revisar'})).toBeVisible();
+ await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:true})));
+ await expect.poll(() => page.evaluate(() => (globalThis as any).pagehideVoiceCancels.length)).toBe(1);
+ await page.evaluate(() => { Object.defineProperty(document,'hidden',{configurable:true,value:true}); document.dispatchEvent(new Event('visibilitychange')); });
+ await page.waitForTimeout(200);
+ expect(await page.evaluate(() => (globalThis as any).pagehideVoiceCancels.length)).toBe(1);
+});
+
+test('pagehide fences a delayed session transcription without applying its late result', async ({page}) => {
+ await linkedPhone(page);
+ await page.evaluate(() => { const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke; state.holdTranscript = true; state.pagehideVoiceCancels = [];
+  state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => { if (command.endsWith('cancel_voice')) state.pagehideVoiceCancels.push(args.ownerId); return previous(command, args); }; });
+ await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+ const input = page.getByRole('textbox',{name:'Continuar esta sesión'}); await input.fill('Texto previo');
+ await page.getByRole('button',{name:'Dictar mensaje'}).click(); await page.getByRole('button',{name:'Terminar y revisar'}).click();
+ await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishTranscript)).toBe('function');
+ const original = await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record);
+ await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted:true})));
+ await expect.poll(() => page.evaluate(() => (globalThis as any).pagehideVoiceCancels.length)).toBe(1);
+ expect(await page.evaluate(() => (globalThis as any).pagehideVoiceCancels[0])).toBe(original.owner);
+ await page.evaluate(() => (globalThis as any).finishTranscript());
+ await page.waitForTimeout(300); await expect(input).toHaveValue('Texto previo');
+ expect(await page.evaluate(() => Boolean(JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record))).toBe(true);
+ expect(await page.evaluate(() => (globalThis as any).pagehideVoiceCancels.length)).toBe(1);
+});
+
 test('cancel preparation keeps typed text, fences a late callback, and leaves other sessions alone', async ({page}) => {
  await linkedPhone(page); await page.evaluate(() => { const state=globalThis as any, previous=state.__TAURI_INTERNALS__.invoke; state.voiceNeedsAssets=true; state.cancelOwners=[]; state.starts=[];
   state.__TAURI_INTERNALS__.invoke=async (command:string,args:any) => { if(command.endsWith('prepare_voice')) await new Promise<void>(resolve => {state.finishPreparation=resolve;}); if(command.endsWith('cancel_voice')) state.cancelOwners.push(args.ownerId); if(command.endsWith('start_voice')) state.starts.push(args.ownerId); return previous(command,args); }; });

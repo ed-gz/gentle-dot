@@ -1,5 +1,6 @@
 import { localIdentifier } from './local-identifiers.ts';
 import { waitForForeground } from './foreground.ts';
+import { appForegroundPage as foregroundPage } from './foreground-page.ts';
 import { pickDocuments, listDocumentImportReport, importDocumentItemStreamed } from './document-import.ts';
 import { createEngineAsync, frameAt } from '@gentle-dot/ui/src/capri2d/engine.ts';
 import { RoamDirector, type RoamPosition } from '@gentle-dot/ui/src/capri2d/roam.ts';
@@ -92,6 +93,8 @@ let revision = 0;
 let lastRevision = -1;
 let assetRevision = 0;
 let panel = 'chat';
+// pagehide may precede visibilitychange in WKWebView. A late intent, resize,
+// or reduced-motion change must not wake the renderer before pageshow.
 let absent = false;
 const presenceTransition = createPresenceTransition();
 let presenceState = presenceTransition.settle();
@@ -171,7 +174,7 @@ const framePacer = createFramePacer();
 function animate(now: number) {
   // Let the persisted transcript reach the DOM before the first GPU frame.
   // Software renderers can block unrelated IndexedDB callbacks during warmup.
-  if (!conversationRestored || !engine || document.hidden || !['agents', 'chat', 'inbox', 'settings'].includes(panel) || !presenceState.visible) return;
+  if (!conversationRestored || !engine || document.hidden || foregroundPage.isSuspended() || !['agents', 'chat', 'inbox', 'settings'].includes(panel) || !presenceState.visible) return;
   if (!isReduced() && !framePacer.ready(now)) { frame = requestAnimationFrame(animate); return; }
   if (intent.outcome && now - intent.outcome.at > 2400) { const { outcome: _outcome, ...rest } = intent; intent = rest; revision++; }
   if (now - measuredAt >= 1000) {
@@ -258,7 +261,8 @@ function redraw() {
   // With no continuous animation loop, an old overlay cannot expire on its
   // own. Recompute the static pose from the current intent on each redraw.
   if (reducedMotion) director = new RigDirector();
-  revision++; cancelAnimationFrame(frame); framePacer.wake(); lastTime = 0; frame = requestAnimationFrame(animate);
+  revision++; cancelAnimationFrame(frame); framePacer.wake(); lastTime = 0;
+  if (!document.hidden && !foregroundPage.isSuspended()) frame = requestAnimationFrame(animate);
 }
 function applyPresenceSample(sample: PresenceSample, now: number) {
   const visibilityChanged = presenceState.visible !== sample.visible;
@@ -287,7 +291,7 @@ function gesture(name: string) {
 }
 function companionTheaterSafe() {
   const focused = document.activeElement;
-  return Boolean(conversationRestored && engine && panel === 'chat' && !absent && !isReduced() && !document.hidden
+  return Boolean(conversationRestored && engine && panel === 'chat' && !absent && !isReduced() && !document.hidden && !foregroundPage.isSuspended()
     && !typing && !attention && !localBusy && !linkedBusy && !voiceSession && !voiceStarting
     && !(focused instanceof HTMLElement && focused.matches('input, textarea, select, [contenteditable="true"]')));
 }
@@ -323,7 +327,7 @@ async function startRig() {
   rig.dataset.ready = 'false';
   // Do not poll shader compilation while WKWebView is in the background.
   // The current artwork remains in memory and gets one new attempt on return.
-  if (document.hidden) return;
+  if (document.hidden || foregroundPage.isSuspended()) return;
   const operation = new AbortController(); preparingRig = operation;
   try {
     const prepared = await createEngineAsync(canvas, image, { maskReadback: false }, operation.signal);
@@ -387,7 +391,7 @@ element('appear').addEventListener('click', () => {
   element('scene-status').textContent = absent ? 'Vuelvo cuando me llames.' : 'De vuelta.';
   fx?.clear();
   const now = performance.now();
-  applyPresenceSample(presenceTransition.request(!absent, now, Boolean(engine && conversationRestored && !document.hidden && !isReduced())), now);
+  applyPresenceSample(presenceTransition.request(!absent, now, Boolean(engine && conversationRestored && !document.hidden && !foregroundPage.isSuspended() && !isReduced())), now);
   redraw();
 });
 let drag: { id: number; x: number; y: number; start: typeof position; moved: boolean } | undefined;
@@ -804,7 +808,7 @@ const draftRecovery = mountConversationDraftRecovery(draftRecoveryRoot, { store:
   } });
 
 async function recoverLocalInference() {
-  if (!conversationReady || localBusy || recoveringLocal || document.hidden) return;
+  if (!conversationReady || localBusy || recoveringLocal || document.hidden || foregroundPage.isSuspended()) return;
   recoveringLocal = true; localRecoveryReady = false; clearTimeout(localRecoveryTimer); updateControls();
   try {
     const hadActive = recoveringNativeId;
@@ -923,12 +927,13 @@ function invalidateModelAvailability() {
   updateControls();
 }
 async function checkModel() {
+  if (document.hidden || foregroundPage.isSuspended()) return;
   invalidateModelAvailability();
   const generation = availabilityGeneration;
   const result = await checkLocalIntelligence();
   // A foreground check can finish after a later check or after suspension.
   // Neither result describes the most recent observable device state.
-  if (generation !== availabilityGeneration || document.hidden) return;
+  if (generation !== availabilityGeneration || document.hidden || foregroundPage.isSuspended()) return;
   availability = result;
   element('local-status').textContent = availabilityMessage(availability);
   element('local-summary').textContent = availability.available ? 'Disponible sin internet' : availability.status === 'browser_preview' ? 'Requiere la app instalada' : 'Revisa su disponibilidad';
@@ -1417,9 +1422,17 @@ element('view-material').addEventListener('click', () => {
   void inbox.openWork(id);
 });
 
+function resumeForeground() {
+  if (rigNeedsPreparation && image && !preparingRig) void startRig();
+  lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference();
+  void recoverPendingVoice(); if (isTauri()) void voiceRecovery.refresh(); void completionNotifications.refresh(); void lockScreenSettings?.refresh();
+}
 document.addEventListener('visibilitychange', () => {
+  const resume = foregroundPage.visibility(document.hidden);
   if (document.hidden) { release(); settlePresence(); pauseRigPreparation(); }
-  cancelAnimationFrame(frame); fx?.clear(); persist();
+  // A duplicate visible event after pageshow is already reconciled; cancelling
+  // the newly scheduled frame here would strand the renderer indefinitely.
+  if (document.hidden || resume) { cancelAnimationFrame(frame); fx?.clear(); persist(); }
   if (document.hidden) {
     invalidateModelAvailability();
     // The native permission sheet can temporarily hide WKWebView while the
@@ -1429,10 +1442,16 @@ document.addEventListener('visibilitychange', () => {
     if (voicePreparingAssets || retainedVoicePreparing || (foreignAudioBusy && voiceOwner) || (voiceSession && !voiceRetry)) void cancelDictation();
     director.update(intent, performance.now(), true); linked.suspend();
   }
-  else { if (rigNeedsPreparation && image && !preparingRig) void startRig(); lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void recoverPendingVoice(); if (isTauri()) void voiceRecovery.refresh(); void completionNotifications.refresh(); void lockScreenSettings?.refresh(); }
+  else if (resume) resumeForeground();
 });
-window.addEventListener('pagehide', () => { invalidateModelAvailability(); settlePresence(); pauseRigPreparation(); connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
-window.addEventListener('pageshow', event => { if (event.persisted) { if (!document.hidden && rigNeedsPreparation && image && !preparingRig) void startRig(); redraw(); linked.resume(); if (!document.hidden) void checkModel(); void recoverLocalInference(); } });
+window.addEventListener('pagehide', () => {
+  foregroundPage.pagehide(); invalidateModelAvailability(); release(); settlePresence(); theater?.stop(); pauseRigPreparation();
+  connectionSettings.cancel(); cancelAnimationFrame(frame); fx?.clear(); linked.suspend(); persist();
+  if (voiceStarting || voicePreparingAssets || retainedVoicePreparing || (foreignAudioBusy && voiceOwner) || (voiceSession && !voiceRetry)) void cancelDictation();
+});
+window.addEventListener('pageshow', event => {
+  if (foregroundPage.pageshow(event.persisted, document.hidden)) resumeForeground();
+});
 let conversationLoading = false;
 const recoveryMessage = 'No se pudo recuperar la conversación local. Tu borrador sigue aquí; reintenta antes de enviar para proteger el historial guardado.';
 async function restoreConversation() {
@@ -1534,7 +1553,7 @@ queueMicrotask(() => void initialize());
 function voiceInProgress() { return voiceStarting || voiceCancelPending || Boolean(voiceSession && !voiceRetry); }
 function stopVoicePreview() { clearInterval(voicePreviewTimer); voicePreviewTimer = undefined; element('dictate').style.removeProperty('--voice-level'); }
 async function recoverPendingVoice() {
-  if (!isTauri() || document.hidden || panel !== 'chat' || voiceStarting || uncertainVoiceOwner || voiceCancelPending || (voiceSession && !voiceRetry)) return;
+  if (!isTauri() || document.hidden || foregroundPage.isSuspended() || panel !== 'chat' || voiceStarting || uncertainVoiceOwner || voiceCancelPending || (voiceSession && !voiceRetry)) return;
   const cancellation = pendingVoiceCancellation();
   if (cancellation) {
     uncertainVoiceOwner = cancellation;
@@ -1545,13 +1564,13 @@ async function recoverPendingVoice() {
   const generation = voiceGeneration;
   try {
     const inspection = await retainedVoiceBridge.inspectState();
-    if (generation !== voiceGeneration || document.hidden || panel !== 'chat' || voiceStarting) return;
+    if (generation !== voiceGeneration || document.hidden || foregroundPage.isSuspended() || panel !== 'chat' || voiceStarting) return;
     const retained = inspection.state === 'none' ? undefined : inspection.record;
     if (retained) {
       retainedVoiceRecord = retained;
       if (retained.destination !== 'chat') {
         const receipt = await nativeVoiceReceipts.get(retained.id);
-        if (generation !== voiceGeneration || document.hidden || panel !== 'chat') return;
+        if (generation !== voiceGeneration || document.hidden || foregroundPage.isSuspended() || panel !== 'chat') return;
         voiceSession = undefined; voiceRetry = false;
         foreignVoiceOwner = retained.owner;
         retainedDiscardPending = inspection.state === 'discard-pending';
@@ -1606,7 +1625,7 @@ async function recoverPendingVoice() {
     }
     foreignAudioButton.hidden = true; incompleteAudioButton.hidden = true;
     const state = await checkVoice();
-    if (generation !== voiceGeneration || document.hidden || panel !== 'chat' || voiceStarting) return;
+    if (generation !== voiceGeneration || document.hidden || foregroundPage.isSuspended() || panel !== 'chat' || voiceStarting) return;
     if (pendingVoiceCancellation()) { void recoverPendingVoice(); return; }
     if (state.recoveryPending && state.busy) {
       element('voice-status').textContent = 'Terminando el audio guardado…';
@@ -2143,7 +2162,7 @@ function stagingNotices(listing: {pendingCopies: PendingCopy[]; omittedPending: 
   return notices;
 }
 function importSharedFiles(): Promise<void> {
-  if (!isTauri()) return Promise.resolve();
+  if (!isTauri() || document.hidden || foregroundPage.isSuspended()) return Promise.resolve();
   if (sharedImports) return sharedImports.then(() => importSharedFiles());
   void importDocumentFiles();
   sharedImports = (async () => {

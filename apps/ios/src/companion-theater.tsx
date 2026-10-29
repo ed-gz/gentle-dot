@@ -19,8 +19,9 @@ export function createCompanionTheater(options: {
   let frame = 0, started = 0, mode: 'intro' | 'possession' | undefined;
   let lastBeat: IntroBeat | undefined, lastPossession = -Infinity, replay = 0;
   let destroyed = false;
+  let pageSuspended = false;
   const safe = () => {
-    if (destroyed || document.hidden || motion.matches) return false;
+    if (destroyed || document.hidden || pageSuspended || motion.matches) return false;
     try { return options.canPlay(); } catch { return false; }
   };
   const stop = (reason: 'complete' | 'interrupted' = 'interrupted') => {
@@ -32,11 +33,15 @@ export function createCompanionTheater(options: {
   };
   const interrupted = () => stop('interrupted');
   const visibility = () => { if (document.hidden) stop(); };
+  const pagehide = () => { pageSuspended = true; stop(); };
+  const pageshow = (event: PageTransitionEvent) => { if (event.persisted || !pageSuspended) pageSuspended = false; };
   const reduce = () => { if (motion.matches) stop(); };
   document.addEventListener('pointerdown', interrupted, true);
   document.addEventListener('keydown', interrupted, true);
   document.addEventListener('focusin', interrupted, true);
   document.addEventListener('visibilitychange', visibility);
+  window.addEventListener('pagehide', pagehide);
+  window.addEventListener('pageshow', pageshow);
   window.addEventListener('resize', interrupted);
   motion.addEventListener('change', reduce);
 
@@ -119,6 +124,8 @@ export function createCompanionTheater(options: {
       document.removeEventListener('keydown', interrupted, true);
       document.removeEventListener('focusin', interrupted, true);
       document.removeEventListener('visibilitychange', visibility);
+      window.removeEventListener('pagehide', pagehide);
+      window.removeEventListener('pageshow', pageshow);
       window.removeEventListener('resize', interrupted);
       motion.removeEventListener('change', reduce);
     },
