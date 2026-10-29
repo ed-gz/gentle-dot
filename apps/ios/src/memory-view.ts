@@ -55,18 +55,35 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
   element('memory-export').addEventListener('click', async () => {
     const button = element<HTMLButtonElement>('memory-export'); button.disabled = true;
     try {
-      await options.retry();
-      let pending = options.pending(); const draft = options.draft(); const chunks: BlobPart[] = []; let archiveFailed = false;
-      try { chunks.push((await conversationArchive.export()).blob); }
-      catch (error) { archiveFailed = true; pending = [...new Map([...options.visible(), ...pending].map(entry => [JSON.stringify([entry.engine, entry.id]), entry])).values()]; chunks.push(JSON.stringify({ schema: 'capri-conversation-rescue/v1', archiveAvailable: false, error: describe(error), exportedAt: Date.now() }) + '\n'); }
-      // Pending entries are explicitly distinguished from records confirmed by IndexedDB.
-      if (pending.length) {
-        chunks.push(JSON.stringify({ schema: 'capri-conversation-pending/v1', committed: false, source: archiveFailed ? 'visible-and-pending-rescue' : 'pending-archive-write', entries: pending.length }) + '\n');
-        for (const entry of pending) chunks.push(JSON.stringify({ id: entry.id, scope: archiveScope(entry), engine: entry.engine, role: entry.role, state: entry.state, text: entry.text, at: entry.at,
-          ...(entry.activities ? { activities: entry.activities.map(activity => ({ id: activity.id, kind: activity.kind, title: activity.title, status: activity.status, detail: activity.detail })) } : {}) }) + '\n');
+      // Capture before any asynchronous storage operation. Export must remain
+      // available even when a prior write or its callback is stuck.
+      const state = options.status(), pending = structuredClone(options.pending()), visible = structuredClone(options.visible()), draft = options.draft();
+      const chunks: BlobPart[] = []; let archiveFailed = false, timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const archive = await Promise.race([conversationArchive.export(), new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('El archivo local no respondió.')), 2000);
+        })]);
+        chunks.push(archive.blob);
+      } catch {
+        archiveFailed = true;
+        chunks.push(JSON.stringify({ schema: 'capri-conversation-rescue/v1', archiveAvailable: false, error: 'No se pudo leer el archivo local.', exportedAt: Date.now() }) + '\n');
+      } finally { clearTimeout(timer); }
+      // Do not collapse different snapshots merely because their IDs match.
+      // Transport wrappers are private and are never part of this projection.
+      const copies = archiveFailed || state.blocked || pending.length ? [...pending, ...visible] : [];
+      const unique = new Map<string, string>();
+      for (const entry of copies) {
+        const record = JSON.stringify({ id: entry.id, scope: archiveScope(entry), engine: entry.engine, role: entry.role, state: entry.state, text: entry.text, at: entry.at,
+          ...(entry.replyTo ? { replyTo: entry.replyTo } : {}), ...(entry.localCancelled ? { localCancelled: true } : {}),
+          ...(entry.activities ? { activities: entry.activities.map(activity => ({ id: activity.id, kind: activity.kind, title: activity.title, status: activity.status, detail: activity.detail })) } : {}) });
+        unique.set(record, record);
+      }
+      if (unique.size) {
+        chunks.push(JSON.stringify({ schema: 'capri-conversation-pending/v1', committed: false, source: 'visible-and-pending-rescue', entries: unique.size }) + '\n');
+        for (const record of unique.values()) chunks.push(record + '\n');
       }
       if (draft) chunks.push(JSON.stringify({ schema: 'capri-conversation-draft/v1', source: 'visible-draft', submitted: false, text: draft }) + '\n');
-      if (archiveFailed && !pending.length && !draft) throw new Error('El archivo no está disponible y no hay mensajes pendientes para rescatar. No se exportó un historial vacío.');
+      if (archiveFailed && !unique.size && !draft) throw new Error('El archivo no está disponible y no hay mensajes pendientes para rescatar. No se exportó un historial vacío.');
       const blob = new Blob(chunks, { type: 'application/x-ndjson' });
       const name = exportFileName(`capri-conversacion-${new Date().toISOString().slice(0,10)}.ndjson`);
       if (isTauri()) {
@@ -74,13 +91,16 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
         const result = await exportNativeFile(blob, name);
         updateStatus(result.status === 'cancelled' ? 'Exportación cancelada. No se borró contenido de Capri.' : archiveFailed
           ? 'Copia parcial guardada en Archivos con el contenido visible y pendiente. El archivo guardado no pudo incluirse; no se borró contenido de Capri.'
+          : unique.size ? 'Copia guardada en Archivos con el historial y las copias visibles o pendientes sin confirmar. No se borró contenido de Capri.'
           : 'Copia del historial guardada en Archivos. El historial y el borrador originales se conservan en Capri.');
         return;
       }
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a'); anchor.href = url; anchor.download = name; anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
-      updateStatus(archiveFailed ? 'Exportación parcial preparada con el contenido visible y pendiente; el archivo guardado no pudo incluirse. Comprueba el archivo descargado.' : 'Exportación preparada. Comprueba el archivo descargado; el historial local se conserva.');
+      updateStatus(archiveFailed ? 'Exportación parcial preparada con el contenido visible y pendiente; el archivo guardado no pudo incluirse. Comprueba el archivo descargado.'
+        : unique.size ? 'Exportación preparada con el historial y las copias visibles o pendientes sin confirmar. Comprueba el archivo descargado.'
+        : 'Exportación preparada. Comprueba el archivo descargado; el historial local se conserva.');
     } catch (error) { updateStatus(`No se confirmó la exportación: ${describe(error)} No se borró contenido de Capri.`); }
     finally { button.disabled = false; }
   });
