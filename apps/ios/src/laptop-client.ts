@@ -45,13 +45,19 @@ export function createLaptopClient(connection: DesktopConnection, options: {
     const value = await snapshot(signal);
     if (value.sessions.length > 200 || value.sessions.some(session => !session ||
       typeof session.paneId !== 'string' || !session.paneId || session.paneId.length > 256 ||
-      typeof session.label !== 'string' || session.label.length > 120 ||
+      typeof session.label !== 'string' ||
       (session.provider !== undefined && !['herdr', 'orca', 'terminal'].includes(session.provider)) ||
       !['idle', 'working', 'blocked', 'done', 'unknown'].includes(session.state) ||
       typeof session.connected !== 'boolean' || (session.sessionId !== undefined && (typeof session.sessionId !== 'string' || session.sessionId.length > 256)))) {
       throw new Error('El equipo devolvió una sesión no válida.');
     }
-    return value;
+    // HERDR and terminal titles are display text, and the daemon does not cap
+    // them at 120 characters. A long title must not hide every other session.
+    // Bound only the displayed label; never change routing identities.
+    return { ...value, sessions: value.sessions.map(session => {
+      const label = Array.from(session.label);
+      return { ...session, label: label.length > 1000 ? `${label.slice(0, 999).join('')}…` : session.label };
+    }) };
   };
   const inspect = client.inspect;
   // The daemon permits 50 messages by default, each potentially 32k UTF-16

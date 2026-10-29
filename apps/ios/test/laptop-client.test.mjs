@@ -22,6 +22,19 @@ test('session identity, malformed inventory and aborted reads cannot be presente
   value = { sessionId: 'different', messages: [], deliveries: [] }; await assert.rejects(client.inspect('p', 's'), /no corresponde/);
   const abort = new AbortController(); abort.abort(); await assert.rejects(client.snapshot(abort.signal), { name: 'AbortError' });
 });
+test('a long terminal title cannot hide other valid sessions or change their identities', async () => {
+  const label = 'Sesión de Gentle Shell '.repeat(60);
+  const snapshot = { ...state, sessions: [state.sessions[0], { ...state.sessions[0], paneId: 'p2', sessionId: 's2', label }] };
+  const client = createLaptopClient(connection, { current: () => connection, request: async () => reply(snapshot) });
+  const sessions = (await client.snapshot()).sessions;
+  assert.equal(sessions.length, 2);
+  assert.equal(sessions[0].label, 'Work');
+  assert.equal(sessions[1].paneId, 'p2'); assert.equal(sessions[1].sessionId, 's2');
+  assert.equal(sessions[1].label.length, 1000); assert.equal(sessions[1].label.at(-1), '…');
+  const ordinary = 'x'.repeat(121);
+  const another = createLaptopClient(connection, { current: () => connection, request: async () => reply({ ...state, sessions: [{ ...state.sessions[0], label: ordinary }] }) });
+  assert.equal((await another.snapshot()).sessions[0].label, ordinary);
+});
 test('cancelling a native read releases the session view before the late bridge response', async () => {
   let resolve; const abort = new AbortController();
   const client = createLaptopClient(connection, { current: () => connection, request: () => new Promise(r => resolve = r) });

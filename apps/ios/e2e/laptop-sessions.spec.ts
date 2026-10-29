@@ -76,6 +76,31 @@ async function selectSessionFile(page: Page, file: { name: string; mimeType: str
   await (await selecting).setFiles(file);
 }
 
+test('a long Herdr terminal title does not prevent opening the other sessions', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      const reply = await original(command, args);
+      if (command.endsWith('https_request') && !args.request?.body) {
+        const body = JSON.parse(reply.body);
+        if (Array.isArray(body.sessions)) {
+          body.sessions[1].label = 'Una sesión extensa de Gentle Shell '.repeat(6);
+          return { ...reply, body: JSON.stringify(body) };
+        }
+      }
+      return reply;
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await expect(page.locator('.agent-session')).toHaveCount(2);
+  await page.locator('.agent-session[data-pane-id="pane-0"]').click();
+  await expect(page.getByText('Historial de session-0.', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session[data-pane-id="pane-1"]').click();
+  await expect(page.getByText('Historial de session-1.', { exact: true })).toBeVisible();
+});
+
 test('small phone keeps navigation and the session composer on one line', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await linkedPhone(page);
