@@ -420,6 +420,12 @@ let selected: Engine = 'iphone';
 let preference: Engine | 'auto' = 'auto';
 let localController: AbortController | undefined;
 let attachedWork: string | undefined;
+let importingComposer = false;
+let retryComposerSelection: { files: File[]; control: HTMLInputElement } | undefined;
+let composerSelectionError = '';
+const retryAttachment = document.createElement('button');
+retryAttachment.type = 'button'; retryAttachment.id = 'retry-attachment'; retryAttachment.textContent = 'Reintentar adjunto'; retryAttachment.hidden = true;
+element('view-material').after(retryAttachment);
 function showAttachedWork(id: string | undefined, label?: string) {
   attachedWork = id;
   const button = element<HTMLButtonElement>('view-material');
@@ -625,7 +631,10 @@ function updateControls() {
   element('engine-explanation').textContent = preference === 'auto'
     ? `Automático usa primero la IA del iPhone y, si no está disponible, la laptop conectada. Ahora: ${selected === 'iphone' ? 'iPhone' : 'laptop'}.`
     : selected === 'iphone' ? 'La conversación usa la IA local del iPhone.' : 'La conversación usa Gentle Dot en tu laptop conectada.';
-  element<HTMLButtonElement>('send').disabled = !conversationReady || persistence.status().blocked || !ready || busy || voiceInProgress();
+  element<HTMLButtonElement>('send').disabled = !conversationReady || persistence.status().blocked || !ready || busy || voiceInProgress() || importingComposer;
+  element<HTMLButtonElement>('camera').disabled = importingComposer;
+  element<HTMLButtonElement>('attach').disabled = importingComposer;
+  retryAttachment.disabled = importingComposer;
   element<HTMLSelectElement>('engine').disabled = localBusy || !!recoveringNativeId || !!pendingRemote;
   element('stop').hidden = !(localBusy || recoveringNativeId || (selected === 'gentle' && linkedBusy));
   element<HTMLButtonElement>('send').setAttribute('aria-label', selected === 'gentle' && linkedBusy ? 'Añadir instrucción' : 'Enviar');
@@ -872,7 +881,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
   noteCompanionInteraction(); introReplayPending = false; theater?.stop();
   const text = prompt.value.trim();
   const promptText = text;
-  if (!text || localBusy || recoveringNativeId || pendingRemote || !conversationReady || persistence.status().blocked || voiceInProgress()) return;
+  if (!text || localBusy || recoveringNativeId || pendingRemote || !conversationReady || persistence.status().blocked || voiceInProgress() || importingComposer) return;
   element('chat-notice').textContent = '';
   if (selected === 'iphone') {
     if (!localRecoveryReady) return;
@@ -1319,24 +1328,39 @@ element('discard-voice').addEventListener('click', () => {
   }
 });
 element('attach').addEventListener('click', async () => {
+  if (importingComposer) return;
   if (!isTauri()) { element<HTMLInputElement>('chat-files').click(); return; }
-  const button = element<HTMLButtonElement>('attach'); button.disabled = true;
+  importingComposer = true; updateControls();
   try { if (await pickDocuments()) await importDocumentFiles(true); }
   catch (error) { element('chat-notice').textContent = errorText(error); }
-  finally { button.disabled = false; }
+  finally { importingComposer = false; updateControls(); }
 });
-element('camera').addEventListener('click', () => element<HTMLInputElement>('chat-camera').click());
+element('camera').addEventListener('click', () => { if (!importingComposer) element<HTMLInputElement>('chat-camera').click(); });
 async function importComposerSelection(event: Event) {
   const control = event.target as HTMLInputElement;
   const files = Array.from(control.files ?? []); if (!files.length) return;
+  await saveComposerSelection(files, control);
+}
+async function saveComposerSelection(files: File[], control: HTMLInputElement) {
+  if (importingComposer) return;
+  importingComposer = true; retryAttachment.hidden = true; updateControls();
+  const status = element('attachment-context'); const previous = status.textContent;
+  status.setAttribute('role', 'status'); status.textContent = 'Guardando material…';
   try {
     const item = await createWork({ title: files[0]!.name.slice(0, 120), kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: prompt.value.trim() || 'Material adjunto a la conversación de Capri.', files });
     showAttachedWork(item.id, item.title);
     element('attachment-context').title = 'Guardado en este iPhone';
     await persist(); releaseAttachedWork(item.id);
-    control.value = ''; await inbox.refresh();
-  } catch (error) { element('chat-notice').textContent = errorText(error); }
+    retryComposerSelection = undefined; control.value = '';
+    if (element('chat-notice').textContent === composerSelectionError) element('chat-notice').textContent = '';
+    composerSelectionError = ''; void inbox.refresh();
+  } catch (error) {
+    retryComposerSelection = { files, control }; retryAttachment.hidden = false;
+    status.textContent = previous; composerSelectionError = `No se adjuntó el archivo. ${errorText(error)}`;
+    element('chat-notice').textContent = composerSelectionError;
+  } finally { importingComposer = false; updateControls(); }
 }
+retryAttachment.addEventListener('click', () => { const selection = retryComposerSelection; if (selection) void saveComposerSelection(selection.files, selection.control); });
 element<HTMLInputElement>('chat-files').addEventListener('change', importComposerSelection);
 element<HTMLInputElement>('chat-camera').addEventListener('change', importComposerSelection);
 const pairingUI = mountPairingInput(element<HTMLFormElement>('pairing'), element<HTMLInputElement>('pairing-invitation'));

@@ -44,6 +44,7 @@ test('a document already imported by iOS is saved locally before acknowledgement
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await expect(page.locator('#attachment-context')).toContainText('Reunión.txt');
+  await expect.poll(() => page.evaluate(() => (globalThis as any).calls.includes('documents_ack'))).toBe(true);
   const saved = await page.evaluate(async () => {
     const inbox = await import('/src/work-inbox.ts' as string);
     const work = (await inbox.listWork())[0];

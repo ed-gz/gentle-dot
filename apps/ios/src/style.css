@@ -35,7 +35,7 @@ h3 { line-height: 1.4; }
 .brand-mark span { color: var(--violet); font-size: .7em; }
 #connection-badge { display: block; margin-top: 3px; font: 500 .58rem/1 var(--mono); color: var(--acid); letter-spacing: .05em; }
 #work-count { color: var(--acid); font-family: var(--mono); }
-#view-material { border: 0; background: transparent; color: var(--violet); padding: 4px 0; font-size: .85rem; }
+#view-material, #retry-attachment { border: 0; background: transparent; color: var(--violet); padding: 4px 0; font-size: .85rem; }
 #panel-inbox[data-contextual="true"] > :not(#work-list):not(#work-status) { display: none; }
 svg { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .panel { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 12px 2px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
