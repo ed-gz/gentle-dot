@@ -27,13 +27,15 @@ test('review requires the exact saved revision and does not imply delivery', asy
     const key=module.sessionOperationKey(item.host,item.paneId,item.sessionId,item.text); await store.begin({...item,key});
     let foreignCancelBlocked=false;
     try { await store.cancelBeforeDispatch({...item,key,owner:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'}); } catch { foreignCancelBlocked=true; }
-    await store.dispatching(item.id); await store.unconfirmed(item.id);
+    await store.dispatching(item.id);
+    let activeReviewBlocked=false; try { await store.reviewed((await store.find(key))!); } catch { activeReviewBlocked=true; }
+    await store.unconfirmed(item.id);
     const old=await store.find(key); let changedBlocked=false;
     try { await store.reviewed({...old,text:'Distinto'}); } catch { changedBlocked=true; }
     const kept=await store.find(key); await store.reviewed(kept);
-    return {foreignCancelBlocked,changedBlocked,kept:kept?.state,after:await store.find(key)};
+    return {foreignCancelBlocked,activeReviewBlocked,changedBlocked,kept:kept?.state,after:await store.find(key)};
   },journalUrl);
-  expect(result).toEqual({foreignCancelBlocked:true,changedBlocked:true,kept:'unconfirmed',after:null});
+  expect(result).toEqual({foreignCancelBlocked:true,activeReviewBlocked:true,changedBlocked:true,kept:'unconfirmed',after:null});
 });
 
 test('lost commit callback never starts transport and leaves durable reservation', async ({page}) => {
@@ -130,4 +132,28 @@ test('the pending limit blocks new sends without deleting an unresolved attempt'
     return {blocked,first:(await store.find(module.sessionOperationKey(host,'p','s','pendiente-0')))?.text};
   },journalUrl);
   expect(result).toEqual({blocked:true,first:'pendiente-0'});
+});
+
+test('a second window cannot close a dispatching send even if its original window disappears', async ({page,context})=>{
+  await page.goto('/');const other=await context.newPage();await other.goto('/');
+  const attempt=await page.evaluate(async url=>{
+    const {createDesktopSessionClient}=await import(/* @vite-ignore */ url),conn={url:'wss://example.test/ws',token:'synthetic'};
+    let ready!:()=>void;const started=new Promise<void>(resolve=>ready=resolve);
+    const session={paneId:'p',sessionId:'s',label:'Fixture',state:'idle',connected:true,capabilities:{inspect:true,prompt:true,abort:true,deliveryReceipts:true}};
+    const client=createDesktopSessionClient({getConnection:()=>conn,request:async request=>{
+      const payload=request.body?JSON.parse(request.body):null;
+      if(payload?.action==='prompt'){ready();return new Promise(()=>{});}
+      return {status:200,headers:{},body:JSON.stringify(payload?{sessionId:'s',instanceId:'i',messages:[],deliveries:[]}:{available:true,sessions:[session]})};
+    }});
+    (globalThis as any).send=client.send({paneId:'p',sessionId:'s',text:'Exacto'},{signal:new AbortController().signal,askApproval:async()=>true});
+    await started;return (await client.listDeliveries()).items[0];
+  },`/@fs${process.cwd()}/apps/ios/src/desktop-tools.ts`);
+  const check=async()=>other.evaluate(async ({desktopUrl,id})=>{
+    const {createDesktopSessionClient}=await import(/* @vite-ignore */ desktopUrl);let approvals=0;
+    const client=createDesktopSessionClient({getConnection:()=>({url:'wss://example.test/ws',token:'synthetic'}),request:async()=>{throw new Error('unexpected');}});
+    let blocked=false;try{await client.resolveDelivery({clientMessageId:id},{signal:new AbortController().signal,askApproval:async()=>{approvals++;return true;}});}catch{blocked=true;}
+    return {blocked,approvals,state:(await client.listDeliveries()).items[0]?.state};
+  },{desktopUrl:`/@fs${process.cwd()}/apps/ios/src/desktop-tools.ts`,id:attempt.id});
+  expect(await check()).toEqual({blocked:true,approvals:0,state:'dispatching'});await page.close();
+  expect(await check()).toEqual({blocked:true,approvals:0,state:'dispatching'});await other.close();
 });

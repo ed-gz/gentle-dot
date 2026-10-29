@@ -187,6 +187,7 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       const id=field(args.clientMessageId, 96, 'Envío'); const conn=connection();
       const item=(await journal.list(endpoint(conn))).find(entry => entry.id === id); unchanged(conn);
       if (!item) throw new Error('El envío pendiente ya cambió o pertenece a otro host.');
+      if (item.state !== 'unconfirmed') throw new Error('El envío sigue en curso o perdió su comprobante de transporte; permanece bloqueado.');
       const {key:_key, owner:_owner, ...review} = item;
       await authorize(context, conn, 'Cerrar aviso tras revisar el historial', { action:'review-delivery-without-resending', attempt:review, warning:'La solicitud anterior podría seguir en curso o haber sido recibida. Cerrar este aviso permite proponer un nuevo envío; no verifica, cancela ni reenvía la solicitud anterior.' });
       context.signal.throwIfAborted(); unchanged(conn);

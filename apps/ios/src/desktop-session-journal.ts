@@ -113,6 +113,6 @@ export function createSessionJournal(databaseName = DATABASE): SessionJournal {
         };
       });
     },
-    reviewed: expected => change(expected.id, item => { if (JSON.stringify(item) !== JSON.stringify(validate(expected))) throw new Error('El envío cambió después de la revisión.'); return {...item,state:'reviewed'}; }, true),
+    reviewed: expected => change(expected.id, item => { if (item.state !== 'unconfirmed') throw new Error('El envío sigue en curso o perdió su comprobante de transporte; permanece bloqueado.'); if (JSON.stringify(item) !== JSON.stringify(validate(expected))) throw new Error('El envío cambió después de la revisión.'); return {...item,state:'reviewed'}; }, true),
   };
 }
