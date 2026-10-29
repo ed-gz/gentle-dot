@@ -65,6 +65,7 @@ svg { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; s
 .engine-status { font-size: .8rem; border-left: 2px solid var(--violet); padding-left: 10px; margin-block: 8px 12px; }
 .engine-status[data-ready="true"] { display: none; }
 .conversation { display: grid; gap: 20px; }
+#earlier-history, #recent-history { border: 0; background: transparent; color: var(--violet); padding: 4px 0; font-size: .85rem; }
 .chat-card { min-width: 0; margin: 0; padding: 14px; background: var(--panel); border: 1px solid var(--line); border-left: 2px solid var(--pink); border-radius: 2px 18px 2px 2px; overflow-wrap: anywhere; }
 .chat-card[data-role="user"] { margin-left: 26px; border-color: #657f49; border-left-color: var(--acid); background: #20251e; border-radius: 16px 2px 2px 2px; }
 .chat-card[data-role="notice"] { border-style: dashed; font-size: .85rem; background: transparent; }

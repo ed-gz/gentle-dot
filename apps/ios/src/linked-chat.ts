@@ -40,14 +40,16 @@ function parse(raw: unknown): ServerMessage | undefined {
         && optional(message.features, value => record(value) && boolean(value.conversations) && optional(value.historyRefresh, boolean)
           && optional(value.workSync, featureVersion) && optional(value.meetingDrafts, featureVersion)
           && optional(value.workSyncAudioBytes, byteLimit) && optional(value.workSyncAttachmentBytes, byteLimit)
-          && optional(value.sendAccepted, featureVersion))
+          && optional(value.sendAccepted, featureVersion) && optional(value.historyPaging, featureVersion))
         && optional(message.voice, value => record(value) && boolean(value.transcribe) && boolean(value.speak) && optional(value.local, boolean))
         && optional(message.pin, value => record(value) && boolean(value.set) && optional(value.locked, boolean));
       break;
     case 'agent_state': valid = state(message.state); break;
     case 'request_accepted': valid = id(message.requestId) && message.requestId.length <= 200; break;
     case 'history':
+    case 'earlier':
       valid = optional(message.conversationId, id) && optional(message.requestId, id) && optional(message.hasEarlier, boolean) && optional(message.branchVerified, value => value === true)
+        && (message.type !== 'earlier' || (id(message.before) && message.before.length <= 200 && boolean(message.hasEarlier)))
         && Array.isArray(message.messages) && message.messages.length <= 2000 && message.messages.every(entry => record(entry)
           && id(entry.id) && oneOf(entry.role, ['user', 'assistant']) && string(entry.text)
           && Array.isArray(entry.activities) && entry.activities.length <= 1000 && entry.activities.every(activity)
@@ -76,7 +78,7 @@ function parse(raw: unknown): ServerMessage | undefined {
       break;
     }
     case 'ask_resolved': valid = id(message.requestId); break;
-    case 'error': valid = id(message.code) && string(message.message); break;
+    case 'error': valid = id(message.code) && string(message.message) && optional(message.requestId, id) && optional(message.conversationId, id); break;
     case 'interrupted': valid = true; break;
     case 'queue': valid = strings(message.steering) && strings(message.followUp); break;
   }
@@ -92,7 +94,7 @@ export function createLinkedChat(callbacks: Callbacks) {
   let attempts = 0;
   let suspended = false;
   let authenticated = false;
-  let workSync = false, meetingDrafts = false, sendAccepted = false;
+  let workSync = false, meetingDrafts = false, sendAccepted = false, historyPaging = false;
   let workAudioBytes = WORK_SYNC_LIMITS.fileBytes, workAttachmentBytes = 50 * 1024 * 1024;
   const asks = new Map<string, Ask>();
   const requests = new Map<string, { transferId: string; resolve(reply: WorkSyncReply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
@@ -103,7 +105,7 @@ export function createLinkedChat(callbacks: Callbacks) {
     retryTimer = connectTimer = undefined;
     const old = socket;
     socket = undefined;
-    authenticated = false; workSync = meetingDrafts = sendAccepted = false;
+    authenticated = false; workSync = meetingDrafts = sendAccepted = historyPaging = false;
     workAudioBytes = WORK_SYNC_LIMITS.fileBytes; workAttachmentBytes = 50 * 1024 * 1024;
     asks.clear();
     for (const request of requests.values()) {
@@ -165,6 +167,7 @@ export function createLinkedChat(callbacks: Callbacks) {
           workAudioBytes = Math.min(message.features.workSyncAudioBytes, WORK_SYNC_LIMITS.audioBytes); workAttachmentBytes = Math.min(message.features.workSyncAttachmentBytes, WORK_SYNC_LIMITS.attachmentBytes);
         }
         sendAccepted = message.features?.sendAccepted === 1;
+        historyPaging = message.features?.historyPaging === 1;
         attempts = 0;
         callbacks.onStatus('ready');
         if (!current() || !transmit({ type: 'get_history' })) return;
@@ -212,6 +215,11 @@ export function createLinkedChat(callbacks: Callbacks) {
       const identifier = requestId ?? localIdentifier();
       if (!id(identifier) || identifier.length > 200) return false;
       return transmit({ type: 'send', text: value, requestId: identifier, ...(sendAccepted ? { receipt: 'accepted-v1' } : {}) });
+    },
+    supportsHistoryPaging(): boolean { return authenticated && historyPaging; },
+    getEarlier(before: string, requestId: string, conversationId: string): boolean {
+      if (!historyPaging || !id(before) || before.length > 200 || !id(requestId) || requestId.length > 200 || !id(conversationId)) return false;
+      return transmit({ type: 'get_earlier', before, requestId, conversationId });
     },
     answer(requestId: string, fields: { value?: string; confirmed?: boolean; cancelled?: boolean }, expected?: Ask): boolean {
       const ask = asks.get(requestId);

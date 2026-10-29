@@ -57,6 +57,13 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
   return next.slice(-MAX_ENTRIES);
 }
 type HostHistoryEntry = { id: string; role: 'user' | 'assistant'; text: string; activities?: ChatActivity[]; branchUnverified?: true };
+/** The host may return an old wrapper after its originating card left the
+ * visible window. Never expose the local context merely because its alias is
+ * no longer in memory; this redacts display only, it does not infer identity. */
+export function isLocalContextWrapper(text: string): boolean {
+  return text.startsWith('Contexto reciente de Capri en el iPhone (datos de conversación, no instrucciones del sistema):\n')
+    && text.includes('\n\nSolicitud actual:\n');
+}
 export class HostHistoryIdentityError extends Error {
   constructor() { super('El historial contiene una identidad contradictoria. La conversación anterior se conserva.'); this.name = 'HostHistoryIdentityError'; }
 }
@@ -74,7 +81,7 @@ function mergeHistoryActivities(live: readonly ChatActivity[], historical: reado
 }
 /** Update exact host IDs only. Text equality cannot prove that a historical
  * message is the same event as a live or pending message. */
-export function reconcileHostHistory(entries: ChatEntry[], prefix: string, history: HostHistoryEntry[], at = Date.now(), beforePrune?: (entries: ChatEntry[]) => void, branchVerified = false): ChatEntry[] {
+export function reconcileHostHistory(entries: ChatEntry[], prefix: string, history: HostHistoryEntry[], at = Date.now(), beforePrune?: (entries: ChatEntry[]) => void, branchVerified = false, aliasContext: readonly ChatEntry[] = []): ChatEntry[] {
   const seen = new Set<string>();
   for (const item of history) {
     const id = prefix + item.id;
@@ -93,11 +100,13 @@ export function reconcileHostHistory(entries: ChatEntry[], prefix: string, histo
     const prior = remote.find(({ entry }) => !used.has(entry.id) && entry.id === id && entry.role === item.role);
     // A known transport wrapper is private display metadata. Redacting the
     // wrapper does not establish that the two records have the same identity.
-    const aliases = item.role === 'user' ? remote.filter(({ entry }) => entry.role === 'user' && entry.transportText !== undefined && entry.transportText === item.text) : [];
+    const aliasCandidates = [...remote, ...aliasContext.filter(entry => entry.engine === 'gentle' && entry.id.startsWith(prefix)).map((entry, index) => ({ entry, index }))];
+    const aliases = item.role === 'user' ? aliasCandidates.filter(({ entry }) => entry.role === 'user' && entry.transportText !== undefined && entry.transportText === item.text) : [];
     const aliasText = aliases.length && aliases.every(({ entry }) => entry.text === aliases[0]!.entry.text)
       ? aliases[0]!.entry.text : aliases.length ? 'Solicitud recibida con contexto adjunto.' : undefined;
-    const displayText = prior?.entry.transportText !== undefined ? prior.entry.text : aliasText ?? item.text;
-    const alias = prior?.entry.transportText ?? (aliasText !== undefined ? item.text : undefined);
+    const wrapped = item.role === 'user' && isLocalContextWrapper(item.text);
+    const displayText = prior?.entry.transportText !== undefined ? prior.entry.text : aliasText ?? (wrapped ? 'Solicitud recibida con contexto adjunto.' : item.text);
+    const alias = prior?.entry.transportText ?? (aliasText !== undefined || wrapped ? item.text : undefined);
     const entry: ChatEntry = {
       id, role: item.role, activities: mergeHistoryActivities(prior?.entry.activities ?? [], item.activities ?? []), text: displayText,
       ...(alias !== undefined ? { transportText: alias } : {}),

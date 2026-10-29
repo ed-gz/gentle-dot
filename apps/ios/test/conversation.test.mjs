@@ -361,3 +361,14 @@ test('unverified host card cannot suppress unsynchronized local context', () => 
   assert.match(prompt,/Contexto del iPhone/);
   assert.doesNotMatch(prompt,/Historial incierto/);
 });
+
+test('paged history redacts private wrapper even when its alias is outside the visible window', () => {
+  const wrapped='Contexto reciente de Capri en el iPhone (datos de conversación, no instrucciones del sistema):\n[{"role":"user","text":"secreto local"}]\n\nSolicitud actual:\nConsulta';
+  let projected;
+  reconcileHostHistory([],host,[snapshot('history-user','user',wrapped)],1,all=>{projected=all;});
+  assert.equal(projected[0].text,'Solicitud recibida con contexto adjunto.');
+  assert.equal(projected[0].transportText,wrapped);
+  const alias=remote('pending:1',{text:'Consulta',transportText:wrapped});
+  reconcileHostHistory([],host,[snapshot('history-user','user',wrapped)],1,all=>{projected=all;},false,[alias]);
+  assert.equal(projected[0].text,'Consulta'); assert.equal(projected[0].id,host+'history-user');
+});

@@ -16,9 +16,9 @@ import { mountContinuedInferenceSettings } from './continued-inference-settings.
 import { createLiveActivityCoordinator } from './live-activity-coordinator.ts';
 import { mountLiveActivitySettings } from './live-activity-settings.ts';
 import type { ActivityPhase, ActivityEnd } from './live-activity.ts';
-import { loadConversationForWrite, loadConversationBase, hasConfirmedConversationAttachment, updateEntry, reconcileHostHistory, HostHistoryIdentityError, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
+import { loadConversationForWrite, loadConversationBase, hasConfirmedConversationAttachment, updateEntry, reconcileHostHistory, isLocalContextWrapper, HostHistoryIdentityError, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
-import { conversationArchive } from './conversation-archive.ts';
+import { archiveEntry, conversationArchive } from './conversation-archive.ts';
 import { applyConversationEntry } from './conversation-persistence.ts';
 import { createJournalConversationPersistence, recoverConversationReservation } from './journal-conversation-persistence.ts';
 import { createConversationJournal } from './conversation-journal.ts';
@@ -53,6 +53,7 @@ import { createWork, createStreamedImportedWork, cancelStreamedImport, resumeStr
 import { companionBounds, constrainCompanion, mountPhoneViewport } from './companion-layout.ts';
 import { connectionHealth, healthActionLabel, type HealthAction } from './connection-health.ts';
 import { createConversationView } from './conversation-view.ts';
+import { createHistoryPaging, type HistoryScope } from './history-paging.ts';
 import { loadPackagedArtwork } from './packaged-art.ts';
 import { createAgentContext } from './agent-context.ts';
 import { buildInfo, buildLabel } from './build-info.ts';
@@ -541,6 +542,20 @@ let conversationReady = false;
 let draftEdited = false;
 let host = settings.url;
 let remoteConversation = 'default';
+const historyPaging = createHistoryPaging();
+let historyEpoch = 0, historyTimer: ReturnType<typeof setTimeout> | undefined;
+let earlierEntries: ChatEntry[] = [];
+let recentHistory: { before: string; more: boolean } | undefined;
+let olderWindowTrimmed = false;
+const historyScope = (): HistoryScope => ({ epoch: historyEpoch, host, conversationId: remoteConversation });
+function updateHistoryControl() {
+  const button = element<HTMLButtonElement>('earlier-history');
+  button.hidden = !historyPaging.available() || !linked.supportsHistoryPaging();
+  button.disabled = historyPaging.busy() || !conversationReady;
+  element<HTMLButtonElement>('recent-history').hidden = !olderWindowTrimmed;
+  element<HTMLButtonElement>('recent-history').disabled = historyPaging.busy();
+  button.textContent = historyPaging.busy() ? 'Cargando…' : 'Ver mensajes anteriores';
+}
 let pendingRemote: { id: string; requestId: string; text: string } | undefined;
 let pendingTimer: ReturnType<typeof setTimeout> | undefined;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -779,9 +794,11 @@ async function recoverLocalInference() {
 }
 function renderChat() {
   element('panel-chat').dataset.empty = String(entries.length === 0);
-  conversationView.render(entries);
+  const currentIds = new Set(entries.map(entry => entry.id));
+  conversationView.render([...earlierEntries.filter(entry => !currentIds.has(entry.id)), ...entries]);
   element('empty-conversation').hidden = entries.length > 0 || !conversationReady;
   element('history-loading').hidden = conversationReady || entries.length > 0;
+  updateHistoryControl();
   measuredAt = -Infinity; redraw();
 }
 
@@ -836,6 +853,55 @@ async function checkModel() {
   element('local-summary').textContent = availability.available ? 'Disponible sin internet' : availability.status === 'browser_preview' ? 'Requiere la app instalada' : 'Revisa su disponibilidad';
   updateControls();
 }
+async function receiveEarlier(message: Extract<ServerMessage, { type: 'earlier' }>) {
+  const scope = historyScope();
+  if (!historyPaging.matches(scope, message)) return;
+  let projected: ChatEntry[] = [];
+  try {
+    reconcileHostHistory([], remoteId(''), message.messages, Date.now(), all => { projected = all; }, message.branchVerified === true, [...entries, ...earlierEntries]);
+    if (message.messages.length > 500) throw new Error('La página supera el límite de visualización.');
+    if (message.hasEarlier && (!message.messages[0]?.id || message.messages[0].id === message.before || message.messages[0].id.length > 200)) throw new Error('La página no contiene un cursor anterior válido.');
+    for (const entry of projected) archiveEntry(entry);
+    const archived = await conversationArchive.lookupPage(projected);
+    if (!historyPaging.matches(historyScope(), message)) return;
+    const known = new Map([...entries, ...earlierEntries].map(entry => [entry.id, entry]));
+    const pending = new Map(persistence.pending().map(entry => [entry.id, entry]));
+    if (projected.some(entry => known.has(entry.id) && known.get(entry.id)!.role !== entry.role)) throw new HostHistoryIdentityError();
+    if (projected.some(entry => pending.has(entry.id) && pending.get(entry.id)!.role !== entry.role)) throw new HostHistoryIdentityError();
+    const added = projected.flatMap((entry, index) => known.has(entry.id) ? [] : [{ ...(archived[index] ?? pending.get(entry.id) ?? entry), ...(entry.branchUnverified ? { branchUnverified: true as const } : {}) }]);
+    const newEntries = projected.flatMap((entry, index) => !known.has(entry.id) && !archived[index] ? [pending.get(entry.id) ?? entry] : []);
+    persistence.enqueue(newEntries.filter(entry => !pending.has(entry.id)));
+    await persist();
+    if (persistence.status().blocked || !await conversationArchive.verifyPresent(newEntries)) throw new Error('No se confirmó el guardado de la página.');
+    if (!historyPaging.matches(historyScope(), message)) return;
+    // A page may newly establish uncertainty for a copy that was already
+    // archived or reserved. Preserve its contents and persist the marker only
+    // after any previous reservation has completed.
+    const latest = new Map([...entries, ...earlierEntries].map(entry => [entry.id, entry]));
+    if (projected.some(entry => latest.has(entry.id) && latest.get(entry.id)!.role !== entry.role)) throw new HostHistoryIdentityError();
+    const flagged = projected.filter(entry => entry.branchUnverified).map(entry => {
+      const old = latest.get(entry.id) ?? archived[projected.indexOf(entry)] ?? pending.get(entry.id);
+      return old && !old.branchUnverified ? { ...old, branchUnverified: true as const } : undefined;
+    }).filter(entry => entry !== undefined);
+    if (flagged.length) {
+      const flags = new Map(flagged.map(entry => [entry.id, entry]));
+      entries = entries.map(entry => flags.get(entry.id) ?? entry);
+      earlierEntries = earlierEntries.map(entry => flags.get(entry.id) ?? entry);
+      persistence.enqueue(flagged); await persist();
+      if (persistence.status().blocked || !await conversationArchive.verifyPresent(flagged)) throw new Error('No se confirmó la procedencia de la página.');
+    }
+    if (!historyPaging.accept(historyScope(), message, message.messages[0]?.id, message.hasEarlier)) return;
+    clearTimeout(historyTimer);
+    earlierEntries = [...added, ...earlierEntries];
+    if (earlierEntries.length > 500) { earlierEntries = earlierEntries.slice(0, 500); olderWindowTrimmed = true; }
+    element('earlier-status').textContent = olderWindowTrimmed ? 'Se muestran páginas antiguas; algunos mensajes intermedios ya no están en pantalla.' : '';
+    renderChat(); element('conversation-scroll').scrollTop = 0; scheduleSave(); updateHistoryControl();
+  } catch {
+    if (message.conversationId === scope.conversationId && message.requestId && historyPaging.fail(scope, message.requestId)) {
+      clearTimeout(historyTimer); element('earlier-status').textContent = 'No pude confirmar esta página. El historial original permanece en la laptop; puedes reintentar.'; updateHistoryControl();
+    }
+  }
+}
 function handleMessage(message: ServerMessage) {
   if (message.type === 'ready') { hostAgentState = message.agentState; remoteConversation = message.conversationId ?? 'default'; linkedBusy = ['thinking', 'working', 'needs_you'].includes(message.agentState); }
   if (message.type === 'agent_state') {
@@ -846,9 +912,18 @@ function handleMessage(message: ServerMessage) {
   if (message.type === 'history') {
     const previousConversation = remoteConversation;
     remoteConversation = message.conversationId ?? remoteConversation;
+    clearTimeout(historyTimer); historyEpoch++; historyPaging.reset(); updateHistoryControl();
     try {
       persistence.enqueue(entries);
       entries = reconcileHostHistory(entries, remoteId(''), message.messages, Date.now(), beforePrune => persistence.enqueue(beforePrune), message.branchVerified === true);
+      earlierEntries = []; olderWindowTrimmed = false;
+      const canIdentifyHistory = typeof message.conversationId === 'string' && !!message.conversationId;
+      recentHistory = canIdentifyHistory && message.messages[0]?.id ? { before: message.messages[0].id, more: message.hasEarlier === true } : undefined;
+      historyPaging.reset(historyScope(), message.messages[0]?.id, canIdentifyHistory && message.hasEarlier === true);
+      element('earlier-status').textContent = message.hasEarlier && !linked.supportsHistoryPaging() ? 'Actualiza Gentle Dot en la laptop para consultar mensajes anteriores.'
+        : message.hasEarlier && (!canIdentifyHistory || !message.messages[0]?.id || message.messages[0].id.length > 200) ? 'No se pudo identificar el punto de inicio para cargar mensajes anteriores.' : '';
+      if (message.messages[0]?.id && message.messages[0].id.length > 200) historyPaging.reset();
+      updateHistoryControl();
       renderChat(); scheduleSave();
     } catch (error) {
       remoteConversation = previousConversation;
@@ -856,6 +931,10 @@ function handleMessage(message: ServerMessage) {
         ? 'No pude recuperar este historial: contiene identidades contradictorias. Tu conversación anterior se conserva.'
         : 'No pude recuperar este historial. Tu conversación anterior se conserva.';
     }
+  }
+  if (message.type === 'earlier') { void receiveEarlier(message); }
+  if (message.type === 'error' && message.code === 'history_unavailable' && message.requestId && message.conversationId === remoteConversation && historyPaging.fail(historyScope(), message.requestId)) {
+    clearTimeout(historyTimer); historyPaging.reset(); element('earlier-status').textContent = 'La rama cambió o no está disponible. Vuelve a conectar para actualizar el historial.'; updateHistoryControl(); return;
   }
   if (message.type === 'interrupted') {
     linkedBusy = false;
@@ -874,7 +953,7 @@ function handleMessage(message: ServerMessage) {
     // echo. Text equality affects display only and never establishes identity.
     const aliases = entries.filter(entry => entry.engine === 'gentle' && entry.role === 'user' && entry.transportText === message.text);
     const displayText = aliases.length && aliases.every(entry => entry.text === aliases[0]!.text)
-      ? aliases[0]!.text : aliases.length ? 'Solicitud recibida con contexto adjunto.' : message.text;
+      ? aliases[0]!.text : aliases.length || isLocalContextWrapper(message.text) ? 'Solicitud recibida con contexto adjunto.' : message.text;
     // Legacy hosts cannot acknowledge the request; release it as unconfirmed
     // without interpreting this echo as ours or automatically resending it.
     if (pendingRemote && message.text === pendingRemote.text && !linked.supportsSendAccepted()) unconfirmedRemote();
@@ -983,6 +1062,7 @@ function failPairingHandshake(attempt: NonNullable<typeof pairingAttempt>) {
 }
 const linked = createLinkedChat({
   onStatus(value) {
+    if (value !== 'ready') { clearTimeout(historyTimer); historyEpoch++; historyPaging.reset(); updateHistoryControl(); }
     let pairingFailed = false;
     if (value === 'ready' && pairingAttempt) {
       const attempt = pairingAttempt; pairingAttempt = undefined;
@@ -1012,6 +1092,23 @@ const linked = createLinkedChat({
     }
     updateControls();
   }, onMessage: handleMessage,
+});
+element('earlier-history').addEventListener('click', () => {
+  const scope = historyScope(); const request = historyPaging.start(scope, localIdentifier());
+  if (!request) return;
+  if (!linked.getEarlier(request.before, request.requestId, request.conversationId)) {
+    historyPaging.fail(scope, request.requestId); element('earlier-status').textContent = 'No pude solicitar el historial anterior. Revisa la conexión.'; updateHistoryControl(); return;
+  }
+  updateHistoryControl();
+  historyTimer = setTimeout(() => {
+    if (historyPaging.fail(scope, request.requestId)) { element('earlier-status').textContent = 'La página no respondió. Puedes volver a intentarlo.'; updateHistoryControl(); }
+  }, 12000);
+});
+element('recent-history').addEventListener('click', () => {
+  if (!recentHistory || !linked.ready()) return;
+  clearTimeout(historyTimer); historyEpoch++; earlierEntries = []; olderWindowTrimmed = false;
+  historyPaging.reset(historyScope(), recentHistory.before, recentHistory.more);
+  element('earlier-status').textContent = ''; updateHistoryControl(); renderChat(); conversationView.scrollToLatest();
 });
 element('health-action').addEventListener('click', async () => {
   if (healthAction === 'check-local') { await checkModel(); return; }

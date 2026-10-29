@@ -306,6 +306,45 @@ export function createConversationArchive(options: { databaseName?: string; maxi
   }
   return {
     upsert, restoreState, verifyExactBatch,
+    /** Reuse archived copies (including private aliases) without overwriting them. */
+    lookupPage: (entries: readonly ChatEntry[]) => {
+      if (!Array.isArray(entries) || entries.length > 500) return Promise.reject(new ArchiveError('invalid', 'Página de historial demasiado grande.'));
+      const safe = entries.map(entry => storedEntry(entry));
+      return access<(ChatEntry | undefined)[]>('readonly', (tx, done, fail) => {
+        const result: (ChatEntry | undefined)[] = []; let index = 0;
+        const next = () => {
+          const entry = safe[index++]; if (!entry) { done(result); return; }
+          read(tx.objectStore('entries').get(keyOf(entry)), value => {
+            if (value === undefined) result.push(undefined);
+            else {
+              const prior = stored(value);
+              if (prior.role !== entry.role) throw new ArchiveError('invalid', 'Una identidad archivada tiene roles contradictorios.');
+              result.push({ id: prior.id, role: prior.role, text: prior.text, engine: prior.engine, state: prior.state, at: prior.at,
+                ...(prior.transportText !== undefined ? { transportText: prior.transportText } : {}),
+                ...(prior.branchUnverified ? { branchUnverified: true as const } : {}),
+                ...(prior.activities ? { activities: prior.activities } : {}) });
+            }
+            next();
+          }, fail);
+        };
+        next();
+      });
+    },
+    verifyPresent: (entries: readonly ChatEntry[]) => {
+      if (!Array.isArray(entries) || entries.length > 500) return Promise.reject(new ArchiveError('invalid', 'Página de historial demasiado grande.'));
+      const safe = entries.map(entry => storedEntry(entry));
+      return access<boolean>('readonly', (tx, done, fail) => {
+        let index = 0;
+        const next = () => {
+          const entry = safe[index++]; if (!entry) { done(true); return; }
+          read(tx.objectStore('entries').get(keyOf(entry)), value => {
+            if (value === undefined || JSON.stringify(storedEntry(stored(value))) !== JSON.stringify(entry)) { done(false); return; }
+            next();
+          }, fail);
+        };
+        next();
+      });
+    },
     restoreWindow: async (entries: readonly ChatEntry[]) => (await restoreState({ entries: [...entries] })).entries,
     page: (options?: ArchiveQuery) => page(options),
     search: (query: string, options?: ArchiveQuery) => page(options, query),

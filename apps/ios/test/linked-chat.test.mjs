@@ -29,6 +29,18 @@ beforeEach(() => {
   FakeSocket.all = [];
   mock.timers.enable({ apis: ['setTimeout'] });
 });
+test('history paging is opt-in, validates pages and clears capability on disconnect', () => {
+  const { chat, socket, messages }=fixture(); ready(socket,{historyPaging:1});
+  assert.equal(chat.supportsHistoryPaging(),true); assert.equal(chat.getEarlier('cursor','request','conversation'),true);
+  assert.deepEqual(socket.sent.at(-1),{type:'get_earlier',before:'cursor',requestId:'request',conversationId:'conversation'});
+  socket.receive({type:'earlier',before:'cursor',requestId:'request',conversationId:'conversation',hasEarlier:true,messages:[]});
+  assert.equal(messages.at(-1).type,'earlier');
+  const count=messages.length;
+  socket.receive({type:'earlier',before:'cursor',requestId:'request',conversationId:'conversation',hasEarlier:'yes',messages:[]});
+  socket.receive({type:'earlier',before:'cursor',requestId:5,conversationId:'conversation',hasEarlier:false,messages:[]});
+  assert.equal(messages.length,count); socket.drop(); assert.equal(chat.supportsHistoryPaging(),false);
+  assert.equal(chat.getEarlier('cursor','request','conversation'),false);
+});
 afterEach(() => { mock.timers.reset(); globalThis.WebSocket = originalSocket; });
 
 test('waits for valid ready before send/abort and requests history once', () => {
