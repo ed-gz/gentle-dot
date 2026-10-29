@@ -169,11 +169,16 @@ function animate(now: number) {
       const dock = companionDock.getBoundingClientRect();
       place(dock.left + dock.width / 2 - area.left - area.width / 2,
         dock.top + dock.height / 2 - area.top - area.height / 2);
-    } else if (!drag && !travel) {
+    } else if (!drag) {
       const here = { x: position.x + (area.width - rig.offsetWidth) / 2, y: position.y + (area.height - rig.offsetHeight) / 2, width: rig.offsetWidth, height: rig.offsetHeight };
+      if (travel && (!phonePositionFree(here, occupied) || !phonePositionFree({ x: travel.target.x, y: travel.target.y, width: rig.offsetWidth, height: rig.offsetHeight }, occupied))) {
+        // A scroll or a new control can invalidate either end of an ongoing
+        // teleport. Cancel it before it can land on a newly occupied control.
+        travel = undefined; revision++;
+      }
       // A manual placement or resting pose must not cover controls introduced
       // later. Preserve it when safe, otherwise choose the closest free perch.
-      if (wasDocked || !phonePositionFree(here, occupied)) {
+      if (!travel && (wasDocked || !phonePositionFree(here, occupied))) {
         const closest = safePerches.reduce<[number, number] | undefined>((best, candidate) =>
           !best || Math.hypot(candidate[0] - here.x, candidate[1] - here.y) < Math.hypot(best[0] - here.x, best[1] - here.y) ? candidate : best, undefined);
         if (closest) place(closest[0] - (area.width - rig.offsetWidth) / 2, closest[1] - (area.height - rig.offsetHeight) / 2);
@@ -419,7 +424,7 @@ let laptopLoading = false;
 function contentMoved() { manuallyPlaced = false; measuredAt = -Infinity; if (['agents', 'chat', 'inbox', 'settings'].includes(panel)) redraw(); }
 const contentObserver = new MutationObserver(contentMoved);
 for (const id of ['laptop-root', 'cards', 'requests', 'panel-inbox', 'panel-settings']) contentObserver.observe(element(id), { childList: true, subtree: true });
-for (const id of ['laptop-root', 'conversation-scroll', 'panel-inbox', 'panel-settings']) element(id).addEventListener('scroll', contentMoved, { passive: true, capture: true });
+for (const id of ['panel-agents', 'laptop-root', 'conversation-scroll', 'panel-inbox', 'panel-settings']) element(id).addEventListener('scroll', contentMoved, { passive: true, capture: true });
 function updateLaptopView() {
   if (laptop) { laptop.update({ connection: runtimeConnection, active: panel === 'agents' }); return; }
   if (panel !== 'agents' || laptopLoading) return;
@@ -468,7 +473,13 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined;
 const rescueHistory = document.createElement('button');
 rescueHistory.type = 'button'; rescueHistory.id = 'rescue-history'; rescueHistory.textContent = 'Rescatar datos guardados'; rescueHistory.hidden = true;
 element('chat-notice').after(rescueHistory);
-rescueHistory.addEventListener('click', () => { showPanel('inbox'); void inbox.openAll(); });
+let recoveredHistoryAvailable = false;
+let conversationRestoreFailed = false;
+rescueHistory.addEventListener('click', () => {
+  recoveredHistoryAvailable = false;
+  rescueHistory.hidden = !persistence.status().blocked && !conversationRestoreFailed;
+  showPanel('inbox'); void inbox.openAll();
+});
 let voiceSession: string | undefined;
 let voiceOwner: string | undefined;
 // If the native bridge cannot confirm cancellation, keep the original owner
@@ -486,9 +497,9 @@ let voicePreviewTimer: ReturnType<typeof setInterval> | undefined;
 let voiceRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let persistenceWarning = '';
 const persistence = createConversationPersistence({ onStatus(status) {
-  rescueHistory.hidden = !status.blocked;
+  rescueHistory.hidden = !status.blocked && !recoveredHistoryAvailable && !conversationRestoreFailed;
   if (status.blocked) {
-    persistenceWarning = `No se confirmó el guardado local. ${status.archiveError ?? status.conversationError} ${status.pending} mensajes siguen en memoria. Los envíos están detenidos: abre Archivo para reintentar o exportar antes de cerrar Capri.`;
+    persistenceWarning = `No se confirmó el guardado local. ${status.archiveError ?? status.conversationError} ${status.pending} mensajes siguen en memoria. Los envíos están detenidos: usa Rescatar datos guardados para reintentar o exportar antes de cerrar Capri.`;
     element('chat-notice').textContent = persistenceWarning;
   } else if (element('chat-notice').textContent === persistenceWarning) element('chat-notice').textContent = '';
   memoryView.updateStatus(); updateControls();
@@ -520,7 +531,10 @@ async function recoverLocalInference() {
       onSettled: (record, cancelled) => endLocalActivity(record.id, !cancelled && record.status === 'answer' ? 'finished' : 'interrupted'),
     });
     recoveringNativeId = result.activeId;
-    if (recoveredFromArchive) notice('Recuperé una respuesta anterior. Está disponible en Archivo.', 'iphone');
+    if (recoveredFromArchive) {
+      recoveredHistoryAvailable = true; rescueHistory.hidden = false;
+      notice('Recuperé una respuesta anterior. Puedes consultarla en tus datos guardados.', 'iphone');
+    }
     localRecoveryReady = !result.activeId;
     element('retry-conversation').hidden = true;
     if (element('chat-notice').textContent === localRecoveryWarning) element('chat-notice').textContent = '';
@@ -992,12 +1006,14 @@ async function restoreConversation() {
     if (!draftEdited) { prompt.value = saved.draft; if (!attachedWork) showAttachedWork(saved.attachedWork); }
     if (attachedWork) showAttachedWork(attachedWork, 'Material guardado en este iPhone');
     conversationReady = true;
+    conversationRestoreFailed = false;
     retry.hidden = true;
-    rescueHistory.hidden = !persistence.status().blocked;
+    rescueHistory.hidden = !persistence.status().blocked && !recoveredHistoryAvailable;
     if (element('chat-notice').textContent === recoveryMessage) element('chat-notice').textContent = '';
     renderChat(); sizeDraft(); await persist(); releaseAttachedWork(attachedWork); await recoverLocalInference();
   } catch {
     element('history-loading').hidden = true;
+    conversationRestoreFailed = true;
     // Never overwrite an unread stored timeline with the partial in-memory state.
     element('chat-notice').textContent = recoveryMessage;
     retry.hidden = false;
