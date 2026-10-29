@@ -31,7 +31,7 @@ import { createRetainedVoiceBridge, activeRetainedOwner, RetainedVoiceAssetsRequ
 import { createNativeVoiceReceipts, type NativeVoiceReceipt } from './native-voice-receipts.ts';
 import { createNativeVoiceDelivery, prepareNativeVoiceDelivery, type NativeVoiceDeliveryIntent } from './native-voice-delivery.ts';
 import { mountNativeVoiceRecovery } from './native-voice-recovery-view.ts';
-import { exportNativeFile } from './file-export.ts';
+import { exportNativeFile, exportNativeFileRanges } from './file-export.ts';
 import { createProtectedVoice, cleanupDeliveredVoiceReceipt, prepareNativeVoiceCapacity } from './protected-voice.ts';
 import { createMemoryTools } from './conversation-memory-tools.ts';
 import { mountMemoryView } from './memory-view.ts';
@@ -47,7 +47,7 @@ import { createConversationRequests } from './conversation-requests.ts';
 import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCancelWithDeadline, voiceAvailabilityNote, VoiceCancelUnconfirmed, VoiceRetryPending } from './perception.ts';
 import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, markVoiceCancellation, clearVoiceCancellation, pendingVoiceCancellation } from './voice-origin.ts';
 import { isTauri } from '@tauri-apps/api/core';
-import { listSharedImportReport, importSharedItemStreamed, recoverImportBatch } from './device-bridge.ts';
+import { listSharedImportReport, importSharedItemStreamed, recoverImportBatch, readPendingFileChunk, type PendingCopy } from './device-bridge.ts';
 import { parseInvitation, pairDevice } from './device-pairing.ts';
 import { ConnectionSelectionAmbiguous, ConnectionSelectionPending, createConnectionSelectionStore, type SelectedConnection } from './connection-selection.ts';
 import { mountPairingSaveRecovery } from './pairing-save-recovery.ts';
@@ -2031,14 +2031,45 @@ element('chat-notice').after(importRecovery);
 const importRecoveryPanels = { share: document.createElement('div'), document: document.createElement('div') };
 importRecovery.hidden = true; importRecoveryPanels.share.hidden = true; importRecoveryPanels.document.hidden = true;
 importRecovery.append(importRecoveryPanels.share, importRecoveryPanels.document);
-function showImportRecovery(kind: 'share' | 'document', failures: { id: string; title: string; message: string; nativeManifest?: boolean; staging?: boolean }[]): void {
+type ImportRecoveryFailure = { id: string; title: string; message: string; nativeManifest?: boolean; staging?: boolean; copy?: PendingCopy };
+const importRecoveryFailures: Record<'share' | 'document', ImportRecoveryFailure[]> = { share: [], document: [] };
+const partialExportStates = new Map<string, {busy: boolean; message: string; controller?: AbortController}>();
+function showImportRecovery(kind: 'share' | 'document', failures: ImportRecoveryFailure[]): void {
+  importRecoveryFailures[kind] = failures;
+  const visibleKeys = new Set(failures.flatMap(failure => (failure.copy?.files ?? []).map(file => JSON.stringify([kind,failure.id,file.id]))));
+  for (const [key, value] of partialExportStates) if (key.startsWith(`["${kind}",`) && !visibleKeys.has(key) && !value.busy) partialExportStates.delete(key);
   const root = importRecoveryPanels[kind]; root.replaceChildren();
   root.hidden = failures.length === 0;
   importRecovery.hidden = importRecoveryPanels.share.hidden && importRecoveryPanels.document.hidden;
   for (const first of failures) {
   const message = document.createElement('p'); message.setAttribute('role', 'status');
   message.textContent = first.staging ? `${first.title}. ${first.message}` : `No se pudo guardar ${first.title}. ${first.nativeManifest ? '' : 'La copia original se conserva. '}${first.message}`;
-  if (first.staging) { root.append(message); continue; }
+  if (first.staging) {
+    root.append(message);
+    for (const file of first.copy?.files ?? []) {
+      const key = JSON.stringify([kind,first.id,file.id]);
+      const state = partialExportStates.get(key) ?? {busy:false,message:''}; partialExportStates.set(key,state);
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = `Exportar parcial ${file.id}`;
+      button.disabled = state.busy;
+      const status = document.createElement('p'); status.setAttribute('role', 'status'); status.textContent = state.message;
+      const stop = document.createElement('button'); stop.type = 'button'; stop.textContent = 'Dejar de esperar'; stop.hidden = !state.busy;
+      stop.onclick = () => state.controller?.abort();
+      button.addEventListener('click', () => {
+        if (state.busy) return;
+        state.busy = true; state.message = 'Preparando copia parcial…';
+        const controller = new AbortController();
+        state.controller = controller;
+        const stopped = new Promise<never>((_,reject) => { controller.signal.addEventListener('abort', () => reject(new Error('Espera cancelada')), {once:true}); });
+        showImportRecovery(kind, importRecoveryFailures[kind]);
+        void Promise.race([exportNativeFileRanges({size:file.bytes, read:(offset,length)=>readPendingFileChunk(kind,first.copy!,file,offset,length)}, `capri-parcial-${file.id}.bin`, {signal:controller.signal}), stopped])
+          .then(result => { state.message = result.status === 'exported' ? 'Copia parcial exportada. No se verificó contra el archivo original ni se confirmó que esté completa; la copia local se conserva.' : 'Exportación cancelada. La copia local se conserva.'; })
+          .catch(() => { state.message = 'No se confirmó la exportación. La copia local se conserva; revisa Archivos y cierra el selector si sigue abierto antes de repetir.'; })
+          .finally(() => { state.busy = false; state.controller = undefined; showImportRecovery(kind, importRecoveryFailures[kind]); });
+      });
+      root.append(button, stop, status);
+    }
+    continue;
+  }
   const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Reintentar';
   const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Liberar copia incompleta';
   const source = `${kind}:${first.id}`;
@@ -2061,8 +2092,8 @@ function showImportRecovery(kind: 'share' | 'document', failures: { id: string; 
     root.append(refresh);
   }
 }
-function stagingNotices(listing: {pendingCopies: {id: string; bytes: number | null}[]; omittedPending: number}) {
-  const notices = listing.pendingCopies.map(copy => ({ id: copy.id, title: `Copia pendiente ${copy.id}`, message: `${copy.bytes === null ? 'Tamaño no disponible' : `${copy.bytes.toLocaleString('es')} bytes`}. Puede seguir en preparación o estar incompleta. Se conserva; aún no hay una forma de recuperarla desde Capri.`, staging: true }));
+function stagingNotices(listing: {pendingCopies: PendingCopy[]; omittedPending: number}): { id: string; title: string; message: string; staging: boolean; copy?: PendingCopy }[] {
+  const notices: { id: string; title: string; message: string; staging: boolean; copy?: PendingCopy }[] = listing.pendingCopies.map(copy => ({ id: copy.id, title: `Copia pendiente ${copy.id}`, message: `${copy.bytes === null ? 'Tamaño no disponible' : `${copy.bytes.toLocaleString('es')} bytes`}. Puede seguir en preparación o estar incompleta. Los archivos parciales exportados podrían no reproducirse.`, staging: true, copy }));
   if (listing.omittedPending) notices.push({id:'',title:`${listing.omittedPending} copias pendientes adicionales`,message:'Se conservan; sus tamaños no se han listado.',staging:true});
   return notices;
 }

@@ -50,7 +50,7 @@ test('partial native listings preserve damaged IDs and permit healthy imports', 
   await assert.rejects(listSharedImportReport(async () => ({ ok:true, items:[item], invalidIds:[id] })), /inválido/);
   await assert.rejects(listSharedImportReport(async () => ({ ok:true, items:[item], invalidIds:['../bad'] })), /verificarse/);
   assert.deepEqual(await listSharedImportReport(async () => ({ ok:true, items:[item] })), { items:[item], invalidIds:[], pendingCopies:[], omittedPending:0 });
-  assert.deepEqual((await listSharedImportReport(async () => ({ok:true,items:[],pendingCopies:[{id:broken,bytes:42},{id:incompatible}],omittedPending:3}))).pendingCopies,[{id:broken,bytes:42},{id:incompatible,bytes:null}]);
+  assert.deepEqual((await listSharedImportReport(async () => ({ok:true,items:[],pendingCopies:[{id:broken,bytes:42},{id:incompatible}],omittedPending:3}))).pendingCopies,[{id:broken,bytes:42,files:[]},{id:incompatible,bytes:null,files:[]}]);
   await assert.rejects(listSharedImportReport(async () => ({ok:true,items:[],pendingCopies:[{id:broken,bytes:-1}]})), /copias pendientes/);
 });
 

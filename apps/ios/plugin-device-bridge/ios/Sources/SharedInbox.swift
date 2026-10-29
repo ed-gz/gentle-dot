@@ -39,7 +39,9 @@ struct SharedListing {
 struct SharedPendingCopy: Encodable {
     let id: String
     let bytes: Int64?
+    let files: [SharedPendingFile]
 }
+struct SharedPendingFile: Encodable { let id: String; let bytes: Int }
 
 // Compiled into both app and extension. Only an atomically published directory is visible
 // to the app. The acknowledgement removes it after the app's IndexedDB commit.
@@ -107,15 +109,20 @@ enum SharedInbox {
                 let id = String(entry.lastPathComponent.dropFirst(".pending-".count))
                 do {
                     var total: Int64 = 0
+                    var files: [SharedPendingFile] = []
                     for file in try FileManager.default.contentsOfDirectory(at: entry, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]) {
                         let values = try file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
-                        guard values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size >= 0 else { return SharedPendingCopy(id: id, bytes: nil) }
+                        guard values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size >= 0 else { return SharedPendingCopy(id: id, bytes: nil, files: []) }
                         let (next, overflow) = total.addingReportingOverflow(Int64(size))
-                        guard !overflow else { return SharedPendingCopy(id: id, bytes: nil) }
+                        guard !overflow else { return SharedPendingCopy(id: id, bytes: nil, files: []) }
                         total = next
+                        let name = file.lastPathComponent
+                        if name.hasSuffix(".blob"), validID(String(name.dropLast(5))), size > 0, size <= maxAudio {
+                            files.append(SharedPendingFile(id: String(name.dropLast(5)), bytes: size))
+                        }
                     }
-                    return SharedPendingCopy(id: id, bytes: total)
-                } catch { return SharedPendingCopy(id: id, bytes: nil) }
+                    return SharedPendingCopy(id: id, bytes: total, files: Array(files.sorted { $0.id < $1.id }.prefix(10)))
+                } catch { return SharedPendingCopy(id: id, bytes: nil, files: []) }
             }
             return SharedListing(items: items.sorted { $0.createdAt < $1.createdAt }, invalidIDs: invalidIDs.sorted(), pendingCopies: copies, omittedPending: max(0, pending.count - copies.count))
         }
@@ -148,6 +155,27 @@ enum SharedInbox {
             let expected = min(length, file.size - offset)
             guard let data = try handle.read(upToCount: expected), data.count == expected else { throw ShareFailure.integrity }
             return data
+        }
+    }
+    /// Read a bounded snapshot of an unconfirmed partial copy, never treating it
+    /// as a complete import. A changing file must be selected and reviewed again.
+    static func readPending(_ id: String, _ fileID: String, _ expectedSize: Int, _ offset: Int, _ length: Int, root suppliedRoot: URL? = nil) throws -> Data {
+        guard validID(id), validID(fileID), expectedSize > 0, expectedSize <= maxAudio,
+              offset >= 0, length > 0, length <= 256 * 1024, offset <= expectedSize, length <= expectedSize - offset else { throw ShareFailure.invalid }
+        let root = try suppliedRoot ?? root()
+        return try locked(root) {
+            let directory = root.appendingPathComponent(".pending-\(id)", isDirectory: true)
+            let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else { throw ShareFailure.invalid }
+            let fd = open(directory.appendingPathComponent("\(fileID).blob").path, O_RDONLY | O_NOFOLLOW)
+            guard fd >= 0 else { throw ShareFailure.invalid }
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            defer { try? handle.close() }
+            var info = stat()
+            guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, info.st_size == Int64(expectedSize) else { throw ShareFailure.integrity }
+            try handle.seek(toOffset: UInt64(offset))
+            guard let bytes = try handle.read(upToCount: length), bytes.count == length else { throw ShareFailure.integrity }
+            return bytes
         }
     }
     static func acknowledge(_ id: String, root suppliedRoot: URL? = nil) throws {

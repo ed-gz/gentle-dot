@@ -67,6 +67,13 @@ enum AppGroupResolver {
         let stagedID = String(oversizedStaging.lastPathComponent.dropFirst(".pending-".count))
         guard let entry = pending.pendingCopies.first(where: { $0.id == stagedID }), let bytes = entry.bytes,
               bytes >= Int64(copied.size), FileManager.default.fileExists(atPath: oversizedStaging.appendingPathComponent("\(copied.id).blob").path) else { fatalError("old staging lost or size hidden") }
+        guard entry.files.contains(where: { $0.id == copied.id && $0.bytes == copied.size }),
+              try SharedInbox.readPending(stagedID, copied.id, copied.size, 0, 10, root: root) == Data(repeating: 73, count: 10) else { fatalError("partial snapshot") }
+        let changing = try FileHandle(forWritingTo: oversizedStaging.appendingPathComponent("\(copied.id).blob"))
+        try changing.seekToEnd(); try changing.write(contentsOf: Data([4])); try changing.close()
+        do { _ = try SharedInbox.readPending(stagedID, copied.id, copied.size, 0, 10, root: root); fatalError("changed size accepted") }
+        catch ShareFailure.integrity { }
+        guard FileManager.default.fileExists(atPath: oversizedStaging.appendingPathComponent("\(copied.id).blob").path) else { fatalError("partial deleted after read error") }
         guard try SharedInbox.list(root: root).isEmpty, FileManager.default.fileExists(atPath: source.path),
               FileManager.default.fileExists(atPath: oversizedStaging.appendingPathComponent("\(copied.id).blob").path) else { fatalError("unpublished source lost") }
         guard SharedInbox.fileLimit("audio/mp4") == 128 * 1024 * 1024,

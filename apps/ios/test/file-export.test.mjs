@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { exportNativeFile, exportNativeFileRanges, exportFileName, FILE_EXPORT_LIMIT } from '../src/file-export.ts';
+import { readPendingFileChunk } from '../src/device-bridge.ts';
 
 const hashID = '5d3d8ff7-b06e-4f88-a17b-3bfbd37e8ca4';
 const exportID = 'b56ae6b2-8595-42dc-9f01-e03a45443fbd';
@@ -103,4 +104,27 @@ test('empty files hash and export, while a confirmed copy wins a concurrent canc
   const result = await exportNativeFile(new Blob([]), 'empty.txt', { signal: controller.signal }, f.call);
   assert.equal(result.status, 'exported'); assert.equal(result.sha256, createHash('sha256').digest('hex'));
   assert.equal(f.calls.some(call => call.command === 'export_write'), false);
+});
+
+test('partial export detects bytes changed between passes and never removes the native source', async () => {
+  const first = Buffer.from('audio-1'), changed = Buffer.from('audio-2'); let reads=0;
+  const copy={id:'a5a6e456-7a93-4bcc-b006-4493c78b5b66',bytes:first.length,files:[{id:'b5a6e456-7a93-4bcc-b006-4493c78b5b66',bytes:first.length}]};
+  const f=fixture();
+  const call=async(command,request)=>{
+    if(command==='share_read') { assert.equal(request.pending,true); assert.equal(request.expectedSize,first.length); reads++; return {ok:true,data:(reads===1?first:changed).subarray(request.offset,request.offset+request.length).toString('base64')}; }
+    return f.call(command,request);
+  };
+  await assert.rejects(exportNativeFileRanges({size:first.length,read:(offset,length)=>readPendingFileChunk('share',copy,copy.files[0],offset,length,call)},'capri-parcial.bin',{},call));
+  assert.equal(reads,2);assert.equal(f.calls.some(item=>item.command==='share_ack'),false);assert.deepEqual(first,Buffer.from('audio-1'));
+});
+
+test('partial export cancellation or an unconfirmed picker retains the source without retry', async () => {
+  const first=Buffer.from('partial');const copy={id:'a5a6e456-7a93-4bcc-b006-4493c78b5b66',bytes:first.length,files:[{id:'b5a6e456-7a93-4bcc-b006-4493c78b5b66',bytes:first.length}]};
+  for(const mode of ['cancelled','lost']) {
+    const f=fixture(mode==='cancelled'?{cancelled:true}:{override:command=>command==='export_present'?{ok:true}:undefined});
+    const call=async(command,request)=>command==='documents_read'?{ok:true,data:first.subarray(request.offset,request.offset+request.length).toString('base64')}:f.call(command,request);
+    const task=()=>exportNativeFileRanges({size:first.length,read:(offset,length)=>readPendingFileChunk('document',copy,copy.files[0],offset,length,call)},'capri-parcial.bin',{},call);
+    if(mode==='cancelled') assert.deepEqual(await task(),{status:'cancelled'}); else await assert.rejects(task());
+    assert.equal(f.calls.filter(item=>item.command==='export_present').length,1);assert.equal(f.calls.some(item=>item.command==='documents_ack'),false);assert.deepEqual(first,Buffer.from('partial'));
+  }
 });

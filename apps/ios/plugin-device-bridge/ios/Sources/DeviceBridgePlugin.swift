@@ -40,7 +40,7 @@ private struct SecretInput: Decodable { let scope: String; let account: String; 
 private struct PairInput: Decodable { let origin: String; let code: String; let deviceName: String }
 private struct UnpairInput: Decodable { let origin: String; let token: String? }
 private struct OAuthInput: Decodable { let authorizationUrl: String; let callbackScheme: String }
-private struct ReadInput: Decodable { let id: String; let fileId: String; let offset: Int; let length: Int }
+private struct ReadInput: Decodable { let id: String; let fileId: String; let offset: Int; let length: Int; let pending: Bool?; let expectedSize: Int? }
 private struct IDInput: Decodable { let id: String }
 private struct HTTPReceiptInput: Decodable { let id: String; let owner: String }
 private struct RandomInput: Decodable { let length: Int }
@@ -287,7 +287,8 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     @objc func shareRead(_ invoke: Invoke) {
         work(invoke) {
             let args = try invoke.parseArgs(ReadInput.self)
-            return BridgeReply(data: try SharedInbox.read(args.id, args.fileId, args.offset, args.length).base64EncodedString())
+            let data = args.pending == true ? try SharedInbox.readPending(args.id, args.fileId, args.expectedSize ?? -1, args.offset, args.length) : try SharedInbox.read(args.id, args.fileId, args.offset, args.length)
+            return BridgeReply(data: data.base64EncodedString())
         }
     }
     @objc func shareAck(_ invoke: Invoke) {
@@ -399,8 +400,9 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     @objc func documentsRead(_ invoke: Invoke) {
         work(invoke) {
             let args = try invoke.parseArgs(ReadInput.self)
-            return BridgeReply(data: try SharedInbox.read(args.id, args.fileId, args.offset, args.length,
-                root: DocumentImportStore.root()).base64EncodedString())
+            let root = try DocumentImportStore.root()
+            let data = args.pending == true ? try SharedInbox.readPending(args.id, args.fileId, args.expectedSize ?? -1, args.offset, args.length, root: root) : try SharedInbox.read(args.id, args.fileId, args.offset, args.length, root: root)
+            return BridgeReply(data: data.base64EncodedString())
         }
     }
     @objc func documentsAck(_ invoke: Invoke) {

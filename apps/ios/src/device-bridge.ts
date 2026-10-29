@@ -145,7 +145,8 @@ export async function listSharedImports(call: DeviceInvoker = deviceInvoke): Pro
   return report.items;
 }
 /** A failed native manifest is retained and reported separately; healthy items remain recoverable. */
-export async function listSharedImportReport(call: DeviceInvoker = deviceInvoke): Promise<{items: SharedImport[]; invalidIds: string[]; pendingCopies: {id: string; bytes: number | null}[]; omittedPending: number}> {
+export type PendingCopy = {id: string; bytes: number | null; files: {id: string; bytes: number}[]};
+export async function listSharedImportReport(call: DeviceInvoker = deviceInvoke): Promise<{items: SharedImport[]; invalidIds: string[]; pendingCopies: PendingCopy[]; omittedPending: number}> {
   const reply = requireNative(await call<NativeReply & { items?: unknown; invalidIds?: unknown; pendingCopies?: unknown; omittedPending?: unknown }>('share_list', {}));
   if (!Array.isArray(reply.items) || reply.items.length > 100) throw new Error('La bandeja compartida contiene un manifiesto inválido.');
   const reported = reply.invalidIds ?? [];
@@ -158,12 +159,22 @@ export async function listSharedImportReport(call: DeviceInvoker = deviceInvoke)
   }
   const pending = reply.pendingCopies ?? [], omitted = reply.omittedPending ?? 0;
   if (!Array.isArray(pending) || pending.length > 100 || !Number.isSafeInteger(omitted) || Number(omitted) < 0) throw new Error('No se pudo verificar el estado de las copias pendientes.');
-  const pendingCopies: {id: string; bytes: number | null}[] = [], pendingIds = new Set<string>();
+  const pendingCopies: PendingCopy[] = [], pendingIds = new Set<string>();
   for (const value of pending) {
     if (!object(value) || typeof value.id !== 'string' || !uuid.test(value.id) || pendingIds.has(value.id) || (value.bytes !== undefined && value.bytes !== null && (!Number.isSafeInteger(value.bytes) || Number(value.bytes) < 0))) throw new Error('No se pudo verificar el estado de las copias pendientes.');
-    pendingIds.add(value.id); pendingCopies.push({id:value.id,bytes:typeof value.bytes === 'number' ? value.bytes : null});
+    const files = value.files ?? [];
+    if (!Array.isArray(files) || files.length > 10 || files.some(file => !object(file) || typeof file.id !== 'string' || !uuid.test(file.id) || !Number.isSafeInteger(file.bytes) || Number(file.bytes) <= 0 || Number(file.bytes) > 128 * 1024 * 1024) || new Set(files.map(file => file.id)).size !== files.length) throw new Error('No se pudo verificar el estado de las copias pendientes.');
+    pendingIds.add(value.id); pendingCopies.push({id:value.id,bytes:typeof value.bytes === 'number' ? value.bytes : null,files: files.map(file => ({id:file.id,bytes:file.bytes}))});
   }
   return {items, invalidIds, pendingCopies, omittedPending: Number(omitted)};
+}
+/** A partial native copy has no trusted original digest or completeness claim. */
+export async function readPendingFileChunk(kind: 'share' | 'document', copy: PendingCopy, file: PendingCopy['files'][number], offset: number, length: number, call: DeviceInvoker = deviceInvoke): Promise<Uint8Array<ArrayBuffer>> {
+  if (!uuid.test(copy.id) || !uuid.test(file.id) || !copy.files.some(candidate => candidate.id === file.id && candidate.bytes === file.bytes) || !Number.isSafeInteger(file.bytes) || file.bytes <= 0 || file.bytes > 128 * 1024 * 1024 || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || length > 256 * 1024 || offset + length > file.bytes) throw new Error('Copia parcial inválida.');
+  const reply = requireNative(await call<NativeReply & {data?:unknown}>(kind === 'share' ? 'share_read' : 'documents_read', { id:copy.id, fileId:file.id, offset, length, pending:true, expectedSize:file.bytes }));
+  if (typeof reply.data !== 'string' || reply.data.length > Math.ceil(length / 3) * 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(reply.data)) throw new Error('No se pudo leer la copia parcial.');
+  const data = atob(reply.data); if (data.length !== length) throw new Error('No se pudo leer la copia parcial.');
+  return Uint8Array.from(data, character => character.charCodeAt(0));
 }
 export async function readSharedFileChunk(item: SharedImport, file: SharedFile, offset: number, length: number, call: DeviceInvoker = deviceInvoke): Promise<Uint8Array<ArrayBuffer>> {
   if (!validSharedImport(item) || !item.files.some(candidate => candidate.id === file.id && candidate.sha256 === file.sha256 && candidate.size === file.size)
