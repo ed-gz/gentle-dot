@@ -2,7 +2,7 @@ name: Capri public iOS archive verification
 
 # A change to this file triggers one public, anonymous-source, archive-only
 # verification. No personal art, account credentials, signing or upload.
-# This run includes Share recovery, Live Activity and the QR scanner lifecycle.
+# This run also includes the native selection CAS and scanner actor isolation.
 on:
   push:
     branches:
