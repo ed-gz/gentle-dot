@@ -170,8 +170,9 @@ no carga resultados de ejecuciones ya terminadas. Sólo los registros `uncertain
 operaciones reservan un comprobante nativo con ID y dueño: si el callback terminal
 no ha llegado, `executing` sigue bloqueado incluso si desaparece JavaScript. Al
 recuperar un `executing`, el callback terminal durable permite convertirlo sólo en
-`uncertain`; si aún no existe reserva nativa, se inserta primero un tombstone que
-impide que un IPC retrasado inicie el envío. Los registros anteriores sin marcador
+`uncertain`. Una reserva nativa ausente no demuestra que el envío no ocurrió: el
+almacén pudo perderse o restaurarse por separado, por lo que permanece bloqueado.
+Los registros anteriores sin marcador
 de comprobante permanecen bloqueados. El callback terminal no demuestra que el
 servidor haya terminado; cerrar la incertidumbre sigue requiriendo revisión humana.
 

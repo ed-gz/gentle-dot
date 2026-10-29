@@ -124,21 +124,20 @@ test('live and orphaned network operations stay blocked until transport durably 
   await other.close();
 });
 
-test('native terminal evidence recovers an orphan only as uncertain, while missing requires a tombstone',async({page})=>{
+test('native terminal evidence recovers an orphan only as uncertain; missing is never proof of no send',async({page})=>{
  await page.goto('/');
  const result=await page.evaluate(async()=>{
   const s=await import('/src/external-connections.ts'),c=await s.saveConnection({kind:'mcp',label:'Servicio',endpoint:'https://fixture.example/mcp'},'');
   const make=(text:string)=>({requestId:crypto.randomUUID(),owner:crypto.randomUUID(),nativeReceipt:1 as const,fingerprint:'c'.repeat(64),connectionId:c.id,connectionRevision:c.revision,endpoint:c.endpoint,toolName:'send',schemaJSON:'{"type":"object"}',argumentsJSON:JSON.stringify({text}),state:'executing' as const,createdAt:1,updatedAt:1});
   const first=make('a');await s.beginRemoteExecution(first);let activeBlocked=false;
-  try{await s.recoverRemoteExecution(first,{state:async()=> 'active',cancel:async()=>{throw new Error('unexpected');}});}catch{activeBlocked=true;}
-  const recovered=await s.recoverRemoteExecution(first,{state:async()=> 'terminal',cancel:async()=>{throw new Error('unexpected');}});
+  try{await s.recoverRemoteExecution(first,{state:async()=> 'active'});}catch{activeBlocked=true;}
+  const recovered=await s.recoverRemoteExecution(first,{state:async()=> 'terminal'});
   let duplicate=false;try{await s.beginRemoteExecution({...first,requestId:crypto.randomUUID()});}catch{duplicate=true;}
-  const second=make('b');await s.beginRemoteExecution(second);let raceBlocked=false;try{await s.recoverRemoteExecution(second,{state:async()=> 'missing',cancel:async()=>{throw new Error('transport started');}});}catch{raceBlocked=true;}
-  const kept=await s.getRemoteExecution(second.requestId);let tombstones=0;
-  const cancelled=await s.recoverRemoteExecution(second,{state:async()=> 'missing',cancel:async()=>{tombstones++;}});
-  return {activeBlocked,recovered:recovered.state,duplicate,raceBlocked,kept:kept?.state,cancelled:cancelled.state,tombstones};
+  const second=make('b');await s.beginRemoteExecution(second);let raceBlocked=false;try{await s.recoverRemoteExecution(second,{state:async()=> 'missing'});}catch{raceBlocked=true;}
+  const kept=await s.getRemoteExecution(second.requestId);
+  return {activeBlocked,recovered:recovered.state,duplicate,raceBlocked,kept:kept?.state};
  });
- expect(result).toEqual({activeBlocked:true,recovered:'uncertain',duplicate:true,raceBlocked:true,kept:'executing',cancelled:'cancelled',tombstones:1});
+ expect(result).toEqual({activeBlocked:true,recovered:'uncertain',duplicate:true,raceBlocked:true,kept:'executing'});
 });
 
 test('remote caller does not mark an early transport error terminal',async({page})=>{
@@ -158,11 +157,25 @@ test('late HTTP result cannot overwrite reviewed recovery and legacy entries sta
   const s=await import('/src/external-connections.ts'),c=await s.saveConnection({kind:'mcp',label:'Servicio',endpoint:'https://fixture.example/mcp'},'');
   const base={fingerprint:'d'.repeat(64),connectionId:c.id,connectionRevision:c.revision,endpoint:c.endpoint,toolName:'send',schemaJSON:'{"type":"object"}',state:'executing' as const,createdAt:1,updatedAt:1};
   const current={...base,requestId:crypto.randomUUID(),owner:crypto.randomUUID(),nativeReceipt:1 as const,argumentsJSON:'{"text":"nuevo"}'};await s.beginRemoteExecution(current);
-  const recovered=await s.recoverRemoteExecution(current,{state:async()=> 'terminal',cancel:async()=>{throw new Error('unexpected');}});await s.reviewRemoteExecution(recovered);
+  const recovered=await s.recoverRemoteExecution(current,{state:async()=> 'terminal'});await s.reviewRemoteExecution(recovered);
   let lateBlocked=false;try{await s.finishRemoteExecution(current.requestId,'succeeded','{}');}catch{lateBlocked=true;}
   const legacy={...base,requestId:crypto.randomUUID(),argumentsJSON:'{"text":"legacy"}'};await s.beginRemoteExecution(legacy);let legacyBlocked=false;
-  try{await s.recoverRemoteExecution(legacy,{state:async()=> 'terminal',cancel:async()=>{}});}catch{legacyBlocked=true;}
+  try{await s.recoverRemoteExecution(legacy,{state:async()=> 'terminal'});}catch{legacyBlocked=true;}
   return {lateBlocked,legacyBlocked,newState:(await s.getRemoteExecution(current.requestId))?.state,legacyState:(await s.getRemoteExecution(legacy.requestId))?.state};
  });
  expect(result).toEqual({lateBlocked:true,legacyBlocked:true,newState:'reviewed',legacyState:'executing'});
+});
+
+test('a replaced or older restored native database cannot prove an operation was never sent',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+  const s=await import('/src/external-connections.ts'),c=await s.saveConnection({kind:'mcp',label:'Servicio',endpoint:'https://fixture.example/mcp'},'');
+  const item={requestId:crypto.randomUUID(),owner:crypto.randomUUID(),nativeReceipt:1 as const,fingerprint:'e'.repeat(64),connectionId:c.id,connectionRevision:c.revision,endpoint:c.endpoint,toolName:'send',schemaJSON:'{"type":"object"}',argumentsJSON:'{}',state:'executing' as const,createdAt:1,updatedAt:1};
+  await s.beginRemoteExecution(item);const older=new Map<string,string>(),current=new Map([[item.requestId,'active']]);let database=current;
+  const bridge={state:async(id:string)=> (database.get(id)??'missing') as 'missing'|'active'|'terminal'};
+  database=new Map();let replacedBlocked=false;try{await s.recoverRemoteExecution(item,bridge);}catch{replacedBlocked=true;}
+  database=older;let restoredBlocked=false;try{await s.recoverRemoteExecution(item,bridge);}catch{restoredBlocked=true;}
+  return {replacedBlocked,restoredBlocked,state:(await s.getRemoteExecution(item.requestId))?.state};
+ });
+ expect(result).toEqual({replacedBlocked:true,restoredBlocked:true,state:'executing'});
 });

@@ -1,4 +1,4 @@
-import { secretGet, secretSet, secretDelete, httpsReceiptState, httpsReceiptCancelBeforeStart } from './device-bridge.ts';
+import { secretGet, secretSet, secretDelete, httpsReceiptState } from './device-bridge.ts';
 import { localIdentifier } from './local-identifiers.ts';
 
 export type Provider = 'github' | 'slack' | 'gmail' | 'odoo';
@@ -7,7 +7,7 @@ export type MCPOAuthGrant = { resource: string; issuer: string; tokenEndpoint: s
 export type ProviderCredentialBundle = { accessToken: string; refreshToken?: string; expiresAt?: number; provider?: Provider; clientId?: string; redirectUri?: string; scopes?: string[]; obtainedAt?: number; refreshState?: 'ready' | 'refreshing' | 'uncertain'; mcpOAuth?: MCPOAuthGrant };
 export type ExternalConnection = { id: string; kind: 'mcp' | 'https-api'; label: string; endpoint: string; revision: number; enabled: boolean; credentialAccount?: string; createdAt: number; updatedAt: number; provider?: Provider; apiMode?: 'json2' | 'legacy'; database?: string; uid?: number };
 export type ConnectionInput = Pick<ExternalConnection, 'kind' | 'label' | 'endpoint' | 'provider' | 'apiMode' | 'database' | 'uid'> & { id?: string; enabled?: boolean };
-export type RemoteExecution = { requestId: string; fingerprint: string; connectionId: string; connectionRevision: number; endpoint: string; toolName: string; schemaJSON: string; argumentsJSON: string; state: 'executing' | 'succeeded' | 'uncertain' | 'reviewed' | 'cancelled'; createdAt: number; updatedAt: number; resultJSON?: string; nativeReceipt?: 1; owner?: string };
+export type RemoteExecution = { requestId: string; fingerprint: string; connectionId: string; connectionRevision: number; endpoint: string; toolName: string; schemaJSON: string; argumentsJSON: string; state: 'executing' | 'succeeded' | 'uncertain' | 'reviewed'; createdAt: number; updatedAt: number; resultJSON?: string; nativeReceipt?: 1; owner?: string };
 const DATABASE = 'capri-ios-external-connections';
 const OPERATION_STATE = 'operation-state';
 const ENDPOINT_OPERATION_STATE = 'endpoint-operation-state';
@@ -224,19 +224,16 @@ export async function getRemoteExecution(id:string):Promise<RemoteExecution | nu
   if(!uuid.test(id)) throw new Error('ID de operación inválido.');
   return transaction(['executions'],'readonly',(tx,done)=>{const read=tx.objectStore('executions').get(id);read.onsuccess=()=>done(read.result??null);});
 }
-/** Recover only with a durable native terminal callback or a tombstone that
- * prevents an already-queued bridge invocation from starting later. */
-export async function recoverRemoteExecution(expected: RemoteExecution, bridge = {state:httpsReceiptState, cancel:httpsReceiptCancelBeforeStart}):Promise<RemoteExecution> {
+/** Recovery requires an actual native terminal callback. A missing receipt is
+ * not proof of non-dispatch: native storage might have been lost or restored. */
+export async function recoverRemoteExecution(expected: RemoteExecution, bridge = {state:httpsReceiptState}):Promise<RemoteExecution> {
   if (!expected || expected.state !== 'executing' || expected.nativeReceipt !== 1 || typeof expected.owner !== 'string' || !uuid.test(expected.owner)) throw new Error('La operación anterior no tiene comprobante nativo; permanece bloqueada.');
   const state=await bridge.state(expected.requestId,expected.owner);
-  if(state==='active') throw new Error('La operación sigue activa en el transporte; espera antes de revisarla.');
-  if(state==='missing') await bridge.cancel(expected.requestId,expected.owner);
-  else if(state!=='terminal' && state!=='cancelledBeforeStart') throw new Error('El comprobante no permite recuperar la operación.');
-  const nextState=state==='terminal'?'uncertain':'cancelled';
+  if(state!=='terminal') throw new Error('El transporte no tiene comprobante terminal verificable; permanece bloqueado.');
   return transaction<RemoteExecution>(['executions'],'readwrite',(tx,done,fail)=>{
     const store=tx.objectStore('executions'),read=store.get(expected.requestId);
     read.onsuccess=()=>{if(!read.result||JSON.stringify(read.result)!==JSON.stringify(expected)||read.result.state!=='executing'){fail(new Error('La operación cambió durante la recuperación.'));return;}
-      const next={...read.result,state:nextState,updatedAt:Date.now()};store.put(next);done(next);};
+      const next={...read.result,state:'uncertain' as const,updatedAt:Date.now()};store.put(next);done(next);};
   });
 }
 /** Human review closes only the exact unresolved record; it does not send,

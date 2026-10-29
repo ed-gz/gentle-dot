@@ -42,7 +42,6 @@ export function createConnectionTools(overrides: Partial<{ getConnection: typeof
         let current=await services.getRemoteExecution(requestId);context.signal.throwIfAborted();
         if (current?.state === 'executing') {
           current=await services.recoverRemoteExecution(current);context.signal.throwIfAborted();
-          if(current.state==='cancelled') return {requestId,cancelledBeforeStart:true,resent:false,confirmed:false,message:'El transporte no inició y quedó bloqueado frente a un envío tardío.'};
         }
         if (!current || current.state !== 'uncertain' || typeof current.endpoint!=='string' || validEndpoint(current.endpoint)!==current.endpoint || typeof current.toolName!=='string' || !current.toolName || current.toolName.length>256 || typeof current.argumentsJSON!=='string' || current.argumentsJSON.length>100_000 || typeof current.schemaJSON!=='string' || current.schemaJSON.length>100_000) throw new Error('El registro requiere revisión y no se modificó.');
         let args:unknown, definition:unknown;try {args=JSON.parse(current.argumentsJSON);definition=JSON.parse(current.schemaJSON);} catch {throw new Error('El registro requiere revisión y no se modificó.');}
