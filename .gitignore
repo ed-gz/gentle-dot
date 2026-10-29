@@ -4,7 +4,10 @@ dist/
 coverage/
 .vitest/
 test-results/
+test-results-*/
 playwright-report/
+__pycache__/
+*.py[cod]
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 *.log
