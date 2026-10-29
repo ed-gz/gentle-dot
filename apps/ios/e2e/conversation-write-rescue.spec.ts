@@ -89,6 +89,7 @@ test('recovery export omits private transport and stale discard preserves the ne
   });
   const root=page.locator('#test-write-recovery');await root.locator('summary').first().click();
   await root.getByText('Ver contenido').click();await expect(root.locator('pre')).toContainText('<b>Texto seguro</b>');
+  await expect(root.locator('pre')).toContainText('Rama no verificada');
   expect(await root.locator('b').count()).toBe(0);
   await root.getByRole('button',{name:'Exportar copia'}).click();
   await expect.poll(()=>page.evaluate(()=>(window as any).testExport)).toContain('Instrucción visible');

@@ -1,5 +1,71 @@
 import { expect, test } from './fixtures.ts';
 
+test('a page exceeding the reservation limit leaves the original journal intact',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+  const {createConversationJournal}=await import('/src/conversation-journal.ts');
+  const id=crypto.randomUUID(),journal=createConversationJournal({databaseName:`append-limit-${crypto.randomUUID()}`});
+  const prefix='host:wss://example.test/ws|chat|';
+  const pending=Array.from({length:10000},(_,index)=>({id:`${prefix}${index}`,engine:'gentle' as const,role:'assistant' as const,state:'complete' as const,text:'Mensaje',at:index}));
+  const snapshot={entries:[],draft:'',revision:1},expected={id,baseRevision:0,snapshot,revision:1};
+  await journal.begin({id,baseRevision:0,snapshot,pending});
+  const rejected=await journal.appendOwnedPage(expected,[{...pending[0],id:`${prefix}extra`}],prefix,()=>true).then(()=>false,()=>true);
+  const remaining=await journal.pending();return {rejected,count:remaining?.pending.length,last:remaining?.pending.at(-1)?.id};
+ });
+ expect(result).toEqual({rejected:true,count:10000,last:'host:wss://example.test/ws|chat|9999'});
+});
+
+test('an owned page extension fences a concurrent stale resume and preserves its reservation', async ({page})=>{
+  await page.goto('/');
+  const result=await page.evaluate(async()=>{
+    const {createConversationJournal}=await import('/src/conversation-journal.ts');
+    const {createConversationArchive}=await import('/src/conversation-archive.ts');
+    const suffix=crypto.randomUUID(),archive=createConversationArchive({databaseName:`append-page-archive-${suffix}`});
+    let start!:()=>void,release!:()=>void;
+    const started=new Promise<void>(resolve=>{start=resolve;});const wait=new Promise<void>(resolve=>{release=resolve;});let once=true;
+    const wrapped={verifyExactBatch:archive.verifyExactBatch,async upsert(...args:Parameters<typeof archive.upsert>){if(once){once=false;start();await wait;}return archive.upsert(...args);}};
+    const journal=createConversationJournal({databaseName:`append-page-${suffix}`,archive:wrapped});
+    const id=crypto.randomUUID(),original={id:'host:wss://example.test/ws|chat|old',engine:'gentle' as const,role:'assistant' as const,state:'complete' as const,text:'Anterior',at:1};
+    const extra={id:'host:wss://example.test/ws|chat|new',engine:'gentle' as const,role:'assistant' as const,state:'complete' as const,text:'Página',at:2};
+    const snapshot={entries:[original],draft:'Borrador',revision:1}, expected={id,baseRevision:0,snapshot,revision:1};
+    await journal.begin({id,baseRevision:0,snapshot,pending:[original]});
+    const stale=journal.resume(id).then(()=>({ok:true}),error=>({ok:false,error:String(error)}));await started;
+    const added=await journal.appendOwnedPage(expected,[extra],'host:wss://example.test/ws|chat|',()=>true);
+    const repeated=await journal.appendOwnedPage(expected,[extra],'host:wss://example.test/ws|chat|',()=>true);
+    release();const old=await stale, pending=await journal.pending();
+    const committed=await journal.resume(id), records=await archive.page();
+    return {added,repeated,old,pending,committed,records:records.entries.map(entry=>entry.text)};
+  });
+  expect(result.added).toBe(true);expect(result.repeated).toBe(true);expect(result.old.ok).toBe(false);
+  expect(result.pending?.pending.map(entry=>entry.text)).toEqual(['Anterior','Página']);
+  expect(result.pending?.snapshot).toMatchObject({draft:'Borrador',revision:1});expect(result.committed.revision).toBe(1);
+  expect(result.records).toEqual(expect.arrayContaining(['Anterior','Página']));
+});
+
+test('an owned page cannot alter identities, another reservation or a changed context',async({page})=>{
+  await page.goto('/');
+  const result=await page.evaluate(async()=>{
+    const {createConversationJournal}=await import('/src/conversation-journal.ts');
+    const {createConversationArchive}=await import('/src/conversation-archive.ts');
+    const suffix=crypto.randomUUID(),journal=createConversationJournal({databaseName:`append-page-guard-${suffix}`,archive:createConversationArchive({databaseName:`append-page-guard-archive-${suffix}`})});
+    const id=crypto.randomUUID(),original={id:'host:wss://example.test/ws|chat|old',engine:'gentle' as const,role:'user' as const,state:'complete' as const,text:'Original',at:1};
+    const pageEntry={...original,id:'host:wss://example.test/ws|chat|new',text:'Página'}, snapshot={entries:[original],draft:'',revision:1};
+    const expected={id,baseRevision:0,snapshot,revision:1}, prefix='host:wss://example.test/ws|chat|';
+    await journal.begin({id,baseRevision:0,snapshot,pending:[original]});
+    const attempts=await Promise.allSettled([
+      journal.appendOwnedPage({...expected,id:crypto.randomUUID()},[pageEntry],prefix,()=>true),
+      journal.appendOwnedPage(expected,[{...original,role:'assistant'}],prefix,()=>true),
+      journal.appendOwnedPage(expected,[{...pageEntry,id:'host:wss://other.test/ws|chat|new'}],prefix,()=>true),
+      journal.appendOwnedPage(expected,[pageEntry],prefix,()=>false),
+    ]);
+    const before=await journal.pending();await journal.resume(id);
+    const after=await journal.appendOwnedPage(expected,[pageEntry],prefix,()=>true);
+    return {attempts:attempts.map(value=>value.status),before,after};
+  });
+  expect(result.attempts).toEqual(['rejected','rejected','rejected','rejected']);
+  expect(result.before?.pending.map(entry=>entry.text)).toEqual(['Original']);expect(result.after).toBe(false);
+});
+
 test('two windows racing from one durable base reserve only one snapshot before touching the archive', async ({ page, context }) => {
   await page.goto('/'); const other = await context.newPage(); await other.goto('/');
   const suffix = crypto.randomUUID(), databaseName = `journal-race-${suffix}`, archiveName = `journal-archive-${suffix}`;

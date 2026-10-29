@@ -126,7 +126,6 @@ function matchesBase(value: unknown, base: Conversation | undefined): boolean {
   if (value === undefined || base === undefined) return value === undefined && base === undefined;
   return same(cleanConversation(value), base);
 }
-
 export function createConversationJournal(options: { databaseName?: string; archive?: Archive } = {}) {
   const name = options.databaseName ?? 'capri-ios-conversation', archive = options.archive ?? conversationArchive;
   if (!name || name.length > 256) throw new Error('El almacén de conversación no es válido.');
@@ -204,6 +203,46 @@ export function createConversationJournal(options: { databaseName?: string; arch
       });
     },
     pending,
+    /** Attach only new, already-validated host page entries to this writer's
+     * exact pending reservation. The visible snapshot, base, revision and
+     * voice-delivery intent remain unchanged. A concurrent resume compares
+     * the entire reservation again before committing, so it cannot release
+     * an older copy after this transaction succeeds. */
+    async appendOwnedPage(expected: { id: string; baseRevision: number; base?: Conversation; snapshot: Conversation; revision: number; voiceDelivery?: NativeVoiceDeliveryIntent }, entries: readonly ChatEntry[], originPrefix: string, stillCurrent: () => boolean): Promise<boolean> {
+      if (!uuid(expected.id) || !natural(expected.baseRevision) || !natural(expected.revision) || !Array.isArray(entries) || entries.length > 500 ||
+          typeof originPrefix !== 'string' || !originPrefix.startsWith('host:') || !originPrefix.endsWith('|') || typeof stillCurrent !== 'function')
+        throw new Error('La página no corresponde a una reserva válida.');
+      const additions = cleanPending(structuredClone(entries));
+      if (additions.some(entry => entry.engine !== 'gentle' || !entry.id.startsWith(originPrefix) || archiveEntry(entry).scope === 'gentle:unscoped'))
+        throw new Error('La página no tiene un origen de host verificable.');
+      const snapshot = cleanConversation(structuredClone(expected.snapshot));
+      const base = expected.base === undefined ? undefined : cleanConversation(structuredClone(expected.base));
+      return transaction(name, 'readwrite', (store, done, fail) => {
+        const read = store.get(JOURNAL);
+        read.onsuccess = () => safely(fail, () => {
+          if (read.result === undefined) { done(false); return; }
+          const current = validate(read.result);
+          if (current.id !== expected.id || current.baseRevision !== expected.baseRevision || current.revision !== expected.revision ||
+              !same(current.base, base) || !same(current.snapshot, snapshot) || !same(current.voiceDelivery, expected.voiceDelivery))
+            throw new Error('La reserva cambió; la página se conserva para revisión.');
+          const storedBase = store.get('current');
+          storedBase.onsuccess = () => safely(fail, () => {
+            if (!stillCurrent()) throw new Error('La conversación cambió; la página se conserva para revisión.');
+            if (!matchesBase(storedBase.result, current.base)) throw new Error('La conversación cambió; la página se conserva para revisión.');
+            const known = new Map(current.pending.map(entry => [entryKey(entry), entry]));
+            const appended = [...current.pending];
+            for (const entry of additions) {
+              const key = entryKey(entry), previous = known.get(key);
+              if (previous && !same(previous, entry)) throw new Error('Una identidad de la página ya contiene otro mensaje; se conservan las copias.');
+              if (!previous) { known.set(key, entry); appended.push(entry); }
+            }
+            const next = validate({ ...current, pending: appended });
+            if (!same(next, current)) store.put(next, JOURNAL);
+            done(true);
+          });
+        });
+      });
+    },
     /** Every batch is replayable. On quota, failure or termination the full
      * journal remains durable; no second revision can be reserved. */
     async resume(id: string): Promise<JournalCommit> {

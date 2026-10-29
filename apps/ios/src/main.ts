@@ -692,7 +692,7 @@ const persistence = createJournalConversationPersistence({ journal: conversation
   else if (memoryNeedsRefresh && panel === 'inbox') { memoryNeedsRefresh = false; void memoryView.refresh(); }
   updateControls();
 } });
-function persist(voiceDelivery?: NativeVoiceDeliveryIntent): Promise<void> {
+function persist(voiceDelivery?: NativeVoiceDeliveryIntent, page?: { entries: readonly ChatEntry[]; addedEntries: readonly ChatEntry[]; originPrefix: string; stillCurrent: () => boolean }): Promise<void> {
   clearTimeout(saveTimer);
   if (!conversationReady) {
     if (!draftEdited) return Promise.resolve();
@@ -708,7 +708,7 @@ function persist(voiceDelivery?: NativeVoiceDeliveryIntent): Promise<void> {
     earlyDraftWrite = write;
     return write;
   }
-  return persistence.persist({ entries, draft: prompt.value, attachedWork }, voiceDelivery).then(async () => {
+  return persistence.persist({ entries, draft: prompt.value, attachedWork }, voiceDelivery, page).then(async () => {
     // Pre-restore edits use an independent owner. Remove only an exact copy
     // already present in a validated, later durable snapshot and no journal.
     await earlyDraftWrite;
@@ -950,9 +950,15 @@ async function receiveEarlier(message: Extract<ServerMessage, { type: 'earlier' 
     if (projected.some(entry => known.has(entry.id) && known.get(entry.id)!.role !== entry.role)) throw new HostHistoryIdentityError();
     if (projected.some(entry => pending.has(entry.id) && pending.get(entry.id)!.role !== entry.role)) throw new HostHistoryIdentityError();
     const added = projected.flatMap((entry, index) => known.has(entry.id) ? [] : [{ ...(archived[index] ?? pending.get(entry.id) ?? entry), ...(entry.branchUnverified ? { branchUnverified: true as const } : {}) }]);
-    const newEntries = projected.flatMap((entry, index) => !known.has(entry.id) && !archived[index] ? [pending.get(entry.id) ?? entry] : []);
-    persistence.enqueue(newEntries.filter(entry => !pending.has(entry.id)));
-    await persist();
+    const newEntries = projected.flatMap((entry, index) => {
+      if (known.has(entry.id) || archived[index]) return [];
+      const old = pending.get(entry.id);
+      return [{ ...(old ?? entry), ...(entry.branchUnverified ? { branchUnverified: true as const } : {}) }];
+    });
+    const addedEntries = newEntries.filter(entry => !pending.has(entry.id));
+    const newlyFlagged = newEntries.filter(entry => entry.branchUnverified && pending.has(entry.id) && !pending.get(entry.id)!.branchUnverified);
+    persistence.enqueue(addedEntries); persistence.enqueue(newlyFlagged, true);
+    await persist(undefined, { entries: newEntries, addedEntries, originPrefix: remoteId(''), stillCurrent: () => historyPaging.matches(historyScope(), message) });
     if (persistence.status().blocked || !await conversationArchive.verifyPresent(newEntries)) throw new Error('No se confirmó el guardado de la página.');
     if (!historyPaging.matches(historyScope(), message)) return;
     // A page may newly establish uncertainty for a copy that was already

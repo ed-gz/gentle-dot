@@ -97,6 +97,25 @@ test('a failed page reservation is recovered on reload before it can be paged ag
  await connect();await page.locator('#earlier-history').click();await expect.poll(()=>requests.length).toBe(2);const second=requests[1];expect(second.before).toBe('h3');reply!({type:'earlier',before:second.before,requestId:second.requestId,conversationId:'chat',hasEarlier:false,messages:[{id:'h2',role:'assistant',text:'Recuperado del host',activities:[]}]});await expect(page.getByText('Recuperado del host',{exact:true})).toBeVisible();
 });
 
+test('a page joins this writer’s blocked reservation and survives reload without advancing the host cursor',async({page})=>{
+ let reply:((m:any)=>void)|undefined;const requests:any[]=[];
+ await page.routeWebSocket('wss://pages.fixture/ws',ws=>{let seq=0;reply=m=>ws.send(JSON.stringify({seq:seq++,...m}));ws.onMessage(raw=>{const m=JSON.parse(String(raw));if(m.type==='hello')reply!({type:'ready',agentState:'idle',conversationId:'chat',features:{conversations:false,historyPaging:1}});if(m.type==='get_history')reply!({type:'history',conversationId:'chat',hasEarlier:true,messages:[{id:'h3',role:'assistant',text:'Reciente',activities:[]}]});if(m.type==='get_earlier')requests.push(m);});});
+ const connect=async()=>{await page.locator('[data-panel="settings"]').click();await page.getByText('Conexión manual',{exact:true}).click();await page.locator('#url').fill('wss://pages.fixture/ws');await page.locator('#token').fill('fixture');await page.locator('#connection button[type="submit"]').click();await page.locator('[data-panel="chat"]').click();await expect(page.locator('#earlier-history')).toBeEnabled();};
+ await page.goto('/');await connect();
+ await page.evaluate(()=>{const original=IDBDatabase.prototype.transaction;IDBDatabase.prototype.transaction=function(...args:any[]){if(this.name==='capri-ios-conversation-archive'&&args[1]==='readwrite')throw new DOMException('quota','QuotaExceededError');return original.apply(this,args as any);};});
+ await page.locator('#prompt').fill('Borrador anterior');await expect(page.locator('#storage-warning')).toBeVisible();
+ const before=await page.evaluate(async()=>{const {createConversationJournal}=await import('/src/conversation-journal.ts');return (await createConversationJournal().pending())?.pending.map(entry=>entry.text);});
+ expect(before).not.toContain('Página recuperable');
+ await page.locator('#earlier-history').click();await expect.poll(()=>requests.length).toBe(1);const first=requests[0];
+ reply!({type:'earlier',before:first.before,requestId:first.requestId,conversationId:'chat',hasEarlier:false,messages:[{id:'h2',role:'assistant',text:'Página recuperable',activities:[]}]});
+ await expect(page.locator('#earlier-status')).toContainText('No pude confirmar');
+ const pending=await page.evaluate(async()=>{const {createConversationJournal}=await import('/src/conversation-journal.ts');return (await createConversationJournal().pending())?.pending.map(entry=>entry.text);});
+ expect(pending).toContain('Página recuperable');await expect(page.locator('#cards').getByText('Página recuperable')).toHaveCount(0);
+ await page.reload();
+ await expect.poll(()=>page.evaluate(async()=>{const a=await import('/src/conversation-archive.ts');return (await a.conversationArchive.page({limit:100})).entries.some(entry=>entry.text==='Página recuperable');})).toBe(true);
+ await connect();await page.locator('#earlier-history').click();await expect.poll(()=>requests.length).toBe(2);expect(requests[1].before).toBe('h3');expect(requests[1].requestId).not.toBe(first.requestId);
+});
+
 test('a non-advancing page is rejected before it enters storage',async({page})=>{
  let reply:((m:any)=>void)|undefined;const requests:any[]=[];
  await page.routeWebSocket('wss://pages.fixture/ws',ws=>{let seq=0;reply=m=>ws.send(JSON.stringify({seq:seq++,...m}));ws.onMessage(raw=>{const m=JSON.parse(String(raw));if(m.type==='hello')reply!({type:'ready',agentState:'idle',conversationId:'chat',features:{conversations:false,historyPaging:1}});if(m.type==='get_history')reply!({type:'history',conversationId:'chat',hasEarlier:true,messages:[{id:'h3',role:'assistant',text:'Reciente',activities:[]}]});if(m.type==='get_earlier')requests.push(m);});});

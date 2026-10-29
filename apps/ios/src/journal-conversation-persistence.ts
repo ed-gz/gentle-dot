@@ -6,9 +6,10 @@ import type { createConversationDraftRescue, DraftRescue } from './conversation-
 import type { NativeVoiceDeliveryIntent } from './native-voice-delivery.ts';
 import type { createConversationWriteRescue, WriteRescue } from './conversation-write-rescue.ts';
 
-type Journal = Pick<ReturnType<typeof createConversationJournal>, 'pending' | 'begin' | 'resume'>;
+type Journal = Pick<ReturnType<typeof createConversationJournal>, 'pending' | 'begin' | 'resume'> & Partial<Pick<ReturnType<typeof createConversationJournal>, 'appendOwnedPage'>>;
 type JournalOperation = { id: string; baseRevision: number; base?: Conversation; nextRevision: number; snapshot: Conversation; pending: ChatEntry[]; voiceDelivery?: NativeVoiceDeliveryIntent };
-type Capture = { sequence: number; snapshot: Conversation; pending: [string, ChatEntry][]; voiceDelivery?: NativeVoiceDeliveryIntent };
+type PageCapture = { entries: readonly ChatEntry[]; addedEntries: readonly ChatEntry[]; originPrefix: string; stillCurrent: () => boolean };
+type Capture = { sequence: number; snapshot: Conversation; pending: [string, ChatEntry][]; voiceDelivery?: NativeVoiceDeliveryIntent; page?: PageCapture };
 const describe = (error: unknown) => error instanceof Error ? error.message : 'No se confirmó la reserva de conversación.';
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 function same(a: unknown, b: unknown): boolean {
@@ -56,11 +57,11 @@ export function createJournalConversationPersistence(options: {
   const readBase = options.readBase ?? loadConversationBase;
   const identifier = options.identifier ?? localIdentifier;
   const rescueOwner = options.draftRescue ? (options.rescueOwner ?? identifier()) : undefined;
-  const writeRescueOwner = options.writeRescue ? (options.writeRescueOwner ?? identifier()) : undefined;
+  let writeRescueOwner = options.writeRescue ? (options.writeRescueOwner ?? identifier()) : undefined;
   let rescueSequence = 0;
   let writeRescueSequence = 0;
   let captureSequence = 0;
-  const pending = new Map<string, ChatEntry>(), seen = new WeakSet<ChatEntry>();
+  const pending = new Map<string, ChatEntry>(), seen = new WeakSet<ChatEntry>(), stalePageCopies = new WeakSet<ChatEntry>();
   let base: Conversation | undefined, bound = false, archiveFloor = 0, owned: JournalOperation | undefined;
   let deferredVoice: Capture | undefined;
   let ownedRejected = false;
@@ -85,10 +86,10 @@ export function createJournalConversationPersistence(options: {
     for (const [key, entry] of captured) if (pending.get(key) === entry) pending.delete(key);
     owned = undefined; ownedRejected = false;
   }
-  function persist(value: Conversation, voiceDelivery?: NativeVoiceDeliveryIntent): Promise<void> {
+  function persist(value: Conversation, voiceDelivery?: NativeVoiceDeliveryIntent, page?: PageCapture): Promise<void> {
     if (!bound) return Promise.reject(new Error('Recupera y vincula la base antes de guardar.'));
     enqueue(value.entries);
-    const capture: Capture = { sequence: ++captureSequence, snapshot: structuredClone(value), pending: [...pending.entries()], ...(voiceDelivery ? { voiceDelivery: structuredClone(voiceDelivery) } : {}) };
+    const capture: Capture = { sequence: ++captureSequence, snapshot: structuredClone(value), pending: [...pending.entries()], ...(voiceDelivery ? { voiceDelivery: structuredClone(voiceDelivery) } : {}), ...(page?.entries.length ? { page: { ...page, entries: structuredClone([...page.entries]), addedEntries: structuredClone([...page.addedEntries]) } } : {}) };
     if (voiceDelivery) {
       if (deferredVoice && !same(deferredVoice.voiceDelivery, voiceDelivery)) return Promise.reject(new Error('Otro dictado sigue pendiente de guardarse.'));
       // Repeated requests for the same pending identity must not replace the
@@ -123,6 +124,7 @@ export function createJournalConversationPersistence(options: {
         if (rescueError) throw rescueError;
         const writeRescueError = await writeRescueSaved;
         if (writeRescueError) throw writeRescueError;
+        if (capture.page && !capture.page.stillCurrent()) throw new Error('La conversación cambió; la página se conserva para revisión.');
         if (owned) {
           const reserved = await journal.pending();
           // If a proven pre-reservation rejection was followed by an
@@ -131,6 +133,11 @@ export function createJournalConversationPersistence(options: {
           if (ownedRejected && (!reserved || reserved.id !== owned.id)) { owned = undefined; ownedRejected = false; }
           if (owned) {
             if (reserved && reserved.id !== owned.id) throw new Error('Otra reserva está pendiente. Conserva el borrador antes de continuar.');
+            if (reserved && capture.page && journal.appendOwnedPage) {
+              await journal.appendOwnedPage({ id: owned.id, baseRevision: owned.baseRevision, ...(owned.base ? { base: owned.base } : {}),
+                snapshot: owned.snapshot, revision: owned.nextRevision, ...(owned.voiceDelivery ? { voiceDelivery: owned.voiceDelivery } : {}) },
+                capture.page.entries, capture.page.originPrefix, capture.page.stillCurrent);
+            }
             // A missing callback is not permission to create a second operation.
             // resume checks the existing journal or its exact commit marker.
             await finish(owned, []);
@@ -152,7 +159,7 @@ export function createJournalConversationPersistence(options: {
         // journal to reject rather than being silently discarded.
         if (snapshot.attachedWork === undefined) delete snapshot.attachedWork;
         const operation: JournalOperation = { id: identifier(), baseRevision, ...(base ? { base: structuredClone(base) } : {}), nextRevision,
-          snapshot, pending: selected.pending.map(([, entry]) => structuredClone(entry)), ...(selected.voiceDelivery ? { voiceDelivery: selected.voiceDelivery } : {}) };
+          snapshot, pending: selected.pending.filter(([, entry]) => !stalePageCopies.has(entry)).map(([, entry]) => structuredClone(entry)), ...(selected.voiceDelivery ? { voiceDelivery: selected.voiceDelivery } : {}) };
         // Save this identity before begin so a lost response can only retry
         // the same reservation, never create a competing copy.
         owned = operation;
@@ -178,7 +185,20 @@ export function createJournalConversationPersistence(options: {
           try { await options.writeRescue.retireIfCommitted(writeRescue, base); } catch { /* Keep the copy for review. */ }
         }
         issue = undefined;
-      } catch (error) { issue = describe(error); }
+      } catch (error) {
+        if (capture.page && !capture.page.stillCurrent()) {
+          // Keep the already-saved copy for human review, but do not let a
+          // later queued snapshot archive page entries from a replaced scope.
+          const keys = new Set(capture.page.addedEntries.map(entry => JSON.stringify([entry.engine, entry.id])));
+          for (const [key, entry] of capture.pending) if (keys.has(key)) {
+            stalePageCopies.add(entry);
+            if (pending.get(key) === entry) pending.delete(key);
+          }
+          // Future saves must not overwrite that writer's rescue copy.
+          if (writeRescueOwner) { writeRescueOwner = identifier(); writeRescueSequence = 0; }
+        }
+        issue = describe(error);
+      }
       notify();
     });
     return chain;

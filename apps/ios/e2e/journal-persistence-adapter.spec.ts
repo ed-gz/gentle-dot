@@ -1,5 +1,60 @@
 import { expect, test } from './fixtures.ts';
 
+test('a page fenced during a later save remains in rescue without entering another conversation',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+  const {createJournalConversationPersistence}=await import('/src/journal-conversation-persistence.ts');
+  const {createConversationJournal}=await import('/src/conversation-journal.ts');
+  const {createConversationArchive}=await import('/src/conversation-archive.ts');
+  const {createConversationWriteRescue}=await import('/src/conversation-write-rescue.ts');
+  const suffix=crypto.randomUUID(),name=`page-switch-${suffix}`,archive=createConversationArchive({databaseName:`page-switch-archive-${suffix}`});
+  let quota=true;const stored={verifyExactBatch:archive.verifyExactBatch,async upsert(...args:Parameters<typeof archive.upsert>){if(quota)throw new Error('Cuota');return archive.upsert(...args);}};
+  const real=createConversationJournal({databaseName:name,archive:stored});
+  let started!:()=>void,release!:()=>void;
+  const waiting=new Promise<void>(resolve=>{started=resolve;}), gate=new Promise<void>(resolve=>{release=resolve;});
+  const journal={...real,async appendOwnedPage(...args:Parameters<typeof real.appendOwnedPage>){started();await gate;return real.appendOwnedPage(...args);}};
+  const readBase=()=>new Promise<any>((resolve,reject)=>{const open=indexedDB.open(name,1);open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result,tx=db.transaction('conversation','readonly'),get=tx.objectStore('conversation').get('current');get.onsuccess=()=>resolve(get.result);tx.oncomplete=()=>db.close();tx.onabort=()=>reject(tx.error);};});
+  const rescue=createConversationWriteRescue({databaseName:name,archive});
+  const writer=createJournalConversationPersistence({journal,readBase,writeRescue:rescue});writer.bindBase(undefined);
+  const original={id:crypto.randomUUID(),engine:'iphone' as const,role:'user' as const,state:'complete' as const,text:'Anterior',at:1};
+  const other={id:'host:wss://old.test/ws|chat|page',engine:'gentle' as const,role:'assistant' as const,state:'complete' as const,text:'Página anterior',at:2};
+  await writer.persist({entries:[original],draft:'Antes'});writer.enqueue([other]);quota=false;
+  let current=true;
+  const pageSave=writer.persist({entries:[original],draft:'Antes'},undefined,{entries:[other],addedEntries:[other],originPrefix:'host:wss://old.test/ws|chat|',stillCurrent:()=>current});
+  await waiting;current=false;
+  const laterSave=writer.persist({entries:[original],draft:'Nuevo contexto'});release();await Promise.all([pageSave,laterSave]);
+  const archived=await archive.page(),copies=await rescue.list();
+  return {archived:archived.entries.map(entry=>entry.text),copies:copies.map(copy=>copy.entries.map(entry=>entry.text)),saved:await readBase()};
+ });
+ expect(result.archived).toContain('Anterior');expect(result.archived).not.toContain('Página anterior');
+ expect(result.copies.some(copy=>copy.includes('Página anterior'))).toBe(true);expect(result.saved.draft).toBe('Nuevo contexto');
+});
+
+test('new unverified provenance cannot silently replace an older reserved copy',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+  const {createJournalConversationPersistence}=await import('/src/journal-conversation-persistence.ts');
+  const {createConversationJournal}=await import('/src/conversation-journal.ts');
+  const {createConversationArchive}=await import('/src/conversation-archive.ts');
+  const {createConversationWriteRescue}=await import('/src/conversation-write-rescue.ts');
+  const suffix=crypto.randomUUID(),name=`page-provenance-${suffix}`,archive=createConversationArchive({databaseName:`page-provenance-archive-${suffix}`});
+  let quota=true;const wrapped={verifyExactBatch:archive.verifyExactBatch,async upsert(...args:Parameters<typeof archive.upsert>){if(quota)throw new Error('Cuota');return archive.upsert(...args);}};
+  const journal=createConversationJournal({databaseName:name,archive:wrapped}),rescue=createConversationWriteRescue({databaseName:name,archive});
+  const readBase=()=>new Promise<any>((resolve,reject)=>{const open=indexedDB.open(name,1);open.onerror=()=>reject(open.error);open.onsuccess=()=>{const db=open.result,tx=db.transaction('conversation','readonly'),get=tx.objectStore('conversation').get('current');get.onsuccess=()=>resolve(get.result);tx.oncomplete=()=>db.close();tx.onabort=()=>reject(tx.error);};});
+  const writer=createJournalConversationPersistence({journal,readBase,writeRescue:rescue});writer.bindBase(undefined);
+  const original={id:'host:wss://host.test/ws|chat|message',engine:'gentle' as const,role:'user' as const,state:'complete' as const,text:'Consulta',at:1};
+  await writer.persist({entries:[original],draft:''});
+  const flagged={...original,branchUnverified:true as const};writer.enqueue([flagged],true);
+  await writer.persist({entries:[original],draft:''},undefined,{entries:[flagged],addedEntries:[],originPrefix:'host:wss://host.test/ws|chat|',stillCurrent:()=>true});
+  const blocked=writer.status(),pending=await journal.pending(),copies=await rescue.list();
+  return {blocked,pending,copies,archived:(await archive.page()).entries};
+ });
+ expect(result.blocked.blocked).toBe(true);
+ expect(result.pending?.pending[0]).not.toHaveProperty('branchUnverified');
+ expect(result.copies.some(copy=>copy.entries.some(entry=>entry.text==='Consulta'&&entry.branchUnverified))).toBe(true);
+ expect(result.archived).toHaveLength(0);
+});
+
 test('a lost draft backup callback leaves the copy and can retry with a newer sequence', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {
