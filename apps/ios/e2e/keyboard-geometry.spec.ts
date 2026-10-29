@@ -5,8 +5,17 @@ for (const hasHistory of [false, true]) test(`a long ${hasHistory ? 'existing' :
   await expect(page.locator('#history-loading')).toBeHidden();
   if (hasHistory) {
     await page.evaluate(async () => {
-      const { saveConversation } = await import('/src/conversation.ts' as string);
-      await saveConversation({ revision: 100, draft: '', entries: [{ id: 'history', role: 'assistant', engine: 'iphone', state: 'complete', text: 'Una respuesta anterior.', at: 1000 }] });
+      const { saveConversation, loadConversationBase } = await import('/src/conversation.ts' as string);
+      let saved = false;
+      for (let i = 0; i < 30 && !saved; i++) {
+        const current = await loadConversationBase();
+        try {
+          await saveConversation({ revision: (current?.revision ?? 0) + 1, draft: '', entries: [{ id: 'history', role: 'assistant', engine: 'iphone', state: 'complete', text: 'Una respuesta anterior.', at: 1000 }] });
+          saved = true;
+        } catch { await new Promise(resolve => setTimeout(resolve, 50)); }
+      }
+      if (!saved) throw new Error('No se pudo preparar la historia de prueba.');
+      window.addEventListener('pagehide', event => event.stopImmediatePropagation(), true);
     });
     await page.reload(); await expect(page.locator('#cards')).toContainText('Una respuesta anterior.');
   }

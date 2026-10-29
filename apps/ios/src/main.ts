@@ -543,6 +543,22 @@ rescueHistory.type = 'button'; rescueHistory.id = 'rescue-history'; rescueHistor
 element('chat-notice').after(rescueHistory);
 let recoveredHistoryAvailable = false;
 let conversationRestoreFailed = false;
+// Keep recovery reachable even when a long conversation is scrolled away
+// from the detailed notice. This occupies layout space only while blocked.
+const storageWarning = document.createElement('div');
+storageWarning.id = 'storage-warning'; storageWarning.hidden = true;
+const storageWarningText = document.createElement('span');
+storageWarningText.setAttribute('role', 'status');
+const storageWarningAction = document.createElement('button');
+storageWarningAction.type = 'button'; storageWarningAction.textContent = 'Rescatar';
+storageWarningAction.setAttribute('aria-label', 'Abrir rescate de guardado');
+storageWarningAction.addEventListener('click', () => rescueHistory.click());
+storageWarning.append(storageWarningText, storageWarningAction);
+element('conversation-scroll').after(storageWarning);
+function showStorageWarning(blocked: boolean) {
+  storageWarningText.textContent = conversationRestoreFailed ? 'Recuperación pendiente' : 'Guardado sin confirmar';
+  storageWarning.hidden = !blocked && !conversationRestoreFailed;
+}
 rescueHistory.addEventListener('click', () => {
   recoveredHistoryAvailable = false;
   rescueHistory.hidden = !persistence.status().blocked && !conversationRestoreFailed;
@@ -583,6 +599,7 @@ const persistence = createJournalConversationPersistence({ journal: conversation
   if (status.blocked) void conversationJournal.pending().then(journal => { if (epoch === reservationStatusEpoch && journal) reservationRescue.show(journal); }).catch(() => {});
   else reservationRescue.clear();
   rescueHistory.hidden = !status.blocked && !recoveredHistoryAvailable && !conversationRestoreFailed;
+  showStorageWarning(status.blocked);
   if (status.blocked) {
     persistenceWarning = `No se confirmó el guardado local. ${status.archiveError ?? status.conversationError} ${status.pending} mensajes siguen en memoria. Los envíos están detenidos: usa Rescatar datos guardados para reintentar o exportar antes de cerrar Capri.`;
     element('chat-notice').textContent = persistenceWarning;
@@ -1168,6 +1185,7 @@ async function restoreConversation() {
     if (attachedWork) showAttachedWork(attachedWork, 'Material guardado en este iPhone');
     conversationReady = true;
     conversationRestoreFailed = false;
+    showStorageWarning(persistence.status().blocked);
     retry.hidden = true;
     rescueHistory.hidden = !persistence.status().blocked && !recoveredHistoryAvailable;
     if (element('chat-notice').textContent === recoveryMessage) element('chat-notice').textContent = '';
@@ -1175,6 +1193,7 @@ async function restoreConversation() {
   } catch {
     element('history-loading').hidden = true;
     conversationRestoreFailed = true;
+    showStorageWarning(persistence.status().blocked);
     // Never overwrite an unread stored timeline with the partial in-memory state.
     element('chat-notice').textContent = recoveryMessage;
     retry.hidden = false;
