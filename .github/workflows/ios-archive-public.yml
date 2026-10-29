@@ -1,0 +1,63 @@
+name: Capri public iOS archive verification
+
+# A change to this file triggers one public, anonymous-source, archive-only
+# verification. No personal art, account credentials, signing or upload.
+on:
+  push:
+    branches:
+      - fix/android-capri-motion-mobile
+    paths:
+      - .github/workflows/ios-archive-public.yml
+
+permissions: {}
+
+jobs:
+  archive:
+    if: github.repository == 'ed-gz/gentle-dot'
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Fetch exact public source without credentials
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init .
+          git -c credential.helper= fetch --depth=1 https://github.com/ed-gz/gentle-dot.git "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          printf 'Source SHA: %s\n' "$SOURCE_SHA"
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          token: ''
+      - name: Install iOS workspace dependencies
+        run: |
+          npm install --global pnpm@11.5.0
+          pnpm install --frozen-lockfile --ignore-scripts --filter @gentle-dot/ios...
+      - name: Select Xcode 26 or newer
+        run: |
+          xcode_path=$(node --input-type=module <<'NODE'
+          import { readdirSync } from 'node:fs';
+          const candidates = readdirSync('/Applications')
+            .filter(name => /^Xcode_\d+(?:\.\d+)*\.app$/.test(name))
+            .filter(name => Number(name.match(/\d+/)[0]) >= 26)
+            .sort((a, b) => b.localeCompare(a, 'en', { numeric: true }));
+          if (!candidates.length) throw new Error('Xcode 26+ is required');
+          console.log(`/Applications/${candidates[0]}`);
+          NODE
+          )
+          export DEVELOPER_DIR="$xcode_path/Contents/Developer"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Install XcodeGen, Rust target and Tauri CLI
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          rustup target add aarch64-apple-ios
+          cargo install tauri-cli --version 2.12.1 --locked --jobs 4 --root "$RUNNER_TEMP/capri-tauri-cli"
+          echo "$RUNNER_TEMP/capri-tauri-cli/bin" >> "$GITHUB_PATH"
+      - name: Compile and inspect unsigned archive without IPA
+        run: CI=true bash apps/ios/scripts/check-device-archive.sh
