@@ -83,6 +83,7 @@ export interface AgentEvent {
 }
 
 export interface OrchestrationSnapshot {
+	mutationInstanceFence?: 1;
 	available: boolean;
 	providers?: { id: "herdr" | "orca" | "terminal"; available: boolean; canCreate: boolean; error?: string }[];
 	error?: string;
@@ -101,7 +102,7 @@ export type OrchestrationAction =
 			provider?: "herdr" | "orca" | "terminal";
 	  }
 	| { action: "abort"; paneId: string; sessionId: string }
-	| { action: "close" | "duplicate"; paneId: string; sessionId: string }
+	| { action: "close" | "duplicate"; paneId: string; sessionId: string; expectedInstanceId?: string }
 	| { action: "prompt"; paneId: string; sessionId: string; text: string; attachments?: AttachmentRef[]; clientMessageId?: string; deliverAs?: "steer" | "followUp" }
 	| ({ action: "answer"; paneId: string; sessionId: string; requestId: string; reviewedApproval?: AgentApproval; expectedQuestionRevision?: string } & AgentAnswer)
 	| {

@@ -243,3 +243,11 @@ it("gates phone replies without removing content and releases one summary throug
 		state.mockRestore();
 	}
 });
+
+it('requires authentication and an instance precondition on guarded session endpoint', async () => {
+ const {daemon,api}=await setup();
+ expect((await api('/orchestration/guarded-v1',undefined,{action:'prompt',paneId:'p',sessionId:'s',expectedInstanceId:'i',text:'test'})).status).toBe(401);
+ expect((await api('/orchestration/guarded-v1',daemon.token,{action:'prompt',paneId:'p',sessionId:'s',text:'test'})).status).toBe(400);
+ expect((await api('/orchestration/guarded-v1',daemon.token,{action:'create',cwd:'/tmp',expectedInstanceId:'i'})).status).toBe(400);
+ const snapshot=await (await api('/orchestration',daemon.token)).json();expect(snapshot.mutationInstanceFence).toBe(1);
+});

@@ -31,7 +31,7 @@ function fixture(overrides = {}) {
   const client = createDesktopSessionClient({ journal: overrides.journal ?? memoryJournal(), controlJournal: overrides.controlJournal ?? memoryJournal(), receiptState: overrides.receiptState ?? (async () => 'terminal'), getConnection: () => current, request: async request => {
     calls.push(request); const payload = request.body ? JSON.parse(request.body) : undefined;
     let value;
-    if (!payload) value = { available: true, sessions: [session], approvals: [{ secret: 'do-not-project' }] };
+    if (!payload) value = { available: true, mutationInstanceFence:1, sessions: [session], approvals: [{ secret: 'do-not-project' }] };
     else if (payload.action === 'inspect') value = { ...page(), deliveries: receipt ? [receipt] : [] };
     else if (payload.action === 'prompt') {
       if (overrides.failSend) throw new Error('socket disconnected');
@@ -55,7 +55,7 @@ test('a late session inventory cannot be attributed to a newly selected laptop',
   const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => current, request: () => new Promise(resolve => { resolveRequest = resolve; }) });
   const listing = client.list();
   current = { ...conn, url: 'wss://other.example.ts.net/ws', deviceId: 'other-device' };
-  resolveRequest({ status: 200, body: JSON.stringify({ available: true, sessions: [session] }), headers: {} });
+  resolveRequest({ status: 200, body: JSON.stringify({ available: true, mutationInstanceFence:1, sessions: [session] }), headers: {} });
   await assert.rejects(listing, /conexión cambió/);
 });
 test('send displays exact target and text before one mutation, then correlates a receipt without claiming completion', async () => {
@@ -104,7 +104,7 @@ test('a connection changed during post-ack inspection stays unconfirmed', async 
   let current = conn, sends = 0;
   const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => current, request: async request => {
     const payload = request.body ? JSON.parse(request.body) : undefined;
-    if (!payload) return { status:200, headers:{}, body:JSON.stringify({available:true,sessions:[session]}) };
+    if (!payload) return { status:200, headers:{}, body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[session]}) };
     if (payload.action === 'prompt') { sends++; return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:target.sessionId,instanceId:'instance-1'})}; }
     if (sends) current = {...conn, deviceId:'new-device'};
     return {status:200,headers:{},body:JSON.stringify(page())};
@@ -193,7 +193,7 @@ test('cancellation after transport starts preserves uncertainty and prevents rep
   const journal=memoryJournal(), controller=new AbortController(); let sends=0;
   const client=createDesktopSessionClient({journal,controlJournal:memoryJournal(),receiptState:async()=> 'terminal',getConnection:()=>conn,request:async request => {
     const payload=request.body?JSON.parse(request.body):undefined;
-    if (!payload) return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[session]})};
+    if (!payload) return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[session]})};
     if (payload.action==='prompt') { sends++; controller.abort(); throw new Error('interrupted'); }
     return {status:200,headers:{},body:JSON.stringify(page())};
   }});
@@ -223,7 +223,7 @@ test('a session prompt whose connection changes in flight remains uncertain and 
   let sends = 0;
   const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => current, request: async request => {
     const payload = request.body ? JSON.parse(request.body) : undefined;
-    if (!payload) return { status: 200, headers: {}, body: JSON.stringify({ available: true, sessions: [session] }) };
+    if (!payload) return { status: 200, headers: {}, body: JSON.stringify({ available: true, mutationInstanceFence:1, sessions: [session] }) };
     if (payload.action === 'inspect') return { status: 200, headers: {}, body: JSON.stringify(page()) };
     sends++;
     current = { ...conn, url: 'wss://other.example.ts.net/ws', deviceId: 'other-device' };
@@ -237,7 +237,8 @@ test('a late stop acknowledgement after switching laptops stays unconfirmed', as
   let current = conn;
   let stops = 0;
   const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => current, request: async request => {
-    const payload = JSON.parse(request.body);
+    const payload = request.body ? JSON.parse(request.body) : null;
+    if (!payload) return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[session]})};
     if (payload.action === 'inspect') return { status: 200, headers: {}, body: JSON.stringify(page()) };
     stops++;
     current = { ...conn, deviceId: 'other-device' };
@@ -252,7 +253,7 @@ test('abort approval identifies shared session, and schema guards reject forged 
   assert.equal(JSON.parse(approval.details).action, 'abort'); assert.equal(JSON.parse(approval.details).sessionId, target.sessionId);
   assert.throws(() => parseDesktopPage({ ...page(), sessionId: 'foreign' }, target.sessionId), /distinta/);
   assert.throws(() => parseDesktopPage({ ...page(), deliveries: [{ id: 'r', status: 'done' }] }, target.sessionId), /inválida/);
-  assert.throws(() => parseDesktopSessions({ available: true, sessions: [{ ...session, paneId: '\0' }] }), /válida/);
+  assert.throws(() => parseDesktopSessions({ available: true, mutationInstanceFence:1, sessions: [{ ...session, paneId: '\0' }] }), /válida/);
 });
 test('human-only answer rechecks the exact current question after approval', async () => {
   const question = { id: 'q1', title: 'Enviar correo', message: 'A: Ana. Texto exacto.', kind: 'confirm', expiresAt: new Date(Date.now() + 60000).toISOString() };
@@ -331,7 +332,7 @@ test('an oversized response to a session mutation remains uncertain and is never
   const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), receiptState: async () => 'terminal', getConnection: () => conn, request: async request => {
     const payload = request.body && JSON.parse(request.body);
     if (payload?.action === 'prompt') { sends++; throw new DeviceBridgeError('size_limit', 'large'); }
-    return { status: 200, headers: {}, body: JSON.stringify(payload ? page() : { available: true, sessions: [session] }) };
+    return { status: 200, headers: {}, body: JSON.stringify(payload ? page() : { available: true, mutationInstanceFence:1, sessions: [session] }) };
   } });
   const result = await client.send({ ...target, text: 'Revisa la sesión' }, context(async () => true));
   assert.equal(result.status, 'uncertain'); assert.equal(sends, 1);
@@ -345,7 +346,7 @@ test('human-only answer binds the reviewed revision and refuses a changed revisi
  const revision='a'.repeat(64),question={id:'q1',title:'Revisar',message:'Contenido exacto',kind:'confirm',expiresAt:new Date(Date.now()+60000).toISOString()};
  let reads=0,change=false,sent;
  const client=createDesktopSessionClient({journal:memoryJournal(),controlJournal:memoryJournal(),getConnection:()=>conn,request:async request=>{
-  const payload=JSON.parse(request.body);if(payload.action==='inspect'){reads++;return {status:200,headers:{},body:JSON.stringify({...page(),question,questionRevision:change&&reads>1?'b'.repeat(64):revision,capabilities:{questionBinding:1}})};}
+  const payload=request.body?JSON.parse(request.body):null;if(!payload)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[session]})};if(payload.action==='inspect'){reads++;return {status:200,headers:{},body:JSON.stringify({...page(),question,questionRevision:change&&reads>1?'b'.repeat(64):revision,capabilities:{questionBinding:1}})};}
   sent=payload;return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:target.sessionId,instanceId:'instance-1'})};
  }});
  change=true;await assert.rejects(client.answerFromHuman({...target,requestId:'q1',confirmed:true},context(async()=>true)),/permiso cambió/);assert.equal(sent,undefined);
@@ -365,7 +366,7 @@ test('session transport error stays dispatching until the exact native terminal 
 test('agent timeout frees the caller without treating the native request as finished', async () => {
  const journal=memoryJournal(),controlJournal=memoryJournal();let sends=0;
  const client=createDesktopSessionClient({journal,controlJournal,controlTimeoutMs:15,receiptState:async()=> 'active',getConnection:()=>conn,request:async request=>{
-  const payload=request.body?JSON.parse(request.body):null;if(!payload)return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[session]})};
+  const payload=request.body?JSON.parse(request.body):null;if(!payload)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[session]})};
   if(payload.action==='prompt'){sends++;return new Promise(()=>{});}return {status:200,headers:{},body:JSON.stringify(page())};
  }});
  const first=await client.send({...target,text:'Pendiente'},context(async()=>true));assert.equal(first.status,'uncertain');assert.equal(sends,1);

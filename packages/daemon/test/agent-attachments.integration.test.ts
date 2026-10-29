@@ -54,7 +54,7 @@ async function fixture(images = true) {
  return { cwd, workspace, daemon, target, manifest, session, requests, upload, prompt, roots, url, headers };
 }
 
-it("queues a real HTTP steering message during inference, confirms native consumption, and deduplicates an explicit retry", async () => {
+it("queues a real HTTP steering message without claiming correlated delivery, and deduplicates an explicit retry", async () => {
  const h = await fixture();
  const original = h.session.agent.streamFunction;
  let release!: () => void;
@@ -82,7 +82,7 @@ it("queues a real HTTP steering message during inference, confirms native consum
   await h.session.waitForIdle();
   expect(h.requests).toHaveLength(2);
   expect(JSON.stringify(h.requests[1])).toContain(input.text);
-  expect(await inspect()).toMatchObject({ deliveries: [{ id: input.clientMessageId, status: "delivered" }] });
+  expect(await inspect()).toMatchObject({ deliveries: [{ id: input.clientMessageId, status: "queued" }] });
   expect((await h.prompt(input)).status).toBe(200);
   expect((await h.prompt({ ...input, text: "changed message" })).status).toBe(409);
   expect(h.requests).toHaveLength(2);
@@ -203,4 +203,11 @@ it("rejects unsupported model images before consuming refs or writing destinatio
   socket.once("connect", () => socket.end(Buffer.alloc(ATTACHMENT_IPC_BYTES + 1, 32)));
  });
  expect(h.roots()).toEqual([]); expect(h.requests).toEqual([]);
+});
+
+it('guarded HTTP session mutation refuses a replaced instance before reaching real Pi', async () => {
+ const h=await fixture();
+ const post=(expectedInstanceId:string)=>fetch(`${h.url}/orchestration/guarded-v1`,{method:'POST',headers:{...h.headers,'Content-Type':'application/json'},body:JSON.stringify({action:'prompt',...h.target,text:'offline-fenced-fixture',expectedInstanceId})});
+ const denied=await post('different-instance');expect(denied.status).toBeGreaterThanOrEqual(400);expect(h.requests).toEqual([]);
+ const accepted=await post(h.manifest.instanceId);expect(accepted.status).toBe(200);expect(await accepted.json()).toMatchObject({accepted:true,sessionId:h.target.sessionId,instanceId:h.manifest.instanceId});
 });

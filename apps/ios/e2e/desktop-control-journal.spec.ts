@@ -8,7 +8,7 @@ test('a lost human answer blocks changed answers from both the panel and agent a
     const question={id:'q1',kind:'input',title:'Pregunta',message:'Indica la respuesta',expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
     const approval={...question,paneId:'p',sessionId:'s',action:question.title,createdAt:''};
     const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;
-      if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[],approvals:[approval],policies:[],events:[]})};
+      if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[approval],policies:[],events:[]})};
       if(body?.action==='answer'){sessionStorage.setItem('control-sends',String(Number(sessionStorage.getItem('control-sends')??0)+1));throw new Error('lost ACK');}
       return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question,history:{hasEarlier:false}})};
     };
@@ -27,7 +27,7 @@ test('a control in flight cannot be reviewed or duplicated from another window',
   await page.goto('/');const other=await context.newPage();await other.goto('/');
   await page.evaluate(async()=>{
     const {createLaptopClient}=await import('/src/laptop-client.ts'),conn={url:'wss://example.test/ws',token:'fixture'};let ready!:()=>void;const started=new Promise<void>(r=>ready=r);
-    const request=async(req:any)=>{const body=JSON.parse(req.body);if(body.action==='abort'){ready();return new Promise<any>(()=>{});}return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'working',messages:[],deliveries:[],question:null,history:{hasEarlier:false}})};};
+    const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[],policies:[],events:[]})};if(body.action==='abort'){ready();return new Promise<any>(()=>{});}return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'working',messages:[],deliveries:[],question:null,history:{hasEarlier:false}})};};
     (globalThis as any).pending=createLaptopClient(conn,{current:()=>conn,request,receiptState:async()=> 'active'}).act({action:'abort',paneId:'p',sessionId:'s'});await started;
   });
   const verify=async()=>other.evaluate(async()=>{
@@ -47,7 +47,7 @@ test('an uncertain control requires exact human review before allowing another a
     const {createLaptopClient}=await import('/src/laptop-client.ts'),{createDesktopSessionClient}=await import('/src/desktop-tools.ts'),conn={url:'wss://example.test/ws',token:'fixture'};
     let sends=0;const question={id:'q1',kind:'input',title:'Pregunta',message:'Contenido a revisar',expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
     const approval={...question,paneId:'p',sessionId:'s',action:question.title,createdAt:''};
-    const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[],approvals:[approval],policies:[],events:[]})};if(body.action==='answer'){sends++;throw new Error('lost ACK');}return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question,history:{hasEarlier:false}})};};
+    const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[approval],policies:[],events:[]})};if(body.action==='answer'){sends++;throw new Error('lost ACK');}return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question,history:{hasEarlier:false}})};};
     const panel=createLaptopClient(conn,{current:()=>conn,request,receiptState:async()=> 'terminal'}),desktop=createDesktopSessionClient({getConnection:()=>conn,request,receiptState:async()=> 'terminal'});
     try{await panel.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q1',text:'Respuesta exacta',reviewedApproval:approval});}catch{}
     const {items}=await desktop.listControls();let denied=false;try{await desktop.resolveControl({id:items[0].id},{signal:new AbortController().signal,askApproval:async()=>false});}catch{denied=true;}
@@ -65,7 +65,7 @@ test('panel refuses changed approval content with the same ID and never sends lo
     const {createLaptopClient}=await import('/src/laptop-client.ts'),conn={url:'wss://example.test/ws',token:'fixture'};
     const approval={id:'q1',paneId:'p',sessionId:'s',title:'Enviar',message:'Texto original',action:'send',kind:'confirm' as const,createdAt:'',expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
     let changed=true;const sent:any[]=[];
-    const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[],approvals:[{...approval,message:changed?'Texto cambiado':approval.message}],policies:[],events:[]})};
+    const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[{...approval,message:changed?'Texto cambiado':approval.message}],policies:[],events:[]})};
       if(body.action==='answer'){sent.push(body);return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};}
       return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question:null,history:{hasEarlier:false}})};
     };
@@ -73,7 +73,7 @@ test('panel refuses changed approval content with the same ID and never sends lo
     changed=false;await client.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q1',approved:true,reviewedApproval:approval});
     return {blocked,sent};
   });
-  expect(result.blocked).toBe(true);expect(result.sent).toEqual([{action:'answer',paneId:'p',sessionId:'s',requestId:'q1',approved:true}]);
+  expect(result.blocked).toBe(true);expect(result.sent).toEqual([{action:'answer',paneId:'p',sessionId:'s',requestId:'q1',approved:true,expectedInstanceId:'i'}]);
 });
 
 test('control pages and exact review avoid bulk reads of pending payloads',async({page})=>{
@@ -93,10 +93,10 @@ test('new host receives the reviewed revision, while the local approval remains 
  const result=await page.evaluate(async()=>{
    const {createLaptopClient}=await import('/src/laptop-client.ts'),conn={url:'wss://example.test/ws',token:'fixture'},revision='a'.repeat(64);
    const approval={id:'q',paneId:'p',sessionId:'s',title:'Enviar',message:'Contenido revisado',action:'send',kind:'confirm' as const,createdAt:'',expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true,questionRevision:revision};let sent:any,changed=true;
-   const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[],approvals:[{...approval,questionRevision:changed?'b'.repeat(64):revision}],policies:[],events:[]})};if(body.action==='answer'){sent=body;return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};}return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question:null,history:{hasEarlier:false}})};};
+   const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[{...approval,questionRevision:changed?'b'.repeat(64):revision}],policies:[],events:[]})};if(body.action==='answer'){sent=body;return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};}return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question:null,history:{hasEarlier:false}})};};
    const client=createLaptopClient(conn,{current:()=>conn,request,receiptState:async()=> 'terminal'});let blocked=false;try{await client.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,reviewedApproval:approval});}catch{blocked=true;}changed=false;await client.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,reviewedApproval:approval});return {sent,blocked};
  });
- expect(result.blocked).toBe(true);expect(result.sent).toEqual({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,expectedQuestionRevision:'a'.repeat(64)});
+ expect(result.blocked).toBe(true);expect(result.sent).toEqual({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,expectedInstanceId:'i',expectedQuestionRevision:'a'.repeat(64)});
 });
 
 test('shared composer retries use fresh transport IDs and wait for native terminal plus human review',async({page})=>{
@@ -104,7 +104,7 @@ test('shared composer retries use fresh transport IDs and wait for native termin
  const perform=async(phase:'first'|'retry'|'review'|'after')=>page.evaluate(async phase=>{
   const {createLaptopClient}=await import('/src/laptop-client.ts'),{createDesktopSessionClient}=await import('/src/desktop-tools.ts'),conn={url:'wss://example.test/ws',token:'fixture'};
   const receiptState=async()=>phase==='first'||phase==='retry'?'active' as const:'terminal' as const;
-  const request=async(req:any)=>{const body=JSON.parse(req.body);if(body.action==='prompt'){
+  const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[],policies:[],events:[]})};if(body.action==='prompt'){
     const prior=JSON.parse(sessionStorage.getItem('prompt-attempts')??'[]');prior.push({receiptId:req.receiptId,receiptOwner:req.receiptOwner,clientMessageId:body.clientMessageId});sessionStorage.setItem('prompt-attempts',JSON.stringify(prior));
     if(phase==='first')throw new Error('early timeout');return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};
    }return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'idle',messages:[],deliveries:[],question:null,history:{hasEarlier:false}})};};
@@ -127,7 +127,7 @@ for (const first of ['panel','agent'] as const) test(`agent and panel block conc
   const {createLaptopClient}=await import('/src/laptop-client.ts'),{createDesktopSessionClient}=await import('/src/desktop-tools.ts'),conn={url:'wss://example.test/ws',token:'fixture'};
   let sends=0,ready!:()=>void;const started=new Promise<void>(resolve=>ready=resolve),receiptState=async()=> 'active' as const;
   const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;
-   if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[{paneId:'p',sessionId:'s',label:'Fixture',state:'idle',connected:true,capabilities:{inspect:true,prompt:true,abort:true,deliveryReceipts:true}}],approvals:[],policies:[],events:[]})};
+   if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[{paneId:'p',sessionId:'s',label:'Fixture',state:'idle',connected:true,capabilities:{inspect:true,prompt:true,abort:true,deliveryReceipts:true}}],approvals:[],policies:[],events:[]})};
    if(body.action==='prompt'){sends++;ready();return new Promise<any>(()=>{});}
    return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'idle',messages:[],deliveries:[],question:null,history:{hasEarlier:false}})};
   };
@@ -146,7 +146,7 @@ for(const first of ['panel','agent'] as const) test(`host ACK without Pi deliver
  await page.goto('/');
  const result=await page.evaluate(async first=>{
   const {createLaptopClient}=await import('/src/laptop-client.ts'),{createDesktopSessionClient}=await import('/src/desktop-tools.ts'),conn={url:'wss://example.test/ws',token:'fixture'};let sends=0;
-  const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[{paneId:'p',sessionId:'s',label:'Fixture',state:'idle',connected:true,capabilities:{inspect:true,prompt:true,abort:true,deliveryReceipts:true}}],approvals:[],policies:[],events:[]})};
+  const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[{paneId:'p',sessionId:'s',label:'Fixture',state:'idle',connected:true,capabilities:{inspect:true,prompt:true,abort:true,deliveryReceipts:true}}],approvals:[],policies:[],events:[]})};
    if(body.action==='prompt'){sends++;return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};}
    return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'idle',messages:[],deliveries:[],question:null,history:{hasEarlier:false}})};};
   const receiptState=async()=> 'terminal' as const,panel=createLaptopClient(conn,{current:()=>conn,request,receiptState}),agent=createDesktopSessionClient({getConnection:()=>conn,request,receiptState});
@@ -164,7 +164,7 @@ test('only unique correlated Pi delivery on the same host and instance clears th
   const {createLaptopClient}=await import('/src/laptop-client.ts'),{createDesktopSessionClient}=await import('/src/desktop-tools.ts'),conn={url:'wss://example.test/ws',token:'fixture'};
   let evidence:any,instance='i';const receiptState=async()=> 'terminal' as const;
   const receipt=()=>({id:'unique-message-id',status:'delivered',deliverAs:'followUp',acceptedAt:'2026-10-29T12:00:00Z',...(evidence?{evidence}:{}),preview:'Igual'});
-  const request=async(req:any)=>{const body=JSON.parse(req.body);if(body.action==='prompt')return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:instance,status:'idle',messages:[],deliveries:evidence==='none'?[]:[receipt()],question:null,history:{hasEarlier:false}})};};
+  const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[],policies:[],events:[]})};if(body.action==='prompt')return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:instance,status:'idle',messages:[],deliveries:evidence==='none'?[]:[receipt()],question:null,history:{hasEarlier:false}})};};
   evidence='none';const laptop=createLaptopClient(conn,{current:()=>conn,request,receiptState}),desktop=createDesktopSessionClient({getConnection:()=>conn,request,receiptState});
   await laptop.act({action:'prompt',paneId:'p',sessionId:'s',text:'Igual',clientMessageId:'unique-message-id'});
   evidence=undefined;await laptop.inspect('p','s');const legacy=(await desktop.listControls()).total;
@@ -179,7 +179,7 @@ test('a reused host message ID cannot reconcile two separate native attempts',as
  await page.goto('/');
  const result=await page.evaluate(async()=>{
   const {createLaptopClient}=await import('/src/laptop-client.ts'),{createDesktopSessionClient}=await import('/src/desktop-tools.ts'),conn={url:'wss://example.test/ws',token:'fixture'},receiptState=async()=> 'terminal' as const;let delivered=false;
-  const request=async(req:any)=>{const body=JSON.parse(req.body);if(body.action==='prompt')return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'idle',messages:[],deliveries:delivered?[{id:'reused-message-id',status:'delivered',evidence:'correlated-v1',deliverAs:'followUp',acceptedAt:'2026-10-29T12:00:00Z'}]:[],question:null,history:{hasEarlier:false}})};};
+  const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[],policies:[],events:[]})};if(body.action==='prompt')return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'idle',messages:[],deliveries:delivered?[{id:'reused-message-id',status:'delivered',evidence:'correlated-v1',deliverAs:'followUp',acceptedAt:'2026-10-29T12:00:00Z'}]:[],question:null,history:{hasEarlier:false}})};};
   const panel=createLaptopClient(conn,{current:()=>conn,request,receiptState}),desktop=createDesktopSessionClient({getConnection:()=>conn,request,receiptState});
   const action={action:'prompt' as const,paneId:'p',sessionId:'s',text:'Igual',clientMessageId:'reused-message-id'};
   await panel.act(action);const first=(await desktop.listControls()).items[0];await desktop.resolveControl({id:first.id},{signal:new AbortController().signal,askApproval:async()=>true});await panel.act(action);

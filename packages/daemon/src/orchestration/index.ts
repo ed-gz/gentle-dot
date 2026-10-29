@@ -111,6 +111,7 @@ export interface OrchestrationEvent {
 	message: string;
 }
 export interface OrchestrationSnapshot {
+	mutationInstanceFence?: 1;
 	providers: ProviderStatus[];
 	available: boolean;
 	error?: string;
@@ -486,7 +487,7 @@ export class Orchestrator {
 	snapshot(): Promise<OrchestrationSnapshot> {
 		if (this.closed) return Promise.resolve(this.last);
 		if (this.refreshing) return this.refreshing;
-		this.refreshing = this.refresh().finally(() => {
+		this.refreshing = this.refresh().then(snapshot => ({...snapshot,mutationInstanceFence:1 as const})).finally(() => {
 			this.refreshing = undefined;
 		});
 		return this.refreshing;
@@ -989,6 +990,8 @@ export class Orchestrator {
 			const sessionId = text(input.sessionId, "sessionId");
 			const bound = await this.bind(paneId, sessionId);
 			this.assertAuthorized(authorize);
+			if (input.expectedInstanceId !== undefined && (typeof input.expectedInstanceId !== "string" || !input.expectedInstanceId || input.expectedInstanceId !== bound.manifest.instanceId))
+				throw new OrchestrationError("SESSION_CHANGED", "La instancia cambió desde la revisión. Actualiza la sesión.");
 			if (action === "inspect") {
 				if (input.historyContent !== undefined && input.historyContent !== "text-only-v1")
 					throw new OrchestrationError("INVALID_HISTORY", "La proyección del historial no es válida.", 400);

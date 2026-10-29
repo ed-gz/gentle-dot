@@ -120,17 +120,30 @@ export function createLaptopClient(connection: DesktopConnection, options: {
   // Promise.race here: cancellation of JS does not stop URLSession natively.
   const act = client.act, controlJournal = createControlJournal();
   client.act = async action => {
-    if (action.action !== 'abort' && action.action !== 'answer' && action.action !== 'prompt') return act(action);
+    if (action.action === 'grant') throw new Error('La autorización temporal desde el teléfono aún no tiene revisión vinculada al contenido; gestiona ese permiso en la laptop.');
+    if (action.action === 'create' || action.action === 'revoke') {
+      current();const kind=action.action,operationDigest=kind==='create' ? await promptDigest(JSON.stringify([action.cwd,action.label??null,action.workspaceId??null,action.provider??null])) : undefined;
+      const payload={...structuredClone(action),...(operationDigest?{operationDigest}:{})} as unknown as Record<string,unknown>;
+      const paneId=kind==='create'?'@create':'@policy', sessionId=kind==='create'?'@create':action.policyId;
+      await runSessionControl(controlJournal,{kind,host:`${origin}/orchestration`,paneId,sessionId,instanceId:'global',payload,...(captured.deviceId?{deviceId:captured.deviceId}:{})},current,async receipt=>{
+        current();const reply=await request({...receipt,url:`${origin}/orchestration`,method:'POST',headers:{Authorization:`Bearer ${captured.token}`,'Content-Type':'application/json'},body:JSON.stringify(action)});current();
+        let ack:unknown;try{ack=JSON.parse(reply.body);}catch{throw new Error('Respuesta inválida.');}
+        if(reply.status<200||reply.status>=300||!ack||typeof ack!=='object'||(kind==='create'?(!('created' in ack)||ack.created!==true):(!('revoked' in ack)||ack.revoked!==true))) throw new Error('Confirmación no verificable.');
+      },options.receiptState ?? httpsReceiptState,undefined,options.controlTimeoutMs ?? 35000);
+      return;
+    }
+    if (action.action !== 'abort' && action.action !== 'answer' && action.action !== 'prompt' && action.action !== 'close' && action.action !== 'duplicate') return act(action);
     current();
     const page = await client.inspect(action.paneId, action.sessionId, undefined, {limit:1});
     const instanceId=(page as typeof page & {instanceId?:unknown}).instanceId;
     if (typeof instanceId !== 'string' || !instanceId || instanceId.length>256) throw new Error('No se pudo identificar la instancia de la sesión.');
-    let wireAction = action;
+    const snapshot=await client.snapshot();current();
+    if(snapshot.mutationInstanceFence!==1) throw new Error('La laptop necesita actualizarse para controlar una instancia verificada. Puedes seguir leyendo sus sesiones.');
+    let wireAction = {...action,expectedInstanceId:instanceId};
     let review:AgentApproval | undefined;
     if (action.action==='answer') {
-      const {reviewedApproval,expectedQuestionRevision:_untrustedRevision,...wire}=action;wireAction=wire;
+      const {reviewedApproval,expectedQuestionRevision:_untrustedRevision,...wire}=action;wireAction={...wire,expectedInstanceId:instanceId};
       if(!reviewedApproval || reviewedApproval.id!==action.requestId || reviewedApproval.paneId!==action.paneId || reviewedApproval.sessionId!==action.sessionId) throw new Error('Vuelve a abrir y revisar la solicitud humana.');
-      const snapshot=await client.snapshot(); current();
       const supplied=snapshot.approvals.find(item=>item.id===action.requestId && item.paneId===action.paneId && item.sessionId===action.sessionId);
       const q=page.question;
       const fresh:AgentApproval | undefined=supplied ?? (q?.id===action.requestId ? {...q,kind:q.kind as AgentApproval['kind'],paneId:action.paneId,sessionId:action.sessionId,message:q.message??'',action:q.title,createdAt:'',expiresAt:'expiresAt' in q && typeof q.expiresAt==='string'?q.expiresAt:''} : undefined);
@@ -138,7 +151,7 @@ export function createLaptopClient(connection: DesktopConnection, options: {
       if(!fresh || reviewedFields(fresh)!==reviewedFields(reviewedApproval) || (fresh.expiresAt && Date.parse(fresh.expiresAt)<=Date.now())) throw new Error('La solicitud humana cambió o venció; vuelve a revisarla.');
       if(reviewedApproval.questionRevision !== undefined) {
         if (!/^[a-f0-9]{64}$/.test(reviewedApproval.questionRevision)) throw new Error('La revisión de la solicitud no es válida.');
-        wireAction={...wire,expectedQuestionRevision:reviewedApproval.questionRevision};
+        wireAction={...wire,expectedInstanceId:instanceId,expectedQuestionRevision:reviewedApproval.questionRevision};
       }
       review=structuredClone(reviewedApproval);
     }
@@ -147,10 +160,13 @@ export function createLaptopClient(connection: DesktopConnection, options: {
     const payload={...structuredClone(wireAction),...(review?{reviewedApproval:review}:{}),...(operationDigest?{operationDigest}:{})} as unknown as Record<string,unknown>;
     await runSessionControl(controlJournal,{kind:action.action,host:`${origin}/orchestration`,paneId:action.paneId,sessionId:action.sessionId,instanceId,payload,...(captured.deviceId?{deviceId:captured.deviceId}:{})},current,async receipt=>{
       current();
-      const reply=await request({...receipt,url:`${origin}/orchestration`,method:'POST',headers:{Authorization:`Bearer ${captured.token}`,'Content-Type':'application/json'},body:JSON.stringify(wireAction)});
+      const reply=await request({...receipt,url:`${origin}/orchestration/guarded-v1`,method:'POST',headers:{Authorization:`Bearer ${captured.token}`,'Content-Type':'application/json'},body:JSON.stringify(wireAction)});
       current();
       let ack:unknown;try{ack=JSON.parse(reply.body);}catch{throw new Error('Respuesta inválida.');}
-      if(reply.status<200||reply.status>=300||!ack||typeof ack!=='object'||!('accepted' in ack)||ack.accepted!==true||!('sessionId' in ack)||ack.sessionId!==action.sessionId||!('instanceId' in ack)||ack.instanceId!==instanceId) throw new Error('Confirmación no correlacionada.');
+      if(reply.status<200||reply.status>=300||!ack||typeof ack!=='object') throw new Error('Confirmación no correlacionada.');
+      if(action.action==='duplicate') {
+        if(!('created' in ack)||ack.created!==true||!('sourceSessionId' in ack)||ack.sourceSessionId!==action.sessionId||!('sessionId' in ack)||typeof ack.sessionId!=='string'||ack.sessionId===action.sessionId) throw new Error('Confirmación de copia no verificable.');
+      } else if(!('accepted' in ack)||ack.accepted!==true||!('sessionId' in ack)||ack.sessionId!==action.sessionId||!('instanceId' in ack)||ack.instanceId!==instanceId||(action.action==='close'&&(!('closing' in ack)||ack.closing!==true))) throw new Error('Confirmación no correlacionada.');
     },options.receiptState ?? httpsReceiptState,undefined,options.controlTimeoutMs ?? 35000,action.action === 'prompt');
   };
   client.uploadAttachment = (paneId, sessionId, file, uploadId, signal) => {

@@ -577,6 +577,15 @@ describe("HERDR orchestration authority", () => {
         expect(h.calls.filter(call=>call.method==='answer').at(-1)?.params.expectedQuestionRevision).toBe(revision);
     });
 
+	it("fences a replaced Pi instance before a session mutation reaches the adapter", async () => {
+        const h=harness();h.setCapabilities({close:true});h.manifest.instanceId='new-instance';
+        const snapshot=await h.orchestrator.snapshot();expect(snapshot.mutationInstanceFence).toBe(1);
+        await expect(h.orchestrator.dispatch({action:'close',paneId:'w1:p1',sessionId:'s1',expectedInstanceId:'old-instance'},'human')).rejects.toMatchObject({code:'SESSION_CHANGED'});
+        expect(h.calls.filter(call=>call.method==='close')).toHaveLength(0);
+        await expect(h.orchestrator.dispatch({action:'close',paneId:'w1:p1',sessionId:'s1',expectedInstanceId:'new-instance'},'human')).resolves.toMatchObject({accepted:true});
+        expect(h.calls.find(call=>call.method==='close')?.params.expectedInstanceId).toBe('new-instance');
+    });
+
 	it("never silently downgrades a reviewed revision on an older adapter", async () => {
         const h=harness();h.setQuestion();
         const input={action:'answer',paneId:'w1:p1',sessionId:'s1',requestId:'q1',approved:true};

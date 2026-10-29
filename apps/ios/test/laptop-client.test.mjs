@@ -90,7 +90,7 @@ test('a large history page is retried at a smaller size with the same cursor, ne
   const calls = [];
   const client = createLaptopClient(connection, { current: () => connection, request: async request => {
     const body = request.body && JSON.parse(request.body); calls.push(body);
-    if (body?.action === 'close') throw new DeviceBridgeError('size_limit', 'Límite de respuesta.');
+    if (body?.action === 'navigate') throw new DeviceBridgeError('size_limit', 'Límite de respuesta.');
     if (body?.limit > 12) throw new DeviceBridgeError('size_limit', 'Límite de respuesta.');
     return reply({ sessionId: 's', messages: [{ id: 'one', role: 'assistant', content: [{ type: 'text', text: 'Historia' }] }], history: { supported: true, hasEarlier: true, before: 'previous' } });
   } });
@@ -101,7 +101,7 @@ test('a large history page is retried at a smaller size with the same cursor, ne
   await client.inspect('p', 's');
   assert.equal(calls[0].limit, 12, 'subsequent polls reuse the proven page size');
   calls.length = 0;
-  await assert.rejects(client.act({ action: 'close', paneId: 'p', sessionId: 's' }), /Límite/);
+  await assert.rejects(client.browserAction({ action: 'navigate', url: 'https://example.test/' }), /Límite/);
   assert.equal(calls.length, 1);
 });
 

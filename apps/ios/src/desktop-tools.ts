@@ -83,7 +83,7 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
   async function rpc(conn: DesktopConnection, payload?: object, receipt?: {receiptId:string;receiptOwner:string}): Promise<unknown> {
     unchanged(conn);
     let reply: HTTPSResponse;
-    try { reply = await request({ url: endpoint(conn), method: payload ? 'POST' : 'GET', headers: { Authorization: `Bearer ${conn.token}`, 'Content-Type': 'application/json' }, ...(payload ? { body: JSON.stringify(payload) } : {}), ...receipt }); }
+    try { reply = await request({ url: endpoint(conn) + (receipt ? '/guarded-v1' : ''), method: payload ? 'POST' : 'GET', headers: { Authorization: `Bearer ${conn.token}`, 'Content-Type': 'application/json' }, ...(payload ? { body: JSON.stringify(payload) } : {}), ...receipt }); }
     catch (error) {
       unchanged(conn);
       if (error instanceof DeviceBridgeError && error.code === 'size_limit') throw new DesktopPageTooLarge('Respuesta del host demasiado grande.');
@@ -116,6 +116,10 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       }
     }
   };
+  async function requireInstanceFence(conn:DesktopConnection):Promise<void> {
+    const snapshot=await rpc(conn);unchanged(conn);
+    if(!object(snapshot) || snapshot.mutationInstanceFence!==1) throw new Error('La laptop necesita actualizarse para controlar una instancia verificada. Puedes seguir leyendo sus sesiones.');
+  }
   async function authorize(context: ToolContext, conn: DesktopConnection, title: string, payload: object): Promise<void> {
     context.signal.throwIfAborted();
     if (!context.askApproval || !await context.askApproval({ title, details: JSON.stringify({ host: endpoint(conn), ...payload }, null, 2), operation: 'desktop-session' })) throw new Error('La acción sobre la sesión no fue aprobada.');
@@ -146,10 +150,11 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       const conn = connection(); const host = endpoint(conn); const key = sessionOperationKey(host, target.paneId, target.sessionId, text);
       const prior = await journal.find(key); context.signal.throwIfAborted(); unchanged(conn);
       if (prior) return { status:'unconfirmed', ...target, clientMessageId:prior.id, completed:false, message:'Ya existe un envío igual sin resolver. Revisa el historial del host y usa session_delivery_resolve para cerrar el aviso sin reenviar.' };
-      const session = parseDesktopSessions(await rpc(conn)).find(item => item.paneId === target.paneId && item.sessionId === target.sessionId);
+      const inventory=await rpc(conn);if(!object(inventory)||inventory.mutationInstanceFence!==1)throw new Error('La laptop necesita actualizarse para controlar una instancia verificada. Puedes seguir leyendo sus sesiones.');
+      const session = parseDesktopSessions(inventory).find(item => item.paneId === target.paneId && item.sessionId === target.sessionId);
       if (!session?.connected || !session.capabilities.prompt || !session.capabilities.deliveryReceipts) throw new Error('La sesión debe estar conectada y admitir confirmaciones de entrega antes de enviar.');
       const before = await inspect(conn, target, 1); const clientMessageId = localIdentifier();
-      const payload = Object.freeze({ action: 'prompt', ...target, text, deliverAs, clientMessageId });
+      const payload = Object.freeze({ action: 'prompt', ...target, text, deliverAs, clientMessageId, expectedInstanceId:before.instanceId });
       await authorize(context, conn, `Enviar a ${session.label || 'sesión de Pi'}`, payload);
       const fresh = await inspect(conn, target, 1); if (fresh.instanceId !== before.instanceId) throw new Error('Pi se reinició desde la revisión. La instrucción no se envió.');
       context.signal.throwIfAborted();
@@ -243,8 +248,8 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       return {id,reviewed:true,resent:false,confirmed:false};
     },
     async abort(args: unknown, context: ToolContext) {
-      const target = identity(args); const conn = connection(); const before = await inspect(conn, target, 1);
-      const payload = Object.freeze({ action: 'abort', ...target });
+      const target = identity(args); const conn = connection(); const before = await inspect(conn, target, 1);await requireInstanceFence(conn);
+      const payload = Object.freeze({ action: 'abort', ...target, expectedInstanceId:before.instanceId });
       await authorize(context, conn, 'Detener el trabajo de esta sesión compartida', payload);
       const fresh = await inspect(conn, target, 1); if (fresh.instanceId !== before.instanceId) throw new Error('Pi cambió desde la revisión. No se detuvo otra instancia.');
       context.signal.throwIfAborted();
@@ -262,7 +267,8 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       if (!['confirm','select','input'].includes(question.kind)) throw new Error('Este formulario requiere la interfaz humana de la laptop.');
       const answer = { ...(typeof args.confirmed === 'boolean' ? { confirmed: args.confirmed } : {}), ...(typeof args.cancelled === 'boolean' ? { cancelled: args.cancelled } : {}), ...(args.optionId !== undefined ? { optionId: field(args.optionId, 256, 'Opción') } : {}), ...(args.text !== undefined ? { text: field(args.text, 8000, 'Respuesta') } : {}) };
       if (!Object.keys(answer).length) throw new Error('Selecciona una respuesta humana explícita.');
-      const payload = { action: 'answer', ...target, requestId: question.id, ...answer, ...(page.questionRevision ? {expectedQuestionRevision:page.questionRevision} : {}) };
+      await requireInstanceFence(conn);
+      const payload = { action: 'answer', ...target, requestId: question.id, ...answer, expectedInstanceId:page.instanceId, ...(page.questionRevision ? {expectedQuestionRevision:page.questionRevision} : {}) };
       await authorize(context, conn, question.title, { request: question, response: payload, ...(!page.questionRevision ? {warning:'La laptop usa un contrato anterior y no puede verificar atómicamente el contenido al responder.'} : {}) });
       const fresh = await inspect(conn, target, 1);
       if (fresh.instanceId !== page.instanceId || fresh.questionRevision !== page.questionRevision || JSON.stringify(fresh.question) !== JSON.stringify(question)) throw new Error('El permiso cambió después de revisarlo.');

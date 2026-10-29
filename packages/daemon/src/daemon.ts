@@ -685,7 +685,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 		}
 		if (
 			pathname.startsWith("/api/mobile/") ||
-			(pathname === "/orchestration" || pathname.startsWith("/orchestration/companion")) ||
+			(pathname === "/orchestration" || pathname === "/orchestration/guarded-v1" || pathname.startsWith("/orchestration/companion")) ||
 			pathname === "/api/orchestration/agent" ||
 			pathname === "/browser" ||
 			pathname === "/api/browser/agent" ||
@@ -1117,6 +1117,14 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 						return jsonResponse(res, 200, await orchestrator.focusCompanion(await readJson(req), () => acceptsToken(key) && !res.destroyed));
 					return jsonResponse(res, 405, { error: "Method not allowed" });
 				}
+				if (pathname === "/orchestration/guarded-v1") {
+                    if (!orchestrator) return jsonResponse(res, 503, {error:"Local session control is unavailable in VPS mode"});
+                    if (req.method !== "POST") return jsonResponse(res,405,{error:"Use POST"});
+                    const body=await readJson(req);
+                    if (!body || typeof body !== "object" || Array.isArray(body) || !["prompt","abort","answer","close","duplicate"].includes(String(body.action)) || typeof body.expectedInstanceId !== "string" || !body.expectedInstanceId)
+                        return jsonResponse(res,400,{error:"Session instance precondition required"});
+                    return jsonResponse(res,200,await orchestrator.dispatch(body,"human",()=>acceptsToken(key) && !res.destroyed,key));
+                }
 				if (pathname === "/orchestration") {
 					if (!orchestrator)
 						return jsonResponse(res, 503, { error: "Local session control is unavailable in VPS mode" });

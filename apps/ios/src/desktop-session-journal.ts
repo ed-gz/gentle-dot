@@ -2,7 +2,7 @@
 export type SessionAttempt = {
   id: string; owner: string; key: string; host: string; deviceId?: string; paneId: string; sessionId: string; instanceId: string;
   text: string; deliverAs: 'steer' | 'followUp'; state: 'prepared' | 'dispatching' | 'unconfirmed' | 'delivered' | 'reviewed' | 'cancelled';
-  createdAt: number; nativeReceipt?: 1; control?: { kind: 'abort' | 'answer' | 'prompt'; payload: Record<string, unknown> };
+  createdAt: number; nativeReceipt?: 1; control?: { kind: 'abort' | 'answer' | 'prompt' | 'create' | 'close' | 'duplicate' | 'revoke'; payload: Record<string, unknown> };
 };
 export interface SessionJournal {
   find(key: string): Promise<SessionAttempt | null>;
@@ -35,7 +35,7 @@ function validate(value: unknown): SessionAttempt {
       (item.deviceId !== undefined && (typeof item.deviceId !== 'string' || !item.deviceId || item.deviceId.length > 256)) ||
       !['steer', 'followUp'].includes(item.deliverAs) || !['prepared','dispatching','unconfirmed','delivered','reviewed','cancelled'].includes(item.state) ||
       (item.nativeReceipt !== undefined && item.nativeReceipt !== 1) ||
-      (item.control !== undefined && (!item.control || !['abort','answer','prompt'].includes(item.control.kind) || !item.control.payload || typeof item.control.payload !== 'object' || Array.isArray(item.control.payload) || JSON.stringify(item.control).length > 100000)) ||
+      (item.control !== undefined && (!item.control || !['abort','answer','prompt','create','close','duplicate','revoke'].includes(item.control.kind) || !item.control.payload || typeof item.control.payload !== 'object' || Array.isArray(item.control.payload) || JSON.stringify(item.control).length > 100000)) ||
       !Number.isSafeInteger(item.createdAt) || item.createdAt < 0 || item.key !== sessionOperationKey(item.host, item.paneId, item.sessionId, item.text)) throw new Error('El registro de envíos no es válido.');
   return { id:item.id, owner:item.owner, key:item.key, host:item.host, ...(item.deviceId ? {deviceId:item.deviceId} : {}), paneId:item.paneId, sessionId:item.sessionId, instanceId:item.instanceId, text:item.text, deliverAs:item.deliverAs, state:item.state, createdAt:item.createdAt, ...(item.nativeReceipt ? {nativeReceipt:1 as const} : {}), ...(item.control ? {control:structuredClone(item.control)} : {}) };
 }

@@ -64,7 +64,7 @@ test('the agent cannot resend an uncertain instruction after reload without huma
     const client=createDesktopSessionClient({getConnection:()=>connection,receiptState:async()=> 'terminal',request:async (request:{body?:string}) => {
       const payload=request.body?JSON.parse(request.body):undefined;
       const session={paneId:'p',sessionId:'s',label:'Prueba',state:'idle',connected:true,capabilities:{inspect:true,prompt:true,abort:true,deliveryReceipts:true}};
-      if (!payload) return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[session]})};
+      if (!payload) return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[session]})};
       if (payload.action==='prompt') {
         sessionStorage.setItem('fixture-sends',String(Number(sessionStorage.getItem('fixture-sends')??0)+1));
         if (payload.text==='Una instrucción') throw new Error('disconnect');
@@ -143,7 +143,7 @@ test('a second window cannot close a dispatching send even if its original windo
     const client=createDesktopSessionClient({getConnection:()=>conn,request:async request=>{
       const payload=request.body?JSON.parse(request.body):null;
       if(payload?.action==='prompt'){ready();return new Promise(()=>{});}
-      return {status:200,headers:{},body:JSON.stringify(payload?{sessionId:'s',instanceId:'i',messages:[],deliveries:[]}:{available:true,sessions:[session]})};
+      return {status:200,headers:{},body:JSON.stringify(payload?{sessionId:'s',instanceId:'i',messages:[],deliveries:[]}:{available:true,mutationInstanceFence:1,sessions:[session]})};
     }});
     (globalThis as any).send=client.send({paneId:'p',sessionId:'s',text:'Exacto'},{signal:new AbortController().signal,askApproval:async()=>true});
     await started;return (await client.listDeliveries()).items[0];
