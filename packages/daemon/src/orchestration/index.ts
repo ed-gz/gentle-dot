@@ -32,6 +32,7 @@ import { isSessionCopy } from "./session-copy.ts";
 import { historySessionMetadata, publicSessionMetadata, type SessionMetadata } from "./session-info.ts";
 import { peerSessionMetadata } from "./session-peer.ts";
 import { normalizeBoundMessages } from "./transcript.ts";
+import { textOnlySessionMessages } from "./session-display-projection.ts";
 
 export { OrchestrationError } from "./herdr.ts";
 
@@ -984,6 +985,8 @@ export class Orchestrator {
 			const bound = await this.bind(paneId, sessionId);
 			this.assertAuthorized(authorize);
 			if (action === "inspect") {
+				if (input.historyContent !== undefined && input.historyContent !== "text-only-v1")
+					throw new OrchestrationError("INVALID_HISTORY", "La proyección del historial no es válida.", 400);
 				const limit = input.limit ?? 50;
 				if (!Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > 100)
 					throw new OrchestrationError(
@@ -1011,9 +1014,10 @@ export class Orchestrator {
 							...(!reported?.context && peer.context ? { context: peer.context } : {}),
 						};
 				}
+				const messages = normalizeBoundMessages(bound.manifest.sessionId, raw.messages, transcript);
 				const page: Record<string, unknown> = {
 					...raw,
-					messages: normalizeBoundMessages(bound.manifest.sessionId, raw.messages, transcript),
+					messages: input.historyContent === "text-only-v1" ? textOnlySessionMessages(messages) : messages,
 					metadata,
 					capabilities: {
 						...(record(raw.capabilities) ? raw.capabilities : {}),

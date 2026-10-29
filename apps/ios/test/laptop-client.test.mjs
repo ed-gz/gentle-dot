@@ -71,6 +71,21 @@ test('legacy image blocks retain the surrounding history without exposing inline
   await assert.rejects(client.inspect('p', 's'), /historial no corresponde/i);
 });
 
+test('iOS requests text-only session history but leaves mutations unchanged and tolerates older hosts', async () => {
+  const requests = [];
+  const client = createLaptopClient(connection, { current: () => connection, request: async request => {
+    const body = JSON.parse(request.body); requests.push(body);
+    // An older host ignores the extra field and still returns inline image blocks.
+    return body.action === 'inspect' ? reply({ sessionId: 's', messages: [{ id: 'u', role: 'user', content: [{ type: 'image', data: 'old-host-bytes' }] }] }) : reply({ ok: true });
+  } });
+  const history = await client.inspect('p', 's', undefined, { before: 'cursor', limit: 25 });
+  assert.deepEqual(requests[0], { action: 'inspect', paneId: 'p', sessionId: 's', before: 'cursor', limit: 25, historyContent: 'text-only-v1' });
+  assert.equal(history.messages[0].content[0].text, '[Imagen adjunta no disponible en esta vista]');
+  assert.doesNotMatch(JSON.stringify(history), /old-host-bytes/);
+  await client.act({ action: 'prompt', paneId: 'p', sessionId: 's', text: 'continúa' });
+  assert.deepEqual(requests[1], { action: 'prompt', paneId: 'p', sessionId: 's', text: 'continúa' });
+});
+
 test('a large history page is retried at a smaller size with the same cursor, never replaying mutations', async () => {
   const calls = [];
   const client = createLaptopClient(connection, { current: () => connection, request: async request => {

@@ -26,9 +26,15 @@ export function createLaptopClient(connection: DesktopConnection, options: {
       !['/orchestration', '/api/mobile/workflows', '/api/mobile/approvals', '/api/mobile/answer', '/api/mobile/computer', '/browser'].includes(target.pathname)) throw new Error('Destino de sesión no permitido.');
     const method = init?.method ?? 'GET';
     if (!['GET', 'POST'].includes(method) || (init?.body !== undefined && typeof init.body !== 'string')) throw new Error('Esta operación necesita un transporte de archivos.');
+    let body = typeof init?.body === 'string' ? init.body : undefined;
+    if (target.pathname === '/orchestration' && body) {
+      const action: unknown = JSON.parse(body);
+      if (action && typeof action === 'object' && 'action' in action && action.action === 'inspect')
+        body = JSON.stringify({ ...action, historyContent: 'text-only-v1' });
+    }
     const pending = request({ url: target.href, method: method as 'GET' | 'POST',
       headers: { Authorization: `Bearer ${captured.token}`, ...(init?.body !== undefined ? { 'Content-Type': 'application/json' } : {}) },
-      ...(typeof init?.body === 'string' ? { body: init.body } : {}) });
+      ...(body !== undefined ? { body } : {}) });
     let onAbort: (() => void) | undefined;
     const reply = await (init?.signal ? Promise.race([pending, new Promise<never>((_, reject) => {
       onAbort = () => reject(init.signal!.reason);

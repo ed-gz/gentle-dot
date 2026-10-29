@@ -811,6 +811,32 @@ describe("live Pi confirmation adapter with local socket", () => {
 	});
 });
 
+it("projects old inline images only for an explicit text-only history request", async () => {
+	const h = harness();
+	const bytes = "P".repeat(2_200_000);
+	h.setMessages([
+		{ id: "human", role: "user", unexpectedBinary: "PRIVATE-MESSAGE-EXTRA", content: [{ type: "text", text: "Antes" }, { type: "image", data: bytes, mimeType: "image/png" }, { type: "text", text: "Después" }] },
+		{ id: "assistant", role: "assistant", content: "Resultado visible" },
+		{ id: "unknown", role: "user", content: [{ type: "future_attachment", data: "SECRET-UNKNOWN-PAYLOAD" }] },
+	]);
+	const input = { action: "inspect", paneId: "w1:p1", sessionId: "s1" };
+	const legacy = await h.orchestrator.dispatch(input, "human");
+	expect(JSON.stringify(legacy)).toContain(bytes);
+	const projected = await h.orchestrator.dispatch({ ...input, historyContent: "text-only-v1" }, "human");
+	expect(projected).toMatchObject({ messages: [
+		{ id: "human", role: "user", content: [{ type: "text", text: "Antes" }, { type: "text", text: "[Imagen adjunta no disponible en esta vista]" }, { type: "text", text: "Después" }] },
+		{ id: "assistant", role: "assistant", content: [{ type: "text", text: "Resultado visible" }] },
+		{ id: "unknown", role: "user", content: [{ type: "text", text: "[Contenido adjunto no disponible en esta vista]" }] },
+	] });
+	expect(JSON.stringify(projected)).not.toContain(bytes);
+	expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(2 * 1024 * 1024);
+	expect(JSON.stringify(projected)).not.toContain("SECRET-UNKNOWN-PAYLOAD");
+	expect(JSON.stringify(projected)).not.toContain("PRIVATE-MESSAGE-EXTRA");
+	await expect(h.orchestrator.dispatch({ ...input, historyContent: "unknown" }, "human")).rejects.toMatchObject({ code: "INVALID_HISTORY" });
+	const socketCalls = h.calls.filter(call => call.method === "snapshot");
+	expect(socketCalls.every(call => !('historyContent' in call.params))).toBe(true);
+});
+
 it("validates paging before contacting a session and refuses fake history on legacy adapters", async () => {
 	const h = harness();
 	for (const limit of [-1, 0, 101, 3.5, "50"]) {
