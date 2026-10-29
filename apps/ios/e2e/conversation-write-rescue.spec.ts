@@ -82,7 +82,7 @@ test('recovery export omits private transport and stale discard preserves the ne
     const {createConversationWriteRescue}=await import('/src/conversation-write-rescue.ts');
     const {mountConversationWriteRecovery}=await import('/src/conversation-write-recovery-view.ts');
     const owner=crypto.randomUUID(),store=createConversationWriteRescue({databaseName:`write-view-${crypto.randomUUID()}`});
-    const record={schema:'capri-conversation-write-rescue/v1',owner,sequence:1,baseRevision:0,draft:'<b>Texto seguro</b>',entries:[{id:'host:wss://example.test/ws|main|m',engine:'gentle',role:'user',state:'complete',text:'Instrucción visible',transportText:'WRAPPER PRIVADO',at:1}]};
+    const record={schema:'capri-conversation-write-rescue/v1',owner,sequence:1,baseRevision:0,draft:'<b>Texto seguro</b>',entries:[{id:'host:wss://example.test/ws|main|m',engine:'gentle',role:'user',state:'complete',text:'Instrucción visible',transportText:'WRAPPER PRIVADO',branchUnverified:true,at:1}]};
     await store.save(record);const root=document.createElement('section');root.id='test-write-recovery';document.body.append(root);
     const view=mountConversationWriteRecovery(root,{store,deliver:async(blob:Blob)=>{(window as any).testExport=await blob.text();return 'exported';}});
     (window as any).writeRecoveryFixture={store,record};await view.refresh();
@@ -93,6 +93,8 @@ test('recovery export omits private transport and stale discard preserves the ne
   await root.getByRole('button',{name:'Exportar copia'}).click();
   await expect.poll(()=>page.evaluate(()=>(window as any).testExport)).toContain('Instrucción visible');
   expect(await page.evaluate(()=>(window as any).testExport)).not.toContain('WRAPPER PRIVADO');
+  const exported = await page.evaluate(()=>(window as any).testExport as string);
+  expect(exported.split('\n').filter(Boolean).map(line=>JSON.parse(line)).find(entry=>entry.text==='Instrucción visible')).toMatchObject({branchUnverified:true});
   await page.evaluate(async()=>{const {store,record}=(window as any).writeRecoveryFixture;await store.save({...record,sequence:2,draft:'Copia posterior'});});
   await root.getByRole('button',{name:'Descartar copia'}).click();await root.getByRole('button',{name:'Sí, descartar esta copia'}).click();
   await expect(root.getByRole('status')).toContainText('La copia cambió');

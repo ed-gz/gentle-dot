@@ -7,7 +7,7 @@ export function writeRescueBlob(record:WriteRescue):Blob {
   const lines=[JSON.stringify({schema:'capri-conversation-write-rescue-export/v1',committed:false,owner:record.owner,sequence:record.sequence,baseRevision:record.baseRevision}),
     JSON.stringify({schema:'capri-conversation-draft/v1',source:'unconfirmed-writer',submitted:false,text:record.draft,...(record.attachedWork?{attachedWork:record.attachedWork}:{})}),
     ...record.entries.map(entry=>JSON.stringify({source:'unconfirmed-writer',id:entry.id,engine:entry.engine,role:entry.role,state:entry.state,text:entry.text,at:entry.at,
-      ...(entry.replyTo?{replyTo:entry.replyTo}:{}),...(entry.localCancelled?{localCancelled:true}:{}),
+      ...(entry.replyTo?{replyTo:entry.replyTo}:{}),...(entry.localCancelled?{localCancelled:true}:{}),...(entry.branchUnverified?{branchUnverified:true}:{}),
       ...(entry.activities?{activities:entry.activities.map(({id,title,kind,status,detail})=>({id,title,kind,status,...(detail===undefined?{}:{detail})}))}:{})}))];
   return new Blob([lines.join('\n'),'\n'],{type:'application/x-ndjson'});
 }
