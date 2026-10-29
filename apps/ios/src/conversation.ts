@@ -54,6 +54,18 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
   return next.slice(-MAX_ENTRIES);
 }
 type HostHistoryEntry = { id: string; role: 'user' | 'assistant'; text: string; activities?: ChatActivity[] };
+function mergeHistoryActivities(live: readonly ChatActivity[], historical: readonly ChatActivity[]): ChatActivity[] {
+  const merged = new Map<string, ChatActivity>();
+  for (const activity of [...live, ...historical]) {
+    const prior = merged.get(activity.id);
+    if (!prior) { merged.set(activity.id, activity); continue; }
+    // A snapshot may omit activity details or still report an older running
+    // state. Keep a known terminal result and any already-observed detail.
+    const preferred = prior.status !== 'running' && activity.status === 'running' ? prior : activity;
+    merged.set(activity.id, { ...preferred, ...(!preferred.detail && prior.detail ? { detail: prior.detail } : {}) });
+  }
+  return [...merged.values()];
+}
 /** Reconcile the host's durable snapshot IDs with its separate live-event IDs. */
 export function reconcileHostHistory(entries: ChatEntry[], prefix: string, history: HostHistoryEntry[], at = Date.now(), beforePrune?: (entries: ChatEntry[]) => void): ChatEntry[] {
   const remote = entries.map((entry, index) => ({ entry, index })).filter(({ entry }) =>
@@ -62,6 +74,9 @@ export function reconcileHostHistory(entries: ChatEntry[], prefix: string, histo
   const replacements = new Map<number, ChatEntry>();
   const removed = new Set<number>();
   const resolved: { entry: ChatEntry; index?: number }[] = [];
+  // A known durable ID belongs to that exact snapshot item, even if an older
+  // turn contains identical text. Never consume it as a text-only match.
+  const historyIds = new Set(history.map(item => JSON.stringify([prefix + item.id, item.role])));
   let userAnchor: number | undefined;
   let lastMatch = -1;
   for (const item of history) {
@@ -74,7 +89,7 @@ export function reconcileHostHistory(entries: ChatEntry[], prefix: string, histo
       const turn: typeof remote = [];
       for (const candidate of remote.slice(start + 1)) {
         if (candidate.entry.role === 'user') break;
-        if (!used.has(candidate.entry.id)) turn.push(candidate);
+        if (!used.has(candidate.entry.id) && (candidate.entry.id === id || !historyIds.has(JSON.stringify([candidate.entry.id, candidate.entry.role])))) turn.push(candidate);
       }
       const combined = turn.map(({ entry }) => entry.text).filter(Boolean).join('\n\n');
       if (turn.length && (combined === item.text || (combined && item.text.startsWith(combined)
@@ -83,13 +98,13 @@ export function reconcileHostHistory(entries: ChatEntry[], prefix: string, histo
     if (!matches.length) {
       const direct = remote.find(({ entry }) => !used.has(entry.id) && entry.id === id && entry.role === item.role);
       const sameText = remote.find(({ entry, index }) => index > lastMatch && !used.has(entry.id)
-        && entry.role === item.role && (entry.transportText ?? entry.text) === item.text);
+        && entry.role === item.role && !historyIds.has(JSON.stringify([entry.id, entry.role])) && (entry.transportText ?? entry.text) === item.text);
       const match = direct ?? sameText;
       if (match) matches = [match];
     }
     const prior = matches[0];
     const entry: ChatEntry = {
-      id, role: item.role, activities: item.activities ?? matches.flatMap(match => match.entry.activities ?? []), text: prior?.entry.transportText ? prior.entry.text : item.text,
+      id, role: item.role, activities: mergeHistoryActivities(matches.flatMap(match => match.entry.activities ?? []), item.activities ?? []), text: prior?.entry.transportText ? prior.entry.text : item.text,
       ...(prior?.entry.transportText ? { transportText: prior.entry.transportText } : {}),
       engine: 'gentle',
       // History contains text, not the terminal outcome. Keep a known interrupted

@@ -290,3 +290,37 @@ test('repeated host text is matched once per turn and fragments never cross anot
   assert.deepEqual(result.map(item => item.id), ['h1', 'h2', 'h3', 'h4'].map(id => host + id));
   assert.equal(result.length, 4);
 });
+
+test('history preserves live tool evidence when a snapshot has no activity records', () => {
+  const activity = { id: 'tool-1', title: 'Buscar evidencia', kind: 'search', status: 'done', detail: 'Archivo encontrado' };
+  const original = [remote('user-live', { text: 'Consulta' }), remote('answer-live', { role: 'assistant', text: 'Resultado', activities: [activity] })];
+  const result = reconcileHostHistory(original, host, [snapshot('history-user', 'user', 'Consulta'), { ...snapshot('history-answer', 'assistant', 'Resultado'), activities: [] }]);
+  assert.deepEqual(result[1].activities, [activity]);
+  assert.deepEqual(reconcileHostHistory(result, host, [{ ...snapshot('history-user', 'user', 'Consulta'), activities: [] }, { ...snapshot('history-answer', 'assistant', 'Resultado'), activities: [] }]), result);
+});
+
+test('older repeated text cannot steal the identity of a later known historical message', () => {
+  const original = [entry('local-before'), remote('h3', { text: 'Repetir', at: 300 }), remote('h4', { role: 'assistant', text: 'Respuesta actual', at: 400 }), entry('local-after')];
+  const history = [snapshot('h1', 'user', 'Repetir'), snapshot('h2', 'assistant', 'Respuesta anterior'), snapshot('h3', 'user', 'Repetir'), snapshot('h4', 'assistant', 'Respuesta actual')];
+  const result = reconcileHostHistory(original, host, history, 900);
+  assert.deepEqual(result.map(item => item.id), ['local-before', host + 'h1', host + 'h2', host + 'h3', host + 'h4', 'local-after']);
+  assert.equal(result.find(item => item.id === host + 'h3').at, 300);
+  assert.deepEqual(reconcileHostHistory(result, host, history, 1000), result);
+});
+
+test('history merges tool activity by identity without losing detail or regressing a terminal result', () => {
+  const original = [remote('user', { text: 'Consulta' }), remote('answer', { role: 'assistant', text: 'Resultado', activities: [
+    { id: 'a', title: 'Leer', kind: 'read', status: 'done', detail: 'Resultado conservado' },
+    { id: 'b', title: 'Buscar', kind: 'search', status: 'running' },
+  ] })];
+  const result = reconcileHostHistory(original, host, [snapshot('h1', 'user', 'Consulta'), { ...snapshot('h2', 'assistant', 'Resultado'), activities: [
+    { id: 'a', title: 'Leer', kind: 'read', status: 'running' },
+    { id: 'b', title: 'Buscar', kind: 'search', status: 'done', detail: 'Listo' },
+    { id: 'c', title: 'Revisar', kind: 'other', status: 'done' },
+  ] }]);
+  assert.deepEqual(result[1].activities, [
+    { id: 'a', title: 'Leer', kind: 'read', status: 'done', detail: 'Resultado conservado' },
+    { id: 'b', title: 'Buscar', kind: 'search', status: 'done', detail: 'Listo' },
+    { id: 'c', title: 'Revisar', kind: 'other', status: 'done' },
+  ]);
+});
