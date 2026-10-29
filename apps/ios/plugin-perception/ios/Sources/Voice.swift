@@ -743,7 +743,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                     durationSeconds: duration, locale: locale, source: source)
                 let receipt = VoiceNativeReceipt(schema: "capri-native-voice-receipt/v1", audio: retainedRecord, transcript: evidence)
                 try lease.verify()
-                try VoiceNativeReceiptStore(root: root).put(receipt)
+                try VoiceNativeReceiptStore(root: root).put(receipt, lease: lease)
             }
             let verification = await verify.result
             retentionLatch.end()
@@ -982,8 +982,13 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     }
 
     func discardVoiceReceipt(_ receipt: VoiceNativeReceipt) async -> VoiceReceiptReply {
-        guard let root = VoiceNativeReceiptStore.defaultRoot() else { return .failure() }
-        do { try await Task.detached { try VoiceNativeReceiptStore(root: root).discard(receipt) }.value; return VoiceReceiptReply(ok: true) }
+        guard let root = VoiceNativeReceiptStore.defaultRoot(), let audioRoot = VoiceRetentionBinding.defaultRoot() else { return .failure() }
+        do {
+            try await Task.detached {
+                try VoiceNativeReceiptStore(root: root).discard(receipt, audioJournal: VoiceRecoveryJournal(root: audioRoot))
+            }.value
+            return VoiceReceiptReply(ok: true)
+        }
         catch { return .failure() }
     }
 

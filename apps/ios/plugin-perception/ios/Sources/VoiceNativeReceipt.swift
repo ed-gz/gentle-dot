@@ -151,18 +151,34 @@ final class VoiceNativeReceiptStore {
         }
         return decoded
     }
-    func put(_ receipt: VoiceNativeReceipt) throws {
+    private func scan() throws -> [VoiceNativeReceiptFile] {
+        let names = try fm.contentsOfDirectory(atPath: root.path).filter { $0 != ".receipts.lock" }
+        // Older versions wrote up to 100 permanent discard tombstones. Keep
+        // those identity barriers but do not charge them to active capacity.
+        guard names.count <= maxRecords + 100 else { throw VoiceNativeReceiptError.corrupt }
+        var files: [VoiceNativeReceiptFile] = []
+        var tombstones = 0
+        for name in names {
+            guard name.hasSuffix(".json") else { throw VoiceNativeReceiptError.corrupt }
+            let id = String(name.dropLast(5))
+            guard uuid(id), name == "\(id.lowercased()).json", let file = try read(id) else { throw VoiceNativeReceiptError.corrupt }
+            if file.state == "discarded" { tombstones += 1 }
+            else { files.append(file) }
+        }
+        guard tombstones <= 100, files.count <= maxRecords else { throw VoiceNativeReceiptError.corrupt }
+        return files
+    }
+    func put(_ receipt: VoiceNativeReceipt, lease: VoiceRecoveryReadLease) throws {
         let fingerprint = try digest(receipt)
-        try locked {
+        try lease.withVerified(record: receipt.audio) { try locked {
             if let old = try read(receipt.audio.id) {
                 guard old.state != "discarded", old.digest == fingerprint, old.receipt == receipt else { throw VoiceNativeReceiptError.changed }
                 // Re-sync on a lost callback, including an earlier fsync error.
                 try sync(path(receipt.audio.id)); try sync(root, directory: true); return
             }
-            let names = try fm.contentsOfDirectory(atPath: root.path).filter { $0 != ".receipts.lock" }
-            guard names.count < maxRecords else { throw VoiceNativeReceiptError.full }
+            guard try scan().count < maxRecords else { throw VoiceNativeReceiptError.full }
             try write(VoiceNativeReceiptFile(schema: "capri-native-voice-file/v1", state: "retained", digest: fingerprint, receipt: receipt), id: receipt.audio.id)
-        }
+        } }
     }
     func get(_ id: String) throws -> VoiceNativeReceiptEnvelope? {
         try locked {
@@ -172,25 +188,28 @@ final class VoiceNativeReceiptStore {
     }
     func list() throws -> [VoiceNativeReceiptEnvelope] {
         try locked {
-            let names = try fm.contentsOfDirectory(atPath: root.path).filter { $0 != ".receipts.lock" }
-            guard names.count <= maxRecords else { throw VoiceNativeReceiptError.corrupt }
             var results: [VoiceNativeReceiptEnvelope] = []
-            for name in names {
-                guard name.hasSuffix(".json") else { throw VoiceNativeReceiptError.corrupt }
-                let id = String(name.dropLast(5))
-                guard uuid(id), name == "\(id.lowercased()).json", let file = try read(id) else { throw VoiceNativeReceiptError.corrupt }
+            for file in try scan() {
                 if let receipt = file.receipt { results.append(VoiceNativeReceiptEnvelope(receipt: receipt, releaseState: file.state)) }
             }
             return results.sorted { $0.receipt.audio.createdAt < $1.receipt.audio.createdAt }
         }
     }
-    func discard(_ receipt: VoiceNativeReceipt) throws {
+    func discard(_ receipt: VoiceNativeReceipt, audioJournal: VoiceRecoveryJournal) throws {
         let fingerprint = try digest(receipt)
         try locked {
-            guard let existing = try read(receipt.audio.id), existing.digest == fingerprint else { throw VoiceNativeReceiptError.changed }
-            if existing.state == "discarded" { try sync(path(receipt.audio.id)); try sync(root, directory: true); return }
-            guard existing.receipt == receipt, existing.state != "releasing" else { throw VoiceNativeReceiptError.changed }
-            try write(VoiceNativeReceiptFile(schema: "capri-native-voice-file/v1", state: "discarded", digest: fingerprint, receipt: nil), id: receipt.audio.id)
+            guard let existing = try read(receipt.audio.id) else {
+                // A prior removal may have succeeded before its callback or
+                // directory sync. Confirm the source cannot recreate it.
+                try audioJournal.withReleased(receipt.audio) { try sync(root, directory: true) }
+                return
+            }
+            guard existing.digest == fingerprint else { throw VoiceNativeReceiptError.changed }
+            guard existing.receipt == receipt, existing.state == "released" else { throw VoiceNativeReceiptError.changed }
+            try audioJournal.withReleased(receipt.audio) {
+                try fm.removeItem(at: path(receipt.audio.id))
+                try sync(root, directory: true)
+            }
         }
     }
     /// Hold this store's lock across the audio journal removal so explicit

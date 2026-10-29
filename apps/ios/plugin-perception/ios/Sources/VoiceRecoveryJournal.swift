@@ -34,16 +34,24 @@ enum VoiceRecoveryJournalError: Error {
 /// and before acknowledging its transcript; it cannot prevent rogue writers.
 final class VoiceRecoveryReadLease: @unchecked Sendable {
     let url: URL
+    private let record: VoiceRecoveryRecord
     private var lockFD: Int32
     private let guardLock = NSLock()
     private let validate: () throws -> Void
-    init(url: URL, lockFD: Int32, validate: @escaping () throws -> Void) {
-        self.url = url; self.lockFD = lockFD; self.validate = validate
+    init(url: URL, record: VoiceRecoveryRecord, lockFD: Int32, validate: @escaping () throws -> Void) {
+        self.url = url; self.record = record; self.lockFD = lockFD; self.validate = validate
     }
     func verify() throws {
         guardLock.lock(); defer { guardLock.unlock() }
         guard lockFD >= 0 else { throw VoiceRecoveryJournalError.changed }
         try validate()
+    }
+    /// Keeps close() from releasing the shared journal lock during a commit.
+    func withVerified<T>(record expected: VoiceRecoveryRecord, _ action: () throws -> T) throws -> T {
+        guardLock.lock(); defer { guardLock.unlock() }
+        guard lockFD >= 0, record == expected else { throw VoiceRecoveryJournalError.changed }
+        try validate()
+        return try action()
     }
     func close() {
         guardLock.lock(); defer { guardLock.unlock() }
@@ -320,7 +328,7 @@ final class VoiceRecoveryJournal {
                 guard valid(expected), expected.state == .ready, try read() == expected else { throw VoiceRecoveryJournalError.changed }
                 let (file, identity) = try audioIdentity(expected)
                 guard expected.byteCount == identity.byteCount, expected.sha256 == identity.sha256 else { throw VoiceRecoveryJournalError.changed }
-                return VoiceRecoveryReadLease(url: file, lockFD: fd) { [self] in
+                return VoiceRecoveryReadLease(url: file, record: expected, lockFD: fd) { [self] in
                     try locked {
                         guard try read() == expected else { throw VoiceRecoveryJournalError.changed }
                         let (_, current) = try audioIdentity(expected)
@@ -423,6 +431,21 @@ final class VoiceRecoveryJournal {
             try syncDirectory(root)
             try manager.removeItem(at: manifest)
             try syncDirectory(root)
+          }
+        }
+    }
+
+    /// Confirm the exact audio is absent while excluding any live journal
+    /// reader or writer. The action must not attempt to lock this journal.
+    func withReleased<T>(_ expected: VoiceRecoveryRecord, _ action: () throws -> T) throws -> T {
+        try locked {
+          try withFileLock(shared: false) {
+            guard valid(expected), expected.state == .ready else { throw VoiceRecoveryJournalError.invalid }
+            guard try readRecord(discardMarker) == nil else { throw VoiceRecoveryJournalError.busy }
+            let current = try read()
+            guard current?.id.lowercased() != expected.id.lowercased(), !(try exists(audio(expected))) else { throw VoiceRecoveryJournalError.changed }
+            try syncDirectory(root)
+            return try action()
           }
         }
     }
