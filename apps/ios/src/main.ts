@@ -819,7 +819,9 @@ function handleMessage(message: ServerMessage) {
   }
   if (message.type === 'queue') element('chat-notice').textContent = message.steering.length ? `${message.steering.length} instrucción(es) recibidas para orientar el trabajo en curso.` : '';
   if (message.type === 'toast' || message.type === 'error') notice(message.message, 'gentle');
-  if (message.type === 'error') unconfirmedRemote();
+  // A generic error has no request ID and may refer to another operation.
+  // Modern hosts can still acknowledge this send by its exact request ID.
+  if (message.type === 'error' && !linked.supportsSendAccepted()) unconfirmedRemote();
   if (message.type === 'ask') {
     const ask = message.ask;
     if (ask.method === 'app' && isTauri() && runtimeConnection) {

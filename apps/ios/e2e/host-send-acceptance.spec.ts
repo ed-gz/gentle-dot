@@ -90,3 +90,54 @@ test('a legacy host leaves an indistinguishable echo unconfirmed and never recei
   await expect.poll(() => host.sent.filter(message => message.type === 'hello').length).toBe(2);
   expect(host.sent.filter(message => message.type === 'send')).toHaveLength(1);
 });
+
+test('an unrelated host error cannot erase a request before its correlated acceptance', async ({ page }) => {
+  const host = await fixture(page, true);
+  await page.locator('#prompt').fill('Continuar la tarea'); await page.locator('#send').click();
+  await expect.poll(() => host.sent.filter(message => message.type === 'send').length).toBe(1);
+  const sent = host.sent.find(message => message.type === 'send');
+  const card = page.locator('.chat-card[data-role="user"]').first();
+  host.emit({ type: 'error', code: 'history_unavailable', message: 'No se pudo recuperar otra operación.' });
+  await expect(card.locator('small')).toContainText('Esperando confirmación');
+  host.emit({ type: 'request_accepted', requestId: sent.requestId });
+  await expect(card.locator('small')).toHaveText('');
+  await expect(page.locator('#chat-notice')).toContainText('no confirma que esté guardada');
+  expect(host.sent.filter(message => message.type === 'send')).toHaveLength(1);
+});
+
+test('without a correlated acceptance an error times out honestly and does not resend', async ({ page }) => {
+  await page.clock.install();
+  const host = await fixture(page, true);
+  await page.locator('#prompt').fill('Solicitud sin confirmar'); await page.locator('#send').click();
+  await expect.poll(() => host.sent.filter(message => message.type === 'send').length).toBe(1);
+  const sent = host.sent.find(message => message.type === 'send');
+  host.emit({ type: 'error', code: 'command_failed', message: 'No se pudo completar una operación.' });
+  const card = page.locator('.chat-card[data-role="user"]').first();
+  await expect(card.locator('small')).toContainText('Esperando confirmación');
+  await page.clock.fastForward(15_001);
+  await expect(card.locator('small')).toContainText('sin confirmar');
+  host.emit({ type: 'request_accepted', requestId: sent.requestId });
+  await expect(card.locator('small')).toContainText('sin confirmar');
+  expect(host.sent.filter(message => message.type === 'send')).toHaveLength(1);
+});
+
+test('a prior socket acceptance cannot confirm a later send after reconnect', async ({ page }) => {
+  const host = await fixture(page, true);
+  await page.locator('#prompt').fill('Primer envío'); await page.locator('#send').click();
+  await expect.poll(() => host.sent.filter(message => message.type === 'send').length).toBe(1);
+  const first = host.sent.find(message => message.type === 'send');
+  await host.drop();
+  await expect.poll(() => host.sent.filter(message => message.type === 'hello').length).toBe(2);
+  await expect(page.locator('#send')).toBeEnabled();
+  await page.locator('#prompt').fill('Segundo envío'); await page.locator('#send').click();
+  await expect.poll(() => host.sent.filter(message => message.type === 'send').length).toBe(2);
+  const second = host.sent.filter(message => message.type === 'send')[1];
+  expect(second.requestId).not.toBe(first.requestId);
+  host.emit({ type: 'request_accepted', requestId: first.requestId });
+  const cards = page.locator('.chat-card[data-role="user"]');
+  await expect(cards.last().locator('small')).toContainText('Esperando confirmación');
+  host.emit({ type: 'request_accepted', requestId: second.requestId });
+  await expect(cards.last().locator('small')).toHaveText('');
+  await expect(cards.first().locator('small')).toContainText('sin confirmar');
+  expect(host.sent.filter(message => message.type === 'send')).toHaveLength(2);
+});
