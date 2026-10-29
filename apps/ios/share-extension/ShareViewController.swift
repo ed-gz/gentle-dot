@@ -110,11 +110,11 @@ final class ShareViewController: UIViewController {
     }
     // NSItemProvider often exposes a concrete audio UTI even when its temporary
     // URL has no useful suffix. Preserve that type so Capri recognises a meeting.
-    nonisolated private static func fileMetadata(_ provider: NSItemProvider, url: URL, category: UTType) -> (String, String) {
-        let suggested = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+    nonisolated private static func fileMetadata(suggestedName: String?, registeredTypeIdentifiers: [String], url: URL, category: UTType) -> (String, String) {
+        let suggested = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let suggestedExtension = (suggested as NSString?)?.pathExtension ?? ""
         let fromName = UTType(filenameExtension: suggestedExtension) ?? UTType(filenameExtension: url.pathExtension)
-        let registered = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
+        let registered = registeredTypeIdentifiers.compactMap { UTType($0) }
             .first { $0.conforms(to: category) && $0.preferredMIMEType != nil }
         let concrete = (fromName?.conforms(to: category) == true ? fromName : nil) ?? registered
         let fallback: String
@@ -132,6 +132,10 @@ final class ShareViewController: UIViewController {
     }
     private func copy(_ provider: NSItemProvider, into staging: URL) async throws -> SharedFile {
         let types: [UTType] = [.audio, .pdf, .image, .plainText]
+        // Snapshot provider metadata before invoking callbacks, which are
+        // Sendable and must not capture the non-Sendable NSItemProvider.
+        let suggestedName = provider.suggestedName
+        let registeredTypeIdentifiers = provider.registeredTypeIdentifiers
         if let type = types.first(where: { provider.hasItemConformingToTypeIdentifier($0.identifier) }) {
             if type == .plainText {
                 return try await withCheckedThrowingContinuation { continuation in
@@ -160,7 +164,7 @@ final class ShareViewController: UIViewController {
                     do {
                         guard error == nil, let url = url else { throw ShareFailure.invalid }
                         // The provider URL is valid only during this callback: copy before returning.
-                        let (name, mime) = Self.fileMetadata(provider, url: url, category: type)
+                        let (name, mime) = Self.fileMetadata(suggestedName: suggestedName, registeredTypeIdentifiers: registeredTypeIdentifiers, url: url, category: type)
                         continuation.resume(returning: try SharedInbox.stageFile(url, name: name, mime: mime, in: staging))
                     } catch { continuation.resume(throwing: error) }
                 }
@@ -172,7 +176,7 @@ final class ShareViewController: UIViewController {
                     do {
                         guard error == nil, let url = value as? URL, url.isFileURL else { throw ShareFailure.invalid }
                         let type = UTType(filenameExtension: url.pathExtension)
-                        let suggested = provider.suggestedName ?? ""
+                        let suggested = suggestedName ?? ""
                         let m4a = url.pathExtension.lowercased() == "m4a" || (suggested as NSString).pathExtension.lowercased() == "m4a"
                         guard m4a || (type != nil && types.contains(where: { type!.conforms(to: $0) })) else { throw ShareFailure.invalid }
                         let mime = m4a ? "audio/mp4" : (type?.preferredMIMEType ?? "application/octet-stream")
