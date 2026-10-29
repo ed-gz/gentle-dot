@@ -176,6 +176,12 @@ test('a request and turn that are not a bound pair cannot start native planning'
   assert.equal(f.calls.includes('native-create'), false);
 });
 
+test('a notice cannot act as an assistant turn', async () => {
+  const f = fixture(); f.timeline.set(id, { ...f.timeline.get(id), role: 'notice' });
+  await assert.rejects(f.controller.start(input), /Guarda primero/);
+  assert.equal(f.calls.includes('native-create'), false);
+});
+
 test('a durable pending turn projected as interrupted remains usable, while explicit cancellation fences it', async () => {
   const f = fixture(); f.timeline.set(id, { ...f.timeline.get(id), state: 'interrupted' });
   assert.equal((await f.controller.start(input)).kind, 'proposal');

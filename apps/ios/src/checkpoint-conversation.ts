@@ -24,7 +24,7 @@ export function createCheckpointConversation(options: { turns: CheckpointTurnSto
     const pair = await options.turns.readPair(anchor.userId, anchor.id);
     const request = pair?.user, turn = pair?.turn;
     if (!request || request.id !== anchor.userId || request.role !== 'user' || request.engine !== 'iphone' || request.state !== 'complete' || await fingerprintText(request.text) !== anchor.requestFingerprint) throw new Error('No coincide la solicitud original. El análisis se conserva sin ejecutar.');
-    if (!turn || turn.id !== anchor.id || turn.engine !== 'iphone' || turn.role === 'user' || turn.localCancelled || (!allowComplete && turn.state === 'complete')) throw new Error('El turno original cambió o fue cancelado. El análisis se conserva sin modificarlo.');
+    if (!turn || turn.id !== anchor.id || turn.engine !== 'iphone' || turn.role !== 'assistant' || turn.localCancelled || (!allowComplete && turn.state === 'complete')) throw new Error('El turno original cambió o fue cancelado. El análisis se conserva sin modificarlo.');
     return { user: request, turn };
   }
   async function bound(anchor: CheckpointAnchor): Promise<{ record?: CheckpointSummary; activeId?: string }> {
@@ -131,7 +131,7 @@ export function createCheckpointConversation(options: { turns: CheckpointTurnSto
       // Reading a durable window after reload projects pending as interrupted.
       // Both represent an unanswered original turn; local cancellation and a
       // completed answer remain hard fences.
-      if (!user || user.id !== input.userId || user.role !== 'user' || user.engine !== 'iphone' || user.state !== 'complete' || user.text !== input.instruction || !turn || turn.id !== input.id || turn.engine !== 'iphone' || turn.role === 'user' || !['pending', 'interrupted'].includes(turn.state) || turn.localCancelled) throw new Error('Guarda primero la solicitud y su turno original.');
+      if (!user || user.id !== input.userId || user.role !== 'user' || user.engine !== 'iphone' || user.state !== 'complete' || user.text !== input.instruction || !turn || turn.id !== input.id || turn.engine !== 'iphone' || turn.role !== 'assistant' || !['pending', 'interrupted'].includes(turn.state) || turn.localCancelled) throw new Error('Guarda primero la solicitud y su turno original.');
       const fingerprint = await fingerprintForCheckpoint(input.instruction, input.context, input.tools);
       const requestFingerprint = await fingerprintText(input.instruction);
       let anchor = await anchors.create({ id: input.id, userId: input.userId, fingerprint, requestFingerprint, state: 'preparing' });
