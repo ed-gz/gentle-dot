@@ -78,7 +78,7 @@ const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 const canvas = element<HTMLCanvasElement>('capri');
 const rig = element<HTMLButtonElement>('rig-handle');
 const stage = element('stage');
-const director = new RigDirector();
+let director = new RigDirector();
 let engine: Awaited<ReturnType<typeof createEngineAsync>> | undefined;
 let preparingRig: AbortController | undefined;
 let rigNeedsPreparation = false;
@@ -135,11 +135,18 @@ let typing = false;
 let attention = false;
 let conversationRestored = false;
 let manuallyPlaced = false;
+// A session is a separate context from the main conversation. Its status
+// must not overwrite the conversation's current reaction when navigating.
+let sessionIntent: RigIntent = {};
+const activeIntent = (): RigIntent => panel === 'agents'
+  ? { ...sessionIntent, ...(intent.dragging ? { dragging: true } : {}) }
+  : intent;
 function presenceIntent(): RigIntent {
   if (travel) return { travelling: true, direction: travel.target.direction };
   // Work events can arrive during a greeting. Retain the latest real state,
   // but let the explicit gesture finish before showing an outcome animation.
-  const visible = humanGesture ? { ...intent, outcome: undefined, gesture: humanGesture } : intent;
+  const current = activeIntent();
+  const visible = humanGesture ? { ...current, outcome: undefined, gesture: humanGesture } : current;
   if (attention) return { ...visible, question: 'review' };
   if (typing && !visible.working && !visible.dragging && !visible.gesture) return { ...visible, resting: 'sit', watching: true };
   return Object.keys(visible).length ? { direction: perched.direction, ...visible } : perched;
@@ -207,7 +214,7 @@ function animate(now: number) {
     const region = { x: 0, y: 0, width: stage.clientWidth, height: stage.clientHeight };
     const next = roamDirector.step({ laptop: region, region, x: 0, y: 0, width: rig.offsetWidth, height: rig.offsetHeight, herdr: false, safePerches }, now,
       { composer: typing || Boolean(document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')),
-        question: attention, paused: isReduced() || Boolean(intent.working || humanGesture || intent.outcome) });
+        question: attention, paused: isReduced() || Boolean(activeIntent().working || activeIntent().alert || humanGesture || activeIntent().outcome) });
     if (next) { manuallyPlaced = false; travel = { started: now, target: next, moved: false }; nextRoam = now + 18000; revision++; }
   }
   if (travel) {
@@ -419,6 +426,9 @@ element('roam').setAttribute('aria-pressed', String(roaming));
 
 function showPanel(next: string) {
   manuallyPlaced = false;
+  // Discard a previous context's animation overlay as well as its intent.
+  // In reduced motion there is no continuous frame loop to expire an old act.
+  if (panel !== next) director = new RigDirector();
   panel = next;
   updateLaptopView();
   if (next !== 'chat' && (retainedVoicePreparing || (foreignAudioBusy && voiceOwner))) void cancelDictation();
@@ -524,7 +534,10 @@ function updateLaptopView() {
   laptopLoading = true; element('laptop-root').textContent = 'Abriendo tus sesiones…';
   void import('./laptop-view.tsx').then(({ mountLaptopView }) => {
     laptop = mountLaptopView(element('laptop-root'), () => showPanel('settings'), state => {
-      if (panel === 'agents') setIntent(state === 'working' ? { working: true } : state === 'blocked' ? { alert: true } : {});
+      if (panel !== 'agents') return;
+      sessionIntent = state === 'working' ? { working: true } : state === 'blocked' ? { alert: true } : {};
+      if (sessionIntent.working || sessionIntent.alert) travel = undefined;
+      redraw();
     });
     updateLaptopView();
   }).catch(() => { element('laptop-root').textContent = 'No se pudo abrir el panel. Vuelve a entrar a Sesiones para reintentar.'; })

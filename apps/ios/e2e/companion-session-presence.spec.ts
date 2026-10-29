@@ -68,6 +68,36 @@ async function connectPhone(page: Page) {
   await expect(page.locator('#status')).toContainText('Acceso guardado en Keychain');
 }
 
+test('Capri restores the conversation reaction after leaving a working session', async ({ page }) => {
+  test.slow();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await linkedPhone(page);
+  const artwork = await page.evaluate(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 240; canvas.height = 420;
+    canvas.getContext('2d')!.fillRect(60, 10, 120, 380);
+    return canvas.toDataURL('image/png').split(',')[1]!;
+  });
+  await page.locator('#art').setInputFiles({ name: 'synthetic-capri.png', mimeType: 'image/png', buffer: Buffer.from(artwork, 'base64') });
+  const rig = page.locator('#rig-handle');
+  await expect(rig).toHaveAttribute('data-ready', 'true', { timeout: 30000 });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  await expect(rig).toHaveAttribute('data-pose', 'look', { timeout: 15000 });
+  const box = (await rig.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 - 15, box.y + box.height / 2, { steps: 3 });
+  await expect(rig).toHaveAttribute('data-pose', 'flinch');
+  await page.mouse.up();
+  await page.locator('[data-panel="settings"]').click();
+  await expect(rig).toBeVisible();
+  await expect(rig).not.toHaveAttribute('data-pose', 'look', { timeout: 15000 });
+  await page.locator('[data-panel="agents"]').click();
+  await expect(rig).toHaveAttribute('data-pose', 'look', { timeout: 15000 });
+  await page.locator('[data-panel="chat"]').click();
+  await expect(rig).toBeVisible();
+  await expect(rig).not.toHaveAttribute('data-pose', 'look', { timeout: 15000 });
+});
+
 
 test('Capri keeps session and conversation text accessible across scrolling', async ({ page }) => {
   test.slow(); await page.emulateMedia({ reducedMotion: 'reduce' }); await linkedPhone(page);
@@ -174,7 +204,7 @@ for (const motion of ['reduce','no-preference'] as const) test(`keyboard resize 
   for (const panel of ['settings','agents'] as const) {
     if(panel==='agents'){await page.locator('[data-panel="agents"]').click();await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();}
     else {const detail=page.locator('.settings-manual');if(!await detail.evaluate(el=>(el as HTMLDetailsElement).open))await detail.locator('summary').click();}
-    const input=panel==='settings'?page.locator('#url'):page.getByRole('textbox',{name:'Continuar esta sesión'});await input.focus();await expect(input).toBeFocused();
+    const input=panel==='settings'?page.locator('#url'):page.getByRole('textbox',{name:'Continuar esta sesión'});await expect(input).toBeEnabled();await input.focus();await expect(input).toBeFocused();
     const values=await page.evaluate(async height=>{const v=window.visualViewport!;Object.defineProperties(v,{height:{configurable:true,value:height},pageTop:{configurable:true,value:0},scale:{configurable:true,value:1}});v.dispatchEvent(new Event('resize'));
       const take=()=>{const rig=document.querySelector<HTMLElement>('#rig-handle')!,a=rig.getBoundingClientRect(),b=document.activeElement!.getBoundingClientRect();return {overlap:a.left<b.right&&b.left<a.right&&a.top<b.bottom&&b.top<a.bottom,visible:rig.offsetWidth>0&&getComputedStyle(rig).visibility==='visible'&&getComputedStyle(rig).opacity!=='0'};};const values=[take()];for(let i=0;i<20;i++){await new Promise<void>(r=>requestAnimationFrame(()=>r()));values.push(take());}return values;},180);
     expect(values.some(value=>value.overlap),panel).toBe(false);expect(values.every(value=>value.visible),panel).toBe(true);
