@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { nativeSHA256Bytes } from './device-bridge.ts';
+import { localIdentifier } from './local-identifiers.ts';
 
 export const MAX_DOCUMENT_BYTES = 12 * 1024 * 1024;
 export const VOICE_MAX_SECONDS = 90;
@@ -271,16 +272,26 @@ export async function stopVoice(id: string): Promise<VoiceTranscript> {
   return parseVoiceTranscript(await native('stop_voice', { sessionId: sessionId(id) }), id);
 }
 export async function cancelVoice(ownerId?: string): Promise<void> { successful(await native('cancel_voice', ownerId ? { ownerId: sessionId(ownerId) } : undefined)); }
-export async function cancelDocument(): Promise<void> { successful(await native('cancel_document')); }
-export async function recognizeDocument(file: File): Promise<RecognizedDocument> {
+export async function cancelDocument(requestId: string): Promise<void> { successful(await native('cancel_document', { requestId: sessionId(requestId) })); }
+export async function recognizeDocument(file: File, signal?: AbortSignal): Promise<RecognizedDocument> {
   validateDocument(file);
+  signal?.throwIfAborted();
   const buffer = await file.arrayBuffer();
+  signal?.throwIfAborted();
   if (buffer.byteLength !== file.size) throw new Error('El archivo cambió durante la lectura. Vuelve a importarlo.');
   const sha256 = await hashSourceBytes(new Uint8Array(buffer));
+  signal?.throwIfAborted();
   const bytes = new Uint8Array(buffer);
   const chunks: string[] = [];
   for (let offset = 0; offset < bytes.length; offset += 0x8000) chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
   const base64 = btoa(chunks.join(''));
-  const result = await native('recognize_document', { request: { base64, mimeType: file.type, fileName: file.name } });
-  return parseRecognizedDocument(result, { name: file.name, type: file.type, size: file.size, sha256 });
+  signal?.throwIfAborted();
+  const requestId = localIdentifier();
+  const cancel = () => { void cancelDocument(requestId).catch(() => {}); };
+  signal?.addEventListener('abort', cancel, { once: true });
+  try {
+    const result = await native('recognize_document', { request: { requestId, base64, mimeType: file.type, fileName: file.name } });
+    signal?.throwIfAborted();
+    return parseRecognizedDocument(result, { name: file.name, type: file.type, size: file.size, sha256 });
+  } finally { signal?.removeEventListener('abort', cancel); }
 }

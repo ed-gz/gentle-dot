@@ -9,6 +9,7 @@ private struct VoiceOwnerArgs: Decodable { let ownerId: String?; let retainDesti
 private struct RetainedVoiceArgs: Decodable { let record: VoiceRecoveryRecord }
 private struct VoiceReceiptArgs: Decodable { let receipt: VoiceNativeReceipt }
 private struct VoiceReceiptSessionArgs: Decodable { let sessionId: String }
+private struct DocumentRequestIdArgs: Decodable { let requestId: String }
 private struct IncompleteVoiceExportReply: Encodable {
     let ok: Bool
     let exported: Bool?
@@ -21,6 +22,7 @@ private struct IncompleteVoiceExportReply: Encodable {
 final class PerceptionPlugin: Plugin {
     private var voice: AnyObject?
     private var document: DocumentOperation?
+    private var documentOwners = DocumentOwnership()
     private var pairingCode: DocumentOperation?
     private var observers: [NSObjectProtocol] = []
     private weak var exportWebview: WKWebView?
@@ -240,7 +242,7 @@ final class PerceptionPlugin: Plugin {
         }
     }
     @objc func recognizeDocument(_ invoke: Invoke) {
-        guard let args = try? invoke.parseArgs(DocumentArgs.self) else {
+        guard let args = try? invoke.parseArgs(DocumentArgs.self), let requestId = args.requestId, UUID(uuidString: requestId) != nil else {
             invoke.resolve(DocumentReply(error: "invalid_document", message: "El documento no es válido.")); return
         }
         DispatchQueue.main.async {
@@ -250,6 +252,9 @@ final class PerceptionPlugin: Plugin {
             guard self.document == nil else {
                 invoke.resolve(DocumentReply(error: "busy", message: "Espera a que termine la lectura actual.")); return
             }
+            guard self.documentOwners.begin(requestId) else {
+                invoke.resolve(DocumentReply(error: "cancelled", message: "Lectura cancelada.")); return
+            }
             let operation = DocumentOperation()
             self.document = operation
             let timeout = DispatchWorkItem { operation.cancel(timeout: true) }
@@ -258,14 +263,20 @@ final class PerceptionPlugin: Plugin {
                 let result = operation.recognize(args)
                 timeout.cancel()
                 DispatchQueue.main.async {
-                    if self.document === operation { self.document = nil }
+                    if self.document === operation { self.document = nil; self.documentOwners.finish(requestId) }
                     invoke.resolve(operation.finalResult(result))
                 }
             }
         }
     }
     @objc func cancelDocument(_ invoke: Invoke) {
-        DispatchQueue.main.async { self.document?.cancel(); invoke.resolve(VoiceReply(ok: true)) }
+        guard let args = try? invoke.parseArgs(DocumentRequestIdArgs.self), UUID(uuidString: args.requestId) != nil else {
+            invoke.resolve(VoiceReply.failure("invalid_document_request", "No se pudo identificar la lectura.")); return
+        }
+        DispatchQueue.main.async {
+            if self.documentOwners.cancel(args.requestId) { self.document?.cancel() }
+            invoke.resolve(VoiceReply(ok: true))
+        }
     }
     @objc func scanPairingCode(_ invoke: Invoke) {
         guard let args = try? invoke.parseArgs(DocumentArgs.self) else {

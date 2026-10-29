@@ -9,6 +9,7 @@ struct DocumentArgs: Decodable {
     let base64: String
     let mimeType: String
     let fileName: String
+    var requestId: String? = nil
 }
 struct DocumentSource: Encodable {
     let name: String

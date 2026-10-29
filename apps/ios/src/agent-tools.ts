@@ -1,6 +1,6 @@
 import { addWorkVersion, createWork, listWork, readWork, readWorkFile, reviseWork, WORK_LIMITS,
   type WorkInput, type WorkItem } from './work-inbox.ts';
-import { checkVoice, recognizeDocument, cancelDocument, hashSourceBytes, type RecognizedDocument } from './perception.ts';
+import { checkVoice, recognizeDocument, hashSourceBytes, type RecognizedDocument } from './perception.ts';
 import { checkLocalIntelligence } from './local-intelligence.ts';
 import { validateOperation, type Operation } from './external-actions.ts';
 
@@ -20,8 +20,7 @@ export interface LocalToolServices {
   reviseWork: typeof reviseWork;
   addWorkVersion: typeof addWorkVersion;
   readWorkFile: typeof readWorkFile;
-  recognizeDocument: (file: File) => Promise<RecognizedDocument>;
-  cancelDocument: () => Promise<void>;
+  recognizeDocument: (file: File, signal?: AbortSignal) => Promise<RecognizedDocument>;
   capabilities: () => Promise<unknown>;
 }
 
@@ -88,7 +87,7 @@ export function createToolRegistry(tools: readonly Tool[]): ToolRegistry {
 }
 
 const defaults: LocalToolServices = {
-  listWork, readWork, createWork, reviseWork, addWorkVersion, readWorkFile, recognizeDocument, cancelDocument,
+  listWork, readWork, createWork, reviseWork, addWorkVersion, readWorkFile, recognizeDocument,
   async capabilities() {
     const [model, voice] = await Promise.allSettled([checkLocalIntelligence(), checkVoice()]);
     return {
@@ -165,29 +164,25 @@ export function createLocalTools(overrides: Partial<LocalToolServices> = {}): To
       value => { const a = args(value, ['workId', 'fileId', 'page', 'offset', 'maxChars']); return { workId: id(a.workId), fileId: id(a.fileId), ...(a.page === undefined ? {} : { page: integer(a.page, 1, 20) }), ...paging(a) }; },
       async (a, context) => {
         const { metadata, blob } = await readFile(a.workId, a.fileId, context.signal);
-        const cancel = () => { void service.cancelDocument().catch(() => {}); };
-        context.signal.addEventListener('abort', cancel, { once: true });
-        try {
-          context.signal.throwIfAborted();
-          const result = await service.recognizeDocument(new File([blob], metadata.name, { type: metadata.type }));
-          context.signal.throwIfAborted();
-          const pages = a.page ? result.pages.filter(page => page.page === a.page) : result.pages;
-          if (!pages.length) throw new Error('La página solicitada no existe.');
-          let remainingEvidence = 20;
-          const evidence = pages.map(page => {
-            const selected = page.observations.slice(0, Math.min(10, remainingEvidence));
-            remainingEvidence -= selected.length;
-            return { page: page.page, pixelWidth: page.pixelWidth, pixelHeight: page.pixelHeight,
-              observationCount: page.observations.length,
-              observations: selected.map(observation => ({ ...observation, text: observation.text.slice(0, 300),
-                textTruncated: observation.text.length > 300, originalTextChars: observation.text.length })),
-              evidenceTruncated: page.observations.length > selected.length };
-          });
-          return { workId: a.workId, fileId: a.fileId, source: result.source, untrustedContent: true, warnings: result.warnings,
-            coordinateSystem: result.coordinateSystem, totalPages: result.pages.length,
-            content: excerpt(pages.map(page => page.text).join('\n\n'), a.offset, a.maxChars),
-            evidence };
-        } finally { context.signal.removeEventListener('abort', cancel); }
+        context.signal.throwIfAborted();
+        const result = await service.recognizeDocument(new File([blob], metadata.name, { type: metadata.type }), context.signal);
+        context.signal.throwIfAborted();
+        const pages = a.page ? result.pages.filter(page => page.page === a.page) : result.pages;
+        if (!pages.length) throw new Error('La página solicitada no existe.');
+        let remainingEvidence = 20;
+        const evidence = pages.map(page => {
+          const selected = page.observations.slice(0, Math.min(10, remainingEvidence));
+          remainingEvidence -= selected.length;
+          return { page: page.page, pixelWidth: page.pixelWidth, pixelHeight: page.pixelHeight,
+            observationCount: page.observations.length,
+            observations: selected.map(observation => ({ ...observation, text: observation.text.slice(0, 300),
+              textTruncated: observation.text.length > 300, originalTextChars: observation.text.length })),
+            evidenceTruncated: page.observations.length > selected.length };
+        });
+        return { workId: a.workId, fileId: a.fileId, source: result.source, untrustedContent: true, warnings: result.warnings,
+          coordinateSystem: result.coordinateSystem, totalPages: result.pages.length,
+          content: excerpt(pages.map(page => page.text).join('\n\n'), a.offset, a.maxChars),
+          evidence };
       }),
     makeTool({ name: 'external_prepare', description: 'Prepara contenido exacto para revisión de GitHub, Slack, Gmail u Odoo. Devuelve un intento local sin aprobación ni ejecución. Nunca afirmar que se envió o modificó el servicio.',
       parameters: parameters({ operation: { type: 'object', description: 'Operation declarada: github.issue, slack.message, gmail.message, odoo.task.create u odoo.task.update. No incluye credenciales ni aprobación.' } }, ['operation']) },

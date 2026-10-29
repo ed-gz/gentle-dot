@@ -81,7 +81,7 @@ test('OCR cancellation reaches the native operation and rejects late successful 
   f.work.files = [{ id: 'image-1', name: 'error.png', type: 'image/png', size: blob.size }];
   f.services.readWorkFile = async () => blob;
   let started; const began = new Promise(resolve => { started = resolve; });
-  let finish; f.services.recognizeDocument = async file => { assert.equal(file.name, 'error.png'); started(); return new Promise(resolve => { finish = resolve; }); };
+  let finish; f.services.recognizeDocument = async (file, signal) => { assert.equal(file.name, 'error.png'); signal.addEventListener('abort', () => void f.services.cancelDocument(), { once: true }); started(); return new Promise(resolve => { finish = resolve; }); };
   const running = f.registry().execute('file_ocr', { workId: f.work.id, fileId: 'image-1' }, { signal: controller.signal });
   await began; controller.abort(); finish({ text: 'late' });
   await assert.rejects(running, { name: 'AbortError' });

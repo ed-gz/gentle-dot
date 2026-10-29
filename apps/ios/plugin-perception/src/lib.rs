@@ -9,6 +9,7 @@ const MAX_DOCUMENT_BYTES: usize = 12 * 1024 * 1024;
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DocumentRequest {
+    request_id: Option<String>,
     base64: String,
     mime_type: String,
     file_name: String,
@@ -66,6 +67,10 @@ fn valid_session_id(id: &str) -> bool {
                 b.is_ascii_hexdigit()
             }
         })
+}
+
+fn valid_recognition_request(request: &DocumentRequest) -> bool {
+    valid_document(request) && request.request_id.as_deref().is_some_and(valid_session_id)
 }
 
 fn valid_retention_destination(value: &str) -> bool {
@@ -282,15 +287,21 @@ async fn release_retained_voice<R: Runtime>(
     native_call(app, "releaseRetainedVoice", json!({"receipt": receipt})).await
 }
 #[tauri::command]
-async fn cancel_document<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
-    native_call(app, "cancelDocument", json!({})).await
+async fn cancel_document<R: Runtime>(
+    app: AppHandle<R>,
+    request_id: String,
+) -> Result<Value, String> {
+    if !valid_session_id(&request_id) {
+        return Err("invalid_document_request".into());
+    }
+    native_call(app, "cancelDocument", json!({"requestId": request_id})).await
 }
 #[tauri::command]
 async fn recognize_document<R: Runtime>(
     app: AppHandle<R>,
     request: DocumentRequest,
 ) -> Result<Value, String> {
-    if !valid_document(&request) {
+    if !valid_recognition_request(&request) {
         return Err("invalid_document".into());
     }
     native_call(app, "recognizeDocument", json!(request)).await
@@ -348,6 +359,7 @@ mod tests {
     use super::*;
     fn request() -> DocumentRequest {
         DocumentRequest {
+            request_id: None,
             base64: "eA==".into(),
             mime_type: "image/png".into(),
             file_name: "error.png".into(),
@@ -382,6 +394,15 @@ mod tests {
             r.file_name = name.into();
             assert!(!valid_document(&r));
         }
+    }
+    #[test]
+    fn recognition_requires_an_exact_request_identity() {
+        let mut r = request();
+        assert!(!valid_recognition_request(&r));
+        r.request_id = Some("01234567-89ab-cdef-0123-456789abcdef".into());
+        assert!(valid_recognition_request(&r));
+        r.request_id = Some("../other-request".into());
+        assert!(!valid_recognition_request(&r));
     }
     #[test]
     fn session_ids_do_not_accept_paths_or_arbitrary_payloads() {
