@@ -22,7 +22,7 @@ async function fixture(page: Page, modern: boolean) {
         return value === null ? { ok: true } : { ok: true, value };
       }
       if (command.endsWith('secret_set')) {
-        sessionStorage.setItem(`fixture-keychain:${request.scope}:${request.account}`, request.value); return { ok: true };
+        const key = `fixture-keychain:${request.scope}:${request.account}`; if (request.compare === true && sessionStorage.getItem(key) !== (request.expected ?? null)) return { ok: true, persisted: false }; sessionStorage.setItem(key, request.value); return { ok: true, persisted: true };
       }
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('agent_step')) return { ok: true, decision: { kind: 'answer', text: 'Respuesta local.', toolName: '', argumentsJSON: '{}' } };

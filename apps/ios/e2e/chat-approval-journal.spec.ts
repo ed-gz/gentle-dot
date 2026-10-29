@@ -29,7 +29,7 @@ test('chat cards only offer a journaled refusal and ignore an approval read afte
   state.__TAURI_INTERNALS__={invoke:async(command:string,args:any)=>{
     const name=command.split('|').at(-1),req=args?.request??{};
     if(name==='secret_get'){const value=sessionStorage.getItem(`key:${req.scope}:${req.account}`);return value===null?{ok:true}:{ok:true,value};}
-    if(name==='secret_set'){sessionStorage.setItem(`key:${req.scope}:${req.account}`,req.value);return {ok:true};}
+    if(name==='secret_set'){const key=`key:${req.scope}:${req.account}`;if(req.compare===true && sessionStorage.getItem(key)!==(req.expected??null))return {ok:true,persisted:false};sessionStorage.setItem(key,req.value);return {ok:true,persisted:true};}
     if(name==='share_list'||name==='documents_list')return {ok:true,items:[]};
     if(name==='https_receipt_state')return {ok:true,receiptState:'active'};
     if(name==='https_request'){

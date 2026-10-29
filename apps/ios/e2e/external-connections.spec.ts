@@ -57,7 +57,7 @@ test('credential rotation preserves refresh metadata and a losing CAS removes on
       if (command.endsWith('results_list')) return { ok: true, items: [] };
       const request = args?.request;
       const key = request ? `${request.scope}:${request.account}` : '';
-      if (command.endsWith('|secret_set')) { state.testKeychain.set(key, request.value); return { ok: true, persisted: true }; }
+      if (command.endsWith('|secret_set')) { if (request.compare === true && (state.testKeychain.get(key) ?? null) !== (request.expected ?? null)) return { ok: true, persisted: false }; state.testKeychain.set(key, request.value); return { ok: true, persisted: true }; }
       if (command.endsWith('|secret_get')) return { ok: true, value: state.testKeychain.get(key) };
       if (command.endsWith('|secret_delete')) { state.testKeychain.delete(key); return { ok: true }; }
       if (command.endsWith('|share_list') || command.endsWith('|documents_list')) return { ok: true, items: [] };
@@ -77,7 +77,7 @@ test('credential rotation preserves refresh metadata and a losing CAS removes on
     const metadata = await store.getConnection(initial.id);
     const keychain = (globalThis as any).testKeychain as Map<string, string>;
     const surviving = JSON.parse(keychain.get(`external-connections:${metadata.credentialAccount}`)!);
-    return { statuses: attempts.map(value => value.status), metadata, remaining: keychain.size, surviving, stored: JSON.stringify(await store.listConnections()) };
+    return { statuses: attempts.map(value => value.status), metadata, remaining: [...keychain.keys()].filter(key => key.startsWith('external-connections:')).length, surviving, stored: JSON.stringify(await store.listConnections()) };
   });
   expect(result.statuses.sort()).toEqual(['fulfilled', 'rejected']);
   expect(result.remaining).toBe(1);

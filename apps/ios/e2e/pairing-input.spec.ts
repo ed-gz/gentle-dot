@@ -259,7 +259,9 @@ test('installed settings lead with the camera and keep pasted codes secondary un
 test('pairing tells the user to approve on the laptop while the host request is pending', async ({ page }) => {
   await page.addInitScript(link => {
     const state = globalThis as any; state.isTauri = true;
-    state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
+    state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('|secret_get')) { const value = sessionStorage.getItem(`fixture-keychain:${args.request.scope}:${args.request.account}`); return value === null ? { ok: true } : { ok: true, value }; }
+      if (command.endsWith('|secret_set')) { const req = args.request, key = `fixture-keychain:${req.scope}:${req.account}`; if (req.compare === true && sessionStorage.getItem(key) !== (req.expected ?? null)) return { ok: true, persisted: false }; sessionStorage.setItem(key, req.value); return { ok: true, persisted: true }; }
       if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: link };
       if (command.endsWith('|pair_device')) return new Promise(resolve => { state.finishPairing = () => resolve({ ok: false, status: 403 }); });
       if (command.endsWith('|share_list') || command.endsWith('|documents_list') || command.endsWith('results_list')) return { ok: true, items: [] };
@@ -291,12 +293,14 @@ test('a paired credential that could not be saved can be retried without redeemi
       if (command.endsWith('|secret_get') && args.request.account === 'capri.selected-connection.v1') return { ok: true, value: state.selectionMarker };
       if (command.endsWith('|secret_set') && args.request.account === 'capri.selected-connection.v1') {
         const marker = JSON.parse(args.request.value);
+        if (args.request.compare !== true) return { ok: false };
+        if ((state.selectionMarker ?? null) !== (args.request.expected ?? null)) return { ok: true, persisted: false };
         if (marker.state === 'pending' && marker.candidate) {
           state.saveCalls++;
           if (state.saveCalls === 1) return { ok: false, error: 'storage' };
-          return new Promise(resolve => { state.finishSave = () => { state.selectionMarker = args.request.value; resolve({ ok: true }); }; });
+          return new Promise(resolve => { state.finishSave = () => { if ((state.selectionMarker ?? null) !== (args.request.expected ?? null)) { resolve({ ok: true, persisted: false }); return; } state.selectionMarker = args.request.value; resolve({ ok: true, persisted: true }); }; });
         }
-        state.selectionMarker = args.request.value; return { ok: true };
+        state.selectionMarker = args.request.value; return { ok: true, persisted: true };
       }
       if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: link };
       if (command.endsWith('|pair_device')) {
@@ -379,7 +383,7 @@ test('token receipt does not claim human approval or persistence before handshak
     const state = globalThis as any; state.isTauri = true; state.pairCalls = 0; state.selectionMarker = undefined;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('|secret_get') && args.request.account === 'capri.selected-connection.v1') return { ok: true, value: state.selectionMarker };
-      if (command.endsWith('|secret_set') && args.request.account === 'capri.selected-connection.v1') { state.selectionMarker = args.request.value; return { ok: true }; }
+      if (command.endsWith('|secret_set') && args.request.account === 'capri.selected-connection.v1') { if (args.request.compare !== true) return { ok: false }; if ((state.selectionMarker ?? null) !== (args.request.expected ?? null)) return { ok: true, persisted: false }; state.selectionMarker = args.request.value; return { ok: true, persisted: true }; }
       if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: link };
       if (command.endsWith('|pair_device')) { state.pairCalls++; return { ok: true, persisted: true, connection: { url: 'wss://laptop.example.ts.net/ws', token: 'a'.repeat(64), deviceId: 'device-1', name: 'Capri iPhone' } }; }
       if (command.endsWith('|share_list') || command.endsWith('|documents_list') || command.endsWith('results_list')) return { ok: true, items: [] };
@@ -411,7 +415,7 @@ test('confirmed pairing reconnects after reload without redeeming the invitation
     const state = globalThis as any; state.isTauri = true;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('|secret_get')) return { ok: true, value: localStorage.getItem('fixture-secret:' + args.request.account) };
-      if (command.endsWith('|secret_set')) { localStorage.setItem('fixture-secret:' + args.request.account, args.request.value); return { ok: true }; }
+      if (command.endsWith('|secret_set')) { const key = 'fixture-secret:' + args.request.account; if (args.request.compare === true && localStorage.getItem(key) !== (args.request.expected ?? null)) return { ok: true, persisted: false }; localStorage.setItem(key, args.request.value); return { ok: true, persisted: true }; }
       if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: link };
       if (command.endsWith('|pair_device')) { localStorage.setItem('fixture-pairs', String(Number(localStorage.getItem('fixture-pairs') || 0) + 1)); return { ok: true, persisted: true, connection: { url: 'wss://laptop.example.ts.net/ws', token: 'a'.repeat(64), deviceId: 'device-1', name: 'Capri iPhone' } }; }
       if (command.endsWith('|share_list') || command.endsWith('|documents_list') || command.endsWith('results_list')) return { ok: true, items: [] };

@@ -31,7 +31,7 @@ async function fixture(page: Page, onRequest: (message: WireMessage, send: (mess
         return value === null ? { ok: true } : { ok: true, value };
       }
       if (command.endsWith('secret_set')) {
-        sessionStorage.setItem(`fixture-keychain:${request.scope}:${request.account}`, request.value); return { ok: true };
+        const key = `fixture-keychain:${request.scope}:${request.account}`; if (request.compare === true && sessionStorage.getItem(key) !== (request.expected ?? null)) return { ok: true, persisted: false }; sessionStorage.setItem(key, request.value); return { ok: true, persisted: true };
       }
       if (command.endsWith('results_list')) return { ok: true, items: [] };
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };

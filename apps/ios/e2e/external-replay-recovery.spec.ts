@@ -2,7 +2,7 @@ import { expect, test } from './fixtures.ts';
 
 test('recreated connections and different credentials cannot bypass an uncertain endpoint operation', async ({page})=>{
   await page.addInitScript(()=>{const state=globalThis as any;state.isTauri=true;state.keychain=new Map();state.__TAURI_INTERNALS__={invoke:async(command:string,args:any)=>{
-    if(command.endsWith('secret_set')){state.keychain.set(args.request.account,args.request.value);return {ok:true};}
+    if(command.endsWith('secret_set')){if(args.request.compare===true && (state.keychain.get(args.request.account)??null)!==(args.request.expected??null))return {ok:true,persisted:false};state.keychain.set(args.request.account,args.request.value);return {ok:true,persisted:true};}
     if(command.endsWith('secret_get'))return {ok:true,value:state.keychain.get(args.request.account)};
     if(command.endsWith('secret_delete')){state.keychain.delete(args.request.account);return {ok:true};}
     if(command.endsWith('results_list')||command.endsWith('share_list')||command.endsWith('documents_list'))return {ok:true,items:[]};return {ok:true};

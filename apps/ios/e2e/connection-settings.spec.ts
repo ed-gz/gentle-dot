@@ -11,7 +11,7 @@ async function fixture(page: Page, schemes = ['capri-auth']) {
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('results_list')) return { ok: true, items: [] };
       const request = args?.request ?? {}, key = `${request.scope}:${request.account}`;
-      if (command.endsWith('|secret_set')) { state.settingsVault.set(key, request.value); return { ok: true, persisted: true }; }
+      if (command.endsWith('|secret_set')) { if (request.compare === true && (state.settingsVault.get(key) ?? null) !== (request.expected ?? null)) return { ok: true, persisted: false }; state.settingsVault.set(key, request.value); return { ok: true, persisted: true }; }
       if (command.endsWith('|secret_get')) return { ok: true, value: state.settingsVault.get(key) };
       if (command.endsWith('|secret_delete')) { state.settingsVault.delete(key); return { ok: true }; }
       if (command.endsWith('|registered_url_schemes')) return { ok: true, schemes };
@@ -70,7 +70,7 @@ test('provider form stores PAT only in Keychain and binds edits to the visible r
   expect(await page.evaluate(() => (globalThis as any).settingsRequests)).toEqual([]);
   expect(JSON.stringify(stored)).not.toContain('fixture-personal-token');
   expect(await page.locator('body').innerText()).not.toContain('fixture-personal-token');
-  const secret = await page.evaluate(() => [...(globalThis as any).settingsVault.values()]);
+  const secret = await page.evaluate(() => [...(globalThis as any).settingsVault.entries()].filter(([key]) => key.startsWith('external-connections:')).map(([, value]) => value));
   expect(secret).toHaveLength(1); expect(secret[0]).toContain('fixture-personal-token');
   await page.getByRole('button', { name: 'Editar acceso' }).click();
   await expect(page.locator('#connection-secret')).toHaveValue('');
@@ -96,7 +96,7 @@ test('an additional MCP service authorizes a public native client and keeps acce
   expect(stored[0]).toMatchObject({ kind: 'mcp', endpoint: 'https://custom.example/mcp', revision: 1 });
   expect(JSON.stringify(stored)).not.toContain('fixture-custom');
   expect(await page.locator('body').innerText()).not.toContain('fixture-custom');
-  const secret = await page.evaluate(() => [...(globalThis as any).settingsVault.values()]);
+  const secret = await page.evaluate(() => [...(globalThis as any).settingsVault.entries()].filter(([key]) => key.startsWith('external-connections:')).map(([, value]) => value));
   expect(JSON.parse(secret[0]).mcpOAuth.resource).toBe('https://custom.example/mcp');
 });
 
@@ -108,7 +108,7 @@ test('Slack consent uses minimum read scopes and persists refresh credentials wi
   await expect(page.locator('#connection-secret')).toBeHidden();
   await page.locator('#connection-save').click();
   await expect(page.locator('#connections-status')).toContainText('Autorización guardada');
-  const auth = await page.evaluate(() => ({ urls: (globalThis as any).settingsURLs, requests: (globalThis as any).settingsRequests, vault: [...(globalThis as any).settingsVault.values()] }));
+  const auth = await page.evaluate(() => ({ urls: (globalThis as any).settingsURLs, requests: (globalThis as any).settingsRequests, vault: [...(globalThis as any).settingsVault.entries()].filter(([key]) => key.startsWith('external-connections:')).map(([, value]) => value) }));
   const url = new URL(auth.urls[0]); expect(url.searchParams.get('scope')).toBe('');
   expect(url.searchParams.get('user_scope')!.split(',').sort()).toEqual(['channels:history', 'channels:read', 'users:read']);
   expect(url.searchParams.get('user_scope')).not.toContain('chat:write');
@@ -194,7 +194,7 @@ test('Odoo reveals legacy requirements and removal names the connection before d
   await page.getByRole('button', { name: 'Confirmar eliminación' }).click();
   await expect(page.locator('#connections-status')).toContainText('retirada');
   expect(await metadata(page)).toEqual([]);
-  expect(await page.evaluate(() => (globalThis as any).settingsVault.size)).toBe(0);
+  expect(await page.evaluate(() => [...(globalThis as any).settingsVault.keys()].filter((key: string) => key.startsWith('external-connections:')).length)).toBe(0);
 });
 
 test('provider settings fit small and landscape screens with large text and reduced motion', async ({ page }, testInfo) => {

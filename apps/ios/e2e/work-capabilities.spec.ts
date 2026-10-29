@@ -6,7 +6,7 @@ for (const supported of [false, true]) test(`${supported ? 'capable host confirm
     const state = globalThis as any; state.isTauri = true; state.nativePrompts = []; let step = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('results_list')) return { ok: true, items: [] };
-      if (command.endsWith('secret_set')) { const request = args.request; sessionStorage.setItem(`fixture-keychain:${request.scope}:${request.account}`, request.value); return { ok: true }; }
+      if (command.endsWith('secret_set')) { const request = args.request; const key = `fixture-keychain:${request.scope}:${request.account}`; if (request.compare === true && sessionStorage.getItem(key) !== (request.expected ?? null)) return { ok: true, persisted: false }; sessionStorage.setItem(key, request.value); return { ok: true, persisted: true }; }
       if (command.endsWith('secret_get')) { const request = args.request, value = sessionStorage.getItem(`fixture-keychain:${request.scope}:${request.account}`); return value === null ? { ok: true } : { ok: true, value }; }
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };

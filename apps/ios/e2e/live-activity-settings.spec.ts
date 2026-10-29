@@ -9,7 +9,7 @@ async function nativeActivity(page: Page, fixture: Fixture = {}) {
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       const name = command.split('|').at(-1);
       if (name === 'secret_get') { const request=args.request, value=sessionStorage.getItem(`fixture-keychain:${request.scope}:${request.account}`); return value===null?{ok:true}:{ok:true,value}; }
-      if (name === 'secret_set') { const request=args.request;sessionStorage.setItem(`fixture-keychain:${request.scope}:${request.account}`,request.value);return {ok:true}; }
+      if (name === 'secret_set') { const request=args.request;const key=`fixture-keychain:${request.scope}:${request.account}`;if(request.compare===true && sessionStorage.getItem(key)!==(request.expected??null))return {ok:true,persisted:false};sessionStorage.setItem(key,request.value);return {ok:true,persisted:true}; }
       if (name?.startsWith('live_activity_')) {
         const action = name.slice('live_activity_'.length), request = args?.request ?? {};
         state.activityCalls.push({ action, request: structuredClone(request), ...(action === 'end' ? { journalAcked: sessionStorage.getItem('fixture-journal-acked') === '1' } : {}) });

@@ -15,7 +15,7 @@ async function linkedPhone(page: Page) {
         return value === null ? { ok: true } : { ok: true, value };
       }
       if (command.endsWith('secret_set')) {
-        sessionStorage.setItem(`fixture-keychain:${args.scope}:${args.account}`, args.value); return { ok: true };
+        const key = `fixture-keychain:${args.scope}:${args.account}`; if (args.compare === true && sessionStorage.getItem(key) !== (args.expected ?? null)) return { ok: true, persisted: false }; sessionStorage.setItem(key, args.value); return { ok: true, persisted: true };
       }
       if (command.endsWith('check_availability')) return { available: false, status: 'model_not_ready', supportsSpanish: false };
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
