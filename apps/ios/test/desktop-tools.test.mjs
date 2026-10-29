@@ -336,3 +336,14 @@ test('an oversized response to a session mutation remains uncertain and is never
 test('a host advertising question binding cannot omit the revision', () => {
   assert.throws(() => parseDesktopPage({...page(),capabilities:{questionBinding:1},question:{id:'q',kind:'confirm',title:'Revisar',message:'Contenido',expiresAt:new Date(Date.now()+60000).toISOString()}},target.sessionId), /no confirmó la revisión/);
 });
+
+test('human-only answer binds the reviewed revision and refuses a changed revision', async () => {
+ const revision='a'.repeat(64),question={id:'q1',title:'Revisar',message:'Contenido exacto',kind:'confirm',expiresAt:new Date(Date.now()+60000).toISOString()};
+ let reads=0,change=false,sent;
+ const client=createDesktopSessionClient({journal:memoryJournal(),controlJournal:memoryJournal(),getConnection:()=>conn,request:async request=>{
+  const payload=JSON.parse(request.body);if(payload.action==='inspect'){reads++;return {status:200,headers:{},body:JSON.stringify({...page(),question,questionRevision:change&&reads>1?'b'.repeat(64):revision,capabilities:{questionBinding:1}})};}
+  sent=payload;return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:target.sessionId,instanceId:'instance-1'})};
+ }});
+ change=true;await assert.rejects(client.answerFromHuman({...target,requestId:'q1',confirmed:true},context(async()=>true)),/permiso cambió/);assert.equal(sent,undefined);
+ change=false;reads=0;assert.equal((await client.answerFromHuman({...target,requestId:'q1',confirmed:true},context(async()=>true))).accepted,true);assert.equal(sent.expectedQuestionRevision,revision);
+});
