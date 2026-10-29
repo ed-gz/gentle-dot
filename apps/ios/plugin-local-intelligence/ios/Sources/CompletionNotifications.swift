@@ -7,6 +7,7 @@ import UIKit
 struct CompletionNotificationStatus: Encodable {
     let ok: Bool
     let enabled: Bool
+    let preferred: Bool
     let authorization: String
 }
 
@@ -70,12 +71,14 @@ final class CompletionNotifications {
         return false
         #endif
     }) {
+        defaults.register(defaults: [Self.key: true])
         self.client = client ?? SystemCompletionNotificationClient(); self.defaults = defaults; self.inBackground = inBackground
     }
     private func allowed(_ status: String) -> Bool { ["authorized", "provisional", "ephemeral"].contains(status) }
     func status() async -> CompletionNotificationStatus {
         let authorization = await client.authorization()
-        return CompletionNotificationStatus(ok: true, enabled: defaults.bool(forKey: Self.key) && allowed(authorization), authorization: authorization)
+        let preferred = defaults.bool(forKey: Self.key)
+        return CompletionNotificationStatus(ok: true, enabled: preferred && allowed(authorization), preferred: preferred, authorization: authorization)
     }
     func configure(enabled: Bool) async throws -> CompletionNotificationStatus {
         revision += 1; let current = revision
@@ -88,7 +91,7 @@ final class CompletionNotifications {
         let authorization = await client.authorization()
         guard revision == current else { return await status() }
         defaults.set(granted && allowed(authorization), forKey: Self.key)
-        return CompletionNotificationStatus(ok: true, enabled: granted && allowed(authorization), authorization: authorization)
+        return CompletionNotificationStatus(ok: true, enabled: granted && allowed(authorization), preferred: granted && allowed(authorization), authorization: authorization)
     }
     func notifyCompleted(id: String) async {
         guard defaults.bool(forKey: Self.key), inBackground(), !cancelled.contains(id) else { return }

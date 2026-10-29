@@ -1,14 +1,16 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { withInferenceDeadline } from './inference-recovery.ts';
 
-export type CompletionNotificationStatus = { enabled: boolean; authorization: 'authorized' | 'provisional' | 'ephemeral' | 'denied' | 'not_determined' | 'unavailable' };
+export type CompletionNotificationStatus = { enabled: boolean; preferred?: boolean; authorization: 'authorized' | 'provisional' | 'ephemeral' | 'denied' | 'not_determined' | 'unavailable' };
 export function parseCompletionNotificationStatus(value: unknown): CompletionNotificationStatus {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('El iPhone no confirmó la configuración de avisos.');
   const item = value as Record<string, unknown>;
   if (item.ok !== true || typeof item.enabled !== 'boolean' || typeof item.authorization !== 'string'
       || !['authorized', 'provisional', 'ephemeral', 'denied', 'not_determined', 'unavailable'].includes(item.authorization)
-      || (item.enabled && !['authorized', 'provisional', 'ephemeral'].includes(item.authorization))) throw new Error('El iPhone no confirmó la configuración de avisos.');
-  return { enabled: item.enabled, authorization: item.authorization as CompletionNotificationStatus['authorization'] };
+      || (item.enabled && !['authorized', 'provisional', 'ephemeral'].includes(item.authorization))
+      || (item.preferred !== undefined && typeof item.preferred !== 'boolean')
+      || (item.enabled && item.preferred === false)) throw new Error('El iPhone no confirmó la configuración de avisos.');
+  return { enabled: item.enabled, authorization: item.authorization as CompletionNotificationStatus['authorization'], ...(typeof item.preferred === 'boolean' ? { preferred: item.preferred } : {}) };
 }
 
 /** Permission is requested exclusively by a direct change to the checkbox. */
@@ -22,8 +24,10 @@ export function mountCompletionNotifications(root: HTMLElement, dependencies: {
   const configure = dependencies.configure ?? ((enabled: boolean) => invoke('plugin:local-intelligence|notification_configure', { enabled }));
   let revision = 0, userRevision = 0, configuring = false, refreshAfterConfiguration = false;
   function show(value: CompletionNotificationStatus) {
-    toggle.checked = value.enabled;
+    toggle.checked = value.preferred ?? value.enabled;
     message.textContent = value.enabled ? 'Si iOS permite completar la respuesta al salir, te avisaré sin mostrar su contenido.'
+      : value.preferred && value.authorization === 'not_determined' ? 'Avisos activados, pero el iPhone aún no los ha permitido. Para solicitar permiso, apágalos y vuelve a activarlos.'
+      : value.preferred ? 'Avisos activados, pero el iPhone aún no los permite. Revisa Ajustes del iPhone.'
       : value.authorization === 'denied' ? 'Los avisos están desactivados en Ajustes del iPhone.'
       : 'Desactivados. Puedes activarlos cuando quieras.';
   }

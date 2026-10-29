@@ -41,7 +41,7 @@ export function mountLiveActivitySettings(root: HTMLElement, coordinator: Coordi
     if (!native) { configured = true; render(coordinator.snapshot()); return; }
     const preference = saved(); configured = true;
     try {
-      await coordinator.setEnabled(preference === 'enabled');
+      await coordinator.setEnabled(preference !== 'disabled');
       // A prior opt-out may have raced a timeout. Inspect on restart so the
       // person can dismiss a still-visible activity without restarting work.
       if (preference === 'disabled') await coordinator.refresh();

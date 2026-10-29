@@ -30,8 +30,13 @@ enum CompletionNotificationsTests {
         let id = "d3dba896-4b5c-4c1c-98c9-4e60238fe6b9"
         var checks = 0
         func check(_ condition: Bool, _ message: String) { precondition(condition, message); checks += 1 }
+        let initial = await service.status()
+        check(initial.preferred && !initial.enabled && client.requests == 0, "default preference is on without requesting permission")
+        client.permission = "authorized"
+        check((await service.status()).enabled, "existing system permission enables the default")
+        client.permission = "not_determined"
         await service.notifyCompleted(id: id)
-        check(client.added.isEmpty && client.requests == 0, "no notification or permission request by default")
+        check(client.added.isEmpty && client.requests == 0, "no notification or permission request without consent")
         let denied = try await service.configure(enabled: true)
         check(!denied.enabled && client.requests == 1, "explicit consent denial does not enable alerts")
         client.permission = "authorized"; client.requestResult = true

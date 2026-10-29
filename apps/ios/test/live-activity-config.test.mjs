@@ -5,7 +5,20 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
+import { mountLiveActivitySettings } from '../src/live-activity-settings.ts';
+
 const script = new URL('../scripts/configure-live-activity.rb', import.meta.url).pathname;
+test('initialization defaults on, respects saved choices and never retries a failed mutation', async () => {
+  for (const [value, expected, fails] of [[null, true, false], ['0', false, false], ['1', true, false], [null, true, true]]) {
+    const calls = []; const state = { enabled: expected, status: 'ready' };
+    const input = { addEventListener() {} }; const message = {}; const button = { addEventListener() {} };
+    const root = { querySelector: selector => selector === 'input' ? input : selector === 'button' ? button : message };
+    const coordinator = { snapshot: () => state, setEnabled: async enabled => { calls.push(enabled); if (fails) throw new Error('uncertain'); }, refresh: async () => {} };
+    const settings = mountLiveActivitySettings(root, coordinator, { native: true, storage: { getItem: () => value, setItem() {} } });
+    await settings.initialize();
+    assert.deepEqual(calls, [expected]);
+  }
+});
 test('optional XcodeGen target is idempotent and embeds only the WidgetKit extension', () => {
   const root = mkdtempSync(join(tmpdir(), 'capri-live-spec-'));
   try {

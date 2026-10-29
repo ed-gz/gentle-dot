@@ -80,14 +80,29 @@ async function submit(page: Page) {
 const toggle = '#live-activity-settings input';
 const status = '#live-activity-settings [role="status"]';
 
-test('without opt-in, a real local turn never queries or starts a Lock Screen activity', async ({ page }) => {
+test('an explicit opt-out keeps a real local turn from touching the Lock Screen', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('capri.ios.lock-screen-activity.v1', '0'));
   await nativeActivity(page);
   await submit(page);
   await expect(page.locator('#cards')).toContainText('Resultado local confirmado.');
   await expect.poll(() => page.evaluate(() => (globalThis as any).modelCalls.length)).toBe(1);
-  expect(await page.evaluate(() => (globalThis as any).activityCalls)).toEqual([]);
+  // A stored opt-out still inspects once at restart so a leftover activity can
+  // be dismissed, but it must never start or update one.
+  expect((await page.evaluate(() => (globalThis as any).activityCalls)).map((call: any) => call.action)).toEqual(['available', 'list']);
   await openSettings(page); await expect(page.locator(toggle)).not.toBeChecked();
   await expect(page.locator(status)).toContainText('Desactivado');
+});
+
+test('with no stored choice the Lock Screen activity is on by default and shows a real turn', async ({ page }) => {
+  await nativeActivity(page);
+  await openSettings(page);
+  await expect(page.locator(toggle)).toBeChecked();
+  await expect(page.locator(status)).toContainText('Se mostrará al iniciar una respuesta local');
+  await submit(page);
+  await expect.poll(() => page.evaluate(() => (globalThis as any).activityCalls.some((call: any) => call.action === 'start'))).toBe(true);
+  const start = await page.evaluate(() => (globalThis as any).activityCalls.find((call: any) => call.action === 'start'));
+  expect(start.request).toMatchObject({ origin: 'iphone', phase: 'thinking', sequence: 1 });
+  expect(await page.evaluate(() => localStorage.getItem('capri.ios.lock-screen-activity.v1'))).toBe(null);
 });
 
 test('opt-in inspects the system; real inference and tool events drive a confirmed activity', async ({ page }) => {
