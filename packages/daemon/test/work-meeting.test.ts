@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { canonicalWorkManifest, type WorkSyncManifest, type WorkResult, type WorkSyncRequest } from '@gentle-dot/protocol';
 import { expect, it } from 'vitest';
 import { createMeetingProcessor } from '../src/work-meeting.ts';
-import { WorkSyncStore } from '../src/work-sync.ts';
+import { WorkProcessorFailure, WorkSyncStore } from '../src/work-sync.ts';
 import { tempDir } from './helpers.ts';
 
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -68,8 +68,47 @@ it('preserves SRT cue-level quotation provenance and deterministic warnings with
   expect(result.manifestHash).toBe(manifestHash); expect(result.requiresReview).toBe(true);
   expect(result.transcriptComparison).toContain('no se han verificado contra audio');
   expect(prompt.importWarnings).toHaveLength(1); expect(prompt.evidence).toEqual(result.evidence);
+  expect(prompt.priorDrafts).toEqual([{ fileId: 'previous', createdAt: 1, text: version }]);
   expect(await readFile(join(directory, 'notes'), 'utf8')).toBe(srt);
   expect(await readFile(join(directory, 'previous'), 'utf8')).toBe(version);
+});
+
+it('includes the reviewed correction in the next draft without treating it as source evidence', async () => {
+  const directory = tempDir();
+  const evidence = 'Se acordó revisar el registro.';
+  const correction = 'Cambiar el título a Seguimiento y conservar la tarea sin responsable.';
+  await writeFile(join(directory, 'notes'), evidence);
+  await writeFile(join(directory, 'version'), correction);
+  const manifest: WorkSyncManifest = { schema: 1, workId: 'corrected', revision: 2, kind: 'meeting', title: 'Reunión', instruction: 'Revisar minuta', files: [
+    { id:'notes', name:'notes.txt', mime:'text/plain', bytes:Buffer.byteLength(evidence), sha256:hash(evidence), role:'attachment' },
+    { id:'version', name:'version.txt', mime:'text/plain', bytes:Buffer.byteLength(correction), sha256:hash(correction), role:'version', createdAt:3 },
+  ] };
+  const processor=createMeetingProcessor({generate:async input=>{
+    const prompt=JSON.parse(input);
+    expect(prompt.priorDrafts).toEqual([{fileId:'version',createdAt:3,text:correction}]);
+    expect(prompt.evidence).toEqual([{id:'notes-0',fileId:'notes',text:evidence,source:'imported-text'}]);
+    return {model:'fixture',text:JSON.stringify({minutes:{title:prompt.priorDrafts[0].text.includes('Seguimiento')?'Seguimiento':'Anterior',summary:'Revisión.',items:[{kind:'task',certainty:'confirmed',text:'Revisar el registro.',owner:null,due:null,evidenceIds:['notes-0']}]},transcriptComparison:'Sólo texto importado.'})};
+  }});
+  const result=await processor({directory,manifest,receipt:{transferId:'t',workId:'corrected',revision:2,manifestHash:hash(canonicalWorkManifest(manifest)),committedAt:1}},new AbortController().signal);
+  expect(result.minutes.title).toBe('Seguimiento');expect(result.evidence.map(item=>item.fileId)).toEqual(['notes']);expect(result.requiresReview).toBe(true);
+  expect(await readFile(join(directory,'version'),'utf8')).toBe(correction);
+});
+
+it('rejects oversized versions before generation rather than silently truncating corrections', async () => {
+  const directory=tempDir(), draft='x'.repeat(200001);await writeFile(join(directory,'version'),draft);let called=false;
+  const manifest:WorkSyncManifest={schema:1,workId:'large-draft',revision:1,kind:'meeting',title:'Reunión',instruction:'',files:[{id:'version',name:'draft.txt',mime:'text/plain',bytes:Buffer.byteLength(draft),sha256:hash(draft),role:'version',createdAt:1}]};
+  const processor=createMeetingProcessor({generate:async()=>{called=true;throw new Error('not expected');}});
+  await expect(processor({directory,manifest,receipt:{transferId:'t',workId:manifest.workId,revision:1,manifestHash:hash(canonicalWorkManifest(manifest)),committedAt:1}},new AbortController().signal)).rejects.toThrow('superan 200000 caracteres');
+  expect(called).toBe(false);expect(await readFile(join(directory,'version'),'utf8')).toBe(draft);
+});
+
+it('reports the version budget failure through the durable processing status', async () => {
+  const directory=join(tempDir(),'inbox');const manifest:WorkSyncManifest={schema:1,workId:'failure',revision:1,kind:'meeting',title:'Reunión',instruction:'',files:[]};const manifestHash=hash(canonicalWorkManifest(manifest));
+  const store=new WorkSyncStore(directory,async()=>{throw new WorkProcessorFailure('versions-too-large');});
+  const send=(operation:object)=>store.handle('device',{type:'work_sync',requestId:randomUUID(),transferId:'t',...operation} as WorkSyncRequest);
+  await send({operation:'begin',manifest,manifestHash});await send({operation:'commit'});await send({operation:'process',approvedManifestHash:manifestHash});
+  await expect.poll(async()=>{const value=await send({operation:'result'});return value.state==='processing'&&value.processing.status==='failed'?value.processing.message:'';}).toContain('superan 200000 caracteres');
+  await store.close();
 });
 
 it('preserves malformed timed text without invented ranges even when the model omits the import warning', async () => {

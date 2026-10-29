@@ -6,6 +6,12 @@ import { canonicalWorkManifest, parseWorkSyncManifest, parseWorkSyncRequest, par
 
 const digest = (data: string | Uint8Array) => createHash('sha256').update(data).digest('hex');
 type RecordFile = { manifest: WorkSyncManifest; manifestHash: string; receipt?: WorkSyncReceipt; processing?: WorkProcessing };
+
+/** Only fixed, non-sensitive messages may cross the processing boundary. */
+export class WorkProcessorFailure extends Error {
+  readonly reason: 'versions-too-large';
+  constructor(reason: 'versions-too-large') { super('Las versiones anteriores superan 200000 caracteres. Conserva los originales y crea otro trabajo con sólo las versiones necesarias.'); this.reason = reason; }
+}
 export type WorkProcessor = (input: { directory: string; manifest: WorkSyncManifest; receipt: WorkSyncReceipt }, signal: AbortSignal) => Promise<WorkResult>;
 class WorkStorageError extends Error {
   readonly code: 'invalid' | 'conflict' | 'quota' | 'missing';
@@ -136,9 +142,9 @@ export class WorkSyncStore {
           const result = parseWorkResult(await processor({ directory, manifest: committed.manifest, receipt: committed.receipt! }, controller.signal));
           if (!result || result.manifestHash !== committed.manifestHash || result.evidence.some(e => !committed.manifest.files.some(f => f.id === e.fileId))) throw new Error('El modelo no devolvió una minuta verificable.');
           processing = { status: 'ready', result };
-        } catch {
+        } catch (error) {
           if (controller.signal.aborted) return;
-          processing = { status: 'failed', message: 'No se pudo completar una minuta verificable. Comprueba el transcriptor de la PC, ffmpeg y el modelo conectado. Los archivos originales están conservados.' };
+          processing = { status: 'failed', message: error instanceof WorkProcessorFailure && error.reason === 'versions-too-large' ? 'Las versiones anteriores superan 200000 caracteres. Conserva los originales y crea otro trabajo con sólo las versiones necesarias.' : 'No se pudo completar una minuta verificable. Comprueba el transcriptor de la PC, ffmpeg y el modelo conectado. Los archivos originales están conservados.' };
         }
         const save = this.queue.then(async () => { committed.processing = processing; await atomicRecord(directory, committed); });
         this.queue = save.catch(() => {}); await save;
