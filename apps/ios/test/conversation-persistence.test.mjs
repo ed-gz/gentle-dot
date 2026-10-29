@@ -1,9 +1,31 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createConversationPersistence } from '../src/conversation-persistence.ts';
+import { applyConversationEntry, createConversationPersistence } from '../src/conversation-persistence.ts';
 import { updateEntry, reconcileHostHistory } from '../src/conversation.ts';
 const entry = (id, extra = {}) => ({ id, engine: 'iphone', role: 'assistant', state: 'complete', text: `Mensaje ${id}`, at: 1000, ...extra });
 const defer = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return { promise,resolve,reject }; };
+
+test('only the accepted normalized linked response reaches the archive queue', async () => {
+  const saved = [];
+  const persistence = createConversationPersistence({ archive: { upsert: async rows => { saved.push(...rows); } }, save: async () => {} });
+  const request = '02bce422-1da0-4ebc-b2fb-9df32a25434e';
+  const turn = 'd3dba896-4b5c-4c1c-98c9-4e60238fe6b9';
+  const activity = { id: 'lookup', title: 'Consultar', kind: 'read', status: 'done' };
+  const original = [entry(turn, { state: 'pending', text: 'Parcial', at: 100, replyTo: request, activities: [activity] })];
+  // A later valid update may omit inherited fields; archival must use the
+  // visible, accepted turn and retain its link and original event time.
+  const current = applyConversationEntry(persistence, original, entry(turn, { state: 'complete', text: 'Final', at: 200 }));
+  assert.equal(current[0].replyTo, request);
+  assert.equal(current[0].at, 100);
+  assert.deepEqual(current[0].activities, [activity]);
+  // A conflicting link is refused by the timeline and must not be queued.
+  const rejected = applyConversationEntry(persistence, current, entry(turn, { text: 'No archivar', replyTo: 'a3dba896-4b5c-4c1c-98c9-4e60238fe6b9' }));
+  assert.equal(rejected, current);
+  await persistence.persist({ entries: rejected, draft: '' });
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0], current[0]);
+  assert.equal(saved[0].text, 'Final');
+});
 
 test('pruned messages stay queued until archival transaction confirms and latest window persists', async () => {
   const gate = defer(), writes = [], snapshots = [];

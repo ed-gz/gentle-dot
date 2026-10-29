@@ -19,7 +19,7 @@ import type { ActivityPhase, ActivityEnd } from './live-activity.ts';
 import { loadConversation, updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
 import { conversationArchive } from './conversation-archive.ts';
-import { createConversationPersistence } from './conversation-persistence.ts';
+import { applyConversationEntry, createConversationPersistence } from './conversation-persistence.ts';
 import { createMemoryTools } from './conversation-memory-tools.ts';
 import { mountMemoryView } from './memory-view.ts';
 import { createAgentRunner } from './agent-runner.ts';
@@ -516,11 +516,7 @@ function renderChat() {
 }
 
 function add(entry: ChatEntry) {
-  const prior = entries.find(item => item.id === entry.id);
-  // Queue the normalized update before pruning too; otherwise a rapidly
-  // completed stream could archive a later timestamp than its visible card.
-  const next = prior ? { ...entry, at: prior.at, activities: entry.activities ?? prior.activities } : entry;
-  persistence.enqueue(entries); persistence.enqueue([next]); entries = updateEntry(entries, next); renderChat(); scheduleSave();
+  entries = applyConversationEntry(persistence, entries, entry); renderChat(); scheduleSave();
 }
 function notice(text: string, target: Engine = selected, id: string = localIdentifier()) { add({ id, role: 'notice', text, engine: target, state: 'complete', at: Date.now() }); }
 function remoteId(id: string) { return `host:${host}|${remoteConversation}|${id}`; }

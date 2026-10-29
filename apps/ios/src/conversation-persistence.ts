@@ -1,5 +1,5 @@
 import { conversationArchive } from './conversation-archive.ts';
-import { saveConversation, type ChatEntry, type Conversation } from './conversation.ts';
+import { saveConversation, updateEntry, type ChatEntry, type Conversation } from './conversation.ts';
 
 export type PersistenceStatus = { pending: number; archiveError?: string; conversationError?: string; blocked: boolean };
 type Dependencies = {
@@ -8,6 +8,21 @@ type Dependencies = {
   onStatus?: (status: PersistenceStatus) => void;
 };
 const describe = (error: unknown) => error instanceof Error ? error.message : 'El almacenamiento no confirmó la escritura.';
+
+/** Queue the accepted, normalized entry, not the untrusted incoming event.
+ * Capture the old window first so a newly appended item cannot prune it
+ * before archival. Rejected identity changes never enter the pending queue. */
+export function applyConversationEntry(persistence: { enqueue(entries: readonly ChatEntry[]): void }, entries: ChatEntry[], entry: ChatEntry): ChatEntry[] {
+  const prior = entries.find(item => item.id === entry.id);
+  const candidate = prior ? { ...entry, at: prior.at, activities: entry.activities ?? prior.activities } : entry;
+  const updated = updateEntry(entries, candidate);
+  persistence.enqueue(entries);
+  if (updated !== entries) {
+    const accepted = updated.find(item => item.id === entry.id);
+    if (accepted) persistence.enqueue([accepted]);
+  }
+  return updated;
+}
 
 /** Capture before the visible window is pruned. Only a confirmed commit can release a snapshot. */
 export function createConversationPersistence(deps: Dependencies = {}) {
