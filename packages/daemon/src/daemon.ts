@@ -1071,8 +1071,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 					if (pathname === "/api/mobile/answer-v1" && req.method === "POST") {
 						const body = await readJson(req);
 						if (!mobile.canApprove(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
-						const view = body.review;
-						if (typeof body.requestId !== "string" || typeof body.approved !== "boolean" || !view || typeof view !== "object" || Array.isArray(view) || view.id !== body.requestId || typeof view.title !== "string" || typeof view.message !== "string" || typeof view.expiresAt !== "string" || typeof view.revision !== "string")
+						const candidate = body.review;
+						if (!candidate || typeof candidate !== "object" || Array.isArray(candidate))
+							return jsonResponse(res, 400, { error: "Exact reviewed approval required" });
+						const view = candidate as Record<string, unknown>;
+						if (typeof body.requestId !== "string" || typeof body.approved !== "boolean" || view.id !== body.requestId || typeof view.title !== "string" || typeof view.message !== "string" || typeof view.expiresAt !== "string" || typeof view.revision !== "string")
 							return jsonResponse(res, 400, { error: "Exact reviewed approval required" });
 						// Some producers supply summaries rather than all material arguments.
 						if (body.approved) return jsonResponse(res, 403, { error: "Revisa y aprueba esta solicitud en la laptop." });
