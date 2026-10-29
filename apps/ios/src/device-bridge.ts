@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { blobSHA256 } from './blob-sha256.ts';
 
 export type SecretScope = 'daemon-pairing' | 'daemon-manual' | 'external-connections';
 export type NativeReply = { ok: boolean; error?: string; message?: string };
@@ -125,13 +126,8 @@ export async function readSharedFile(item: SharedImport, file: SharedFile, call:
     chunks.push(Uint8Array.from(binary, char => char.charCodeAt(0))); offset += length;
   }
   const result = new File(chunks, file.name, { type: file.mime, lastModified: item.createdAt });
-  // Native verifies the entire immutable file before the first chunk, including on
-  // WKWebView origins without WebCrypto. Check a second time when WebCrypto exists.
-  if (globalThis.crypto?.subtle) {
-    const digest = await crypto.subtle.digest('SHA-256', await result.arrayBuffer());
-    const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    if (hex !== file.sha256) throw new Error('El adjunto no coincide con su huella. El original se conserva.');
-  }
+  // Verify reconstructed bytes even on WKWebView origins without WebCrypto.
+  if (await blobSHA256(result) !== file.sha256) throw new Error('El adjunto no coincide con su huella. El original se conserva.');
   return result;
 }
 export async function acknowledgeSharedImport(id: string, call: DeviceInvoker = deviceInvoke): Promise<void> {

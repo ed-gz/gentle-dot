@@ -18,6 +18,16 @@ test('missing/changed local blobs and unapproved work never create a transfer', 
   await assert.rejects(prepareWorkTransfer(item(), 'host', async () => undefined), /Falta/);
   await assert.rejects(prepareWorkTransfer(item(), 'host', async () => new Blob(['wrong size'])), /Falta/);
 });
+test('cancellation while hashing a file stops preparation without creating a transfer', async () => {
+  const abort = new AbortController();
+  const blob = new Blob([new Uint8Array(600_000)]);
+  const originalSlice = blob.slice.bind(blob); let reads = 0;
+  blob.slice = (start, end) => { reads++; const result = originalSlice(start, end); abort.abort(); return result; };
+  const work = item(); work.files[0].size = blob.size;
+  await assert.rejects(prepareWorkTransfer(work, 'host', async () => blob, abort.signal), { name: 'AbortError' });
+  assert.equal(reads, 1);
+  assert.equal(work.status, 'approved'); assert.equal(work.transfer, undefined);
+});
 test('revisions invalidate previous transfer snapshots; delivery-state changes preserve them', async () => {
   const transfer = await prepareWorkTransfer(item(), 'wss://host/ws', async () => new Blob(['data']));
   const work = { ...item(), transfer };

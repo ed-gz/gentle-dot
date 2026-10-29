@@ -1,4 +1,5 @@
 import { localIdentifier } from './local-identifiers.ts';
+import { blobSHA256 } from './blob-sha256.ts';
 import { canonicalWorkManifest, parseWorkSyncManifest, parseWorkResult, type WorkSyncManifest, type WorkSyncReceipt, type WorkResult } from '@gentle-dot/protocol';
 export type WorkTransfer = { host: string; transferId: string; manifest: WorkSyncManifest; manifestHash: string; receipt?: WorkSyncReceipt };
 export type WorkStatus = 'local' | 'prepared' | 'approved' | 'sending' | 'sent' | 'uncertain' | 'failed';
@@ -408,7 +409,7 @@ export async function createImportedWork(sourceId: string, input: WorkInput): Pr
     return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
   };
   const files = [];
-  for (const file of safe.files) files.push({ name: file.name, type: file.type, size: file.size, hash: await digest(await file.arrayBuffer()) });
+  for (const file of safe.files) files.push({ name: file.name, type: file.type, size: file.size, hash: await blobSHA256(file) });
   const content = JSON.stringify({ title: safe.title, kind: safe.kind, instruction: safe.instruction, files });
   const hash = await digest(new TextEncoder().encode(content).buffer);
   return insertWork(safe, { id: sourceId.toLowerCase(), hash });

@@ -13,6 +13,7 @@
     "@gentle-dot/protocol": "workspace:*",
     "@gentle-dot/ui": "workspace:*",
     "@tauri-apps/api": "2.2.0",
+    "fast-sha256": "1.3.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

@@ -1,21 +1,24 @@
 import { localIdentifier } from './local-identifiers.ts';
 import { canonicalWorkManifest, parseWorkSyncReply, WORK_SYNC_LIMITS, type WorkSyncManifest, type WorkSyncReply, type WorkSyncRequest, type WorkProcessing } from '@gentle-dot/protocol';
 import { beginWorkTransfer, readWork, readWorkFile, settleWorkTransfer, saveWorkResult, type WorkItem, type WorkTransfer } from './work-inbox.ts';
+import { blobSHA256 } from './blob-sha256.ts';
 
 export type WorkExchange = (request: WorkSyncRequest) => Promise<WorkSyncReply>;
 async function sha256(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   if (!globalThis.crypto?.subtle) return (await import('./device-bridge.ts')).nativeSHA256Bytes(bytes);
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
-export async function prepareWorkTransfer(item: WorkItem, host: string, getFile = readWorkFile): Promise<WorkTransfer> {
+export async function prepareWorkTransfer(item: WorkItem, host: string, getFile = readWorkFile, signal?: AbortSignal): Promise<WorkTransfer> {
+  signal?.throwIfAborted();
   if (item.status !== 'approved') throw new Error('Aprueba el contenido exacto antes de enviarlo al host.');
   const manifest: WorkSyncManifest = { schema: 1, workId: item.id, revision: item.revision, title: item.title, kind: item.kind, instruction: item.instruction, files: [] };
   for (const file of item.files) {
     const blob = await getFile(item.id, file.id);
     if (!blob || blob.size !== file.size) throw new Error('Falta un archivo local o sus bytes cambiaron.');
-    manifest.files.push({ id: file.id, name: file.name, mime: file.type.split(';')[0]!.trim(), bytes: blob.size, sha256: await sha256(new Uint8Array(await blob.arrayBuffer())), role: 'attachment' });
+    manifest.files.push({ id: file.id, name: file.name, mime: file.type.split(';')[0]!.trim(), bytes: blob.size, sha256: await blobSHA256(blob, signal), role: 'attachment' });
   }
   for (const version of item.versions) {
+    signal?.throwIfAborted();
     const bytes = new TextEncoder().encode(version.text);
     manifest.files.push({ id: `version-${version.id}`, name: `version-${version.id}.txt`, mime: 'text/plain', bytes: bytes.length, sha256: await sha256(bytes), role: 'version', createdAt: version.createdAt });
   }
@@ -50,7 +53,7 @@ export function createWorkDispatcher(exchange: WorkExchange, host: string) {
       for (const file of transfer.manifest.files) {
         const version = file.role === 'version' ? item.versions.find(v => `version-${v.id}` === file.id) : undefined;
         const blob = file.role === 'version' ? (version ? new Blob([version.text], { type: 'text/plain' }) : undefined) : await readWorkFile(item.id, file.id);
-        if (!blob || blob.size !== file.bytes || await sha256(new Uint8Array(await blob.arrayBuffer())) !== file.sha256) throw new Error('Los bytes locales ya no coinciden con la versión aprobada.');
+        if (!blob || blob.size !== file.bytes || await blobSHA256(blob, signal) !== file.sha256) throw new Error('Los bytes locales ya no coinciden con la versión aprobada.');
         let offset = reply.offsets[file.id];
         if (offset === undefined || offset > file.bytes) throw new Error('El desplazamiento confirmado por el host no es válido.');
         while (offset < file.bytes) {
@@ -88,7 +91,7 @@ export function createWorkDispatcher(exchange: WorkExchange, host: string) {
       signal?.throwIfAborted();
       const item = await readWork(id);
       if (item.revision !== revision) throw new Error('El trabajo cambió. Revisa la versión actual antes de enviar.');
-      const transfer = await prepareWorkTransfer(item, host);
+      const transfer = await prepareWorkTransfer(item, host, readWorkFile, signal);
       if (approvedManifestHash !== undefined && transfer.manifestHash !== approvedManifestHash) throw new Error('El contenido cambió después de aprobar la transferencia. Revisa de nuevo antes de enviar.');
       signal?.throwIfAborted();
       return run(await beginWorkTransfer(id, revision, transfer), true, signal);

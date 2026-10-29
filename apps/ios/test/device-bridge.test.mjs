@@ -50,6 +50,18 @@ test('shared file chunks preserve bytes and reject corruption before any acknowl
   await assert.rejects(readSharedFile(item, item.files[0], async () => ({ ok: true, data: '' })), /incompleto/);
 });
 
+test('shared bytes are verified even when WebCrypto is unavailable', async () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  try {
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: undefined });
+    const item = manifest();
+    await assert.rejects(readSharedFile(item, item.files[0], async () => ({ ok: true, data: Buffer.alloc(bytes.length, 97).toString('base64') })), /huella/);
+  } finally {
+    if (original) Object.defineProperty(globalThis, 'crypto', original);
+    else delete globalThis.crypto;
+  }
+});
+
 test('share ACK waits for durable app save and retry uses the same deduplication identity', async () => {
   const item = manifest(); const events = []; const saved = new Set();
   const call = async (command) => { events.push(command); return command === 'share_read' ? { ok: true, data: bytes.toString('base64') } : { ok: true }; };

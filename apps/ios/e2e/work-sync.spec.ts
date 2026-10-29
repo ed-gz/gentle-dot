@@ -32,11 +32,13 @@ test('share imports deduplicate atomically before native acknowledgement and det
   await page.goto('/');
   const imported = await page.evaluate(async () => {
     const inbox = await import('/src/work-inbox.ts'); const sourceId = `share:${crypto.randomUUID()}`;
-    const input = { title: 'Voice Memos', kind: 'meeting', instruction: '', files: [new File(['original-audio'], 'meeting.m4a', { type: 'audio/mp4' })] };
+    const file = new File(['original-audio'], 'meeting.m4a', { type: 'audio/mp4' });
+    file.arrayBuffer = () => { throw new Error('A whole-file read is not allowed'); };
+    const input = { title: 'Voice Memos', kind: 'meeting', instruction: '', files: [file] };
     const items = await Promise.all([inbox.createImportedWork(sourceId, input), inbox.createImportedWork(sourceId, input)]);
     const changed = await Promise.allSettled([inbox.createImportedWork(sourceId, { ...input, files: [new File(['changed--audio'], 'meeting.m4a', { type: 'audio/mp4' })] })]);
-    const file = await inbox.readWorkFile(items[0].id, items[0].files[0].id);
-    return { ids: items.map((item: any) => item.id), count: (await inbox.listWork()).length, text: await file.text(), changed: changed[0].status, sourceId };
+    const savedFile = await inbox.readWorkFile(items[0].id, items[0].files[0].id);
+    return { ids: items.map((item: any) => item.id), count: (await inbox.listWork()).length, text: await savedFile.text(), changed: changed[0].status, sourceId };
   });
   expect(imported.ids[0]).toBe(imported.ids[1]); expect(imported).toMatchObject({ count: 1, text: 'original-audio', changed: 'rejected' });
   await page.reload();
