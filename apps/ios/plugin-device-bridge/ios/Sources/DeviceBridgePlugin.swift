@@ -31,6 +31,7 @@ private struct BridgeReply: Encodable {
     var written: Int? = nil
     var exported: Bool? = nil
     var cancelled: Bool? = nil
+    var receiptState: String? = nil
 }
 private struct SecretInput: Decodable { let scope: String; let account: String; let value: String? }
 private struct PairInput: Decodable { let origin: String; let code: String; let deviceName: String }
@@ -38,12 +39,19 @@ private struct UnpairInput: Decodable { let origin: String; let token: String? }
 private struct OAuthInput: Decodable { let authorizationUrl: String; let callbackScheme: String }
 private struct ReadInput: Decodable { let id: String; let fileId: String; let offset: Int; let length: Int }
 private struct IDInput: Decodable { let id: String }
+private struct HTTPReceiptInput: Decodable { let id: String; let owner: String }
 private struct RandomInput: Decodable { let length: Int }
 private struct HashInput: Decodable { let data: String }
 private struct HashUpdateInput: Decodable { let id: String; let data: String }
 private struct URLInput: Decodable { let url: String }
 
 final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextProviding {
+    private static let httpReceiptStore: Result<HTTPReceiptJournal, Error> = Result {
+        let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let directory = root.appendingPathComponent("CapriHTTPReceipts", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return try HTTPReceiptJournal(path: directory.appendingPathComponent("receipts.sqlite").path)
+    }
     private weak var webview: WKWebView?
     private var authSession: ASWebAuthenticationSession?
     private var authInvoke: Invoke?
@@ -122,13 +130,36 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     @objc func httpsRequest(_ invoke: Invoke) {
         do {
             let args = try invoke.parseArgs(HTTPInput.self)
-            BoundedHTTP.run(args) { result in
+            var terminal: (() -> Void)?
+            if args.receiptId != nil || args.receiptOwner != nil {
+                guard let id = args.receiptId, let owner = args.receiptOwner else { throw DeviceFailure.invalid("La identidad del transporte está incompleta.") }
+                _ = try BoundedHTTP.validated(args)
+                let journal = try Self.httpReceiptStore.get()
+                try journal.begin(id: id, owner: owner)
+                terminal = { try? journal.terminalCallback(id: id, owner: owner) }
+            }
+            BoundedHTTP.run(args, onTerminal: terminal) { result in
                 switch result {
                 case .success(let response): invoke.resolve(BridgeReply(status: response.status, body: response.body, headers: response.headers))
                 case .failure(let error): self.fail(invoke, error)
                 }
             }
         } catch { fail(invoke, error) }
+    }
+    @objc func httpsReceiptState(_ invoke: Invoke) {
+        work(invoke) {
+            let args = try invoke.parseArgs(HTTPReceiptInput.self)
+            guard let entry = try Self.httpReceiptStore.get().read(id: args.id) else { return BridgeReply(receiptState: "missing") }
+            guard entry.owner == args.owner else { throw DeviceFailure.invalid("El comprobante pertenece a otra operación.") }
+            return BridgeReply(receiptState: entry.state.rawValue)
+        }
+    }
+    @objc func httpsReceiptCancelBeforeStart(_ invoke: Invoke) {
+        work(invoke) {
+            let args = try invoke.parseArgs(HTTPReceiptInput.self)
+            try Self.httpReceiptStore.get().cancelBeforeStart(id: args.id, owner: args.owner)
+            return BridgeReply(receiptState: "cancelledBeforeStart")
+        }
     }
     @objc func sessionUploadBegin(_ invoke: Invoke) {
         work(invoke) { BridgeReply(id: try self.uploads.begin(invoke.parseArgs(SessionUploadInput.self))) }

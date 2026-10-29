@@ -3,7 +3,7 @@ import { blobSHA256 } from './blob-sha256.ts';
 
 export type SecretScope = 'daemon-pairing' | 'daemon-manual' | 'external-connections';
 export type NativeReply = { ok: boolean; error?: string; message?: string };
-export type HTTPSRequest = { url: string; method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'; headers: Record<string, string>; body?: string };
+export type HTTPSRequest = { url: string; method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD'; headers: Record<string, string>; body?: string; receiptId?: string; receiptOwner?: string };
 export type HTTPSResponse = { status: number; body: string; headers: Record<string, string> };
 export type SharedFile = { id: string; name: string; mime: string; size: number; sha256: string };
 export type SharedImport = { schemaVersion: 1; id: string; createdAt: number; title: string; notes: string; files: SharedFile[] };
@@ -43,6 +43,22 @@ export async function httpsRequest(request: HTTPSRequest): Promise<HTTPSResponse
   const reply = requireNative(await deviceInvoke<NativeReply & Partial<HTTPSResponse>>('https_request', request));
   if (!Number.isInteger(reply.status) || reply.status! < 100 || reply.status! > 599 || typeof reply.body !== 'string' || !reply.headers) throw new Error('Respuesta HTTPS inválida.');
   return { status: reply.status!, body: reply.body, headers: reply.headers };
+}
+export type HTTPReceiptState = 'missing' | 'active' | 'terminal' | 'cancelledBeforeStart';
+function receiptIdentity(id: string, owner: string): void {
+  const valid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+  if (!valid.test(id) || !valid.test(owner)) throw new Error('Identidad de transporte inválida.');
+}
+export async function httpsReceiptState(id: string, owner: string, call: DeviceInvoker = deviceInvoke): Promise<HTTPReceiptState> {
+  receiptIdentity(id, owner);
+  const reply = requireNative(await call<NativeReply & { receiptState?: unknown }>('https_receipt_state', {id,owner}));
+  if (!['missing','active','terminal','cancelledBeforeStart'].includes(String(reply.receiptState))) throw new Error('Comprobante nativo inválido.');
+  return reply.receiptState as HTTPReceiptState;
+}
+export async function httpsReceiptCancelBeforeStart(id: string, owner: string, call: DeviceInvoker = deviceInvoke): Promise<void> {
+  receiptIdentity(id, owner);
+  const reply = requireNative(await call<NativeReply & {receiptState?: unknown}>('https_receipt_cancel_before_start',{id,owner}));
+  if (reply.receiptState !== 'cancelledBeforeStart') throw new Error('La cancelación no quedó confirmada.');
 }
 export async function oauthAuthorize(authorizationUrl: string, callbackScheme = 'capri-auth'): Promise<string> {
   const reply = requireNative(await deviceInvoke<NativeReply & { callbackUrl?: string }>('oauth_authorize', { authorizationUrl, callbackScheme }));

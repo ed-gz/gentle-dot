@@ -5,6 +5,12 @@ struct HTTPInput: Decodable {
     let method: String
     let headers: [String: String]
     let body: String?
+    let receiptId: String?
+    let receiptOwner: String?
+    init(url: String, method: String, headers: [String: String], body: String?, receiptId: String? = nil, receiptOwner: String? = nil) {
+        self.url = url; self.method = method; self.headers = headers; self.body = body
+        self.receiptId = receiptId; self.receiptOwner = receiptOwner
+    }
 }
 struct HTTPOutput {
     let status: Int
@@ -22,8 +28,10 @@ final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDelegat
     private var session: URLSession?
     private let queue = OperationQueue()
     private let completion: (Result<HTTPOutput, Error>) -> Void
+    private let onTerminal: (() -> Void)?
 
-    private init(completion: @escaping (Result<HTTPOutput, Error>) -> Void) {
+    private init(onTerminal: (() -> Void)? = nil, completion: @escaping (Result<HTTPOutput, Error>) -> Void) {
+        self.onTerminal = onTerminal
         self.completion = completion
         queue.maxConcurrentOperationCount = 1
     }
@@ -57,11 +65,11 @@ final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDelegat
         request.httpBody = input.body.map { Data($0.utf8) }
         return request
     }
-    static func run(_ input: HTTPInput, timeout: TimeInterval = 30, completion: @escaping (Result<HTTPOutput, Error>) -> Void) {
+    static func run(_ input: HTTPInput, timeout: TimeInterval = 30, configuration: URLSessionConfiguration? = nil, onTerminal: (() -> Void)? = nil, completion: @escaping (Result<HTTPOutput, Error>) -> Void) {
         do {
             let request = try validated(input)
-            let delegate = BoundedHTTP(completion: completion)
-            delegate.start(request, file: nil, timeout: timeout)
+            let delegate = BoundedHTTP(onTerminal: onTerminal, completion: completion)
+            delegate.start(request, file: nil, timeout: timeout, configuration: configuration)
         } catch { completion(.failure(error)) }
     }
     /// File-backed uploads use the same bounded response and redirect policy.
@@ -71,9 +79,9 @@ final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDelegat
         delegate.start(request, file: file, timeout: 120)
         return delegate
     }
-    private func start(_ input: URLRequest, file: URL?, timeout: TimeInterval) {
+    private func start(_ input: URLRequest, file: URL?, timeout: TimeInterval, configuration: URLSessionConfiguration? = nil) {
         var request = input; request.timeoutInterval = timeout
-        let config = URLSessionConfiguration.ephemeral
+        let config = configuration ?? URLSessionConfiguration.ephemeral
         config.httpCookieStorage = nil; config.urlCredentialStorage = nil; config.urlCache = nil
         config.httpShouldSetCookies = false
         config.timeoutIntervalForRequest = timeout; config.timeoutIntervalForResource = timeout
@@ -110,6 +118,7 @@ final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDelegat
         bytes.append(data)
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        onTerminal?()
         guard !finished else { return }
         guard error == nil, let response = response, let body = String(data: bytes, encoding: .utf8) else {
             finish(.failure(DeviceFailure.network)); return

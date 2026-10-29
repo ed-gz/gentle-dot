@@ -53,6 +53,8 @@ request_command!(secret_delete, "secretDelete");
 request_command!(pair_device, "pairDevice");
 request_command!(unpair_device, "unpairDevice");
 request_command!(https_request, "httpsRequest");
+request_command!(https_receipt_state, "httpsReceiptState");
+request_command!(https_receipt_cancel_before_start, "httpsReceiptCancelBeforeStart");
 request_command!(session_upload_begin, "sessionUploadBegin");
 request_command!(session_upload_write, "sessionUploadWrite");
 request_command!(session_upload_send, "sessionUploadSend");
@@ -95,6 +97,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             pair_device,
             unpair_device,
             https_request,
+            https_receipt_state,
+            https_receipt_cancel_before_start,
             session_upload_begin,
             session_upload_write,
             session_upload_send,

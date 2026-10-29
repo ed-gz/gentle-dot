@@ -11,6 +11,8 @@ fn main() {
         "pair_device",
         "unpair_device",
         "https_request",
+        "https_receipt_state",
+        "https_receipt_cancel_before_start",
         "session_upload_begin",
         "session_upload_write",
         "session_upload_send",

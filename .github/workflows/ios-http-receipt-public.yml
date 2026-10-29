@@ -1,6 +1,6 @@
 name: Capri HTTP receipt fixture
 
-# The fixture performs no network requests; no credentials, signing, IPA or artifacts.
+# The URLProtocol fixture performs no network requests; no credentials, signing, IPA or artifacts.
 on:
   push:
     branches:

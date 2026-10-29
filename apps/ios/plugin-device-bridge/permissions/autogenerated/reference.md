@@ -8,6 +8,8 @@ Use iPhone Keychain, explicit authenticated requests, pairing, OAuth, secure has
 - `allow-pair-device`
 - `allow-unpair-device`
 - `allow-https-request`
+- `allow-https-receipt-state`
+- `allow-https-receipt-cancel-before-start`
 - `allow-oauth-authorize`
 - `allow-oauth-cancel`
 - `allow-open-external-url`
@@ -395,6 +397,58 @@ Enables the export_write command without any pre-configured scope.
 <td>
 
 Denies the export_write command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-https-receipt-cancel-before-start`
+
+</td>
+<td>
+
+Enables the https_receipt_cancel_before_start command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-https-receipt-cancel-before-start`
+
+</td>
+<td>
+
+Denies the https_receipt_cancel_before_start command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:allow-https-receipt-state`
+
+</td>
+<td>
+
+Enables the https_receipt_state command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`device-bridge:deny-https-receipt-state`
+
+</td>
+<td>
+
+Denies the https_receipt_state command without any pre-configured scope.
 
 </td>
 </tr>

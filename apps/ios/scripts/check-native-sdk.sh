@@ -227,6 +227,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/Documents.swift \
   "$verification/PerceptionPlugin.swift" \
   plugin-device-bridge/ios/Sources/BoundedHTTP.swift \
+  plugin-device-bridge/ios/Sources/HTTPReceiptJournal.swift \
   plugin-device-bridge/ios/Sources/KeychainStore.swift \
   plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
   plugin-device-bridge/ios/Sources/SharedInbox.swift \

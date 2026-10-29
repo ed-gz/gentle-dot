@@ -435,6 +435,26 @@
           "const": "deny-export-write"
         },
         {
+          "description": "Enables the https_receipt_cancel_before_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-https-receipt-cancel-before-start"
+        },
+        {
+          "description": "Denies the https_receipt_cancel_before_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-https-receipt-cancel-before-start"
+        },
+        {
+          "description": "Enables the https_receipt_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-https-receipt-state"
+        },
+        {
+          "description": "Denies the https_receipt_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-https-receipt-state"
+        },
+        {
           "description": "Enables the https_request command without any pre-configured scope.",
           "type": "string",
           "const": "allow-https-request"
