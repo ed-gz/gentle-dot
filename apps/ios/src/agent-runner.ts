@@ -44,7 +44,7 @@ function recentObservations(observations: Observation[], budget: number): string
 function failedObservation(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const result = value as Record<string, unknown>;
-  return result.isError === true || result.accepted === false || result.status === 'uncertain'
+  return result.isError === true || result.approved === false || result.accepted === false || result.status === 'uncertain'
     || (result.result !== undefined && failedObservation(result.result))
     || (result.processing !== undefined && failedObservation(result.processing)) || result.status === 'failed';
 }

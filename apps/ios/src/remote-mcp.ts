@@ -23,21 +23,28 @@ export function canonicalJSON(value: unknown): string {
 }
 /** Fail closed for unsupported validation keywords. No remote refs or regular-expression execution. */
 export function validateMCPArguments(schema: Record<string, unknown>, value: unknown, maximumBytes = 16 * 1024): Record<string, unknown> {
+  // A branch that does not match is different from a branch whose schema we
+  // cannot evaluate. Treating both as false could make oneOf accept a value
+  // even though another (unsupported) branch might match it as well.
+  class UnsupportedSchema extends Error {}
   const keywords = new Set(['$schema', '$id', '$defs', 'definitions', '$ref', 'title', 'description', 'default', 'examples', 'deprecated', 'readOnly', 'writeOnly',
     'type', 'properties', 'required', 'additionalProperties', 'items', 'minItems', 'maxItems', 'uniqueItems', 'minLength', 'maxLength', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'enum', 'const', 'anyOf', 'oneOf', 'allOf', 'minProperties', 'maxProperties']);
   function check(rule: unknown, input: unknown, depth = 0): void {
-    if (depth > 24) throw new Error('Esquema demasiado profundo.');
+    if (depth > 24) throw new UnsupportedSchema('Esquema demasiado profundo.');
     if (typeof rule === 'boolean') { if (!rule) throw new Error('Valor no admitido.'); return; }
-    if (!object(rule) || Object.keys(rule).some(key => !keywords.has(key))) throw new Error('El esquema MCP usa validaciones aún no compatibles; no se ejecutó la herramienta.');
+    if (!object(rule) || Object.keys(rule).some(key => !keywords.has(key))) throw new UnsupportedSchema('El esquema MCP usa validaciones aún no compatibles; no se ejecutó la herramienta.');
     if (rule.$ref !== undefined) {
-      if (typeof rule.$ref !== 'string' || !rule.$ref.startsWith('#/')) throw new Error('Referencias externas no admitidas.');
+      if (typeof rule.$ref !== 'string' || !rule.$ref.startsWith('#/')) throw new UnsupportedSchema('Referencias externas no admitidas.');
       let referenced: unknown = schema;
       for (const part of rule.$ref.slice(2).split('/').map(item => item.replace(/~1/g, '/').replace(/~0/g, '~'))) referenced = object(referenced) ? referenced[part] : undefined;
       check(referenced, input, depth + 1);
     }
     for (const combinator of ['anyOf', 'oneOf', 'allOf']) if (rule[combinator] !== undefined) {
-      const branches = rule[combinator]; if (!Array.isArray(branches) || branches.length < 1 || branches.length > 20) throw new Error('Combinación de esquema inválida.');
-      const valid = branches.filter(branch => { try { check(branch, input, depth + 1); return true; } catch { return false; } }).length;
+      const branches = rule[combinator]; if (!Array.isArray(branches) || branches.length < 1 || branches.length > 20) throw new UnsupportedSchema('Combinación de esquema inválida.');
+      const valid = branches.filter(branch => {
+        try { check(branch, input, depth + 1); return true; }
+        catch (error) { if (error instanceof UnsupportedSchema) throw error; return false; }
+      }).length;
       if (combinator === 'allOf' ? valid !== branches.length : combinator === 'oneOf' ? valid !== 1 : valid === 0) throw new Error('Los argumentos no cumplen el esquema.');
     }
     if (rule.enum !== undefined && (!Array.isArray(rule.enum) || !rule.enum.some(item => canonicalJSON(item) === canonicalJSON(input)))) throw new Error('Valor fuera del catálogo.');

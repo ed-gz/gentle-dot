@@ -74,13 +74,21 @@ test('an uncertain failure cannot be automatically replayed', async () => {
 });
 
 test('rejected and uncertain service receipts stay failed in the conversation activity', async () => {
-  for (const receipt of [{ accepted: false }, { result: { isError: true } }, { processing: { status: 'failed' } }, { status: 'uncertain' }]) {
+  for (const receipt of [{ accepted: false }, { approved: false, executed: false }, { result: { isError: true } }, { processing: { status: 'failed' } }, { status: 'uncertain' }]) {
     const f = sequence([call('tool_describe', { name: 'save_note' }), call('save_note', { title: 'T', text: 'X' }),
       prompt => { assert.ok(prompt.includes(JSON.stringify(receipt))); return answer('No se confirmó.'); }],
       { tools: [tool(async () => receipt)] });
     assert.equal(await f.runner.run(run()), 'No se confirmó.');
     assert.deepEqual(f.traces.map(trace => trace.status), ['running', 'failed']);
   }
+});
+
+test('a prepared draft is not presented as a failed action just because execution is pending', async () => {
+  const receipt = { approvalRequired: true, executed: false, state: 'draft' };
+  const f = sequence([call('tool_describe', { name: 'save_note' }), call('save_note', { title: 'T', text: 'X' }), answer('Preparé el borrador.')],
+    { tools: [tool(async () => receipt)] });
+  assert.equal(await f.runner.run(run()), 'Preparé el borrador.');
+  assert.deepEqual(f.traces.map(trace => trace.status), ['running', 'done']);
 });
 
 test('known read tools can observe advancing state without replaying a mutation', async () => {

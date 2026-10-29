@@ -9,7 +9,7 @@ const base = () => ({ id, kind: 'mcp', label: 'Servidor propio', endpoint: 'http
 const schema = () => ({ type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 100 } }, required: ['text'], additionalProperties: false });
 const remote = () => ({ name: 'custom.send', description: 'Envía al servicio configurado', inputSchema: schema() });
 function fixture(version = '2025-06-18') {
-  const calls = []; const journal = []; let connection = base(); let changedSchema = false; let failCall = false; let token = 'secret-stays-in-headers'; let taskSupport; let outputSchema; let callResult; let batchResponses = false;
+  const calls = []; const journal = []; let connection = base(); let changedSchema = false; let inputSchema; let failCall = false; let token = 'secret-stays-in-headers'; let taskSupport; let outputSchema; let callResult; let batchResponses = false;
   const services = {
     prepare: async () => connection,
     getConnection: async () => connection,
@@ -22,7 +22,7 @@ function fixture(version = '2025-06-18') {
       if (rpc.method === 'notifications/initialized') return { status: 202, headers: {}, body: '' };
       let result;
       if (rpc.method === 'initialize') result = { protocolVersion: version, capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' } };
-      if (rpc.method === 'tools/list') result = { tools: [{ ...remote(), ...(changedSchema ? { inputSchema: { ...schema(), additionalProperties: true } } : {}), ...(taskSupport === undefined ? {} : { execution: { taskSupport } }), ...(outputSchema === undefined ? {} : { outputSchema }) }] };
+      if (rpc.method === 'tools/list') result = { tools: [{ ...remote(), ...(inputSchema === undefined ? {} : { inputSchema }), ...(changedSchema ? { inputSchema: { ...schema(), additionalProperties: true } } : {}), ...(taskSupport === undefined ? {} : { execution: { taskSupport } }), ...(outputSchema === undefined ? {} : { outputSchema }) }] };
       if (rpc.method === 'tools/call') { if (failCall) throw new Error('network'); assert.equal(journal.at(-1).state, 'executing'); result = callResult ?? { content: [{ type: 'text', text: 'Confirmado' }] }; }
       const reply = { jsonrpc: '2.0', id: rpc.id, result };
       const body = batchResponses && rpc.method !== 'initialize' ? [{ jsonrpc: '2.0', method: 'notifications/progress', params: {} }, reply] : reply;
@@ -34,7 +34,7 @@ function fixture(version = '2025-06-18') {
       connection = { ...connection, revision: connection.revision + 1, credentialAccount: '00000000-0000-4000-8000-000000000002' };
       token = 'test-next';
     }, failCall: () => { failCall = true; }, recover: () => { failCall = false; }, setTaskSupport: value => { taskSupport = value; },
-    setOutputSchema: value => { outputSchema = value; }, setCallResult: value => { callResult = value; }, setBatchResponses: value => { batchResponses = value; } };
+    setInputSchema: value => { inputSchema = value; }, setOutputSchema: value => { outputSchema = value; }, setCallResult: value => { callResult = value; }, setBatchResponses: value => { batchResponses = value; } };
 }
 const context = askApproval => ({ signal: new AbortController().signal, askApproval });
 
@@ -53,6 +53,23 @@ test('JSON schema validates nested arguments, refs, bounds and rejects unsafe un
   assert.throws(() => validateMCPArguments({ type: 'object', patternProperties: { '.*': {} } }, {}), /no compatibles/);
   assert.throws(() => canonicalJSON(JSON.parse('{"__proto__":{"x":1}}')));
 });
+test('unsupported combinator branches never become false matches that permit a call', () => {
+  for (const combinator of ['oneOf', 'anyOf', 'allOf']) {
+    const uncertain = { type: 'object', properties: { text: { [combinator]: [
+      { type: 'string' }, { type: 'string', pattern: '^allowed' },
+    ] } } };
+    assert.throws(() => validateMCPArguments(uncertain, { text: 'allowed text' }), /no compatibles/);
+  }
+  const external = { type: 'object', properties: { text: { oneOf: [
+    { type: 'string' }, { $ref: 'https://schemas.example/value' },
+  ] } } };
+  assert.throws(() => validateMCPArguments(external, { text: 'allowed text' }), /Referencias externas/);
+  // Ordinary supported branches retain the expected matching behaviour.
+  const supported = { type: 'object', properties: { text: { oneOf: [
+    { type: 'string', maxLength: 3 }, { type: 'string', minLength: 4 },
+  ] } } };
+  assert.deepEqual(validateMCPArguments(supported, { text: 'allowed' }), { text: 'allowed' });
+});
 test('MCP initialization and tool call retain session, protocol, exact approval and durable ordering', async () => {
   const f = fixture(); const [tool] = await discoverMCPTools(id, f.services);
   assert.equal(f.calls[0].rpc.params.protocolVersion, '2025-11-25');
@@ -67,6 +84,16 @@ test('MCP initialization and tool call retain session, protocol, exact approval 
   assert.equal(call.headers['MCP-Protocol-Version'], '2025-06-18'); assert.equal(call.headers['Mcp-Session-Id'], 'session-123');
   assert.equal(call.rpc.id, f.journal[0].requestId); assert.equal(f.journal[0].state, 'succeeded');
   assert.equal(JSON.stringify(f.journal).includes('secret-stays-in-headers'), false);
+});
+test('an indeterminate input branch stops before approval, journaling or network execution', async () => {
+  const f = fixture();
+  f.setInputSchema({ type: 'object', properties: { text: { oneOf: [
+    { type: 'string' }, { type: 'string', pattern: '^valid' },
+  ] } }, required: ['text'] });
+  const [tool] = await discoverMCPTools(id, f.services); let reviewed = false;
+  await assert.rejects(tool.execute({ text: 'valid value' }, context(async () => { reviewed = true; return true; })), /no compatibles/);
+  assert.equal(reviewed, false); assert.equal(f.journal.length, 0);
+  assert.equal(f.calls.some(call => call.rpc.method === 'tools/call'), false);
 });
 test('negotiation uses the offered supported version on every subsequent request', async () => {
   for (const version of ['2025-11-25', '2025-06-18', '2025-03-26']) {
@@ -159,6 +186,7 @@ test('invalid or unsupported output schema remains an unverified correlated resu
   for (const output of [
     { type: 'object', properties: { number: { type: 'integer', minimum: 10 } }, required: ['number'] },
     { type: 'object', patternProperties: { '.*': {} } },
+    { type: 'object', properties: { number: { oneOf: [{ type: 'integer' }, { type: 'integer', multipleOf: 5 }] } } },
   ]) {
     const f = fixture('2025-11-25'); f.setOutputSchema(output); f.setCallResult({ content: [], structuredContent: { number: 5 } });
     const [tool] = await discoverMCPTools(id, f.services);
