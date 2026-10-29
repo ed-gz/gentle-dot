@@ -571,7 +571,7 @@ describe("HERDR orchestration authority", () => {
         const h=harness();h.setCapabilities({questionBinding:1});
         const question={id:'q1',kind:'confirm',answerable:true,title:'Publicar',message:'Contenido revisado',expiresAt:new Date(Date.now()+60000).toISOString()};
         h.setRawQuestion(question);const revision=questionRevision(question);const snapshot=await h.orchestrator.snapshot();
-        expect(snapshot.approvals[0].questionRevision).toBe(revision);
+        expect(snapshot.approvals[0]?.questionRevision).toBe(revision);
         h.setBeforeAnswer(()=>h.setRawQuestion({...question,message:'Contenido cambiado'}));
         await expect(h.orchestrator.dispatch({action:'answer',paneId:'w1:p1',sessionId:'s1',requestId:'q1',approved:true,expectedQuestionRevision:revision},'human')).rejects.toThrow('Question changed in adapter');
         expect(h.calls.filter(call=>call.method==='answer').at(-1)?.params.expectedQuestionRevision).toBe(revision);
@@ -1030,6 +1030,7 @@ describe("independent session concurrency", () => {
 		h.setCapabilities({activityFence:1});
 		h.setRawQuestion({id:"q1",kind:"confirm",answerable:true,title:"Allow running tests?",message:"Local unit tests",workflowPermission:{provider:"dot-session/v1",category:"workspace-tool",scope:"project-workspace",tool:"bash"},expiresAt:new Date(Date.now()+600_000).toISOString()});
 		const raw = await h.request("/pi.sock", "snapshot");
+		if (!("question" in raw) || !raw.question) throw new Error("Expected an active question in the fixture snapshot.");
 		const question = raw.question as Record<string, unknown>;
 		const inspecting = h.orchestrator.dispatch(
 			{ action: "inspect", paneId: "w1:p1", sessionId: "s1" },
