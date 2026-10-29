@@ -20,7 +20,9 @@ final class PairingScanner: NSObject, PairingScannerSession, DataScannerViewCont
     }
     func present(from presenter: UIViewController) {
         backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
-            object: nil, queue: .main) { [weak self] _ in self?.cancel() }
+            object: nil, queue: .main) { [weak self] _ in
+                self?.finish(.failure(DeviceFailure.unavailable("El escáner se detuvo al salir de Capri. Vuelve a intentar o elige una foto del QR.")))
+            }
         Task { @MainActor [weak self, weak presenter] in
             guard let self = self else { return }
             guard DataScannerViewController.isSupported else {

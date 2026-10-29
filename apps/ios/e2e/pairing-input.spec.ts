@@ -2,16 +2,17 @@ import { expect, test, type Page } from './fixtures.ts';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
 const link = `gentledot://pair?${new URLSearchParams({ url: 'https://laptop.example.ts.net', code: 'a'.repeat(32), name: 'Mi laptop' })}`;
-async function fixture(page: Page, options: { codes?: string[]; hold?: boolean; native?: boolean } = {}) {
+async function fixture(page: Page, options: { codes?: string[]; hold?: boolean; native?: boolean; liveError?: string } = {}) {
   await page.route('**/pairing-fixture', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><body><form id="fixture"><h2>Vincular laptop</h2><label>Invitación<input id="invitation"></label><button type="submit">Vincular iPhone</button></form></body></html>' }));
   await page.goto('/pairing-fixture');
-  await page.evaluate(async ({ codes, hold, native }) => {
+  await page.evaluate(async ({ codes, hold, native, liveError }) => {
     const state = globalThis as any; state.isTauri = native; state.qrCommands = []; state.pairSubmits = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('results_list')) return { ok: true, items: [] };
       state.qrCommands.push(command);
       if (command.endsWith('|pairing_scan_cancel')) return { ok: true };
       if (command.endsWith('|pairing_scan')) {
+        if (liveError) return { ok: false, error: 'unavailable', message: liveError };
         const result = { ok: true, value: codes[0], cancelled: false };
         if (hold) return new Promise(resolve => { state.finishQR = () => resolve(result); });
         return result;
@@ -28,7 +29,7 @@ async function fixture(page: Page, options: { codes?: string[]; hold?: boolean; 
     const module = await import(path), form = document.querySelector<HTMLFormElement>('#fixture')!, input = document.querySelector<HTMLInputElement>('#invitation')!;
     state.qrMount = module.mountPairingInput(form, input); module.mountPairingInput(form, input);
     form.addEventListener('submit', event => { event.preventDefault(); state.pairSubmits++; });
-  }, { codes: options.codes ?? [link], hold: options.hold ?? false, native: options.native ?? true });
+  }, { codes: options.codes ?? [link], hold: options.hold ?? false, native: options.native ?? true, liveError: options.liveError });
 }
 
 test('photo QR fills one validated invitation, shows its host and requires separate human submission', async ({ page }) => {
@@ -127,6 +128,16 @@ test('live native scanner shows a validated host without photographing, opening 
   await page.evaluate(() => (globalThis as any).qrMount.setSubmitting(false));
   await page.getByRole('button', { name: 'Vincular iPhone', exact: true }).click();
   expect(await page.evaluate(() => (globalThis as any).pairSubmits)).toBe(1);
+});
+
+test('a scanner interrupted by backgrounding reports why without treating it as a user cancellation', async ({ page }) => {
+  await fixture(page, { liveError: 'El escáner se detuvo al salir de Capri. Vuelve a intentar o elige una foto del QR.' });
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
+  await expect(page.locator('.pairing-scan-status')).toContainText('se detuvo al salir de Capri');
+  await expect(page.locator('.pairing-scan-status')).not.toContainText('Lectura cancelada');
+  await expect(page.getByRole('button', { name: 'Escanear QR', exact: true })).toBeEnabled();
+  await expect(page.locator('#invitation')).toHaveValue('');
+  expect(await page.evaluate(() => (globalThis as any).pairSubmits)).toBe(0);
 });
 
 test('native camera result for an unrelated URL cannot become a candidate', async ({ page }) => {
