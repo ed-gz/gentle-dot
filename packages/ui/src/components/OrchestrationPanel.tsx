@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AgentConversation, AgentSession, OrchestrationClient } from "../orchestration.ts";
 import type { OrchestrationControls } from "../useOrchestration.ts";
-import { reconcileDeliveries, restoreDeliveries, persistDeliveries, type OutgoingMessage } from "../session-delivery.ts";
+import { isLegacyDelivery, sessionDeliveryIdentity, reconcileDeliveries, restoreDeliveries, persistDeliveries, type OutgoingMessage } from "../session-delivery.ts";
 import { useSessionPolling } from "../useSessionPolling.ts";
 import { reconcileRecentConversation } from "../session-history.ts";
 import { publishCompanionActivity, useCompanionResponse } from "../companion-activity.ts";
@@ -29,9 +29,9 @@ const STATES: Record<AgentSession["state"], string> = {
 const PROVIDERS = { herdr: "Herdr", orca: "Orca", terminal: "Terminal" };
 const DELIVERY_STATUS = {
 	sending: "Enviando al equipo…",
-	unconfirmed: "Sin confirmación. Revisa el historial antes de reintentar.",
+	unconfirmed: "Sin confirmación. Revisa el historial: reintentar podría duplicar el mensaje.",
 	accepted: "Recibido por la conexión; esperando confirmación de la sesión.",
-	queued: "En cola; la sesión todavía no ha recibido el mensaje.",
+	queued: "Enviado a la cola; esperando confirmación de la sesión.",
 	delivered: "Recibido por la sesión",
 	dismissed: "Descartado",
 };
@@ -68,9 +68,32 @@ export function OrchestrationPanel({
 	const [provider, setProvider] = useState<AgentSession["provider"]>();
 	const [instruction, setInstruction] = useState("");
 	const [receipt, setReceipt] = useState<string>();
-	const [outbox, setOutbox] = useState<OutgoingMessage[]>(restoreDeliveries);
-	const outboxRef = useRef(outbox);
-	outboxRef.current = outbox;
+	const [deliveryStorageError, setDeliveryStorageError] = useState(false);
+	const [outbox, setOutbox] = useState<OutgoingMessage[]>([]);
+	const [deliveryStorageReady, setDeliveryStorageReady] = useState(false);
+	const deliveryWrites = useRef<Promise<void>>(Promise.resolve());
+	const deliveryVersions = useRef(new Map<string, number>());
+	const deliverySaved = useRef(new Map<string, string>());
+	const deliveryKey = (item: OutgoingMessage) => JSON.stringify([item.identity, item.id]);
+	const deliveryContent = (item: OutgoingMessage) => JSON.stringify({...item, storageVersion:undefined, baseline:[...item.baseline]});
+	const saveDeliveries = useCallback((items: OutgoingMessage[], requireNew = false) => {
+		const snapshots = items.map(item => ({...item, baseline:new Set(item.baseline)}));
+		const operation = deliveryWrites.current.then(async () => {
+			for (const item of snapshots) {
+				const version = deliveryVersions.current.get(deliveryKey(item));
+				if (requireNew && version !== undefined) return false;
+				if (version !== undefined) item.storageVersion = version;
+			}
+			const saved = await persistDeliveries(snapshots);
+			if (saved) for (const item of snapshots) {
+				deliveryVersions.current.set(deliveryKey(item), item.storageVersion ?? 0);
+				deliverySaved.current.set(deliveryKey(item), deliveryContent(item));
+			}
+			return saved;
+		});
+		deliveryWrites.current = operation.then(() => {}, () => {});
+		return operation;
+	}, []);
 	const [deliverAs, setDeliverAs] = useState<"steer" | "followUp">("steer");
 	const [mobileDisclosure, setMobileDisclosure] = useState<"work" | "delivery">();
 	const [conversation, setConversation] = useState<AgentConversation>();
@@ -95,7 +118,7 @@ export function OrchestrationPanel({
 	// by the daemon; keep refresh/retry available after QUESTION_CHANGED or a refusal.
 	const answerConnected = snapshot?.available === true;
 	const connected = answerConnected && !error;
-	const identity = session?.sessionId ? `${identityScope}${session.paneId}:${session.sessionId}` : undefined;
+	const identity = session?.sessionId ? sessionDeliveryIdentity(identityScope, session.paneId, session.sessionId) : undefined;
 	useCompanionResponse(conversationMessages.findLast(message => message.role === "assistant")?.id, identity, active, ".agent-message-assistant");
 	const clientEpoch = useRef({ client, epoch: 0 });
 	if (clientEpoch.current.client !== client) clientEpoch.current = { client, epoch: clientEpoch.current.epoch + 1 };
@@ -108,6 +131,8 @@ export function OrchestrationPanel({
 	const capturedEpoch = ownerEpoch.current.epoch;
 	const liveIdentity = useRef(identity);
 	liveIdentity.current = identity;
+	const activeRef = useRef(active);
+	activeRef.current = active;
 	const activeSessions = [...(snapshot?.sessions ?? [])].sort((a, b) => {
 		const priority = { blocked: 0, working: 1, idle: 2, done: 3, unknown: 4 };
 		return priority[a.state] - priority[b.state];
@@ -283,29 +308,76 @@ export function OrchestrationPanel({
 		},
 		(problem) => setConversationError(problem instanceof Error ? problem.message : "No se pudo cargar esta conversación."));
 	useEffect(() => {
-		if (conversation && conversation.sessionId === session?.sessionId)
+		if (deliveryStorageReady && conversation && conversation.sessionId === session?.sessionId)
 			setOutbox(current => reconcileDeliveries(current, conversation, identity));
-	}, [conversation, identity, session?.sessionId]);
-	useEffect(() => { persistDeliveries(outbox); }, [outbox]);
+	}, [conversation, identity, session?.sessionId, deliveryStorageReady]);
+	useEffect(() => {
+		let current = true;
+		void restoreDeliveries().then(items => {
+			if (current) {
+				for (const item of items) {
+					deliveryVersions.current.set(deliveryKey(item), item.storageVersion ?? 0);
+					deliverySaved.current.set(deliveryKey(item), deliveryContent(item));
+				}
+				setOutbox(items); setDeliveryStorageReady(true);
+			}
+		}).catch(() => { if (current) setDeliveryStorageError(true); });
+		return () => { current = false; };
+	}, []);
+	useEffect(() => {
+		if (!deliveryStorageReady) return;
+		const changed = outbox.filter(item => deliverySaved.current.get(deliveryKey(item)) !== deliveryContent(item));
+		if (!changed.length) return;
+		let current = true;
+		void saveDeliveries(changed).then(saved => {
+			if (current) setDeliveryStorageError(!saved);
+		});
+		return () => { current = false; };
+	}, [outbox, deliveryStorageReady, saveDeliveries]);
+	const reloadDeliveries = async () => {
+		await deliveryWrites.current;
+		try {
+			const items = await restoreDeliveries();
+			const restored = new Set(items.map(deliveryKey));
+			for (const item of items) {
+				deliveryVersions.current.set(deliveryKey(item), item.storageVersion ?? 0);
+				deliverySaved.current.set(deliveryKey(item), deliveryContent(item));
+			}
+			setOutbox(current => [...items, ...current.filter(item => !restored.has(deliveryKey(item)))]);
+			setDeliveryStorageReady(true);
+			setDeliveryStorageError(false);
+		} catch { setDeliveryStorageError(true); }
+	};
+	const retriesInFlight = useRef(new Set<string>());
 	const retryDelivery = async (item: OutgoingMessage) => {
 		if (!session?.sessionId || !connected || !session.connected || !active || busy) return;
-		if (!item.payload) {
-			// A receipt from another client only contains a potentially truncated preview.
-			// Never resend it silently or pretend its attachments can be reconstructed.
-			setInstruction(item.text);
-			setReceipt("Revisa el mensaje completo y vuelve a adjuntar los archivos antes de enviarlo.");
-			panel.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
-			return;
-		}
-		let payload: unknown;
-		try { payload = JSON.parse(item.payload); } catch { setReceipt("No se pudo recuperar el envío. Revisa el mensaje antes de enviarlo."); return; }
-		if (!Array.isArray(payload) || typeof payload[0] !== "string") return;
-		const [text, attachments, mode] = payload;
-		setOutbox(current => current.map(entry => entry.id === item.id ? {...entry, status:"sending"} : entry));
-		const sent = await act({action:"prompt", paneId:session.paneId, sessionId:session.sessionId, text,
-			...(attachments ? {attachments} : {}), clientMessageId:item.id, ...(mode ? {deliverAs:mode} : {})});
-		setOutbox(current => current.map(entry => entry.id === item.id && entry.status === "sending" ? {...entry, status:sent ? "accepted" : "unconfirmed"} : entry));
-		refreshConversation();
+		const key = deliveryKey(item);
+		if (retriesInFlight.current.has(key)) return;
+		retriesInFlight.current.add(key);
+		try {
+			if (!item.payload) {
+				// A receipt from another client only contains a potentially truncated preview.
+				// Never resend it silently or pretend its attachments can be reconstructed.
+				setInstruction(item.text);
+				setReceipt("Revisa el mensaje completo y vuelve a adjuntar los archivos antes de enviarlo.");
+				panel.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+				return;
+			}
+			let payload: unknown;
+			try { payload = JSON.parse(item.payload); } catch { setReceipt("No se pudo recuperar el envío. Revisa el mensaje antes de enviarlo."); return; }
+			if (!Array.isArray(payload) || typeof payload[0] !== "string") return;
+			const [text, attachments, mode] = payload;
+			if (!deliveryStorageReady || !await saveDeliveries([{...item, status:"sending"}])) { setDeliveryStorageError(true); return; }
+			if (!activeRef.current || liveIdentity.current !== identity || clientEpoch.current.client !== client) {
+				if (!await saveDeliveries([{...item, status:"unconfirmed"}])) setDeliveryStorageError(true);
+				return;
+			}
+			setOutbox(current => current.map(entry => entry.id === item.id && entry.identity === item.identity ? {...entry, status:"sending"} : entry));
+			const sent = await act({action:"prompt", paneId:session.paneId, sessionId:session.sessionId, text,
+				...(attachments ? {attachments} : {}), clientMessageId:item.id, ...(mode ? {deliverAs:mode} : {})});
+			setOutbox(current => current.map(entry => entry.id === item.id && entry.identity === item.identity && entry.status === "sending" ? {...entry, status:sent ? "accepted" : "unconfirmed"} : entry));
+			refreshConversation();
+		} finally { retriesInFlight.current.delete(key); }
 	};
 	const lastCompanionDelivery = useRef("");
 	useEffect(() => {
@@ -362,7 +434,7 @@ export function OrchestrationPanel({
 				/>
 				<AgentWorkflow
 					capriMobile={mobile && capriMobile}
-					key={`${session.paneId}:${session.sessionId ?? ""}`}
+					key={JSON.stringify([session.paneId, session.sessionId ?? null])}
 					work={conversation?.work}
 					stale={Boolean(conversationError) || !connected || !session.connected}
 					onInspect={() => {
@@ -377,8 +449,10 @@ export function OrchestrationPanel({
 			Trabajando…
 		</div>
 	) : null;
+	const storageNotice = deliveryStorageError ? <div className="orchestration-error" role="alert">No se pudieron leer o guardar los envíos en este dispositivo. Se conservan los datos anteriores; revisa el almacenamiento antes de enviar. <button type="button" onClick={() => void reloadDeliveries()}>Volver a leer</button></div> : null;
 	const selectedView = session ? (
 		<section className="agent-detail" aria-label={`Sesión ${session.label}`}>
+			{storageNotice}
 			{!capriMobile ? sessionWork : null}
 			{capriMobile && (error || conversationError) ? (
 				<div className="session-connection-notices" role="region" tabIndex={0} aria-label="Avisos de la sesión">
@@ -483,22 +557,33 @@ export function OrchestrationPanel({
 						</select>
 					</label>
 				) : null}
-				<AgentAttachments key={`${identity}:${clientEpoch.current.epoch}`} client={client} paneId={session.paneId} sessionId={session.sessionId}
+				<AgentAttachments key={JSON.stringify([identity, clientEpoch.current.epoch])} client={client} paneId={session.paneId} sessionId={session.sessionId}
 					capriMobile={mobile && capriMobile}
-					text={instruction} onText={setInstruction} busy={busy} disabled={!connected || !active || !session.connected}
+					text={instruction} onText={setInstruction} busy={busy} disabled={!connected || !active || !session.connected || !deliveryStorageReady}
 					images={session.capabilities?.attachments?.images ?? false}
 					filesEnabled={session.capabilities?.attachments?.version === 1 && Boolean(client.uploadAttachment)}
 					onSend={async (text, attachments) => {
 						const mode = session.capabilities?.deliveryModes?.includes(deliverAs) ? deliverAs : undefined;
 						const payload = JSON.stringify([text, attachments, mode]);
-						const previous = outboxRef.current.findLast(item => item.identity === identity && item.payload === payload && item.status === "unconfirmed");
-						const messageId = previous?.id ?? createMessageId();
+						const messageId = createMessageId();
+						const pending: OutgoingMessage = { id: messageId, identity: identity!, text, payload, createdAt: Date.now(), status: "sending", attachmentNames: attachments?.map(file => file.name), baseline: new Set(conversation?.messages.map(message => message.id)) };
+						if (!deliveryStorageReady || !await saveDeliveries([pending], true)) {
+							setDeliveryStorageError(true);
+							return false;
+						}
+						if (!activeRef.current || ownerEpoch.current.epoch !== capturedEpoch || liveIdentity.current !== identity || clientEpoch.current.client !== client) {
+							if (!await saveDeliveries([{...pending, status:"dismissed"}])) {
+								setOutbox(current => [...current, {...pending, status:"unconfirmed"}]);
+								setDeliveryStorageError(true);
+							}
+							return false;
+						}
 						followConversation.current = true;
-						setOutbox(current => [...current.filter(item => item.id !== messageId), { id: messageId, identity: identity!, text, payload, createdAt: Date.now(), status: "sending", attachmentNames: attachments?.map(file => file.name), baseline: previous?.baseline ?? new Set(conversation?.messages.map(message => message.id)) }]);
+						setOutbox(current => [...current.filter(item => item.id !== messageId || item.identity !== identity), pending]);
 						const sent = await act({ action: "prompt", paneId: session.paneId, sessionId: session.sessionId!, text,
 							...(attachments ? { attachments } : {}),
 							...(session.capabilities?.deliveryReceipts ? { clientMessageId: messageId } : {}), ...(mode ? { deliverAs: mode } : {}) });
-						if (clientEpoch.current.client === client) setOutbox(current => current.map(item => item.id === messageId && item.status === "sending" ? { ...item, status: sent ? "accepted" : "unconfirmed" } : item));
+						if (clientEpoch.current.client === client) setOutbox(current => current.map(item => item.id === messageId && item.identity === identity && item.status === "sending" ? { ...item, status: sent ? "accepted" : "unconfirmed" } : item));
 						refreshConversation();
 						if (sent && ownerEpoch.current.epoch === capturedEpoch && liveIdentity.current === identity && clientEpoch.current.client === client) {
 							setInstruction("");
@@ -592,6 +677,14 @@ export function OrchestrationPanel({
 					{receipt}
 				</p>
 			) : null}
+			{storageNotice}
+			{outbox.some(item => isLegacyDelivery(item) && !["delivered", "dismissed"].includes(item.status)) ? <details className="orchestration-receipt"><summary>Envíos anteriores sin sesión verificada</summary>
+				<p>La sesión de origen no se puede identificar con seguridad. Revisa el contenido antes de usarlo.</p>
+				{outbox.filter(item => isLegacyDelivery(item) && !["delivered", "dismissed"].includes(item.status)).map(item => <div key={JSON.stringify([item.identity, item.id])}>
+					<p>{item.text || "Contenido no disponible"}</p>
+					<button type="button" onClick={() => setOutbox(current => current.map(entry => entry === item ? {...entry, status:"dismissed"} : entry))}>Descartar registro</button>
+				</div>)}
+			</details> : null}
 
 			{active && requestsVisible && snapshot && snapshot.approvals.length > 0 ? (
 				<section className="orchestration-section" aria-label="Permisos pendientes">
@@ -703,7 +796,7 @@ export function OrchestrationPanel({
 						const preview = typeof entry.lastMessage === "string" ? Array.from(entry.lastMessage.trim()).slice(0, 160).join("") : "";
 						const baseLabel = `${entry.label || "Sesión sin nombre"} · ${entry.connected ? STATES[entry.state] : "Sin conexión"}`;
 						return (
-						<div className="agent-session-row" key={`${entry.paneId}:${entry.sessionId}`}>
+						<div className="agent-session-row" key={JSON.stringify([entry.paneId, entry.sessionId ?? null])}>
 						<button
 							type="button"
 							className="agent-session"
@@ -782,11 +875,12 @@ export function SessionTurns({ messages, pending = [], onRetry, onDiscard, retry
 		const work = lastTool < 0 ? [] : turn.filter((message, i) => message.role === "tool" || (message.role === "assistant" && !message.provenance && (i < lastTool || message.stopReason === "toolUse")));
 		const actions = work.filter(message => message.role === "tool").length;
 		const pendingItem = pendingById.get(turn[0]!.id);
+		const pendingText = pendingItem?.text || (pendingItem?.attachmentNames?.length ? "Archivos adjuntos" : "Contenido no disponible");
 		const superseded = pendingItem?.status === "unconfirmed" && messages.some(message => message.role === "user" && !message.provenance && Date.parse(message.timestamp ?? "") > pendingItem.createdAt);
 		return <section className="session-turn" aria-label={`Turno ${index + 1}`} key={turn[0]!.id}>
 			{pendingItem ? <article className={`session-delivery session-delivery-${pendingItem.status}`} aria-label="Envío sin confirmar">
-				{superseded ? <details className="session-delivery-superseded"><summary>Sin confirmar · {pendingItem.text.slice(0, 80) || "Archivos adjuntos"}</summary><p>{pendingItem.text || "Archivos adjuntos"}</p></details> : <p>{pendingItem.text || "Archivos adjuntos"}</p>}
-				{!superseded ? <small>{pendingItem.status === "queued" && waiting ? "En cola: se enviará cuando respondas la pregunta" : DELIVERY_STATUS[pendingItem.status]}</small> : null}
+				{superseded ? <details className="session-delivery-superseded"><summary>Sin confirmar · {pendingText.slice(0, 80)}</summary><p>{pendingText}</p></details> : <p>{pendingText}</p>}
+				<small>{pendingItem.status === "queued" && waiting ? "Enviado a la cola; revisa la pregunta pendiente." : DELIVERY_STATUS[pendingItem.status]}</small>
 				<div className="session-delivery-actions">
 					<button type="button" disabled={retryDisabled || pendingItem.status !== "unconfirmed"} onClick={() => onRetry?.(pendingItem)}>Reintentar</button>
 					<button type="button" disabled={pendingItem.status === "sending"} onClick={() => onDiscard?.(pendingItem)}>Descartar</button>

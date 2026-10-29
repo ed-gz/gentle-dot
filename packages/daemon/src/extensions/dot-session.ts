@@ -117,7 +117,6 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
   ...(companionActions.snapshot() ? {lastAction: companionActions.snapshot()} : {}),
  });
 	const deliveries = new SessionDeliveries();
-	const deliveryEvidence = new Map<string, {text: string; acceptedAt: number; baseline: Set<string>}>();
 	const deliveredAttachments = new Map<string, string>();
 	const deliveredTokens = new Set<string>();
 	const remoteAnswers = new WeakSet<object>();
@@ -141,7 +140,6 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 		enrollment = undefined;
 		queuedHuman.length = 0;
 		deliveries.clear();
-		deliveryEvidence.clear();
 		companionActivity.reset();
   companionActions.reset();
 		deliveredAttachments.clear();
@@ -396,26 +394,11 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 		if (method === "snapshot") {
             pi.events?.emit("gentle-dot:editor-activity:probe", {sessionId:ctx.sessionManager.getSessionId()});
 			const branch = ctx.sessionManager.getBranch();
-			// A message_start event can precede final content (or be missed during
-			// reconnect). The persisted user branch is authoritative consumption evidence.
-			const matchedDeliveries = new Set<string>();
+			// Reconcile only explicit delivery IDs carried by the native message.
+			// A matching text and timestamp do not prove which client sent it.
 			for (const entry of branch) {
 				if (entry.type !== "message" || entry.message.role !== "user") continue;
-				const at = Date.parse(entry.timestamp);
-				if (!Number.isFinite(at)) continue;
-				const content = entry.message.content;
-				const text = typeof content === "string" ? content : content.filter(part => part.type === "text").map(part => part.text).join("\n");
-				// Reserve evidence for completed receipts too: one real turn must never
-				// confirm two identical remote sends on successive snapshot polls.
-				const receipt = deliveries.snapshot().find(receipt => {
-					const evidence = deliveryEvidence.get(receipt.id);
-					return !matchedDeliveries.has(receipt.id) && evidence?.text === text && !evidence.baseline.has(entry.id) && at >= evidence.acceptedAt - 5_000 && at <= evidence.acceptedAt + 600_000;
-				});
-				if (receipt) {
-					matchedDeliveries.add(receipt.id);
-					const firstPending = deliveries.snapshot().find(item => item.status !== "delivered" && deliveryEvidence.get(item.id)?.text === text);
-					if (receipt.status !== "delivered" && firstPending?.id === receipt.id) deliveries.consume(entry.message);
-				}
+				deliveries.consume(entry.message);
 			}
 			const limit = params.limit ?? 50;
 			if (!Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > 100)
@@ -542,14 +525,13 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				const prepared = deliveryId
 					? deliveries.prepare(deliveryId, [params.text, params.deliveryId, params.deliverAs ?? "followUp"], plain, deliverAs, !waitingForQuestion && ctx!.isIdle(), String(params.text)) : undefined;
 				if (!prepared?.duplicate) {
-					if (deliveryId && prepared) deliveryEvidence.set(deliveryId, {text:plain, acceptedAt:Date.parse(prepared.receipt.acceptedAt), baseline:new Set(ctx!.sessionManager.getBranch().map(entry => entry.id))});
 					if (waitingForQuestion && queuedHuman.length >= 16) {
-						if (deliveryId) { deliveries.remove(deliveryId); deliveryEvidence.delete(deliveryId); }
+						if (deliveryId) deliveries.remove(deliveryId);
 						throw new OrchestrationError("DELIVERY_LIMIT", "Responde la pregunta antes de enviar más mensajes.");
 					}
 					if (waitingForQuestion) { queuedHuman.push({content, id:deliveryId}); return; }
 					try { pi.sendUserMessage(content, { deliverAs, expandPromptTemplates: false }); }
-					catch (error) { if (typeof clientMessageId === "string") { deliveries.remove(clientMessageId); deliveryEvidence.delete(clientMessageId); } throw error; }
+					catch (error) { if (typeof clientMessageId === "string") deliveries.remove(clientMessageId); throw error; }
 				}
 			};
 			// Slash commands can load files or change sessions. User text is always a literal prompt here.

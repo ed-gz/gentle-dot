@@ -33,7 +33,7 @@ it("never carries a vanished session draft to a replacement in the same pane", a
 	expect(await screen.findByLabelText("Continuar esta sesión")).toHaveValue("Solo para la primera sesión");
 });
 
-it("confirms a persisted attachment send on a fresh client from transcript evidence, not a stale receipt", async () => {
+it("keeps a persisted attachment send uncertain when only matching text is available", async () => {
  const at = Date.now()-60_000;
  localStorage.setItem("gentle-dot:session-outbox:v1", JSON.stringify([{id:"restored-send",identity:"p1:s1",text:"Dos bugs a resolver",payload:JSON.stringify(["Dos bugs a resolver",null,"steer"]),createdAt:at,status:"unconfirmed",baseline:[],attachmentNames:["uno.png","dos.png"]}]));
  const {view} = setup({...snapshot,approvals:[]}, {sessionId:"s1",status:"idle",question:null,
@@ -45,7 +45,7 @@ it("confirms a persisted attachment send on a fresh client from transcript evide
   ]});
  fireEvent.click(screen.getByRole("button",{name:/Release/}));
  await screen.findByText("ya");
- await waitFor(() => expect(view.container.querySelector(".session-delivery")).toBeNull());
+ await waitFor(() => expect(view.container.querySelector(".session-delivery-unconfirmed")).toBeVisible());
 });
 
 const snapshot: OrchestrationSnapshot = {
@@ -140,7 +140,7 @@ it("shows the waiting-question queue receipt instead of losing the extra detail"
  const delivery={id:"queued-human-123",status:"queued" as const,deliverAs:"followUp" as const,preview:"extra detail",acceptedAt:new Date().toISOString()};
  setup({...snapshot,approvals:[]},{sessionId:"s1",status:"waiting",messages:[],question:null,deliveries:[delivery]});
  fireEvent.click(screen.getByRole("button",{name:/Release/}));
- expect(await screen.findByText("En cola: se enviará cuando respondas la pregunta")).toBeVisible();
+ expect(await screen.findByText("Enviado a la cola; revisa la pregunta pendiente.")).toBeVisible();
 });
 
 function ProductionAgentPanel({ client, active = true, connected = true, send = () => false }: { client: OrchestrationClient; active?: boolean; connected?: boolean; send?: Send }) {

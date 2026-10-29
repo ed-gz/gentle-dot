@@ -7,7 +7,7 @@ import { createDotSession } from "../src/extensions/dot-session.ts";
 import { SessionDeliveries } from "../src/orchestration/delivery.ts";
 import { localRequest } from "../src/orchestration/herdr.ts";
 
-it("does not confuse acceptance, a queued instruction, an assistant echo, or actual user consumption", () => {
+it("confirms consumption only with the exact delivery identity", () => {
 	const ledger = new SessionDeliveries();
 	const prepare = () =>
 		ledger.prepare("message-123", ["exact instruction", "steer"], "exact instruction", "steer", false);
@@ -18,9 +18,11 @@ it("does not confuse acceptance, a queued instruction, an assistant echo, or act
 	ledger.consume({ role: "user", content: "different instruction" });
 	expect(ledger.snapshot()[0]?.status).toBe("queued");
 	ledger.consume({ role: "user", content: [{ type: "text", text: "exact instruction" }] });
+	expect(ledger.snapshot()[0]?.status).toBe("queued");
+	ledger.consume({ role: "user", clientMessageId: "message-123", content: [{ type: "text", text: "exact instruction" }] });
 	expect(prepare()).toMatchObject({
 		duplicate: true,
-		receipt: { status: "delivered", deliveredAt: expect.any(String) },
+		receipt: { status: "delivered", deliveredAt: expect.any(String), evidence: "correlated-v1" },
 	});
 	ledger.clear();
 	expect(ledger.snapshot()).toEqual([]);
@@ -33,10 +35,14 @@ it("exposes missing consumption confirmation without calling it delivered or ret
 		"unconfirmed",
 	);
 	ledger.consume({ role: "user", content: "hello" });
+	expect(ledger.snapshot()[0]?.status).toBe("unconfirmed");
+	ledger.consume({ role: "user", deliveryId: "message-idle", content: "hello" });
+	expect(ledger.snapshot()[0]?.status).toBe("unconfirmed");
+	ledger.consume({ role: "user", clientMessageId: "message-idle", content: "hello" });
 	expect(ledger.snapshot()[0]?.status).toBe("delivered");
 });
 
-it("carries stable delivery IDs through the native socket, steers once, and confirms only on message_start", async () => {
+it("carries stable delivery IDs without attributing another client's identical message", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "dot-delivery-"));
 	const handlers = new Map<string, (event: unknown, context: ExtensionContext) => void | Promise<void>>();
 	const sendUserMessage = vi.fn();
@@ -86,7 +92,12 @@ it("carries stable delivery IDs through the native socket, steers once, and conf
 			{ message: { role: "user", content: [{ type: "text", text: input.text }] } },
 			context,
 		);
-		expect(await request("snapshot")).toMatchObject({ deliveries: [{ status: "delivered" }] });
+		expect(await request("snapshot")).toMatchObject({ deliveries: [{ status: "queued" }] });
+		await handlers.get("message_start")?.(
+			{ message: { role: "user", clientMessageId: input.clientMessageId, content: [{ type: "text", text: input.text }] } },
+			context,
+		);
+		expect(await request("snapshot")).toMatchObject({ deliveries: [{ status: "delivered", evidence: "correlated-v1" }] });
 		await expect(request("prompt", { ...input, text: "replacement" })).rejects.toMatchObject({
 			code: "DELIVERY_CHANGED",
 		});
@@ -94,11 +105,12 @@ it("carries stable delivery IDs through the native socket, steers once, and conf
 			code: "INVALID_DELIVERY",
 		});
 		expect(sendUserMessage).toHaveBeenCalledTimes(1);
-		// A client can reconnect after message_start was missed. Snapshot must recover
-		// consumption from the real branch, not leave a receipt permanently unconfirmed.
+		// A matching branch message without an ID may be from another client.
 		await request("prompt", {text:"Dos bugs\n\n<attachments>\n{\"name\":\"one.png\"}\n</attachments>", clientMessageId:"delivery-history"});
 		branch.push({type:"message", id:"history-user", timestamp:new Date().toISOString(), message:{role:"user", content:[{type:"text", text:"Dos bugs\n\n<attachments>\n{\"name\":\"one.png\"}\n</attachments>"}]}});
-		expect((await request("snapshot")).deliveries).toEqual(expect.arrayContaining([expect.objectContaining({id:"delivery-history",status:"delivered"})]));
+		expect((await request("snapshot")).deliveries).toEqual(expect.arrayContaining([expect.objectContaining({id:"delivery-history",status:"queued"})]));
+		branch.push({type:"message", id:"history-correlated", timestamp:new Date().toISOString(), message:{role:"user", clientMessageId:"delivery-history", content:[{type:"text", text:"actual"}]}});
+		expect((await request("snapshot")).deliveries).toEqual(expect.arrayContaining([expect.objectContaining({id:"delivery-history",status:"delivered",evidence:"correlated-v1"})]));
 		await request("prompt", {text:"Dos bugs\n\n<attachments>\n{\"name\":\"one.png\"}\n</attachments>", clientMessageId:"delivery-repeat"});
 		for (let poll = 0; poll < 2; poll++) {
 			expect((await request("snapshot")).deliveries).toEqual(expect.arrayContaining([expect.objectContaining({id:"delivery-repeat",status:"queued"})]));

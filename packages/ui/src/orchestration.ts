@@ -227,6 +227,8 @@ export interface AgentDelivery {
 	deliverAs: "steer" | "followUp";
 	acceptedAt: string;
 	deliveredAt?: string;
+	/** Evidence that the session correlated this receipt to its native message. */
+	evidence?: "correlated-v1";
 }
 
 export interface AgentConversation {
@@ -264,6 +266,7 @@ export function parseAgentDeliveries(value: unknown): AgentDelivery[] | undefine
 		["accepted", "queued", "delivered", "unconfirmed"].includes(item.status) &&
 		["steer", "followUp"].includes(item.deliverAs) && typeof item.acceptedAt === "string" && Number.isFinite(Date.parse(item.acceptedAt)))
 		.map(item => ({ id: item.id, status: item.status, deliverAs: item.deliverAs, acceptedAt: item.acceptedAt,
+			...(item.evidence === "correlated-v1" ? { evidence: "correlated-v1" as const } : {}),
 			...(typeof item.preview === "string" ? { preview: item.preview.slice(0, 2000) } : {}),
 			...(typeof item.deliveredAt === "string" && Number.isFinite(Date.parse(item.deliveredAt)) ? { deliveredAt: item.deliveredAt } : {}) }));
 }

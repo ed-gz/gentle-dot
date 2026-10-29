@@ -133,7 +133,7 @@ export function SessionMenu({
 	const submitting = useRef(false);
 	const intent = useRef<{ identity: string; action: OrchestrationControls["act"] } | undefined>(undefined);
 	const mounted = useRef(true);
-	const identity = `${session.paneId}:${session.sessionId ?? ""}`;
+	const identity = JSON.stringify([session.paneId, session.sessionId ?? null]);
 	const displayedIdentity = useRef(identity);
 	const current = useRef({ identity, action: controls.act });
 	current.current = { identity, action: controls.act };

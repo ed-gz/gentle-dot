@@ -8,11 +8,21 @@ export interface SessionDelivery {
 	deliverAs: "steer" | "followUp";
 	acceptedAt: string;
 	deliveredAt?: string;
+	/** The originating user message carried this exact clientMessageId. Older
+	 * receipts without this marker cannot prove who submitted matching text. */
+	evidence?: "correlated-v1";
 }
 
-/** A socket acknowledgement means accepted. Only a real user message event confirms consumption. */
+/**
+ * A socket acknowledgement means accepted, not consumed or durably saved.
+ * correlated-v1 means a user message emitted by the session carried the exact
+ * clientMessageId supplied with this prompt. Older delivered receipts have no
+ * such guarantee. Pi 1.0.4 does not propagate that ID through sendUserMessage,
+ * so its sends remain unconfirmed even if their text appears in the transcript.
+ * This in-memory ledger does not provide durable acknowledgement across restarts.
+ */
 export class SessionDeliveries {
-	private readonly entries = new Map<string, { receipt: SessionDelivery; digest: string; text: string }>();
+	private readonly entries = new Map<string, { receipt: SessionDelivery; digest: string }>();
 	clear() {
 		this.entries.clear();
 	}
@@ -49,7 +59,7 @@ export class SessionDeliveries {
 			deliverAs,
 			acceptedAt: new Date().toISOString(),
 		};
-		this.entries.set(id, { receipt, digest, text });
+		this.entries.set(id, { receipt, digest });
 		return { receipt: { ...receipt }, duplicate: false };
 	}
 	remove(id: string) {
@@ -57,23 +67,15 @@ export class SessionDeliveries {
 	}
 	consume(message: unknown) {
 		if (!record(message) || message.role !== "user") return;
-		const text =
-			typeof message.content === "string"
-				? message.content
-				: Array.isArray(message.content)
-					? message.content
-							.filter(record)
-							.filter((item) => item.type === "text" && typeof item.text === "string")
-							.map((item) => item.text)
-							.join("\n")
-					: undefined;
-		if (text === undefined) return;
-		const entry = [...this.entries.values()].find(
-			(item) => item.receipt.status !== "delivered" && item.text === text,
-		);
+		const client = typeof message.clientMessageId === "string" ? message.clientMessageId : undefined;
+		// Text, timestamps and queue order do not identify the sender: another
+		// window can submit the same instruction while this delivery is pending.
+		// deliveryId is also used for attachment identity, not message identity.
+		const entry = client ? this.entries.get(client) : undefined;
 		if (entry) {
 			entry.receipt.status = "delivered";
 			entry.receipt.deliveredAt = new Date().toISOString();
+			entry.receipt.evidence = "correlated-v1";
 		}
 	}
 	snapshot(idle = false, hasPending = true, now = Date.now()): SessionDelivery[] {

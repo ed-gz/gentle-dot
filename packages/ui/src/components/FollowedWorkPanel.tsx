@@ -247,7 +247,7 @@ function WorkCard({
 				) : null}
 				<ul>
 					{work.sessions.map((session) => (
-						<li key={`${session.paneId}:${session.sessionId}`}>{session.label || "Sesión vinculada"}</li>
+						<li key={JSON.stringify([session.paneId, session.sessionId ?? null])}>{session.label || "Sesión vinculada"}</li>
 					))}
 				</ul>
 			</details>

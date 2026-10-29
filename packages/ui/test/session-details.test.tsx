@@ -329,6 +329,17 @@ describe("session menu actions", () => {
 		expect(control.act).not.toHaveBeenCalled();
 		expect(replacement.act).not.toHaveBeenCalled();
 	});
+	it("does not carry a confirmation across colon-colliding session identities", async () => {
+		const control = controls();
+		const first = {...session, paneId:"a:b", sessionId:"c"};
+		const second = {...session, paneId:"a", sessionId:"b:c"};
+		const view = render(<SessionMenu session={first} controls={control} connected active onClosed={() => {}} />);
+		await openMenu();
+		await userEvent.click(screen.getByRole("button", { name: "Cerrar sesión" }));
+		view.rerender(<SessionMenu session={second} controls={control} connected active onClosed={() => {}} />);
+		expect(screen.queryByRole("button", { name: "Sí, cerrar sesión" })).not.toBeInTheDocument();
+		expect(control.act).not.toHaveBeenCalled();
+	});
 	it("retains a failed action for review without claiming that the session closed", async () => {
 		const control = controls();
 		vi.mocked(control.act).mockResolvedValue(false);
