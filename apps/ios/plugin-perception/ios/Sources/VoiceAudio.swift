@@ -5,9 +5,11 @@ enum VoiceAudioError: Error {
     case invalidFormat, converterUnavailable, cannotAllocate, conversionFailed, excessiveOutput
 }
 
-/// SpeechAnalyzer requires input in a compatible format. AVAudioFile's
-/// processing format can preserve the actual recording's sample rate and
-/// channel count even when a different common format was requested on open.
+/// Convert the file to the requested sample rate and channels, then expose it
+/// through AVAudioFile's standard Float32 processing representation. In the
+/// macOS 26 synthetic probe, the same 16 kHz Int16 CAF failed when opened as
+/// Int16 and succeeded when read as standard Float32. Physical bytes are not
+/// changed by the final read representation.
 enum VoiceAudio {
     static func openForAnalysis(source: URL, converted: URL, format: AVAudioFormat,
                                 maximumSeconds: Double, diagnostic: ((String) -> Void)? = nil) throws -> AVAudioFile {
@@ -19,7 +21,9 @@ enum VoiceAudio {
         diagnostic?("open-input")
         let input = try AVAudioFile(forReading: source, commonFormat: format.commonFormat,
                                     interleaved: format.isInterleaved)
-        if input.processingFormat.isEqual(format) { return input }
+        if input.processingFormat.isEqual(format) {
+            return try openStandardFile(source, matching: format, maximumSeconds: maximumSeconds)
+        }
         diagnostic?("create-converter")
         guard let converter = AVAudioConverter(from: input.processingFormat, to: format) else {
             throw VoiceAudioError.converterUnavailable
@@ -75,9 +79,21 @@ enum VoiceAudio {
         // Release the writer to flush and close its file before opening for reading.
         output = nil
         diagnostic?("open-converted")
-        let file = try AVAudioFile(forReading: converted, commonFormat: format.commonFormat,
-                                   interleaved: format.isInterleaved)
-        guard file.processingFormat.isEqual(format) else { throw VoiceAudioError.invalidFormat }
+        return try openStandardFile(converted, matching: format, maximumSeconds: maximumSeconds)
+    }
+
+    private static func openStandardFile(_ url: URL, matching format: AVAudioFormat,
+                                         maximumSeconds: Double) throws -> AVAudioFile {
+        // The file API uses its processing representation, independent of the
+        // on-disk encoding. Reopen without rewriting the recording.
+        let file = try AVAudioFile(forReading: url)
+        let processing = file.processingFormat
+        guard processing.commonFormat == .pcmFormatFloat32, !processing.isInterleaved,
+              processing.sampleRate == format.sampleRate, processing.channelCount == format.channelCount else {
+            throw VoiceAudioError.invalidFormat
+        }
+        let frameLimit = AVAudioFramePosition(ceil(format.sampleRate * (maximumSeconds + 1)))
+        guard file.length >= 0, file.length <= frameLimit else { throw VoiceAudioError.excessiveOutput }
         return file
     }
 }

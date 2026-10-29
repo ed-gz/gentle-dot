@@ -110,7 +110,9 @@ func run(selected explicit: LocalModule? = nil, reportPhase: (String) -> Void = 
     reportPhase("open-analysis-audio")
     let file = try VoiceAudio.openForAnalysis(source: source, converted: converted, format: format, maximumSeconds: 90,
         diagnostic: { if $0 == "create-converter" { convertedInput = true } })
-    guard file.length > 0, file.processingFormat.isEqual(format) else { throw ProbeError.audio }
+    guard file.length > 0, file.processingFormat.commonFormat == .pcmFormatFloat32,
+          !file.processingFormat.isInterleaved, file.processingFormat.sampleRate == format.sampleRate,
+          file.processingFormat.channelCount == format.channelCount else { throw ProbeError.audio }
     let duration = Double(file.length) / file.processingFormat.sampleRate
     let analyzer = SpeechAnalyzer(modules: [selected.final])
     let results = Task { () throws -> [(String, Double, Double)] in
