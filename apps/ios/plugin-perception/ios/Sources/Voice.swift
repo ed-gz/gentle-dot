@@ -159,10 +159,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         return VoiceLocaleSelection.preferred(choices)
     }
 
-    private func assetState(_ locale: Locale, kind: VoiceTranscriberKind) async -> VoiceAssetState {
-        let finalModule = makeTranscriber(for: locale, kind: kind)
-        let preview = makeTranscriber(for: locale, kind: kind, incremental: true)
-        switch await AssetInventory.status(forModules: [finalModule.module, preview.module]) {
+    private func assetState(_ locale: Locale, kind: VoiceTranscriberKind, incremental: Bool = false) async -> VoiceAssetState {
+        let module = makeTranscriber(for: locale, kind: kind, incremental: incremental)
+        switch await AssetInventory.status(forModules: [module.module]) {
         case .installed: return .installed
         case .supported: return .supported
         case .downloading: return .downloading
@@ -316,8 +315,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else { return .failure("cancelled", "Preparación cancelada.") }
         do {
             let module = makeTranscriber(for: selected.locale, kind: selected.kind)
-            let preview = makeTranscriber(for: selected.locale, kind: selected.kind, incremental: true)
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [module.module, preview.module]) {
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [module.module]) {
                 guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else { return .failure("cancelled", "Preparación cancelada.") }
                 try await request.downloadAndInstall()
             }
@@ -359,9 +357,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         do {
             // installedLocales is device-wide; a downloaded model can belong
             // to another app. Reserve this app's locale even on the fast path
-            // which skips prepare(), and verify both module configurations.
+            // which skips prepare(). Preview assets are optional and checked separately.
             try await AssetInventory.reserve(locale: selected.locale)
-            guard try await AssetInventory.assetInstallationRequest(supporting: [module.module, preview.module]) == nil else {
+            guard try await AssetInventory.assetInstallationRequest(supporting: [module.module]) == nil else {
                 return .failure("assets_required", "Prepara los modelos de voz antes de dictar sin conexión.")
             }
         } catch {
@@ -408,23 +406,29 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             try audio.setActive(true)
             startupAudioActive = true
             liveTranscript = LiveTranscript(); previewIssue = nil
-            let previewFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [preview.module])
+            let previewAssets = await assetState(selected.locale, kind: selected.kind, incremental: true)
+            let previewFormat: AVAudioFormat?
+            if previewAssets == .installed {
+                previewFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [preview.module])
+            } else { previewFormat = nil }
             guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
                 let cancelled = epoch != generation || Task.isCancelled
                 cancel()
                 return .failure(cancelled ? "cancelled" : "not_foreground", cancelled ? "Dictado cancelado." : "Vuelve a Capri para dictar.")
             }
             var live: LiveVoiceCapture?
-            if let previewFormat {
-                do {
-                    let candidate = try LiveVoiceCapture(url: url, analyzerFormat: previewFormat, preserveOnStartFailure: retainDestination != nil) { [weak self] message in
-                        guard self?.generation == epoch else { return }
-                        self?.previewIssue = message
-                    }
-                    do { try await candidate.start(); live = candidate }
-                    catch { if retainDestination != nil { throw error }; await candidate.cancel() }
-                } catch { if retainDestination != nil { throw error } /* Existing recorder remains the fallback before capture starts. */ }
-            }
+            do {
+                // A compatible final analyzer is already available. A missing
+                // optional preview format must not prevent retaining the full
+                // microphone input for final transcription.
+                let candidate = try LiveVoiceCapture(url: url, analyzerFormat: previewFormat ?? format,
+                    previewEnabled: previewFormat != nil, preserveOnStartFailure: retainDestination != nil) { [weak self] message in
+                    guard self?.generation == epoch else { return }
+                    self?.previewIssue = message
+                }
+                do { try await candidate.start(); live = candidate }
+                catch { if retainDestination != nil { throw error }; await candidate.cancel() }
+            } catch { if retainDestination != nil { throw error } /* Existing recorder remains the fallback before capture starts. */ }
             guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
                 let cancelled = epoch != generation || Task.isCancelled
                 let keepCaptured = retainDestination != nil
@@ -461,7 +465,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             recordedLocale = selected.locale
             recordedKind = selected.kind
             recordedFormat = format
-            if let live { beginPreview(preview, capture: live, session: id) }
+            if let live, previewFormat != nil { beginPreview(preview, capture: live, session: id) }
             started = true
             return VoiceReply(ok: true, sessionId: id, maxDurationSeconds: Int(maximumDuration), retainedAudio: retainedRecord)
         } catch {
@@ -966,8 +970,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                 return .failure("cancelled", "Preparación interrumpida. Revisa el audio guardado.")
             }
             let module = makeTranscriber(for: locale, kind: kind)
-            let preview = makeTranscriber(for: locale, kind: kind, incremental: true)
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [module.module, preview.module]) {
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [module.module]) {
                 let beforeDownload = await currentMatches()
                 guard VoiceRecoveryAttempt.mayPrepare(verified: beforeDownload, epoch: epoch, currentEpoch: generation,
                                                      foreground: UIApplication.shared.applicationState == .active, cancelled: Task.isCancelled) else {
@@ -1021,13 +1024,12 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         let assets = await assetState(locale, kind: kind)
         guard assets == .installed else { return .failure(assets.status, assets.message) }
         let module = makeTranscriber(for: locale, kind: kind)
-        let preview = makeTranscriber(for: locale, kind: kind, incremental: true)
         do {
             try await AssetInventory.reserve(locale: locale)
             guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
                 return .failure("cancelled", "La recuperación fue interrumpida; el audio se conserva.")
             }
-            guard try await AssetInventory.assetInstallationRequest(supporting: [module.module, preview.module]) == nil else {
+            guard try await AssetInventory.assetInstallationRequest(supporting: [module.module]) == nil else {
                 return .failure("assets_required", "Prepara el idioma de este audio para volver a transcribirlo.")
             }
         } catch {

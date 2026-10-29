@@ -59,6 +59,25 @@ import Foundation
         bounded.receive(oversized)
         do { try await bounded.drain(); fatalError("An oversized buffer must not become a verified recording.") }
         catch LiveVoiceCaptureError.captureOverflow { /* Expected fail-closed behavior. */ }
+        // A missing preview format must not sacrifice the original recording.
+        // Closing input represents stop/cancel: later engine callbacks are not
+        // accepted, and the queued original bytes drain before the file closes.
+        let noPreviewURL = root.appendingPathComponent("without-preview.caf")
+        var previewIssues: [String] = []
+        let noPreview = try LiveCaptureState(url: noPreviewURL, source: format, target: format, previewEnabled: false, issue: { previewIssues.append($0) })
+        noPreview.begin()
+        noPreview.receive(audio)
+        noPreview.closeInput()
+        noPreview.receive(block)
+        try await noPreview.drain()
+        precondition(previewIssues.count == 1)
+        var input = noPreview.inputs.makeAsyncIterator()
+        if case .some = await input.next() { fatalError("No preview inputs should be emitted.") }
+        let noPreviewFile = try AVAudioFile(forReading: noPreviewURL)
+        precondition(noPreviewFile.length == 4, "Closing capture must preserve accepted audio and reject later callbacks.")
+        let noPreviewRead = AVAudioPCMBuffer(pcmFormat: noPreviewFile.processingFormat, frameCapacity: 4)!
+        try noPreviewFile.read(into: noPreviewRead)
+        for index in 0..<4 { precondition(abs(noPreviewRead.floatChannelData![0][index] - Float(index + 1) / 8) < 0.0001) }
         print("PASS: empty input and large blocks preserved synthetic samples; excessive blocks rejected. Not a microphone or iPhone test.")
     }
 }

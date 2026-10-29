@@ -25,7 +25,7 @@ jobs:
           git -c credential.helper= fetch --depth=1 https://github.com/ed-gz/gentle-dot.git "$SOURCE_SHA"
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-      - name: Compile and exercise empty and large synthetic buffers
+      - name: Exercise synthetic buffers with and without a preview
         run: bash apps/ios/scripts/check-live-capture-empty.sh
       - name: Run native capture, preservation and cancellation fixtures
         run: bash apps/ios/scripts/check-native-sdk.sh

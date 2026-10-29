@@ -31,7 +31,7 @@ final class LiveCaptureState {
     private var level: Double?
     var stopEngine: (() -> Void)?
 
-    init(url: URL, source: AVAudioFormat, target: AVAudioFormat, issue: @escaping (String) -> Void) throws {
+    init(url: URL, source: AVAudioFormat, target: AVAudioFormat, previewEnabled: Bool = true, issue: @escaping (String) -> Void) throws {
         guard source.sampleRate.isFinite, source.sampleRate >= 8_000, source.sampleRate <= 192_000,
               source.channelCount > 0, source.channelCount <= 8,
               source.streamDescription.pointee.mFormatID == kAudioFormatLinearPCM,
@@ -43,12 +43,14 @@ final class LiveCaptureState {
         let pair = AsyncStream<AnalyzerInput>.makeStream(bufferingPolicy: .bufferingOldest(64))
         inputs = pair.stream; continuation = pair.continuation
         sourceFormat = source; targetFormat = target; self.issue = issue
+        self.previewEnabled = previewEnabled
         remainingFrames = Int64((source.sampleRate * 90).rounded(.down))
         file = try AVAudioFile(forWriting: url, settings: source.settings,
                                commonFormat: source.commonFormat, interleaved: source.isInterleaved)
-        if !source.isEqual(target) {
+        if !previewEnabled { continuation.finish() }
+        else if !source.isEqual(target) {
             converter = AVAudioConverter(from: source, to: target)
-            if converter == nil { previewEnabled = false; continuation.finish() }
+            if converter == nil { self.previewEnabled = false; continuation.finish() }
         }
     }
 
@@ -262,11 +264,11 @@ final class LiveVoiceCapture {
     var recording: Bool { running }
     var microphoneLevel: Double? { state.microphoneLevel }
 
-    init(url: URL, analyzerFormat: AVAudioFormat, preserveOnStartFailure: Bool = false, onPreviewIssue: @escaping (String) -> Void) throws {
+    init(url: URL, analyzerFormat: AVAudioFormat, previewEnabled: Bool = true, preserveOnStartFailure: Bool = false, onPreviewIssue: @escaping (String) -> Void) throws {
         self.url = url
         self.preserveOnStartFailure = preserveOnStartFailure
         let source = engine.inputNode.outputFormat(forBus: 0)
-        state = try LiveCaptureState(url: url, source: source, target: analyzerFormat) { message in
+        state = try LiveCaptureState(url: url, source: source, target: analyzerFormat, previewEnabled: previewEnabled) { message in
             DispatchQueue.main.async { onPreviewIssue(message) }
         }
         inputs = state.inputs
