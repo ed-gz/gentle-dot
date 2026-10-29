@@ -8,14 +8,14 @@ async function fixture(page: import('@playwright/test').Page, size = 20, state: 
     const receipt = { schema: 'capri-native-voice-receipt/v1', audio: { id, owner: 'abcdef02-abcd-4bcd-8bcd-abcdef012345', destination: 'chat', locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'ready', byteCount: 10, sha256: 'a'.repeat(64) },
       transcript: { sessionId: id, text, segments: [{ text, startSeconds: 0, endSeconds: 1 }], durationSeconds: 1, locale: 'es-MX', source: 'apple-speech-analyzer' } };
     const globals = globalThis as any;
-    globals.voiceFixture = { item: { receipt, releaseState: state }, appended: [], releases: 0, discards: 0, failRelease: false, confirm: true };
+    globals.voiceFixture = { item: { receipt, releaseState: state }, appended: [], exported: [], exportCancelled: false, releases: 0, discards: 0, failRelease: false, confirm: true };
     const root = document.createElement('section'); root.id = 'native-voice-fixture'; document.body.append(root);
     globals.voiceRecovery = mountNativeVoiceRecovery(root, { store: {
       list: async () => globals.voiceFixture.item ? [structuredClone(globals.voiceFixture.item)] : [],
       get: async () => globals.voiceFixture.item ? structuredClone(globals.voiceFixture.item) : undefined,
       release: async () => { if (globals.voiceFixture.failRelease) throw new Error('fail'); globals.voiceFixture.releases++; globals.voiceFixture.item.releaseState = 'released'; },
       discard: async () => { globals.voiceFixture.discards++; globals.voiceFixture.item = undefined; },
-    }, isDelivered: async () => false, append: (r: any) => { globals.voiceFixture.appended.push(r.transcript.text); }, confirmRelease: () => globals.voiceFixture.confirm, confirmDiscard: () => globals.voiceFixture.confirm });
+    }, isDelivered: async () => false, append: (r: any) => { globals.voiceFixture.appended.push(r.transcript.text); }, exportTranscript: async (r: any) => { globals.voiceFixture.exported.push(r.transcript.text); return globals.voiceFixture.exportCancelled ? 'cancelled' : 'exported'; }, confirmRelease: () => globals.voiceFixture.confirm, confirmDiscard: () => globals.voiceFixture.confirm });
     await globals.voiceRecovery.refresh();
   }, { size, state });
   return page.locator('#native-voice-fixture');
@@ -26,6 +26,35 @@ test('a long transcript remains complete and selectable without attempting to in
   await expect(root.locator('.voice-receipt-text')).toHaveText('x'.repeat(12000));
   await expect(root.getByRole('button', { name: 'Añadir al mensaje' })).toBeDisabled();
   await expect(root.getByRole('status')).toContainText('Selecciona y copia fragmentos');
+  expect(await page.evaluate(() => (globalThis as any).voiceFixture.appended)).toEqual([]);
+});
+
+test('another session can be reviewed and exported without insertion, including cancellation', async ({ page }) => {
+  const root = await fixture(page, 12000, 'retained');
+  await page.evaluate(async () => { const state = globalThis as any; state.voiceFixture.item.receipt.audio.destination = `session:${'a'.repeat(64)}`; await state.voiceRecovery.refresh(); });
+  await root.getByText('Dictado de otra sesión').click();
+  await expect(root).toContainText('No se añadirá a esta conversación');
+  await expect(root.locator('.voice-receipt-text')).toHaveText('x'.repeat(12000));
+  await expect(root.getByRole('button', { name: 'Añadir al mensaje' })).toBeHidden();
+  const exportButton = root.getByRole('button', { name: 'Exportar texto' });
+  await exportButton.focus();
+  await page.evaluate(async () => { await (globalThis as any).voiceRecovery.refresh(); });
+  await expect(exportButton).toBeFocused();
+  await expect(root.locator('details')).toHaveAttribute('open', '');
+  await page.evaluate(() => { (globalThis as any).voiceFixture.exportCancelled = true; });
+  await exportButton.click();
+  await expect(root.getByRole('status')).toContainText('Exportación cancelada');
+  await page.evaluate(() => { (globalThis as any).voiceFixture.exportCancelled = false; });
+  await exportButton.click();
+  await expect(root.getByRole('status')).toContainText('Texto exportado');
+  expect(await page.evaluate(() => ({ exported: (globalThis as any).voiceFixture.exported, appended: (globalThis as any).voiceFixture.appended, releases: (globalThis as any).voiceFixture.releases }))).toEqual({ exported: ['x'.repeat(12000), 'x'.repeat(12000)], appended: [], releases: 0 });
+});
+
+test('a synthetic click cannot insert another session into this conversation', async ({ page }) => {
+  const root = await fixture(page, 20, 'retained');
+  await page.evaluate(async () => { const state = globalThis as any; state.voiceFixture.item.receipt.audio.destination = `session:${'a'.repeat(64)}`; await state.voiceRecovery.refresh(); });
+  await root.getByText('Dictado de otra sesión').click();
+  await root.getByRole('button', { name: 'Añadir al mensaje', includeHidden: true }).evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
   expect(await page.evaluate(() => (globalThis as any).voiceFixture.appended)).toEqual([]);
 });
 

@@ -717,7 +717,7 @@ test('a preserved session recording cannot migrate to another session or chat', 
   await expect(page.getByText(/audio pendiente en otra conversación/i)).toBeVisible();
   await page.locator('[data-panel="chat"]').click();
   await expect(page.locator('#prompt')).toHaveValue('');
-  await expect(page.locator('#voice-status')).toContainText('otra conversación');
+  await expect(page.locator('#voice-status')).toContainText('otra sesión');
   expect(await page.evaluate(() => (globalThis as any).voiceRecoveryCancels)).toBe(0);
   await page.locator('[data-panel="agents"]').click();
   await page.getByRole('button', { name: 'Todos los agentes' }).click();
@@ -834,7 +834,7 @@ test('an unconfirmed session cancellation can be retried safely from the main ch
   ]);
   expect(await page.evaluate(() => (globalThis as any).startOwners.length)).toBe(1);
   await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
-  await expect(page.locator('#voice-status')).toContainText('otra conversación');
+  await expect(page.locator('#voice-status')).toContainText('otra sesión');
   await page.locator('[data-panel="agents"]').click();
   const operations = page.locator('.agent-session').filter({ hasText: 'Operaciones' });
   if (await operations.isVisible()) await operations.click();
@@ -1050,7 +1050,7 @@ test('an oversized session dictation remains selectable and retained across rest
   await page.getByRole('button', { name: 'Dictar mensaje' }).click(); await page.getByRole('button', { name: 'Terminar y revisar' }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'No se confirmó el dictado' })).toBeVisible();
   await page.getByText('Ver dictado').click();
-  await expect(page.getByText('L'.repeat(12000), { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Sesión Operaciones' }).getByText('L'.repeat(12000), { exact: true })).toBeVisible();
   await expect(input).toHaveValue('Antes');
   expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).receipt.releaseState)).toBe('retained');
   await page.getByRole('button', { name: 'Revisar después' }).click();
@@ -1061,7 +1061,7 @@ test('an oversized session dictation remains selectable and retained across rest
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'No se confirmó el dictado' })).toBeVisible();
   await page.getByText('Ver dictado').click();
-  await expect(page.getByText('L'.repeat(12000), { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Sesión Operaciones' }).getByText('L'.repeat(12000), { exact: true })).toBeVisible();
 });
 
 test('a late session transcript cannot enter another session and remains recoverable by its owner', async ({ page }) => {

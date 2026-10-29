@@ -29,6 +29,7 @@ import { createRetainedVoiceBridge, type RetainedVoiceRecord } from './retained-
 import { createNativeVoiceReceipts, type NativeVoiceReceipt } from './native-voice-receipts.ts';
 import { createNativeVoiceDelivery, prepareNativeVoiceDelivery, type NativeVoiceDeliveryIntent } from './native-voice-delivery.ts';
 import { mountNativeVoiceRecovery } from './native-voice-recovery-view.ts';
+import { exportNativeFile } from './file-export.ts';
 import { createProtectedVoice, cleanupDeliveredVoiceReceipt } from './protected-voice.ts';
 import { createMemoryTools } from './conversation-memory-tools.ts';
 import { mountMemoryView } from './memory-view.ts';
@@ -652,7 +653,14 @@ function persist(voiceDelivery?: NativeVoiceDeliveryIntent): Promise<void> {
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 250); }
 const voiceRecoverButton = document.createElement('button');
 voiceRecoverButton.type = 'button'; voiceRecoverButton.textContent = 'Revisar dictado'; voiceRecoverButton.hidden = true;
-element('discard-voice').after(voiceRecoverButton);
+element('discard-voice').before(voiceRecoverButton);
+const foreignAudioButton = document.createElement('button');
+foreignAudioButton.type = 'button'; foreignAudioButton.textContent = 'Transcribir audio de otra sesión'; foreignAudioButton.hidden = true;
+voiceRecoverButton.after(foreignAudioButton);
+const incompleteAudioButton = document.createElement('button');
+incompleteAudioButton.type = 'button'; incompleteAudioButton.textContent = 'Exportar audio incompleto'; incompleteAudioButton.hidden = true;
+foreignAudioButton.after(incompleteAudioButton);
+let foreignAudioBusy = false;
 const voiceRecoveryRoot = document.createElement('section');
 const voiceInsertion = new Map<string, { prior: string; merged: string; intent: NativeVoiceDeliveryIntent }>();
 async function insertNativeDictation(receipt: NativeVoiceReceipt) {
@@ -688,8 +696,15 @@ async function prepareVoiceCapacity(): Promise<void> {
     throw new Error('Hay demasiados dictados pendientes. Revísalos antes de grabar otro.');
   }
 }
-const voiceRecovery = mountNativeVoiceRecovery(voiceRecoveryRoot, { store: { ...nativeVoiceReceipts, release: protectedVoice.releaseManually },
+const voiceRecovery = mountNativeVoiceRecovery(voiceRecoveryRoot, { store: { ...nativeVoiceReceipts, release: async receipt => {
+    await protectedVoice.releaseManually(receipt);
+    if (retainedVoiceRecord?.id.toLowerCase() === receipt.audio.id.toLowerCase()) {
+      retainedVoiceRecord = undefined; foreignVoiceOwner = undefined;
+      element('voice-status').textContent = 'Audio eliminado. La transcripción se conserva.';
+    }
+  } },
   isDelivered: nativeVoiceDelivery.delivered,
+  exportTranscript: async receipt => (await exportNativeFile(new Blob([receipt.transcript.text], { type: 'text/plain;charset=utf-8' }), 'capri-dictado.txt')).status,
   append: async receipt => {
     await insertNativeDictation(receipt);
     try { await cleanupDeliveredVoice(receipt); retainedVoiceRecord = undefined; }
@@ -1340,9 +1355,19 @@ async function recoverPendingVoice() {
     if (retained) {
       retainedVoiceRecord = retained;
       if (retained.destination !== 'chat') {
-        element('voice-status').textContent = 'Hay un audio guardado en otra conversación.';
-        foreignVoiceOwner = retained.owner; element('discard-voice').hidden = true; return;
+        const receipt = await nativeVoiceReceipts.get(retained.id);
+        if (generation !== voiceGeneration || document.hidden || panel !== 'chat') return;
+        voiceSession = undefined; voiceRetry = false;
+        foreignVoiceOwner = retained.owner;
+        retainedDiscardPending = inspection.state === 'discard-pending';
+        element('voice-status').textContent = receipt ? 'Hay un dictado guardado de otra sesión. Puedes revisarlo aquí.' : retained.state === 'capturing' ? 'Audio incompleto de otra sesión; podría no reproducirse.' : 'Hay un audio guardado de otra sesión.';
+        element('discard-voice').textContent = retainedDiscardPending ? 'Reintentar eliminación' : 'Descartar audio pendiente';
+        element('discard-voice').hidden = Boolean(receipt) && !retainedDiscardPending;
+        foreignAudioButton.hidden = Boolean(receipt) || retainedDiscardPending || retained.state !== 'ready';
+        incompleteAudioButton.hidden = Boolean(receipt) || retainedDiscardPending || retained.state !== 'capturing';
+        return;
       }
+      foreignAudioButton.hidden = true; incompleteAudioButton.hidden = true;
       if (inspection.state === 'discard-pending') {
         retainedDiscardPending = true; voiceSession = undefined; voiceRetry = false; voiceOwner = retained.owner;
         element('voice-status').textContent = 'La eliminación del audio espera confirmación.';
@@ -1360,7 +1385,8 @@ async function recoverPendingVoice() {
           element('dictate').setAttribute('aria-label', 'Reintentar transcripción'); element('discard-voice').hidden = false; return;
         }
         voiceSession = undefined; voiceRetry = false; voiceOwner = retained.owner;
-        element('voice-status').textContent = 'La grabación quedó incompleta. El audio se conserva.';
+        element('voice-status').textContent = 'Audio incompleto; podría no reproducirse.';
+        incompleteAudioButton.hidden = false;
         element('discard-voice').hidden = false; return;
       }
       const receipt = await nativeVoiceReceipts.get(retained.id);
@@ -1380,6 +1406,7 @@ async function recoverPendingVoice() {
       element('voice-status').textContent = 'Hay audio guardado. Toca el micrófono para reintentar.';
       element('dictate').setAttribute('aria-label', 'Reintentar transcripción'); element('discard-voice').hidden = false; return;
     }
+    foreignAudioButton.hidden = true; incompleteAudioButton.hidden = true;
     const state = await checkVoice();
     if (generation !== voiceGeneration || document.hidden || panel !== 'chat' || voiceStarting) return;
     if (pendingVoiceCancellation()) { void recoverPendingVoice(); return; }
@@ -1406,6 +1433,43 @@ async function recoverPendingVoice() {
     element('discard-voice').hidden = false;
   } catch { element('voice-status').textContent = 'No pude revisar el audio. Vuelve a intentarlo.'; }
 }
+foreignAudioButton.addEventListener('click', () => {
+  const record = retainedVoiceRecord;
+  if (voiceStarting || !record || record.destination === 'chat' || record.state !== 'ready' || retainedDiscardPending) return;
+  const generation = ++voiceGeneration;
+  let completed = false;
+  voiceStarting = true; voiceStopping = true; foreignAudioBusy = true; foreignAudioButton.disabled = true; element<HTMLButtonElement>('dictate').disabled = true; element<HTMLButtonElement>('discard-voice').disabled = true; updateControls();
+  element('voice-status').textContent = 'Transcribiendo el audio de la otra sesión…';
+  void protectedVoice.recover(record).then(async () => {
+    if (generation !== voiceGeneration) return;
+    completed = true;
+    element('voice-status').textContent = 'Dictado listo para revisar. Sigue vinculado a su sesión original.';
+    await voiceRecovery.refresh();
+  }).catch(() => {
+    if (generation === voiceGeneration) element('voice-status').textContent = 'No pude transcribir el audio. Revisa su estado y vuelve a intentarlo.';
+  }).finally(() => {
+    if (generation === voiceGeneration) { voiceStarting = false; voiceStopping = false; }
+    foreignAudioBusy = false; foreignAudioButton.disabled = false; element<HTMLButtonElement>('dictate').disabled = false; element<HTMLButtonElement>('discard-voice').disabled = false; updateControls();
+    if (completed && panel === 'chat') void recoverPendingVoice();
+  });
+});
+incompleteAudioButton.addEventListener('click', () => {
+  const record = retainedVoiceRecord;
+  if (voiceStarting || !record || record.state !== 'capturing' || retainedDiscardPending) return;
+  const generation = ++voiceGeneration;
+  voiceStarting = true; voiceStopping = true; foreignAudioBusy = true; incompleteAudioButton.disabled = true;
+  element<HTMLButtonElement>('dictate').disabled = true; element<HTMLButtonElement>('discard-voice').disabled = true; updateControls();
+  element('voice-status').textContent = 'Preparando el audio incompleto…';
+  void retainedVoiceBridge.exportIncomplete(record).then(result => {
+    if (generation === voiceGeneration) element('voice-status').textContent = result === 'exported'
+      ? 'Audio incompleto exportado; podría no reproducirse.' : 'Exportación cancelada.';
+  }).catch(() => {
+    if (generation === voiceGeneration) element('voice-status').textContent = 'No pude confirmar la exportación del audio incompleto. Vuelve a intentarlo.';
+  }).finally(() => {
+    if (generation === voiceGeneration) { voiceStarting = false; voiceStopping = false; }
+    foreignAudioBusy = false; incompleteAudioButton.disabled = false; element<HTMLButtonElement>('dictate').disabled = false; element<HTMLButtonElement>('discard-voice').disabled = false; updateControls();
+  });
+});
 function showVoicePreview(id: string, generation: number) {
   stopVoicePreview();
   let polling = false;
@@ -1483,6 +1547,7 @@ async function retryVoiceCancellation(reason: 'navigation' | 'manual' = 'manual'
   }
 }
 element('dictate').addEventListener('click', async () => {
+  if (foreignAudioBusy) return;
   uncertainVoiceOwner ??= pendingVoiceCancellation();
   if (uncertainVoiceOwner) { void retryVoiceCancellation(); return; }
   if (voiceStarting) { void cancelDictation('manual'); return; }
@@ -1567,11 +1632,14 @@ element('dictate').addEventListener('click', async () => {
   }
 });
 element('discard-voice').addEventListener('click', () => {
-  if (retainedVoiceRecord?.destination === 'chat' && (retainedDiscardPending || window.confirm('¿Eliminar este audio pendiente? No se podrá recuperar la grabación.'))) {
+  if (foreignAudioBusy) return;
+  if (retainedVoiceRecord && (retainedDiscardPending || window.confirm(retainedVoiceRecord.destination === 'chat'
+    ? '¿Eliminar este audio pendiente? No se podrá recuperar la grabación.'
+    : '¿Eliminar el audio pendiente de otra sesión? No se podrá recuperar la grabación.'))) {
     const record = retainedVoiceRecord;
     const button = element<HTMLButtonElement>('discard-voice'); button.disabled = true;
     void retainedVoiceBridge.discard(record).then(() => {
-      retainedVoiceRecord = undefined; retainedDiscardPending = false; voiceSession = undefined; voiceOwner = undefined; voiceRetry = false;
+      retainedVoiceRecord = undefined; retainedDiscardPending = false; voiceSession = undefined; voiceOwner = undefined; foreignVoiceOwner = undefined; voiceRetry = false;
       button.hidden = true; button.textContent = 'Descartar audio pendiente'; element('dictate').setAttribute('aria-label', 'Dictar'); element('voice-status').textContent = 'Audio eliminado.'; updateControls();
     }).catch(() => { element('voice-status').textContent = 'No pude confirmar la eliminación. Revisa su estado antes de reintentar.'; })
       .finally(() => { button.disabled = false; });

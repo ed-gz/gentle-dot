@@ -549,7 +549,7 @@ test('an unconfirmed microphone cancellation retains its owner and retries befor
   expect(await page.evaluate(() => sessionStorage.getItem(`capri.voice.origin.${(globalThis as any).voiceOwner}`))).toBe('chat');
   await page.locator('#dictate').click();
   await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
-  await expect(page.locator('#voice-status')).toContainText('La grabación quedó incompleta');
+  await expect(page.locator('#voice-status')).toContainText('Audio incompleto; podría no reproducirse');
   await expect(page.locator('#discard-voice')).toBeVisible();
   expect(await page.evaluate(() => sessionStorage.getItem(`capri.voice.origin.${(globalThis as any).voiceOwner}`))).toBeNull();
   expect(await page.evaluate(() => (globalThis as any).voiceCancelAttempts)).toEqual([
