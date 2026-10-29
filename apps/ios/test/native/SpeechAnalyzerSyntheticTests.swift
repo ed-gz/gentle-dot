@@ -6,7 +6,7 @@ import Speech
 // This is a CI probe, never an iPhone test. It uses only already-installed
 // models and a system Spanish voice; it does not request or download assets.
 @available(macOS 26.0, *)
-private enum LocalModule {
+enum LocalModule {
     case speech(SpeechTranscriber, SpeechTranscriber)
     case dictation(DictationTranscriber, DictationTranscriber)
     var modules: [any SpeechModule] {
@@ -60,7 +60,7 @@ private func candidate() async -> (Locale, LocalModule)? {
 }
 
 @available(macOS 26.0, *)
-private func run() async throws -> String {
+func run(selected explicit: LocalModule? = nil) async throws -> String {
     guard let voice = AVSpeechSynthesisVoice.speechVoices().first(where: { $0.language.lowercased().hasPrefix("es-") && $0.quality == .default }) else {
         return "SKIP: no available default Spanish synthesis voice; no transcription was run."
     }
@@ -97,7 +97,10 @@ private func run() async throws -> String {
     }
     guard peak > 0.001 else { throw ProbeError.audio }
     print("PASS: Spanish voice synthesis and VoiceAudio resampling preserve audible samples and duration. No transcription claimed.")
-    guard let (_, selected) = await candidate() else { return "SKIP: no compatible module with installed Spanish assets; no transcription was run." }
+    let selected: LocalModule
+    if let explicit { selected = explicit }
+    else if let (_, installed) = await candidate() { selected = installed }
+    else { return "SKIP: no compatible module with installed Spanish assets; no transcription was run." }
     guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [selected.final]) else { throw ProbeError.noFormat }
     var convertedInput = false
     let file = try VoiceAudio.openForAnalysis(source: source, converted: converted, format: format, maximumSeconds: 90,
@@ -131,6 +134,7 @@ private func run() async throws -> String {
 }
 
 private enum ProbeError: Error { case noFormat, synthesis, audio, evidence, transcript }
+#if !CAPRI_ASSET_INSTALL_PROBE
 @main struct SpeechAnalyzerSyntheticTests {
     static func main() async {
         if #available(macOS 26.0, *) {
@@ -139,3 +143,5 @@ private enum ProbeError: Error { case noFormat, synthesis, audio, evidence, tran
         } else { print("SKIP: macOS 26 is required; no transcription was run.") }
     }
 }
+
+#endif
