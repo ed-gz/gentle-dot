@@ -1039,7 +1039,7 @@ async function recoverPendingVoice() {
     }
     foreignVoiceOwner = undefined;
     voiceSession = state.sessionId; voiceOwner = state.ownerId; voiceRetry = true;
-    element('voice-status').textContent = state.recoveryIssue ?? 'El audio está guardado. Toca el micrófono para reintentar la transcripción sin volver a grabar.';
+    element('voice-status').textContent = state.recoveryIssue ?? 'Toca el micrófono para reintentar. El audio puede perderse si iOS cierra Capri.';
     element('dictate').setAttribute('aria-pressed', 'false'); element('dictate').setAttribute('aria-label', 'Reintentar transcripción');
     element('discard-voice').hidden = false;
   } catch { /* A failed status check cannot prove the recording was removed. */ }

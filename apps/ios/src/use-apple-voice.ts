@@ -102,7 +102,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
         if (expected && voiceOrigin(value.ownerId) === expected) {
           owner.current.session = value.sessionId; owner.current.ownerId = value.ownerId; owner.current.retry = true;
           setRetryPending(true);
-          setAvailability(value); setNote(value.recoveryIssue ?? 'El audio está guardado. Toca Dictar para reintentar la transcripción sin volver a grabar.');
+          setAvailability(value); setNote(value.recoveryIssue ?? 'Toca Dictar para reintentar. El audio puede perderse si iOS cierra Capri.');
         } else {
           setAvailability({ ...value, available: false, status: 'recovery_elsewhere' });
           setNote('Hay un audio pendiente en otra conversación. Vuelve a su destino original para reintentar.');

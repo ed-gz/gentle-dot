@@ -173,7 +173,7 @@ export function parseVoiceTranscript(value: unknown, expectedSession: string): V
   if (pending.ok === false && pending.error === 'preview_pending') {
     const id = sessionId(pending.sessionId);
     if (id.toLowerCase() !== sessionId(expectedSession).toLowerCase()) throw new Error('La recuperación de voz no corresponde al comando actual.');
-    const message = typeof pending.message === 'string' && pending.message.length <= 500 ? pending.message : 'El audio está guardado. Reintenta la transcripción.';
+    const message = typeof pending.message === 'string' && pending.message.length <= 500 ? pending.message : 'Reintenta la transcripción. El audio puede perderse si iOS cierra Capri.';
     throw new VoiceRetryPending(id, message);
   }
   const reply = successful(value);

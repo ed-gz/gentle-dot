@@ -382,7 +382,7 @@ test('returning to the original session while stopping reveals its eventual retr
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   await expect(page.getByText('Terminando el audio guardado…')).toBeVisible();
   await page.evaluate(() => (globalThis as any).finishPendingStop());
-  await expect(page.getByText(/audio está guardado/i)).toBeVisible();
+  await expect(page.getByText(/audio puede perderse si iOS cierra Capri/i)).toBeVisible();
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Recuperado al volver.');
 });
