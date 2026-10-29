@@ -251,7 +251,14 @@ function animate(now: number) {
   if (!isReduced()) fx?.draw(now);
   if (!isReduced()) { framePacer.submitted(now); frame = requestAnimationFrame(animate); }
 }
-function redraw() { document.documentElement.dataset.motion = isReduced() ? 'reduced' : 'full'; revision++; cancelAnimationFrame(frame); framePacer.wake(); lastTime = 0; frame = requestAnimationFrame(animate); }
+function redraw() {
+  const reducedMotion = isReduced();
+  document.documentElement.dataset.motion = reducedMotion ? 'reduced' : 'full';
+  // With no continuous animation loop, an old overlay cannot expire on its
+  // own. Recompute the static pose from the current intent on each redraw.
+  if (reducedMotion) director = new RigDirector();
+  revision++; cancelAnimationFrame(frame); framePacer.wake(); lastTime = 0; frame = requestAnimationFrame(animate);
+}
 function applyPresenceSample(sample: PresenceSample, now: number) {
   const visibilityChanged = presenceState.visible !== sample.visible;
   presenceState = sample;

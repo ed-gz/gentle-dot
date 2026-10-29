@@ -88,6 +88,7 @@ test('Capri restores the conversation reaction after leaving a working session',
   await page.mouse.down(); await page.mouse.move(box.x + box.width / 2 - 15, box.y + box.height / 2, { steps: 3 });
   await expect(rig).toHaveAttribute('data-pose', 'flinch');
   await page.mouse.up();
+  await expect(rig).toHaveAttribute('data-pose', 'look');
   await page.locator('[data-panel="settings"]').click();
   await expect(rig).toBeVisible();
   await expect(rig).not.toHaveAttribute('data-pose', 'look', { timeout: 15000 });
