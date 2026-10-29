@@ -29,6 +29,11 @@
 #panel-agents .agent-detail-scroll > .session-mobile-controls { max-height: none; overflow: visible; }
 #panel-agents .agent-reply .composer { display: flex; align-items: end; max-height: none; overflow: visible; border: 0; box-shadow: none; }
 #panel-agents .agent-reply .composer textarea { width: 0; flex: 1; min-height: 48px; max-height: 120px; margin: 0; }
+/* WKWebView can retain the full layout viewport while the keyboard reduces
+   the visible viewport; base the draft height on the latter. */
+#panel-agents .agent-reply:focus-within .composer textarea { max-height: min(120px, max(48px, calc(var(--app-height, 100dvh) * .2))); }
+#panel-agents .agent-reply:focus-within { padding-top: 2px; }
+#panel-agents:has(.agent-reply textarea:focus) { padding-block: 4px; }
 #panel-agents .agent-reply .composer svg { width: 24px; height: 24px; }
 #panel-agents .agent-reply .composer label:not(.composer-attach) { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
 #panel-agents .agent-reply .composer button { background: var(--accent); color: var(--bg); border: 0; border-radius: 50%; }
@@ -74,6 +79,14 @@
 #panel-agents .agent-reply .composer { flex: none; }
 #panel-agents .agent-reply .attachment-chips { flex: 0 1 auto; min-height: 60px; margin-block: 4px; padding-inline: 0; list-style: none; }
 #panel-agents .agent-reply .attachment-chips:has(.attachment-image) { min-height: 76px; }
+#panel-agents .agent-reply:has(.attachment-chips):focus-within { padding-top: 2px; }
+#panel-agents .agent-reply:has(.attachment-chips):focus-within .attachment-chips { min-height: 44px; max-height: 56px; margin-block: 0; padding-block: 0; }
+#panel-agents .agent-reply:has(.attachment-chips):focus-within .attachment-draft:not(.attachment-image) { padding-block: 0; }
+#panel-agents .agent-reply:has(.attachment-chips):focus-within .attachment-image { display: flex; align-items: center; width: auto; }
+#panel-agents .agent-reply:has(.attachment-chips):focus-within .attachment-thumbnail,
+#panel-agents .agent-reply:has(.attachment-chips):focus-within .attachment-thumbnail img { width: 44px; height: 44px; }
+#panel-agents .agent-reply:has(.attachment-chips):focus-within .attachment-image .chip-remove { position: relative; top: auto; right: auto; }
+#panel-agents .agent-reply:has(.attachment-chips):focus-within .composer textarea { max-height: min(120px, max(48px, calc(var(--app-height, 100dvh) * .16))); }
 #panel-agents .agent-reply .voice-status { order: -1; flex: 0 1 auto; min-height: 0; max-height: 3lh; overflow-y: auto; margin-block: 4px; font-size: .85rem; line-height: 1.4; color: var(--muted); }
 #panel-agents .agent-reply .voice-status button { width: auto; height: auto; padding: 6px 12px; border-radius: 6px; }
 /* The iOS shell does not load the desktop stylesheet's base chip rules. */

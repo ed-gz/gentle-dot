@@ -8,6 +8,8 @@
 :root[data-companion-size="hero"] #stage[data-companion-layer] .rig { width: min(198px, 25dvh); height: min(280px, 35dvh); }
 #panel-chat .companion-presence { position: relative; flex: none; height: min(340px, 40dvh); min-height: 0; }
 #panel-chat[data-empty="false"] .companion-presence { display: block; height: auto; min-height: 42px; }
+/* The visual viewport can shrink for the keyboard without changing 100dvh. */
+#panel-chat:has(#prompt:focus) .companion-presence { height: auto; min-height: 42px; }
 #panel-chat .presence-copy, #panel-chat[data-empty="false"] .presence-copy { position: static; max-width: 100%; padding: 4px 0; }
 #panel-chat .presence-copy .eyebrow { display: none; }
 #panel-chat #cards { padding-right: 0; }

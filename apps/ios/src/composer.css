@@ -9,7 +9,7 @@
   transition: border-color 160ms ease;
 }
 #composer .compose-surface:focus-within { border-color: color-mix(in srgb, var(--pink) 65%, var(--panel)); }
-#composer #prompt { flex: 1 1 0; width: 0; min-width: 0; border: 0; border-radius: 0; padding: 10px 4px; margin: 0; background: transparent; box-shadow: none; min-height: max(44px, calc(1.5em + 20px)); }
+#composer #prompt { flex: 1 1 0; width: 0; min-width: 0; border: 0; border-radius: 0; padding: 10px 4px; margin: 0; background: transparent; box-shadow: none; min-height: max(44px, calc(1.5em + 20px)); max-height: min(180px, max(44px, calc(var(--app-height, 100dvh) * .28))); }
 #composer #prompt:focus-visible { outline-offset: -3px; border-radius: 16px; }
 #composer .composer-actions { position: static; display: flex; align-items: flex-end; flex-wrap: nowrap; gap: 0; padding: 0; background: transparent; }
 #panel-chat #composer .composer-actions button { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; padding: 10px; border: 0; border-radius: 50%; color: var(--ink); background: transparent; }

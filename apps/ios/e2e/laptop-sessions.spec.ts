@@ -76,6 +76,92 @@ async function selectSessionFile(page: Page, file: { name: string; mimeType: str
   await (await selecting).setFiles(file);
 }
 
+test('session composer and history remain reachable as the keyboard opens and closes', async ({ page }) => {
+  await linkedPhone(page);
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session[data-pane-id="pane-0"]').click();
+  await expect(page.getByText('Historial de session-0.', { exact: true })).toBeVisible();
+  const prompt = page.getByRole('textbox', { name: 'Continuar esta sesión' });
+  const draft = 'Revisar la sesión.\n'.repeat(30);
+  await prompt.fill(draft); await prompt.focus();
+  await page.evaluate(() => {
+    const viewport = window.visualViewport!;
+    Object.defineProperties(viewport, { height: { configurable: true, value: 300 }, pageTop: { configurable: true, value: 0 }, scale: { configurable: true, value: 1 } });
+    viewport.dispatchEvent(new Event('resize'));
+  });
+  await expect(page.locator('html')).toHaveAttribute('data-keyboard', 'true');
+  const geometry = await page.evaluate(() => {
+    const rect = (selector: string) => document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+    return { reply: rect('.agent-reply').bottom, input: rect('.agent-reply textarea').bottom, reading: rect('.agent-detail-scroll').height,
+      send: rect('.agent-reply .composer-send').bottom };
+  });
+  expect(geometry.reply).toBeLessThanOrEqual(301);
+  expect(geometry.input).toBeLessThanOrEqual(301);
+  expect(geometry.send).toBeLessThanOrEqual(301);
+  expect(geometry.reading).toBeGreaterThanOrEqual(40);
+  await prompt.blur();
+  await page.evaluate(() => {
+    const viewport = window.visualViewport!;
+    Object.defineProperty(viewport, 'height', { configurable: true, value: window.innerHeight });
+    viewport.dispatchEvent(new Event('resize'));
+  });
+  await expect(page.locator('html')).toHaveAttribute('data-keyboard', 'false');
+  await expect(prompt).toHaveValue(draft);
+  await expect(page.getByRole('button', { name: 'Todos los agentes' })).toBeVisible();
+  await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  await prompt.focus();
+  await page.evaluate(() => {
+    const viewport = window.visualViewport!;
+    Object.defineProperty(viewport, 'height', { configurable: true, value: 360 });
+    viewport.dispatchEvent(new Event('resize'));
+  });
+  const large = await prompt.evaluate(element => {
+    const style = getComputedStyle(element), box = element.getBoundingClientRect();
+    return { bottom: box.bottom, inner: element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom), line: parseFloat(style.lineHeight) };
+  });
+  expect(large.bottom).toBeLessThanOrEqual(361);
+  expect(large.inner).toBeGreaterThanOrEqual(large.line - 1);
+  expect((await page.locator('.agent-reply .composer-send').boundingBox())!.y + (await page.locator('.agent-reply .composer-send').boundingBox())!.height).toBeLessThanOrEqual(361);
+});
+
+for (const file of [
+  { name: 'evidencia.txt', mimeType: 'text/plain', buffer: Buffer.from('evidencia') },
+  { name: 'captura.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64') },
+]) test(`the session attachment ${file.name} stays reviewable without pushing Send below the keyboard`, async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session[data-pane-id="pane-0"]').click();
+  await selectSessionFile(page, file);
+  await expect(page.getByRole('button', { name: `Quitar ${file.name}` })).toBeVisible();
+  const prompt = page.getByRole('textbox', { name: 'Continuar esta sesión' });
+  await prompt.fill('Conserva la evidencia.\n'.repeat(12)); await prompt.focus();
+  await page.evaluate(() => {
+    const viewport = window.visualViewport!;
+    Object.defineProperties(viewport, { height: { configurable: true, value: 300 }, pageTop: { configurable: true, value: 0 }, scale: { configurable: true, value: 1 } });
+    viewport.dispatchEvent(new Event('resize'));
+  });
+  const geometry = await page.evaluate(() => {
+    const rect = (selector: string) => document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+    return { send: rect('.agent-reply .composer-send').bottom, input: rect('.agent-reply textarea').bottom, chips: rect('.attachment-chips').bottom };
+  });
+  expect(geometry.send).toBeLessThanOrEqual(301);
+  expect(geometry.input).toBeLessThanOrEqual(301);
+  expect(geometry.chips).toBeLessThanOrEqual(301);
+  await expect(page.getByRole('button', { name: `Quitar ${file.name}` })).toBeVisible();
+  if (file.mimeType.startsWith('image/')) {
+    const preview = page.getByRole('button', { name: `Ver ${file.name}` });
+    const remove = page.getByRole('button', { name: `Quitar ${file.name}` });
+    for (const control of [preview, remove]) {
+      const box = (await control.boundingBox())!;
+      expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(await control.evaluate(element => {
+        const box = element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+      })).toBe(true);
+    }
+  }
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((call: any) => call.body && JSON.parse(call.body).action === 'prompt'))).toBe(false);
+});
+
 test('a long Herdr terminal title does not prevent opening the other sessions', async ({ page }) => {
   await linkedPhone(page);
   await page.evaluate(() => {
