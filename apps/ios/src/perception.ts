@@ -109,7 +109,7 @@ export class VoiceBridgeTimeout extends Error {
   constructor(message: string) { super(message); this.name = 'VoiceBridgeTimeout'; }
 }
 export class VoiceCancelUnconfirmed extends Error {
-  constructor() { super('No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.'); this.name = 'VoiceCancelUnconfirmed'; }
+  constructor(message = 'No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.') { super(message); this.name = 'VoiceCancelUnconfirmed'; }
 }
 /** A late result can never turn a timed-out status check into success. */
 export async function withVoiceDeadline<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -136,7 +136,10 @@ export async function voiceStartWithDeadline<T>(operation: Promise<T>, cancelOwn
 /** A missing callback is not proof that the microphone stopped. */
 export async function voiceCancelWithDeadline(cancelOwner: () => Promise<void>, timeoutMs = 8_000): Promise<void> {
   try { await withVoiceDeadline(cancelOwner(), timeoutMs, 'No se confirmó la cancelación.'); }
-  catch { throw new VoiceCancelUnconfirmed(); }
+  catch (error) {
+    const message = error instanceof Error && error.message === 'No pude eliminar el audio pendiente. Toca el micrófono para reintentar.' ? error.message : undefined;
+    throw new VoiceCancelUnconfirmed(message);
+  }
 }
 
 export function parseVoiceAvailability(value: unknown): VoiceAvailability {

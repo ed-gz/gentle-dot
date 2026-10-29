@@ -29,6 +29,8 @@ test('voice timeout reports an unresponsive bridge and fences only the timed-out
   assert.equal(cancelled, 1, 'ordinary native failure must not cancel another capture');
   await assert.rejects(voiceStartWithDeadline(new Promise(() => {}), () => new Promise(() => {}), 5, 5), VoiceCancelUnconfirmed);
   await assert.rejects(voiceCancelWithDeadline(() => Promise.reject(new Error('bridge lost')), 50), VoiceCancelUnconfirmed);
+  await assert.rejects(voiceCancelWithDeadline(() => Promise.reject(new Error('No pude eliminar el audio pendiente. Toca el micrófono para reintentar.')), 50),
+    error => error instanceof VoiceCancelUnconfirmed && error.message.includes('eliminar el audio pendiente'));
   await assert.rejects(voiceCancelWithDeadline(() => new Promise(() => {}), 5), VoiceCancelUnconfirmed);
   await voiceCancelWithDeadline(() => Promise.resolve(), 50);
 });

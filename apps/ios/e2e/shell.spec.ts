@@ -486,6 +486,35 @@ test('an unconfirmed microphone cancellation retains its owner and retries befor
   ]);
 });
 
+test('failed audio cleanup is shown distinctly and the same owner can retry', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '01234567-89ab-cdef-0123-456789abcdef';
+    state.cleanupOwners = [];
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
+      if (command.endsWith('start_voice')) return { ok: true, sessionId: id, maxDurationSeconds: 90 };
+      if (command.endsWith('cancel_voice')) {
+        state.cleanupOwners.push(args.ownerId);
+        if (state.cleanupOwners.length === 1) return { ok: false, error: 'cancel_cleanup_failed', message: 'No pude eliminar el audio pendiente. Toca el micrófono para reintentar.' };
+        return { ok: true };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.locator('#dictate').click();
+  await page.locator('[data-panel="settings"]').click();
+  await page.locator('[data-panel="chat"]').click();
+  await expect(page.locator('#voice-status')).toContainText('No pude eliminar el audio pendiente');
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar detener micrófono');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
+  const owners = await page.evaluate(() => (globalThis as any).cleanupOwners);
+  expect(owners).toHaveLength(2); expect(owners[0]).toBe(owners[1]);
+});
+
 test('an unattributed pending recording can be explicitly discarded without inserting its contents', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {

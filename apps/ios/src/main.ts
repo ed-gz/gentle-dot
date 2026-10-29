@@ -1112,10 +1112,10 @@ async function retryVoiceCancellation(reason: 'navigation' | 'manual' = 'manual'
     element('voice-status').textContent = reason === 'manual'
       ? 'Dictado cancelado. Toca el micrófono para volver a intentarlo.'
       : 'El dictado se interrumpió al salir de Capri. Toca el micrófono para intentarlo de nuevo.';
-  } catch {
+  } catch (error) {
     if (uncertainVoiceOwner !== owner) return;
     control.setAttribute('aria-label', 'Reintentar detener micrófono');
-    element('voice-status').textContent = 'No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.';
+    element('voice-status').textContent = error instanceof VoiceCancelUnconfirmed ? error.message : 'No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.';
   } finally {
     voiceCancelPending = false;
     control.disabled = false;

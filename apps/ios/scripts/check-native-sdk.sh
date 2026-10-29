@@ -112,6 +112,19 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 "$verification/preview-drain-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/PreviewDrain.swift \
+  plugin-perception/ios/Sources/VoiceStartLatch.swift \
+  plugin-perception/ios/Sources/VoiceCancellationBarrier.swift \
+  plugin-perception/ios/Sources/VoiceFileCleanup.swift \
+  test/native/VoiceCancellationBarrierTests.swift -o "$verification/voice-cancellation-barrier-tests"
+"$verification/voice-cancellation-barrier-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/VoiceFileCleanup.swift \
+  test/native/VoiceFileCleanupTests.swift -o "$verification/voice-file-cleanup-tests"
+"$verification/voice-file-cleanup-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/VoiceDeadline.swift \
   test/native/VoiceDeadlineTests.swift -o "$verification/voice-deadline-tests"
 "$verification/voice-deadline-tests"
@@ -140,6 +153,9 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/LiveTranscript.swift \
   plugin-perception/ios/Sources/LiveVoiceDrain.swift \
   plugin-perception/ios/Sources/PreviewDrain.swift \
+  plugin-perception/ios/Sources/VoiceStartLatch.swift \
+  plugin-perception/ios/Sources/VoiceCancellationBarrier.swift \
+  plugin-perception/ios/Sources/VoiceFileCleanup.swift \
   plugin-perception/ios/Sources/VoiceDeadline.swift \
   plugin-perception/ios/Sources/LiveCaptureLifecycle.swift \
   plugin-perception/ios/Sources/LiveVoiceCapture.swift \

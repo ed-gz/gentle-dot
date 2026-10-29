@@ -90,8 +90,19 @@ final class PerceptionPlugin: Plugin {
         }
         Task { @MainActor in
             if #available(iOS 26.0, *) {
-                if let id = args.ownerId { controller().cancel(ownerID: id) }
-                else { (voice as? VoiceController)?.cancel() }
+                let result: VoiceCancellationResult
+                if let id = args.ownerId {
+                    result = await controller().cancelAndConfirm(ownerID: id)
+                } else if let controller = voice as? VoiceController {
+                    result = await controller.cancelAndConfirm(ownerID: nil)
+                } else { result = .confirmed }
+                switch result {
+                case .confirmed: break
+                case .closing:
+                    invoke.resolve(VoiceReply.failure("cancel_pending", "Apple todavía está deteniendo el micrófono. Toca el micrófono para reintentar.")); return
+                case .cleanupFailed:
+                    invoke.resolve(VoiceReply.failure("cancel_cleanup_failed", "No pude eliminar el audio pendiente. Toca el micrófono para reintentar.")); return
+                }
             }
             invoke.resolve(VoiceReply(ok: true))
         }

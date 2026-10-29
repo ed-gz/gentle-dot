@@ -40,6 +40,8 @@ struct VoiceReply: Encodable {
     }
 }
 
+enum VoiceCancellationResult { case confirmed, closing, cleanupFailed }
+
 @available(iOS 26.0, *)
 private enum VoiceTranscriberKind { case speech, dictation }
 
@@ -75,6 +77,17 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     private var previewResultsTask: Task<Void, Never>?
     private let previewDrain = PreviewDrain()
     private let finalDrain = PreviewDrain()
+    private let cancellationBarrier = VoiceCancellationBarrier()
+    private let startLatch = VoiceStartLatch()
+    private var pendingStartURL: URL?
+    private var startupAudioActive = false
+    private struct PendingCancellation {
+        let id: UUID
+        let owner: String?
+        let url: URL?
+        let live: LiveVoiceCapture?
+    }
+    private var pendingCancellation: PendingCancellation?
     private var finalOperation: Task<VoiceReply, Never>?
     private var finalResults: Task<[VoiceSegment], Error>?
     private var finalDeadline: VoiceDeadline<VoiceReply>?
@@ -266,7 +279,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     }
 
     func prepare(ownerID: String? = nil) async -> VoiceReply {
-        guard !busy, sessionID == nil else { return .failure("busy", "Termina o cancela el comando de voz actual.") }
+        guard !busy, sessionID == nil, !cancellationBarrier.active, pendingCancellation == nil else { return .failure("busy", "Termina o cancela el comando de voz actual.") }
         guard UIApplication.shared.applicationState == .active else { return .failure("not_foreground", "Abre Capri para preparar la voz.") }
         if let ownerID, !owners.claim(ownerID) { return .failure("cancelled", "Ese dictado fue cancelado o sustituido.") }
         busy = true
@@ -294,14 +307,15 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
 
     func start(ownerID: String? = nil) async -> VoiceReply {
         guard !busy, sessionID == nil else { return .failure("busy", "Ya hay un comando de voz en curso.") }
-        guard !previewDrain.active, !finalDrain.active else { return .failure("busy", "Apple todavía está cerrando el dictado anterior. Intenta de nuevo en un momento.") }
+        guard !previewDrain.active, !finalDrain.active, !cancellationBarrier.active, pendingCancellation == nil else { return .failure("busy", "Apple todavía está cerrando el dictado anterior. Intenta de nuevo en un momento.") }
         guard UIApplication.shared.applicationState == .active else { return .failure("not_foreground", "Abre Capri para dictar.") }
         if let ownerID, !owners.claim(ownerID) { return .failure("cancelled", "Ese dictado fue cancelado o sustituido.") }
         busy = true
+        startLatch.begin()
         generation += 1
         let epoch = generation
         var started = false
-        defer { busy = false; if let ownerID { owners.finishAttempt(ownerID, succeeded: started) } }
+        defer { startupAudioActive = false; pendingStartURL = nil; startLatch.end(); busy = false; if let ownerID { owners.finishAttempt(ownerID, succeeded: started) } }
         guard let selected = await preferredTranscriber() else {
             return .failure("unsupported_language", "SpeechAnalyzer no está disponible en español en este iPhone.")
         }
@@ -317,19 +331,27 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         }
         guard epoch == generation, !Task.isCancelled else { return .failure("cancelled", "Dictado cancelado.") }
         guard granted else { return .failure("microphone_denied", "Activa el micrófono para Capri en Ajustes del iPhone.") }
-        guard UIApplication.shared.applicationState != .background else { return .failure("not_foreground", "Vuelve a Capri para dictar.") }
+        // The permission callback can precede didBecomeActive. Wait briefly
+        // for the sheet to disappear, without starting a microphone while the
+        // app is inactive or allowing an old start through a cancel fence.
+        guard await waitForForeground(epoch: epoch) else {
+            return .failure(epoch == generation ? "not_foreground" : "cancelled", "Vuelve a Capri para dictar.")
+        }
         let id = UUID().uuidString
         let url = Self.temporaryDirectory.appendingPathComponent(id).appendingPathExtension("caf")
+        pendingStartURL = url
         do {
             let audio = AVAudioSession.sharedInstance()
             try audio.setCategory(.record, mode: .measurement)
             try audio.setActive(true)
+            startupAudioActive = true
             liveTranscript = LiveTranscript(); previewIssue = nil
             let preview = makeTranscriber(for: selected.locale, kind: selected.kind, incremental: true)
             let previewFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [preview.module])
-            guard epoch == generation, !Task.isCancelled else {
-                deactivateAudio()
-                return .failure("cancelled", "Dictado cancelado.")
+            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
+                let cancelled = epoch != generation || Task.isCancelled
+                cancel()
+                return .failure(cancelled ? "cancelled" : "not_foreground", cancelled ? "Dictado cancelado." : "Vuelve a Capri para dictar.")
             }
             var live: LiveVoiceCapture?
             if let previewFormat {
@@ -342,15 +364,16 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                     catch { await candidate.cancel() }
                 } catch { /* Existing recorder remains the fallback before capture starts. */ }
             }
-            guard epoch == generation, !Task.isCancelled else {
+            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
+                let cancelled = epoch != generation || Task.isCancelled
+                cancel()
                 if let live { await live.cancel() }
-                deactivateAudio()
-                return .failure("cancelled", "Dictado cancelado.")
+                return .failure(cancelled ? "cancelled" : "not_foreground", cancelled ? "Dictado cancelado." : "Vuelve a Capri para dictar.")
             }
             if let live {
                 liveCapture = live
             } else {
-                try? FileManager.default.removeItem(at: url)
+                guard VoiceFileCleanup.remove(url) else { throw NSError(domain: "CapriVoice", code: 2) }
                 previewIssue = "La vista previa no está disponible. El audio se transcribirá al terminar."
                 let capture = try AVAudioRecorder(url: url, settings: [
                     AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: format.sampleRate,
@@ -374,12 +397,21 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             started = true
             return VoiceReply(ok: true, sessionId: id, maxDurationSeconds: Int(maximumDuration))
         } catch {
-            if let live = liveCapture { liveCapture = nil; await live.cancel() }
-            recorder?.stop(); recorder = nil
-            try? FileManager.default.removeItem(at: url)
-            deactivateAudio()
+            // The normal cancellation fence owns the URL until all startup
+            // candidates and writers have stopped and deletion is confirmed.
+            cancel()
             return .failure("capture_failed", "No pude iniciar el micrófono. Intenta de nuevo.")
         }
+    }
+
+    private func waitForForeground(epoch: Int) async -> Bool {
+        for _ in 0..<100 {
+            guard epoch == generation, !Task.isCancelled else { return false }
+            if UIApplication.shared.applicationState == .active { return true }
+            if UIApplication.shared.applicationState == .background { return false }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
     }
 
     func stop(id: String) async -> VoiceReply {
@@ -536,6 +568,14 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         }
         finalOperation = nil
         finalResults = nil
+        // The converted file must disappear before the original. If cleanup
+        // fails, retain the original and owner for an explicit retry/discard;
+        // never return success and silently orphan captured audio.
+        guard VoiceFileCleanup.removeFinalFiles(url) else {
+            preserve = true
+            recoveryPending = true
+            return pending(id, reason: "cleanup_failed")
+        }
         recoveryPending = false
         recoveryIssue = nil
         return result
@@ -543,12 +583,19 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
 
     /// A permission prompt resigns active too; don't cancel a pending first-use prompt.
     func resignActive() {
+        if startLatch.active && startupAudioActive { cancel(); return }
         if analyzer != nil { finalInterrupted = true; finalDeadline?.interrupt(); requestFinalShutdown() }
         else if !recoveryPending && !stoppingCapture && sessionID != nil { cancel() }
     }
 
-    func enterBackground() { resignActive() }
-    func audioInterrupted() { resignActive() }
+    func enterBackground() {
+        // Unlike willResignActive (which also occurs for the permission sheet),
+        // true background entry must fence a microphone start before sessionID.
+        if startLatch.active { cancel() } else { resignActive() }
+    }
+    func audioInterrupted() {
+        if startLatch.active { cancel() } else { resignActive() }
+    }
 
     nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
         Task { @MainActor in
@@ -559,31 +606,60 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     }
 
     func cancel() {
+        guard pendingCancellation == nil, !cancellationBarrier.active else { return }
+        let cancelledOwner = owners.active
+        let url = recordingURL ?? pendingStartURL
         generation += 1
         finalDeadline?.interrupt()
         recorder?.stop()
         recorder = nil
         requestFinalShutdown()
-        // A shutdown can outlive the call. Never unlink a file that the
-        // analyzer or its conversion task may still be reading.
-        if finalDrain.active, let url = recordingURL {
-            recordingURL = nil
-            finalDrain.after { try? FileManager.default.removeItem(at: url) }
-        }
         let live = liveCapture; liveCapture = nil
-        // The live capture owns its file until its asynchronous writer drains.
-        // Do not unlink or replace it while a queued write is still running.
-        if live != nil { recordingURL = nil }
+        // The cleanup task owns this path. clearCapture must never unlink it
+        // while a startup candidate, writer or analyzer can still read it.
+        recordingURL = nil
         requestPreviewShutdown()
         clearCapture()
         deactivateAudio()
-        if let live { Task { await live.cancel() } }
+        if live != nil || url != nil || startLatch.active || previewDrain.active || finalDrain.active {
+            pendingCancellation = PendingCancellation(id: UUID(), owner: cancelledOwner, url: url, live: live)
+            beginPendingCancellation()
+        }
     }
 
-    func cancel(ownerID: String) {
+    private func beginPendingCancellation() {
+        guard let pending = pendingCancellation, !cancellationBarrier.active else { return }
+        cancellationBarrier.begin(owner: pending.owner) { [weak self] in
+            guard let self else { return false }
+            // A locally-created capture may not yet have reached liveCapture.
+            // The start latch closes only after its epoch fence drains it.
+            while !(await self.startLatch.wait()) { }
+            if let live = pending.live { await live.cancel() }
+            while !(await self.previewDrain.wait()) { }
+            while !(await self.finalDrain.wait()) { }
+            let removedAudio = VoiceFileCleanup.remove(pending.url)
+            let converted = pending.url?.deletingPathExtension().appendingPathExtension("analysis.caf")
+            let removedConvertedAudio = VoiceFileCleanup.remove(converted)
+            guard removedAudio, removedConvertedAudio else { return false }
+            if self.pendingCancellation?.id == pending.id { self.pendingCancellation = nil }
+            return true
+        }
+    }
+
+    func cancelAndConfirm(ownerID: String?) async -> VoiceCancellationResult {
         // Record even before start/prepare arrive; only the matching owner can
         // stop the current native operation.
-        if owners.cancel(ownerID) { cancel() }
+        if let ownerID {
+            if owners.cancel(ownerID) { cancel() }
+        } else { cancel() }
+        // A failed unlink keeps its owner and path for the same owner's retry.
+        if let pending = pendingCancellation, !cancellationBarrier.active,
+           ownerID == nil || pending.owner == nil || ownerID == pending.owner { beginPendingCancellation() }
+        // A timed-out shutdown continues; retrying the same owner waits on the
+        // original operation rather than claiming that audio already stopped.
+        let confirmed = await cancellationBarrier.wait(owner: ownerID)
+        if confirmed { return .confirmed }
+        return cancellationBarrier.active ? .closing : .cleanupFailed
     }
 
     private func clearCapture() {
