@@ -45,11 +45,13 @@ test('shared manifests enforce UUIDs, size limits, hashes, and unique files', as
 test('partial native listings preserve damaged IDs and permit healthy imports', async () => {
   const item = manifest(), broken = 'b2a6e456-7a93-4bcc-b006-4493c78b5b66', incompatible = 'c2a6e456-7a93-4bcc-b006-4493c78b5b66';
   const call = async () => ({ ok: true, items: [item, { ...item, id: incompatible, title: ' ' }], invalidIds: [broken] });
-  assert.deepEqual(await listSharedImportReport(call), { items: [item], invalidIds: [broken, incompatible] });
+  assert.deepEqual(await listSharedImportReport(call), { items: [item], invalidIds: [broken, incompatible], pendingCopies:[], omittedPending:0 });
   await assert.rejects(listSharedImports(call), /inválido/);
   await assert.rejects(listSharedImportReport(async () => ({ ok:true, items:[item], invalidIds:[id] })), /inválido/);
   await assert.rejects(listSharedImportReport(async () => ({ ok:true, items:[item], invalidIds:['../bad'] })), /verificarse/);
-  assert.deepEqual(await listSharedImportReport(async () => ({ ok:true, items:[item] })), { items:[item], invalidIds:[] });
+  assert.deepEqual(await listSharedImportReport(async () => ({ ok:true, items:[item] })), { items:[item], invalidIds:[], pendingCopies:[], omittedPending:0 });
+  assert.deepEqual((await listSharedImportReport(async () => ({ok:true,items:[],pendingCopies:[{id:broken,bytes:42},{id:incompatible}],omittedPending:3}))).pendingCopies,[{id:broken,bytes:42},{id:incompatible,bytes:null}]);
+  await assert.rejects(listSharedImportReport(async () => ({ok:true,items:[],pendingCopies:[{id:broken,bytes:-1}]})), /copias pendientes/);
 });
 
 test('shared file chunks preserve bytes and reject corruption before any acknowledgement', async () => {

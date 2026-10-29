@@ -33,6 +33,12 @@ struct SharedManifest: Codable {
 struct SharedListing {
     let items: [SharedManifest]
     let invalidIDs: [String]
+    let pendingCopies: [SharedPendingCopy]
+    let omittedPending: Int
+}
+struct SharedPendingCopy: Encodable {
+    let id: String
+    let bytes: Int64?
 }
 
 // Compiled into both app and extension. Only an atomically published directory is visible
@@ -83,14 +89,35 @@ enum SharedInbox {
     static func listReport(root suppliedRoot: URL? = nil) throws -> SharedListing {
         let root = try suppliedRoot ?? root()
         return try locked(root) {
-            let directories = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+            let directories = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])
             var items: [SharedManifest] = []
             var invalidIDs: [String] = []
             for directory in directories where validID(directory.lastPathComponent) {
                 do { items.append(try readManifest(directory)) }
                 catch { invalidIDs.append(directory.lastPathComponent) }
             }
-            return SharedListing(items: items.sorted { $0.createdAt < $1.createdAt }, invalidIDs: invalidIDs.sorted())
+            // Staging may still be in progress, or may be the only remaining
+            // copy after a provider or extension was interrupted. Never infer
+            // that it is disposable, and never expose paths or file names.
+            let pending = directories.filter { entry in
+                let name = entry.lastPathComponent
+                return name.hasPrefix(".pending-") && validID(String(name.dropFirst(".pending-".count)))
+            }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+            let copies = pending.prefix(100).map { entry -> SharedPendingCopy in
+                let id = String(entry.lastPathComponent.dropFirst(".pending-".count))
+                do {
+                    var total: Int64 = 0
+                    for file in try FileManager.default.contentsOfDirectory(at: entry, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]) {
+                        let values = try file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+                        guard values.isRegularFile == true, values.isSymbolicLink != true, let size = values.fileSize, size >= 0 else { return SharedPendingCopy(id: id, bytes: nil) }
+                        let (next, overflow) = total.addingReportingOverflow(Int64(size))
+                        guard !overflow else { return SharedPendingCopy(id: id, bytes: nil) }
+                        total = next
+                    }
+                    return SharedPendingCopy(id: id, bytes: total)
+                } catch { return SharedPendingCopy(id: id, bytes: nil) }
+            }
+            return SharedListing(items: items.sorted { $0.createdAt < $1.createdAt }, invalidIDs: invalidIDs.sorted(), pendingCopies: copies, omittedPending: max(0, pending.count - copies.count))
         }
     }
     // Strict API retained for callers that cannot surface partial failures.
@@ -134,13 +161,6 @@ enum SharedInbox {
     static func makeStaging(root suppliedRoot: URL? = nil) throws -> URL {
         let root = try suppliedRoot ?? root()
         return try locked(root) {
-            // Interrupted extension processes cannot acknowledge or publish their staging area.
-            // Reclaim only old, unpublished copies; the originating app keeps the originals.
-            let entries = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.creationDateKey])
-            for entry in entries where entry.lastPathComponent.hasPrefix(".pending-") {
-                if let created = try entry.resourceValues(forKeys: [.creationDateKey]).creationDate,
-                   Date().timeIntervalSince(created) > 24 * 60 * 60 { try FileManager.default.removeItem(at: entry) }
-            }
             let url = root.appendingPathComponent(".pending-\(UUID().uuidString.lowercased())", isDirectory: true)
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false,
                 attributes: [.protectionKey: FileProtectionType.complete])

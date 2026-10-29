@@ -12,6 +12,8 @@ Capri puede conservar trabajos y adjuntos offline, transferir una revisión apro
 
 El listado nativo separa manifiestos ilegibles por identificador y permite recuperar los demás. La interfaz muestra cada identificador afectado y conserva la copia nativa, sin confirmarla ni eliminarla; puede intentarse de nuevo si vuelve a ser legible o volver a compartir el original cuando esté disponible. Un error de lectura o cuota tampoco confirma el elemento. Esta recuperación está probada con navegador simulado y fixture Swift; falta validar la extensión y firma en el iPhone.
 
+Las copias nativas aún en preparación o interrumpidas se conservan también después de 24 horas y tras errores de importación: no se supone que el proveedor original las conserve. Capri indica sus identificadores y tamaños disponibles, hasta 100 entradas, con el número restante; un tamaño puede no estar disponible. Aún no hay recuperación, exportación ni borrado seguro de estas copias incompletas desde la app, por lo que pueden ocupar espacio hasta que se implemente su gestión explícita. Su presencia no confirma que el contenido esté completo.
+
 ## Qué confirma cada respuesta
 
 | Respuesta | Significado |

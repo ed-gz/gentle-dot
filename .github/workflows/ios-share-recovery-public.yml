@@ -1,6 +1,6 @@
 name: Capri shared import recovery fixture
 
-# Synthetic files only; no signing, IPA, personal art or credentials.
+# Synthetic files and interrupted-copy preservation; no signing, IPA, personal art or credentials.
 on:
   push:
     branches:

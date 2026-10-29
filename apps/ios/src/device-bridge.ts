@@ -145,8 +145,8 @@ export async function listSharedImports(call: DeviceInvoker = deviceInvoke): Pro
   return report.items;
 }
 /** A failed native manifest is retained and reported separately; healthy items remain recoverable. */
-export async function listSharedImportReport(call: DeviceInvoker = deviceInvoke): Promise<{items: SharedImport[]; invalidIds: string[]}> {
-  const reply = requireNative(await call<NativeReply & { items?: unknown; invalidIds?: unknown }>('share_list', {}));
+export async function listSharedImportReport(call: DeviceInvoker = deviceInvoke): Promise<{items: SharedImport[]; invalidIds: string[]; pendingCopies: {id: string; bytes: number | null}[]; omittedPending: number}> {
+  const reply = requireNative(await call<NativeReply & { items?: unknown; invalidIds?: unknown; pendingCopies?: unknown; omittedPending?: unknown }>('share_list', {}));
   if (!Array.isArray(reply.items) || reply.items.length > 100) throw new Error('La bandeja compartida contiene un manifiesto inválido.');
   const reported = reply.invalidIds ?? [];
   if (!Array.isArray(reported) || reported.length > 100 || reported.some(id => typeof id !== 'string' || !uuid.test(id)) || new Set(reported).size !== reported.length || reply.items.length + reported.length > 100) throw new Error('La bandeja compartida no pudo verificarse. Los originales se conservan.');
@@ -156,7 +156,14 @@ export async function listSharedImportReport(call: DeviceInvoker = deviceInvoke)
     seen.add(item.id);
     if (validSharedImport(item)) items.push(item); else invalidIds.push(item.id);
   }
-  return {items, invalidIds};
+  const pending = reply.pendingCopies ?? [], omitted = reply.omittedPending ?? 0;
+  if (!Array.isArray(pending) || pending.length > 100 || !Number.isSafeInteger(omitted) || Number(omitted) < 0) throw new Error('No se pudo verificar el estado de las copias pendientes.');
+  const pendingCopies: {id: string; bytes: number | null}[] = [], pendingIds = new Set<string>();
+  for (const value of pending) {
+    if (!object(value) || typeof value.id !== 'string' || !uuid.test(value.id) || pendingIds.has(value.id) || (value.bytes !== undefined && value.bytes !== null && (!Number.isSafeInteger(value.bytes) || Number(value.bytes) < 0))) throw new Error('No se pudo verificar el estado de las copias pendientes.');
+    pendingIds.add(value.id); pendingCopies.push({id:value.id,bytes:typeof value.bytes === 'number' ? value.bytes : null});
+  }
+  return {items, invalidIds, pendingCopies, omittedPending: Number(omitted)};
 }
 export async function readSharedFileChunk(item: SharedImport, file: SharedFile, offset: number, length: number, call: DeviceInvoker = deviceInvoke): Promise<Uint8Array<ArrayBuffer>> {
   if (!validSharedImport(item) || !item.files.some(candidate => candidate.id === file.id && candidate.sha256 === file.sha256 && candidate.size === file.size)

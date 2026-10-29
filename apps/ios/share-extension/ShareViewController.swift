@@ -83,9 +83,8 @@ final class ShareViewController: UIViewController {
         titleField.isEnabled = false; notesField.isEditable = false; view.endEditing(true)
         statusLabel.text = "Copiando al almacenamiento local…"
         Task {
-            var staging: URL?
             do {
-                let directory = try SharedInbox.makeStaging(); staging = directory
+                let directory = try SharedInbox.makeStaging()
                 var files: [SharedFile] = []
                 for provider in providers {
                     let file = try await copy(provider, into: directory)
@@ -93,15 +92,13 @@ final class ShareViewController: UIViewController {
                     files.append(file)
                 }
                 _ = try SharedInbox.publish(directory, title: title, notes: notes, files: files)
-                staging = nil
                 await MainActor.run {
                     self.statusLabel.text = "Guardado. Abre Capri para continuar."
                     UIAccessibility.post(notification: .announcement, argument: self.statusLabel.text)
                     self.extensionContext?.completeRequest(returningItems: nil)
                 }
             } catch {
-                if let staging = staging { try? FileManager.default.removeItem(at: staging) }
-                let message = (error as? ShareFailure)?.localizedDescription ?? "No se pudo guardar. El archivo original permanece en su aplicación."
+                let message = "No se completó la importación. La copia parcial se conserva; vuelve a compartir el original si está disponible."
                 await MainActor.run {
                     self.statusLabel.text = message; self.saving = false
                     self.saveButton.isEnabled = true; self.cancelButton.isEnabled = true

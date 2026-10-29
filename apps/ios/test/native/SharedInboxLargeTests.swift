@@ -57,6 +57,16 @@ enum AppGroupResolver {
         guard longNotes.count <= 8000, longNotes.utf8.count > 64 * 1024 else { fatalError("metadata fixture") }
         do { _ = try SharedInbox.publish(oversizedStaging, title: "Meeting", notes: longNotes, files: [copied], root: root); fatalError("oversized manifest published") }
         catch ShareFailure.metadataLimit { }
+        // Even an old, incomplete large copy survives another import attempt.
+        let old = Date(timeIntervalSinceNow: -48 * 60 * 60)
+        try FileManager.default.setAttributes([.creationDate: old], ofItemAtPath: oversizedStaging.path)
+        let actualCreation = try oversizedStaging.resourceValues(forKeys: [.creationDateKey]).creationDate
+        guard let actualCreation = actualCreation, Date().timeIntervalSince(actualCreation) > 24 * 60 * 60 else { fatalError("old staging fixture") }
+        _ = try SharedInbox.makeStaging(root: root)
+        let pending = try SharedInbox.listReport(root: root)
+        let stagedID = String(oversizedStaging.lastPathComponent.dropFirst(".pending-".count))
+        guard let entry = pending.pendingCopies.first(where: { $0.id == stagedID }), let bytes = entry.bytes,
+              bytes >= Int64(copied.size), FileManager.default.fileExists(atPath: oversizedStaging.appendingPathComponent("\(copied.id).blob").path) else { fatalError("old staging lost or size hidden") }
         guard try SharedInbox.list(root: root).isEmpty, FileManager.default.fileExists(atPath: source.path),
               FileManager.default.fileExists(atPath: oversizedStaging.appendingPathComponent("\(copied.id).blob").path) else { fatalError("unpublished source lost") }
         guard SharedInbox.fileLimit("audio/mp4") == 128 * 1024 * 1024,

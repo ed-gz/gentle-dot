@@ -17,7 +17,6 @@ enum DocumentImportStore {
     static func importFiles(_ urls: [URL]) throws -> SharedManifest {
         guard !urls.isEmpty, urls.count <= 10, urls.allSatisfy({ $0.isFileURL }) else { throw ShareFailure.limit }
         let root = try root(), staging = try SharedInbox.makeStaging(root: root)
-        defer { try? FileManager.default.removeItem(at: staging) }
         var files: [SharedFile] = []
         var total = 0
         for url in urls {

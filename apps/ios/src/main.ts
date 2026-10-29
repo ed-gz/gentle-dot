@@ -2031,13 +2031,14 @@ element('chat-notice').after(importRecovery);
 const importRecoveryPanels = { share: document.createElement('div'), document: document.createElement('div') };
 importRecovery.hidden = true; importRecoveryPanels.share.hidden = true; importRecoveryPanels.document.hidden = true;
 importRecovery.append(importRecoveryPanels.share, importRecoveryPanels.document);
-function showImportRecovery(kind: 'share' | 'document', failures: { id: string; title: string; message: string; nativeManifest?: boolean }[]): void {
+function showImportRecovery(kind: 'share' | 'document', failures: { id: string; title: string; message: string; nativeManifest?: boolean; staging?: boolean }[]): void {
   const root = importRecoveryPanels[kind]; root.replaceChildren();
   root.hidden = failures.length === 0;
   importRecovery.hidden = importRecoveryPanels.share.hidden && importRecoveryPanels.document.hidden;
   for (const first of failures) {
   const message = document.createElement('p'); message.setAttribute('role', 'status');
-  message.textContent = `No se pudo guardar ${first.title}. ${first.nativeManifest ? '' : 'La copia original se conserva. '}${first.message}`;
+  message.textContent = first.staging ? `${first.title}. ${first.message}` : `No se pudo guardar ${first.title}. ${first.nativeManifest ? '' : 'La copia original se conserva. '}${first.message}`;
+  if (first.staging) { root.append(message); continue; }
   const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Reintentar';
   const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Liberar copia incompleta';
   const source = `${kind}:${first.id}`;
@@ -2054,6 +2055,16 @@ function showImportRecovery(kind: 'share' | 'document', failures: { id: string; 
   root.append(message, retry);
   if (!first.nativeManifest) root.append(cancel);
   }
+  if (failures.some(item => item.staging)) {
+    const refresh = document.createElement('button'); refresh.type = 'button'; refresh.textContent = 'Actualizar copias pendientes';
+    refresh.addEventListener('click', () => { refresh.disabled = true; void (kind === 'share' ? importSharedFiles() : importDocumentFiles(true)).finally(() => { refresh.disabled = false; }); });
+    root.append(refresh);
+  }
+}
+function stagingNotices(listing: {pendingCopies: {id: string; bytes: number | null}[]; omittedPending: number}) {
+  const notices = listing.pendingCopies.map(copy => ({ id: copy.id, title: `Copia pendiente ${copy.id}`, message: `${copy.bytes === null ? 'Tamaño no disponible' : `${copy.bytes.toLocaleString('es')} bytes`}. Puede seguir en preparación o estar incompleta. Se conserva; aún no hay una forma de recuperarla desde Capri.`, staging: true }));
+  if (listing.omittedPending) notices.push({id:'',title:`${listing.omittedPending} copias pendientes adicionales`,message:'Se conservan; sus tamaños no se han listado.',staging:true});
+  return notices;
 }
 function importSharedFiles(): Promise<void> {
   if (!isTauri()) return Promise.resolve();
@@ -2073,7 +2084,7 @@ function importSharedFiles(): Promise<void> {
         });
       });
       await inbox.refresh();
-      showImportRecovery('share', [...listing.invalidIds.map(id => ({ id, title: `material ${id}`, message: 'No se pudo leer su manifiesto. La copia compartida se conserva; vuelve a compartir el original si está disponible.', nativeManifest: true })), ...result.failures]);
+      showImportRecovery('share', [...listing.invalidIds.map(id => ({ id, title: `material ${id}`, message: 'No se pudo leer su manifiesto. La copia compartida se conserva; vuelve a compartir el original si está disponible.', nativeManifest: true })), ...result.failures, ...stagingNotices(listing)]);
     } catch (error) { element('chat-notice').textContent = errorText(error); }
   })().finally(() => { sharedImports = undefined; });
   return sharedImports;
@@ -2099,7 +2110,7 @@ function importDocumentFiles(fresh = false): Promise<void> {
         });
       });
       await inbox.refresh();
-      showImportRecovery('document', [...listing.invalidIds.map(id => ({ id, title: `material ${id}`, message: 'No se pudo leer su manifiesto. La copia importada se conserva; vuelve a seleccionar el original si está disponible.', nativeManifest: true })), ...result.failures]);
+      showImportRecovery('document', [...listing.invalidIds.map(id => ({ id, title: `material ${id}`, message: 'No se pudo leer su manifiesto. La copia importada se conserva; vuelve a seleccionar el original si está disponible.', nativeManifest: true })), ...result.failures, ...stagingNotices(listing)]);
     } catch (error) { element('chat-notice').textContent = errorText(error); }
   })().finally(() => { documentImports = undefined; });
   return documentImports;

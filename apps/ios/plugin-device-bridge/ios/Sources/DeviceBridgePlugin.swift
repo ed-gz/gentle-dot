@@ -28,6 +28,8 @@ private struct BridgeReply: Encodable {
     var connection: PairedConnection? = nil
     var items: [SharedManifest]? = nil
     var invalidIds: [String]? = nil
+    var pendingCopies: [SharedPendingCopy]? = nil
+    var omittedPending: Int? = nil
     var schemes: [String]? = nil
     var written: Int? = nil
     var exported: Bool? = nil
@@ -270,7 +272,7 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     }
     @objc func shareList(_ invoke: Invoke) { work(invoke) {
         let listing = try SharedInbox.listReport()
-        return BridgeReply(items: listing.items, invalidIds: listing.invalidIDs)
+        return BridgeReply(items: listing.items, invalidIds: listing.invalidIDs, pendingCopies: listing.pendingCopies, omittedPending: listing.omittedPending)
     } }
     @objc func cryptoHashBegin(_ invoke: Invoke) { work(invoke) { BridgeReply(id: try self.hashes.begin()) } }
     @objc func cryptoHashUpdate(_ invoke: Invoke) {
@@ -391,7 +393,7 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
     @objc func documentsList(_ invoke: Invoke) {
         work(invoke) {
             let listing = try SharedInbox.listReport(root: DocumentImportStore.root())
-            return BridgeReply(items: listing.items, invalidIds: listing.invalidIDs)
+            return BridgeReply(items: listing.items, invalidIds: listing.invalidIDs, pendingCopies: listing.pendingCopies, omittedPending: listing.omittedPending)
         }
     }
     @objc func documentsRead(_ invoke: Invoke) {
