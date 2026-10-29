@@ -86,6 +86,15 @@
 #panel-agents .composer-attach { display: grid; place-items: center; cursor: pointer; border-radius: 50%; }
 #panel-agents .composer-attach:focus-within { outline: 3px solid var(--violet); outline-offset: 2px; }
 #panel-agents .composer-attach:active { background: var(--surface-2); }
+@media (max-width: 360px) {
+  /* Make room for the prompt without shrinking the 44pt touch targets. */
+  #panel-agents .agent-reply.agent-attachments .composer { gap: 2px; padding-inline: 2px; }
+  #panel-agents .agent-reply.agent-attachments .composer-attach,
+  #panel-agents .agent-reply.agent-attachments .composer button {
+    width: 44px; height: 44px; min-width: 44px; min-height: 44px;
+  }
+  #panel-agents .agent-reply.agent-attachments .composer textarea { padding-inline: 6px; }
+}
 @media (min-width: 600px) and (max-height: 560px) {
   #panel-agents .agent-detail:has(.attachment-chips) .agent-detail-scroll { min-height: 64px; }
   #panel-agents .agent-reply:has(.attachment-chips) { display: grid; flex: none; max-height: none; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(60px, 1fr) auto; column-gap: 12px; }

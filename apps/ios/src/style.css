@@ -146,6 +146,13 @@ main { width: 100%; min-width: 0; }
 #active-tool { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .navigation .brand { flex: 1 0 auto; min-width: max-content; }
 .navigation .brand > span { overflow-wrap: normal; white-space: nowrap; }
+@media (max-width: 360px) {
+  /* Preserve both navigation labels and the character's dock on narrow phones. */
+  .navigation { gap: 2px; }
+  #companion-dock { flex-basis: 44px; }
+  .navigation .brand-mark { font-size: 1.2rem; }
+  .navigation button:not(.brand) { gap: 3px; padding-inline: 2px; }
+}
 .composer textarea { min-height: calc(1.5em + 22px); line-height: 1.5; }
 .composer-actions { position: sticky; bottom: 0; padding-block: 4px; background: var(--bg); z-index: 1; }
 @media (max-height: 560px) {

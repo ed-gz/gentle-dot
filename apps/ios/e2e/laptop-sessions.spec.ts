@@ -76,6 +76,51 @@ async function selectSessionFile(page: Page, file: { name: string; mimeType: str
   await (await selecting).setFiles(file);
 }
 
+test('small phone keeps navigation and the session composer on one line', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  await linkedPhone(page);
+  const navigation = page.locator('.navigation');
+  const buttons = navigation.locator('button');
+  const navRects = await buttons.evaluateAll(elements => elements.map(element => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  }));
+  expect(navRects).toHaveLength(3);
+  for (const rect of navRects) {
+    expect(Math.abs(rect.y - navRects[0]!.y)).toBeLessThan(1);
+    expect(rect.width).toBeGreaterThanOrEqual(44);
+    expect(rect.height).toBeGreaterThanOrEqual(44);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(320);
+  }
+  await expect(navigation.getByText('Sesiones')).toBeVisible();
+  await expect(navigation.getByText('Ajustes')).toBeVisible();
+  await page.getByRole('button', { name: 'Sesiones' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const composer = page.locator('.agent-reply .composer');
+  const text = composer.locator('textarea');
+  const metrics = await text.evaluate(element => {
+    const style = getComputedStyle(element);
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d')!;
+    context.font = style.font;
+    return { textWidth: context.measureText(element.placeholder).width,
+      availableWidth: element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) };
+  });
+  expect(metrics.textWidth).toBeLessThanOrEqual(metrics.availableWidth);
+  const controls = await composer.locator('.composer-attach, .composer-mic, .composer-send').evaluateAll(elements => elements.map(element => {
+    const rect = element.getBoundingClientRect();
+    return { y: rect.y, width: rect.width, height: rect.height };
+  }));
+  expect(controls).toHaveLength(3);
+  for (const control of controls) {
+    expect(control.width).toBeGreaterThanOrEqual(44);
+    expect(control.height).toBeGreaterThanOrEqual(44);
+    expect(Math.abs(control.y - controls[0]!.y)).toBeLessThan(1);
+  }
+  await text.fill('Primera línea\nSegunda línea');
+  await expect(text).toHaveValue('Primera línea\nSegunda línea');
+});
+
 test('compact navigation keeps the session list, chat, and settings usable at phone sizes', async ({ page }, testInfo) => {
   await linkedPhone(page);
   const navigation = page.locator('.navigation');
