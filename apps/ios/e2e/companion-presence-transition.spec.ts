@@ -35,6 +35,11 @@ test('presence plays the shared exit and arrival while controls stay interactive
   await expect(rig).toHaveAttribute('data-presence','visible'); await expect(rig).toBeEnabled();
   await page.locator('[data-panel="chat"]').click();
   await page.clock.runFor(300);
+  // Reappearing now plays the full arrival the user asked to be reachable, so
+  // the guarantee is that the layer is gone once that act ends, not that it
+  // never existed. INTRO_BEATS finishes its last beat at 8000 ms.
+  await expect(page.locator('[data-capri-theater]')).toHaveCount(1);
+  await page.clock.runFor(8000);
   await expect(page.locator('[data-capri-theater]')).toHaveCount(0);
 });
 
