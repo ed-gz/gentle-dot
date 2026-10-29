@@ -24,6 +24,8 @@ import { createJournalConversationPersistence, recoverConversationReservation } 
 import { createConversationJournal } from './conversation-journal.ts';
 import { mountReservationRescue } from './reservation-rescue-view.ts';
 import { createConversationDraftRescue } from './conversation-draft-rescue.ts';
+import { createConversationWriteRescue } from './conversation-write-rescue.ts';
+import { mountConversationWriteRecovery } from './conversation-write-recovery-view.ts';
 import { mountConversationDraftRecovery } from './conversation-draft-recovery-view.ts';
 import { createRetainedVoiceBridge, activeRetainedOwner, RetainedVoiceAssetsRequired, type RetainedVoiceRecord } from './retained-voice.ts';
 import { createNativeVoiceReceipts, type NativeVoiceReceipt } from './native-voice-receipts.ts';
@@ -629,6 +631,10 @@ let voiceRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let persistenceWarning = '';
 let memoryNeedsRefresh = false;
 const draftRescueStore = createConversationDraftRescue();
+const writeRescueStore = createConversationWriteRescue();
+const writeRecoveryRoot = document.createElement('section');
+element('chat-notice').after(writeRecoveryRoot);
+const writeRecovery = mountConversationWriteRecovery(writeRecoveryRoot, {store:writeRescueStore});
 const earlyDraftOwner = localIdentifier();
 let earlyDraftSequence = 0;
 let earlyDraft: Parameters<typeof draftRescueStore.save>[0] | undefined;
@@ -642,7 +648,8 @@ let reservationStatusEpoch = 0;
 const reservationRescueRoot = document.createElement('section');
 element('chat-notice').after(reservationRescueRoot);
 const reservationRescue = mountReservationRescue(reservationRescueRoot, { pending: conversationJournal.pending });
-const persistence = createJournalConversationPersistence({ journal: conversationJournal, draftRescue: draftRescueStore, retireConfirmedDraftRescue: true, onStatus(status) {
+const persistence = createJournalConversationPersistence({ journal: conversationJournal, draftRescue: draftRescueStore, writeRescue:writeRescueStore, retireConfirmedDraftRescue: true, onStatus(status) {
+  void writeRecovery.refresh();
   const epoch = ++reservationStatusEpoch;
   if (status.blocked) void conversationJournal.pending().then(journal => { if (epoch === reservationStatusEpoch && journal) reservationRescue.show(journal); }).catch(() => {});
   else reservationRescue.clear();
@@ -1408,6 +1415,7 @@ async function restoreConversation() {
     rescueHistory.hidden = false;
   } finally {
     void draftRecovery.refresh();
+    void writeRecovery.refresh();
     if (isTauri()) { void voiceRecovery.refresh(); void recoverPendingVoice(); }
     conversationLoading = false; retry.disabled = false; updateControls();
     conversationRestored = true; redraw(); maybeStartCompanionIntro();

@@ -55,6 +55,8 @@ function cleanPending(value: unknown): ChatEntry[] {
     keys.add(key); return normalized;
   });
 }
+/** Preserve the exact allowlisted entries for a losing writer's rescue copy. */
+export function canonicalPendingConversationEntries(value: unknown): ChatEntry[] { return cleanPending(value); }
 function entryKey(value: ChatEntry): string { const entry = archiveEntry(value); return JSON.stringify([entry.engine, entry.scope, entry.id]); }
 function includeVisible(pending: ChatEntry[], visible: ChatEntry[]): ChatEntry[] {
   const result = [...pending], byKey = new Map(result.map(entry => [entryKey(entry), entry])), seen = new Set<string>();

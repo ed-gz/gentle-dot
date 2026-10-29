@@ -4,6 +4,7 @@ import { localIdentifier } from './local-identifiers.ts';
 import type { PersistenceStatus } from './conversation-persistence.ts';
 import type { createConversationDraftRescue, DraftRescue } from './conversation-draft-rescue.ts';
 import type { NativeVoiceDeliveryIntent } from './native-voice-delivery.ts';
+import type { createConversationWriteRescue, WriteRescue } from './conversation-write-rescue.ts';
 
 type Journal = Pick<ReturnType<typeof createConversationJournal>, 'pending' | 'begin' | 'resume'>;
 type JournalOperation = { id: string; baseRevision: number; base?: Conversation; nextRevision: number; snapshot: Conversation; pending: ChatEntry[]; voiceDelivery?: NativeVoiceDeliveryIntent };
@@ -46,13 +47,18 @@ export function createJournalConversationPersistence(options: {
   rescueOwner?: string;
   /** Requires every writer to use the reservation protocol. */
   retireConfirmedDraftRescue?: boolean;
+  /** Independent writer backup; it is never merged or treated as an ACK. */
+  writeRescue?: Pick<ReturnType<typeof createConversationWriteRescue>, 'save' | 'retireIfCommitted'>;
+  writeRescueOwner?: string;
   onStatus?: (status: PersistenceStatus) => void;
 } = {}) {
   const journal = options.journal ?? createConversationJournal();
   const readBase = options.readBase ?? loadConversationBase;
   const identifier = options.identifier ?? localIdentifier;
   const rescueOwner = options.draftRescue ? (options.rescueOwner ?? identifier()) : undefined;
+  const writeRescueOwner = options.writeRescue ? (options.writeRescueOwner ?? identifier()) : undefined;
   let rescueSequence = 0;
+  let writeRescueSequence = 0;
   let captureSequence = 0;
   const pending = new Map<string, ChatEntry>(), seen = new WeakSet<ChatEntry>();
   let base: Conversation | undefined, bound = false, archiveFloor = 0, owned: JournalOperation | undefined;
@@ -93,7 +99,18 @@ export function createJournalConversationPersistence(options: {
     }
     let rescue: DraftRescue | undefined;
     let rescueSaved: Promise<Error | undefined> | undefined;
-    if (options.draftRescue && rescueOwner) {
+    let writeRescue: WriteRescue | undefined;
+    let writeRescueSaved: Promise<Error | undefined> | undefined;
+    if (options.writeRescue && writeRescueOwner && (writeRescueSequence > 0 || capture.pending.length > 0 || Boolean(base?.draft || base?.attachedWork || capture.snapshot.draft || capture.snapshot.attachedWork))) {
+      writeRescue = { schema:'capri-conversation-write-rescue/v1', owner:writeRescueOwner, sequence:++writeRescueSequence,
+        baseRevision:base?.revision ?? 0, draft:capture.snapshot.draft,
+        ...(capture.snapshot.attachedWork === undefined ? {} : {attachedWork:capture.snapshot.attachedWork}),
+        entries:capture.pending.map(([,entry]) => structuredClone(entry)) };
+      // Start immediately, including while an earlier archive operation is
+      // stalled. A conflicting writer retains its own exact pending events.
+      writeRescueSaved = options.writeRescue.save(writeRescue).then(() => undefined, error => error instanceof Error ? error : new Error('No se confirmó la copia de conversación.'));
+    }
+    if (options.draftRescue && rescueOwner && (rescueSequence > 0 || Boolean(base?.draft || base?.attachedWork || capture.snapshot.draft || capture.snapshot.attachedWork))) {
       rescue = { schema: 'capri-draft-rescue/v1', owner: rescueOwner, sequence: ++rescueSequence, baseRevision: base?.revision ?? 0,
         draft: capture.snapshot.draft, ...(capture.snapshot.attachedWork === undefined ? {} : { attachedWork: capture.snapshot.attachedWork }) };
       // A blocked archive operation must not delay preserving a newer draft.
@@ -104,6 +121,8 @@ export function createJournalConversationPersistence(options: {
       try {
         const rescueError = await rescueSaved;
         if (rescueError) throw rescueError;
+        const writeRescueError = await writeRescueSaved;
+        if (writeRescueError) throw writeRescueError;
         if (owned) {
           const reserved = await journal.pending();
           // If a proven pre-reservation rejection was followed by an
@@ -154,6 +173,9 @@ export function createJournalConversationPersistence(options: {
         }
         if (rescue && options.draftRescue?.retireIfCurrent && options.retireConfirmedDraftRescue) {
           try { await options.draftRescue.retireIfCurrent(rescue); } catch { /* The extra copy remains. */ }
+        }
+        if (writeRescue && options.writeRescue && base) {
+          try { await options.writeRescue.retireIfCommitted(writeRescue, base); } catch { /* Keep the copy for review. */ }
         }
         issue = undefined;
       } catch (error) { issue = describe(error); }

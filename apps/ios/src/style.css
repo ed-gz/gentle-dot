@@ -56,6 +56,9 @@ svg { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; s
 .conversation-scroll:focus-visible { outline-offset: -3px; }
 #storage-warning { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--ink); font-size: .75rem; line-height: 1.25; }
 #storage-warning button { flex: none; min-height: 44px; padding: 0 6px; border: 0; background: transparent; color: var(--acid); font-size: .75rem; }
+.conversation-write-recovery { min-width: 0; color: var(--ink); font-size: .8rem; }
+.conversation-write-recovery pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; font: inherit; }
+.conversation-write-recovery button { min-height: 44px; margin-right: .6rem; border: 0; background: transparent; color: var(--acid); }
 .empty-conversation { padding-block: 8px 12px; }
 .empty-conversation h1 span { color: var(--pink); }
 .empty-conversation p { color: var(--muted); margin-top: 8px; font-size: .95rem; }
