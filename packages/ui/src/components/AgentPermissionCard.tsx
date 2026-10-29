@@ -49,6 +49,7 @@ export function AgentPermissionCard({
 				paneId: approval.paneId,
 				sessionId: approval.sessionId,
 				requestId: approval.id,
+				...(controls.requiresReviewedApproval ? { reviewedApproval: approval } : {}),
 				...value,
 			});
 			if (current.current.key === key && current.current.action === action) {

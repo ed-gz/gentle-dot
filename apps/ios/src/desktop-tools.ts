@@ -1,3 +1,4 @@
+import { createControlJournal, runSessionControl } from './desktop-control-journal.ts';
 import { localIdentifier } from './local-identifiers.ts';
 import { DeviceBridgeError, httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import type { Tool, ToolContext } from './agent-tools.ts';
@@ -7,7 +8,7 @@ export type DesktopConnection = { url: string; token: string; deviceId?: string 
 export type DesktopSession = { paneId: string; sessionId: string; label: string; state: string; connected: boolean; capabilities: { inspect: boolean; prompt: boolean; abort: boolean; deliveryReceipts: boolean } };
 export type DesktopDelivery = { id: string; status: 'accepted' | 'queued' | 'delivered' | 'unconfirmed'; acceptedAt: string; deliveredAt?: string; evidence?: 'correlated-v1'; preview: string; deliverAs: 'steer' | 'followUp' };
 export type DesktopPage = { sessionId: string; instanceId: string; messages: { id: string; role: string; text: string }[]; deliveries: DesktopDelivery[]; question?: { id: string; kind: string; title: string; message: string; expiresAt: string; action?: string; fingerprint?: string; requiresConfirmation: boolean; options?: { id: string; label: string; description?: string; effect?: string; consequence?: string }[] }; history: { hasEarlier: boolean; before?: string } };
-export type DesktopDependencies = { getConnection: () => DesktopConnection | undefined; request?: (request: HTTPSRequest) => Promise<HTTPSResponse>; journal?: SessionJournal };
+export type DesktopDependencies = { getConnection: () => DesktopConnection | undefined; request?: (request: HTTPSRequest) => Promise<HTTPSResponse>; journal?: SessionJournal; controlJournal?: SessionJournal };
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 class DesktopPageTooLarge extends Error {}
 const string = (value: unknown, max: number, required = true): value is string => typeof value === 'string' && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value) && (!required || Boolean(value.trim()));
@@ -70,6 +71,7 @@ export function parseDesktopPage(value: unknown, sessionId: string): DesktopPage
 export function createDesktopSessionClient(dependencies: DesktopDependencies) {
   const request = dependencies.request ?? httpsRequest;
   const journal = dependencies.journal ?? createSessionJournal();
+  const controlJournal = dependencies.controlJournal ?? createControlJournal();
   function connection(): DesktopConnection { const value = dependencies.getConnection(); if (!value) throw new Error('Vincula la laptop para consultar sus sesiones de Pi.'); endpoint(value); return { ...value }; }
   function unchanged(expected: DesktopConnection): void {
     const current = dependencies.getConnection();
@@ -194,17 +196,36 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       await journal.reviewed(item);
       return { clientMessageId:id, reviewed:true, resent:false, message:'Aviso cerrado tras tu revisión. No se afirmó la entrega ni se reenvió el mensaje.' };
     },
+    async listControls(args: unknown = {}) {
+      if (!object(args) || Object.keys(args).some(key=>!['offset','limit'].includes(key))) throw new Error('Rango no válido.');
+      const offset=args.offset??0,limit=args.limit??10;
+      if(!Number.isSafeInteger(offset)||Number(offset)<0||Number(offset)>2000||!Number.isSafeInteger(limit)||Number(limit)<1||Number(limit)>20) throw new Error('Rango no válido.');
+      const conn=connection(),page=await controlJournal.page(endpoint(conn),Number(offset),Number(limit));unchanged(conn);
+      const items=page.items.map(item=>({id:item.id,paneId:item.paneId,sessionId:item.sessionId,state:item.state,createdAt:item.createdAt,kind:item.control?.kind}));
+      return {items,total:page.total,offset:Number(offset),...(Number(offset)+items.length<page.total?{nextOffset:Number(offset)+items.length}:{})};
+    },
+    async resolveControl(args: unknown, context: ToolContext) {
+      if(!object(args)||Object.keys(args).some(key=>key!=='id')) throw new Error('Indica la acción exacta.');
+      const id=field(args.id,96,'Acción'),conn=connection();const item=await controlJournal.getPending(endpoint(conn),id);unchanged(conn);
+      if(!item || !item.control) throw new Error('La acción cambió o pertenece a otro host.');
+      if(item.state!=='unconfirmed') throw new Error('La acción sigue en curso o perdió su comprobante de transporte; permanece bloqueada.');
+      const {key:_key,owner:_owner,...review}=item;
+      await authorize(context,conn,'Cerrar aviso de control tras revisar la sesión',{action:'review-session-control',attempt:review,warning:'El host podría seguir procesando la acción anterior. Cerrar el aviso permite proponer otra; no verifica, cancela ni reenvía la anterior.'});
+      context.signal.throwIfAborted();unchanged(conn);await controlJournal.reviewed(item);
+      return {id,reviewed:true,resent:false,confirmed:false};
+    },
     async abort(args: unknown, context: ToolContext) {
       const target = identity(args); const conn = connection(); const before = await inspect(conn, target, 1);
       const payload = Object.freeze({ action: 'abort', ...target });
       await authorize(context, conn, 'Detener el trabajo de esta sesión compartida', payload);
       const fresh = await inspect(conn, target, 1); if (fresh.instanceId !== before.instanceId) throw new Error('Pi cambió desde la revisión. No se detuvo otra instancia.');
       context.signal.throwIfAborted();
-      let ack: unknown;
-      try { ack = await rpc(conn, payload); }
-      catch { throw new Error('No se confirmó si la sesión recibió la solicitud de detener. Consulta su estado antes de repetir.'); }
-      if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== before.instanceId) throw new Error('El host no confirmó la cancelación de esta sesión.');
-      return { accepted: true, ...target, completed: false };
+      return runSessionControl(controlJournal, {kind:'abort',host:endpoint(conn),...target,instanceId:before.instanceId,payload,...(conn.deviceId?{deviceId:conn.deviceId}:{})},
+        ()=>{context.signal.throwIfAborted();unchanged(conn);}, async()=>{
+          const ack=await rpc(conn,payload);
+          if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== before.instanceId) throw new Error('Confirmación inválida.');
+          return { accepted:true,...target,completed:false };
+        });
     },
     /** Deliberately not a model tool. Call only from a human question/permission component. */
     async answerFromHuman(args: { paneId: string; sessionId: string; requestId: string; confirmed?: boolean; optionId?: string; text?: string; cancelled?: boolean }, context: ToolContext) {
@@ -218,11 +239,12 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       const fresh = await inspect(conn, target, 1);
       if (fresh.instanceId !== page.instanceId || JSON.stringify(fresh.question) !== JSON.stringify(question)) throw new Error('El permiso cambió después de revisarlo.');
       context.signal.throwIfAborted();
-      let ack: unknown;
-      try { ack = await rpc(conn, payload); }
-      catch { throw new Error('No se confirmó si la sesión recibió la respuesta. Consulta su estado antes de repetir.'); }
-      if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== page.instanceId) throw new Error('El host no confirmó la respuesta humana.');
-      return { accepted: true, ...target, requestId: question.id };
+      return runSessionControl(controlJournal, {kind:'answer',host:endpoint(conn),...target,instanceId:page.instanceId,payload:{...payload,question},...(conn.deviceId?{deviceId:conn.deviceId}:{})},
+        ()=>{context.signal.throwIfAborted();unchanged(conn);}, async()=>{
+          const ack=await rpc(conn,payload);
+          if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== page.instanceId) throw new Error('Confirmación inválida.');
+          return {accepted:true,...target,requestId:question.id};
+        });
     },
   };
 }
@@ -237,6 +259,8 @@ export function createDesktopTools(dependencies: DesktopDependencies): Tool[] {
     { definition: { name:'session_delivery_list', description:'Consulta páginas de envíos anteriores a este host que siguen sin confirmar. No reenvía ni modifica nada.', parameters:schema({offset:{type:'integer',minimum:0,maximum:2000},limit:{type:'integer',minimum:1,maximum:20}}, []) }, validate(args) { if (!object(args) || Object.keys(args).some(key => !['offset','limit'].includes(key))) throw new Error('Rango no válido.'); return args; }, execute: async (args, context) => { context.signal.throwIfAborted(); return client.listDeliveries(args); } },
     { definition: { name:'session_delivery_resolve', description:'Después de revisar manualmente el historial, propone cerrar un aviso incierto con aprobación humana explícita. No confirma entrega ni reenvía.', parameters:schema({clientMessageId:{type:'string'}}, ['clientMessageId']) }, validate(args) { if (!object(args) || Object.keys(args).some(key => key !== 'clientMessageId')) throw new Error('Indica el envío exacto.'); field(args.clientMessageId,96,'Envío'); return args; }, execute:(args, context) => client.resolveDelivery(args, context) },
     { definition: { name: 'session_send', description: 'Propone una instrucción exacta para una sesión Pi existente y solicita aprobación humana dentro de la conversación antes de enviarla. Devuelve clientMessageId y estado de recepción; no implica tarea terminada. Nunca reenvíes una entrega incierta automáticamente.', parameters: schema({ ...target, text: { type: 'string', maxLength: 16000 }, deliverAs: { type: 'string', enum: ['followUp', 'steer'] } }, ['paneId','sessionId','text']) }, validate(args) { identity(args); field((args as Record<string, unknown>).text, 16000, 'Instrucción'); return args; }, execute: (args, context) => client.send(args, context) },
+    { definition: { name:'session_control_list', description:'Lista controles de sesión sin confirmar, incluyendo respuestas humanas. No ejecuta ni reenvía.', parameters:schema({offset:{type:'integer'},limit:{type:'integer'}},[]) }, validate(args) { if(!object(args))throw new Error('Rango no válido.');return args; }, execute:(args,context)=>{context.signal.throwIfAborted();return client.listControls(args);} },
+    { definition: { name:'session_control_resolve', description:'Propone cerrar un aviso de control incierto tras revisión humana; nunca reenvía ni confirma la acción.', parameters:schema({id:{type:'string'}},['id']) }, validate(args) {if(!object(args)||Object.keys(args).some(key=>key!=='id'))throw new Error('Indica la acción exacta.');field(args.id,96,'Acción');return args;}, execute:(args,context)=>client.resolveControl(args,context) },
     { definition: { name: 'session_abort', description: 'Solicita aprobación humana para detener el trabajo de una sesión Pi compartida concreta. Afecta también al trabajo visible en la laptop.', parameters: schema(target, ['paneId','sessionId']) }, validate: identity, execute: (args, context) => client.abort(args, context) },
   ];
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { OrchestrationAction, OrchestrationClient, OrchestrationSnapshot } from "./orchestration.ts";
 
 export interface OrchestrationControls {
+	requiresReviewedApproval?: boolean;
 	snapshot?: OrchestrationSnapshot;
 	error?: string;
 	busy: boolean;
@@ -102,5 +103,5 @@ export function useOrchestration(
 		[client, refresh],
 	);
 
-	return { snapshot: verified.current === client ? snapshot : undefined, error, busy, refresh, act };
+	return { snapshot: verified.current === client ? snapshot : undefined, requiresReviewedApproval: client?.requiresReviewedApproval, error, busy, refresh, act };
 }

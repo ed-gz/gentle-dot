@@ -288,3 +288,10 @@ it("blocks duplicate responses while sending and after acknowledgement", async (
 	expect(screen.getByText("Respuesta enviada")).toBeVisible();
 	expect(screen.getByRole("button", { name: "Rechazar" })).toBeDisabled();
 });
+
+it('passes the exact reviewed approval to clients that require a local guard', async () => {
+ const act = vi.fn(async () => true); const approval = { ...base, kind: 'confirm' as const, message: 'Contenido exacto' };
+ render(<AgentPermissionCard approval={approval} controls={{act,busy:false,refresh:vi.fn(),requiresReviewedApproval:true}} disabled={false}/>);
+ await userEvent.click(screen.getByRole('button', {name:'Permitir'}));
+ expect(act).toHaveBeenCalledExactlyOnceWith({...answer,approved:true,reviewedApproval:approval});
+});

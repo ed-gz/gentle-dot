@@ -1,7 +1,8 @@
-import { createOrchestrationClient, type OrchestrationClient } from '@gentle-dot/ui/src/orchestration.ts';
+import { createOrchestrationClient, type AgentApproval, type OrchestrationClient } from '@gentle-dot/ui/src/orchestration.ts';
 import { DeviceBridgeError, httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { validDaemonUrl } from './local-state.ts';
 import type { DesktopConnection } from './desktop-tools.ts';
+import { createControlJournal, runSessionControl } from './desktop-control-journal.ts';
 import { uploadSessionFile } from './session-upload.ts';
 
 /** Reuse the desktop session contract through the phone's authenticated native
@@ -46,6 +47,7 @@ export function createLaptopClient(connection: DesktopConnection, options: {
     return new Response(reply.body, { status: reply.status, headers: reply.headers });
   };
   const client = createOrchestrationClient(captured, { fetch: transport, terminalMood: false });
+  client.requiresReviewedApproval = true;
   const snapshot = client.snapshot;
   client.snapshot = async signal => {
     const value = await snapshot(signal);
@@ -103,6 +105,37 @@ export function createLaptopClient(connection: DesktopConnection, options: {
         ? { type: 'text' as const, text: '[Imagen adjunta no disponible en esta vista]' }
         : { type: 'text' as const, text: block.text }),
     })) };
+  };
+  // Human controls share the agent journal. Do not use the fetch adapter's
+  // Promise.race here: cancellation of JS does not stop URLSession natively.
+  const act = client.act, controlJournal = createControlJournal();
+  client.act = async action => {
+    if (action.action !== 'abort' && action.action !== 'answer') return act(action);
+    current();
+    const page = await client.inspect(action.paneId, action.sessionId, undefined, {limit:1});
+    const instanceId=(page as typeof page & {instanceId?:unknown}).instanceId;
+    if (typeof instanceId !== 'string' || !instanceId || instanceId.length>256) throw new Error('No se pudo identificar la instancia de la sesión.');
+    let wireAction = action;
+    let review:AgentApproval | undefined;
+    if (action.action==='answer') {
+      const {reviewedApproval,...wire}=action;wireAction=wire;
+      if(!reviewedApproval || reviewedApproval.id!==action.requestId || reviewedApproval.paneId!==action.paneId || reviewedApproval.sessionId!==action.sessionId) throw new Error('Vuelve a abrir y revisar la solicitud humana.');
+      const snapshot=await client.snapshot(); current();
+      const supplied=snapshot.approvals.find(item=>item.id===action.requestId && item.paneId===action.paneId && item.sessionId===action.sessionId);
+      const q=page.question;
+      const fresh:AgentApproval | undefined=supplied ?? (q?.id===action.requestId ? {...q,kind:q.kind as AgentApproval['kind'],paneId:action.paneId,sessionId:action.sessionId,message:q.message??'',action:q.title,createdAt:'',expiresAt:'expiresAt' in q && typeof q.expiresAt==='string'?q.expiresAt:''} : undefined);
+      const reviewedFields=(a:AgentApproval)=>JSON.stringify([a.id,a.paneId,a.sessionId,a.title,a.message,a.action,a.expiresAt,a.answerable,a.kind,a.requiresConfirmation,a.options,a.placeholder,a.questions]);
+      if(!fresh || reviewedFields(fresh)!==reviewedFields(reviewedApproval) || (fresh.expiresAt && Date.parse(fresh.expiresAt)<=Date.now())) throw new Error('La solicitud humana cambió o venció; vuelve a revisarla.');
+      review=structuredClone(reviewedApproval);
+    }
+    const payload={...structuredClone(wireAction),...(review?{reviewedApproval:review}:{})} as unknown as Record<string,unknown>;
+    await runSessionControl(controlJournal,{kind:action.action,host:`${origin}/orchestration`,paneId:action.paneId,sessionId:action.sessionId,instanceId,payload,...(captured.deviceId?{deviceId:captured.deviceId}:{})},current,async()=>{
+      current();
+      const reply=await request({url:`${origin}/orchestration`,method:'POST',headers:{Authorization:`Bearer ${captured.token}`,'Content-Type':'application/json'},body:JSON.stringify(wireAction)});
+      current();
+      let ack:unknown;try{ack=JSON.parse(reply.body);}catch{throw new Error('Respuesta inválida.');}
+      if(reply.status<200||reply.status>=300||!ack||typeof ack!=='object'||!('accepted' in ack)||ack.accepted!==true||!('sessionId' in ack)||ack.sessionId!==action.sessionId||!('instanceId' in ack)||ack.instanceId!==instanceId) throw new Error('Confirmación no correlacionada.');
+    });
   };
   client.uploadAttachment = (paneId, sessionId, file, uploadId, signal) => {
     current();

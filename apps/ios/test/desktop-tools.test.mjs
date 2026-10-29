@@ -24,7 +24,7 @@ function memoryJournal() {
 }
 function fixture(overrides = {}) {
   const calls = []; let receipt; let current = conn;
-  const client = createDesktopSessionClient({ journal: overrides.journal ?? memoryJournal(), getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: overrides.journal ?? memoryJournal(), controlJournal: overrides.controlJournal ?? memoryJournal(), getConnection: () => current, request: async request => {
     calls.push(request); const payload = request.body ? JSON.parse(request.body) : undefined;
     let value;
     if (!payload) value = { available: true, sessions: [session], approvals: [{ secret: 'do-not-project' }] };
@@ -41,14 +41,14 @@ function fixture(overrides = {}) {
 }
 test('session tools reuse existing sessions and expose no create/answer/permission tool', async () => {
   const f = fixture(); const sessions = await f.client.list(); assert.equal(sessions.length, 1); assert.equal(sessions[0].label, 'Operations'); assert.equal(sessions[0].approvals, undefined);
-  assert.deepEqual(createDesktopTools({ getConnection: () => conn }).map(tool => tool.definition.name), ['session_list','session_read','session_delivery_list','session_delivery_resolve','session_send','session_abort']);
+  assert.deepEqual(createDesktopTools({ getConnection: () => conn }).map(tool => tool.definition.name), ['session_list','session_read','session_delivery_list','session_delivery_resolve','session_send','session_control_list','session_control_resolve','session_abort']);
   const history = await f.client.read(target); assert.equal(history.messages[0].text, 'Waiting for instruction');
   assert.equal(f.calls[0].url, 'https://computer.example.ts.net/orchestration'); assert.equal(f.calls[0].headers.Authorization, `Bearer ${conn.token}`);
 });
 test('a late session inventory cannot be attributed to a newly selected laptop', async () => {
   let current = conn;
   let resolveRequest;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => current, request: () => new Promise(resolve => { resolveRequest = resolve; }) });
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => current, request: () => new Promise(resolve => { resolveRequest = resolve; }) });
   const listing = client.list();
   current = { ...conn, url: 'wss://other.example.ts.net/ws', deviceId: 'other-device' };
   resolveRequest({ status: 200, body: JSON.stringify({ available: true, sessions: [session] }), headers: {} });
@@ -98,7 +98,7 @@ test('a replacement Pi process cannot confirm a prior send', async () => {
 });
 test('a connection changed during post-ack inspection stays unconfirmed', async () => {
   let current = conn, sends = 0;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => current, request: async request => {
     const payload = request.body ? JSON.parse(request.body) : undefined;
     if (!payload) return { status:200, headers:{}, body:JSON.stringify({available:true,sessions:[session]}) };
     if (payload.action === 'prompt') { sends++; return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:target.sessionId,instanceId:'instance-1'})}; }
@@ -217,7 +217,7 @@ test('concurrent identical approvals reserve at most one dispatch', async () => 
 test('a session prompt whose connection changes in flight remains uncertain and is not retried', async () => {
   let current = conn;
   let sends = 0;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => current, request: async request => {
     const payload = request.body ? JSON.parse(request.body) : undefined;
     if (!payload) return { status: 200, headers: {}, body: JSON.stringify({ available: true, sessions: [session] }) };
     if (payload.action === 'inspect') return { status: 200, headers: {}, body: JSON.stringify(page()) };
@@ -232,7 +232,7 @@ test('a session prompt whose connection changes in flight remains uncertain and 
 test('a late stop acknowledgement after switching laptops stays unconfirmed', async () => {
   let current = conn;
   let stops = 0;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => current, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => current, request: async request => {
     const payload = JSON.parse(request.body);
     if (payload.action === 'inspect') return { status: 200, headers: {}, body: JSON.stringify(page()) };
     stops++;
@@ -273,7 +273,7 @@ test('cancellation during the post-approval reread prevents the pending mutation
 
 test('agent session read adapts valid large history while preserving cursor and reuses the safe limit', async () => {
   const calls = [];
-  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => conn, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => conn, request: async request => {
     const payload = JSON.parse(request.body); calls.push(payload);
     if (payload.limit === 50) throw new DeviceBridgeError('size_limit', 'native limit');
     return { status: 200, headers: {}, body: JSON.stringify({ ...page(),
@@ -290,7 +290,7 @@ test('agent session read adapts valid large history while preserving cursor and 
 test('agent session read never retries network failure, cancellation or a changed connection', async () => {
   let current = conn, calls = 0;
   const controller = new AbortController();
-  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => current, request: async () => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => current, request: async () => {
     calls++;
     if (calls === 1) throw new Error('offline');
     if (calls === 2) { controller.abort(); throw new DeviceBridgeError('size_limit', 'large'); }
@@ -304,7 +304,7 @@ test('agent session read never retries network failure, cancellation or a change
 
 test('agent session read does not retry malformed or oversized individual messages', async () => {
   let calls = 0;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => conn, request: async () => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => conn, request: async () => {
     calls++;
     return { status: 200, headers: {}, body: JSON.stringify({ ...page(), messages: [{ id: 'm', role: 'assistant', content: 'x'.repeat(32001) }] }) };
   } });
@@ -313,7 +313,7 @@ test('agent session read does not retry malformed or oversized individual messag
 
 test('agent session read also adapts when the JavaScript response limit is exceeded', async () => {
   const limits = [];
-  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => conn, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => conn, request: async request => {
     const payload = JSON.parse(request.body); limits.push(payload.limit);
     return { status: 200, headers: {}, body: JSON.stringify({ ...page(),
       messages: Array.from({ length: payload.limit }, (_, index) => ({ id: `m${index}`, role: 'assistant', content: 'x'.repeat(25000) })) }) };
@@ -324,7 +324,7 @@ test('agent session read also adapts when the JavaScript response limit is excee
 
 test('an oversized response to a session mutation remains uncertain and is never replayed', async () => {
   let sends = 0;
-  const client = createDesktopSessionClient({ journal: memoryJournal(), getConnection: () => conn, request: async request => {
+  const client = createDesktopSessionClient({ journal: memoryJournal(), controlJournal: memoryJournal(), getConnection: () => conn, request: async request => {
     const payload = request.body && JSON.parse(request.body);
     if (payload?.action === 'prompt') { sends++; throw new DeviceBridgeError('size_limit', 'large'); }
     return { status: 200, headers: {}, body: JSON.stringify(payload ? page() : { available: true, sessions: [session] }) };

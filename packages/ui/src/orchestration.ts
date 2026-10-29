@@ -102,7 +102,7 @@ export type OrchestrationAction =
 	| { action: "abort"; paneId: string; sessionId: string }
 	| { action: "close" | "duplicate"; paneId: string; sessionId: string }
 	| { action: "prompt"; paneId: string; sessionId: string; text: string; attachments?: AttachmentRef[]; clientMessageId?: string; deliverAs?: "steer" | "followUp" }
-	| ({ action: "answer"; paneId: string; sessionId: string; requestId: string } & AgentAnswer)
+	| ({ action: "answer"; paneId: string; sessionId: string; requestId: string; reviewedApproval?: AgentApproval } & AgentAnswer)
 	| {
 			action: "grant";
 			paneId: string;
@@ -114,6 +114,7 @@ export type OrchestrationAction =
 	| { action: "revoke"; policyId: string };
 
 export interface OrchestrationClient {
+	requiresReviewedApproval?: boolean;
 	terminalMood?: TerminalMoodClient;
 	snapshot(signal?: AbortSignal): Promise<OrchestrationSnapshot>;
 	act(action: OrchestrationAction): Promise<void>;
@@ -453,7 +454,10 @@ export function createOrchestrationClient(info: ConnectionInfo, transport: { fet
 			return body as OrchestrationSnapshot;
 		},
 		async act(action) {
-			await request(action);
+			if (action.action === "answer") {
+				const { reviewedApproval: _reviewedApproval, ...wireAction } = action;
+				await request(wireAction);
+			} else await request(action);
 		},
 		async uploadAttachment(paneId, sessionId, file, uploadId, signal) {
 			const response = await requestFetch(`${uploadBase(info.url)}/upload`, {

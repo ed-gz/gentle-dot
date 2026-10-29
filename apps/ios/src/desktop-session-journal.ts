@@ -2,7 +2,7 @@
 export type SessionAttempt = {
   id: string; owner: string; key: string; host: string; deviceId?: string; paneId: string; sessionId: string; instanceId: string;
   text: string; deliverAs: 'steer' | 'followUp'; state: 'prepared' | 'dispatching' | 'unconfirmed' | 'delivered' | 'reviewed' | 'cancelled';
-  createdAt: number;
+  createdAt: number; control?: { kind: 'abort' | 'answer'; payload: Record<string, unknown> };
 };
 export interface SessionJournal {
   find(key: string): Promise<SessionAttempt | null>;
@@ -12,6 +12,8 @@ export interface SessionJournal {
   unconfirmed(id: string): Promise<void>;
   delivered(id: string, instanceId: string): Promise<void>;
   list(host: string): Promise<SessionAttempt[]>;
+  page(host:string, offset:number, limit:number):Promise<{items:SessionAttempt[];total:number}>;
+  getPending(host:string,id:string):Promise<SessionAttempt | null>;
   reviewed(expected: SessionAttempt): Promise<void>;
 }
 export function sessionOperationKey(host: string, paneId: string, sessionId: string, text: string) {
@@ -30,8 +32,9 @@ function validate(value: unknown): SessionAttempt {
       typeof item.instanceId !== 'string' || !item.instanceId || item.instanceId.length > 256 || typeof item.text !== 'string' || !item.text.trim() || item.text.length > 16000 ||
       (item.deviceId !== undefined && (typeof item.deviceId !== 'string' || !item.deviceId || item.deviceId.length > 256)) ||
       !['steer', 'followUp'].includes(item.deliverAs) || !['prepared','dispatching','unconfirmed','delivered','reviewed','cancelled'].includes(item.state) ||
+      (item.control !== undefined && (!item.control || !['abort','answer'].includes(item.control.kind) || !item.control.payload || typeof item.control.payload !== 'object' || Array.isArray(item.control.payload) || JSON.stringify(item.control).length > 100000)) ||
       !Number.isSafeInteger(item.createdAt) || item.createdAt < 0 || item.key !== sessionOperationKey(item.host, item.paneId, item.sessionId, item.text)) throw new Error('El registro de envíos no es válido.');
-  return { id:item.id, owner:item.owner, key:item.key, host:item.host, ...(item.deviceId ? {deviceId:item.deviceId} : {}), paneId:item.paneId, sessionId:item.sessionId, instanceId:item.instanceId, text:item.text, deliverAs:item.deliverAs, state:item.state, createdAt:item.createdAt };
+  return { id:item.id, owner:item.owner, key:item.key, host:item.host, ...(item.deviceId ? {deviceId:item.deviceId} : {}), paneId:item.paneId, sessionId:item.sessionId, instanceId:item.instanceId, text:item.text, deliverAs:item.deliverAs, state:item.state, createdAt:item.createdAt, ...(item.control ? {control:structuredClone(item.control)} : {}) };
 }
 export function createSessionJournal(databaseName = DATABASE): SessionJournal {
   function transaction<T>(mode: IDBTransactionMode, action: (tx: IDBTransaction, done: (value:T) => void, fail: (error:Error) => void) => void): Promise<T> {
@@ -111,6 +114,18 @@ export function createSessionJournal(databaseName = DATABASE): SessionJournal {
             } catch(error) { fail(error as Error); } };
           }
         };
+      });
+    },
+    page(host,offset,limit) {
+      if (!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>20) throw new Error('Rango no válido.');
+      return transaction<{items:SessionAttempt[];total:number}>('readonly',(tx,done,fail)=>{
+        const cursor=tx.objectStore('pending').openCursor(),attempts=tx.objectStore('attempts'),items:SessionAttempt[]=[];let total=0;
+        cursor.onsuccess=()=>{const c=cursor.result;if(!c){done({items,total});return;}const read=attempts.get(c.value);read.onsuccess=()=>{try{const item=validate(read.result);if(!unresolved(item.state)||item.key!==c.key)throw new Error('El registro pendiente no es válido.');if(item.host===host){if(total>=offset&&items.length<limit)items.push(item);total++;}c.continue();}catch(error){fail(error as Error);}};};
+      });
+    },
+    getPending(host,id) {
+      return transaction<SessionAttempt | null>('readonly',(tx,done,fail)=>{
+        const read=tx.objectStore('attempts').get(id);read.onsuccess=()=>{try{if(!read.result){done(null);return;}const item=validate(read.result);if(item.host!==host||!unresolved(item.state)){done(null);return;}const pending=tx.objectStore('pending').get(item.key);pending.onsuccess=()=>{if(pending.result!==id){fail(new Error('El registro pendiente no es válido.'));return;}done(item);};}catch(error){fail(error as Error);}};
       });
     },
     reviewed: expected => change(expected.id, item => { if (item.state !== 'unconfirmed') throw new Error('El envío sigue en curso o perdió su comprobante de transporte; permanece bloqueado.'); if (JSON.stringify(item) !== JSON.stringify(validate(expected))) throw new Error('El envío cambió después de la revisión.'); return {...item,state:'reviewed'}; }, true),
