@@ -83,8 +83,14 @@ do {
     try Data("alterado".utf8).write(to: sentinelURL)
     expectsError("corrupt sentinel blocks reading existing ledger", { _ = try sentinelGate.status(id: sentinelRecord.id) })
     let ledgerAfterCorrupt = try Data(contentsOf: ledgerURL); require(ledgerAfterCorrupt == ledgerBefore, "corrupt sentinel preserves ledger")
+    let swappedRoot = uniqueRoot(); defer { try? FileManager.default.removeItem(at: swappedRoot) }
+    let swapped = try ProvenanceLeaseGate(root: swappedRoot, bootId: id(), now: { 1 })
+    let swappedId = id(); _ = try swapped.prepare(id: swappedId, revision: 0, model: "apple-local", input: "dato")
+    let lockURL = swappedRoot.appendingPathComponent("leases.lock")
+    try FileManager.default.removeItem(at: lockURL); try Data().write(to: lockURL)
+    expectsError("replaced lock sidecar blocks operation", { _ = try swapped.status(id: swappedId) })
     let corruptRoot = uniqueRoot(); defer { try? FileManager.default.removeItem(at: corruptRoot) }
-    try FileManager.default.createDirectory(at: corruptRoot, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: corruptRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     let corruptFile = corruptRoot.appendingPathComponent("leases.json"), damaged = Data("{broken".utf8); try damaged.write(to: corruptFile)
     try Data("capri-provenance-ledger/v1".utf8).write(to: corruptRoot.appendingPathComponent("ledger-present"))
     let corrupt = try ProvenanceLeaseGate(root: corruptRoot, bootId: id())
@@ -101,6 +107,10 @@ do {
     _ = try unicodeGate.cancelPrepared(id: decomposed.id, leaseId: decomposed.leaseId)
     let emoji = try unicodeGate.prepare(id: id(), revision: 0, model: "apple-local", input: "🤖")
     require(emoji.inputSHA256 == "b0d125182029e6c500cbcc81011341df77de8fe24d9e80190c32be390c916ec2", "emoji unicode hash")
+    let permissiveRoot = uniqueRoot(); defer { try? FileManager.default.removeItem(at: permissiveRoot) }
+    try FileManager.default.createDirectory(at: permissiveRoot, withIntermediateDirectories: false)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: permissiveRoot.path)
+    expectsError("non-private existing directory rejected", { _ = try ProvenanceLeaseGate(root: permissiveRoot, bootId: id()) })
     let missingParent = uniqueRoot().appendingPathComponent("absent").appendingPathComponent("gate")
     expectsError("missing parent fails closed", { _ = try ProvenanceLeaseGate(root: missingParent, bootId: id()) })
     print("PASS: native lease gate model scenarios")

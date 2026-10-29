@@ -49,9 +49,12 @@ final class ProvenanceLeaseGate {
             guard (error.domain == NSCocoaErrorDomain && error.code == NSFileWriteFileExistsError) || (error.domain == NSPOSIXErrorDomain && error.code == Int(EEXIST)) else { throw error }
         }
         let rootAttributes = try FileManager.default.attributesOfItem(atPath: root.path)
-        guard rootAttributes[.type] as? FileAttributeType == .typeDirectory else { throw ProvenanceLeaseError.corrupt }
+        guard rootAttributes[.type] as? FileAttributeType == .typeDirectory,
+              let owner = rootAttributes[.ownerAccountID] as? NSNumber, owner.uint32Value == Darwin.geteuid(),
+              let mode = rootAttributes[.posixPermissions] as? NSNumber, mode.intValue & 0o077 == 0 else { throw ProvenanceLeaseError.corrupt }
         try Self.syncDirectory(parent)
-        let path = root.standardizedFileURL.resolvingSymlinksInPath().appendingPathComponent("leases.lock").path
+        let stableRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+        let path = stableRoot.appendingPathComponent("leases.lock").path
         Self.ownershipLock.lock(); defer { Self.ownershipLock.unlock() }
         guard !Self.ownedPaths.contains(path) else { throw ProvenanceLeaseError.busy }
         let descriptor = path.withCString { Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, mode_t(0o600)) }
@@ -62,11 +65,19 @@ final class ProvenanceLeaseGate {
             throw ProvenanceLeaseError.uncertain
         }
         Self.ownedPaths.insert(path)
-        self.root = root; self.lockDescriptor = descriptor; self.lockPath = path; self.bootId = bootId ?? Self.processBootId; self.now = now
+        self.root = stableRoot; self.lockDescriptor = descriptor; self.lockPath = path; self.bootId = bootId ?? Self.processBootId; self.now = now
     }
     deinit {
         Self.ownershipLock.lock(); defer { Self.ownershipLock.unlock() }
         capri_lease_unlock(lockDescriptor); Darwin.close(lockDescriptor); Self.ownedPaths.remove(lockPath)
+    }
+    private func verifyLockIdentity() throws {
+        var held = stat(), path = stat()
+        guard Darwin.fstat(lockDescriptor, &held) == 0,
+              lockPath.withCString({ Darwin.lstat($0, &path) }) == 0,
+              held.st_dev == path.st_dev, held.st_ino == path.st_ino,
+              held.st_nlink == 1, path.st_nlink == 1, held.st_uid == Darwin.geteuid(),
+              (UInt32(held.st_mode) & UInt32(S_IFMT)) == UInt32(S_IFREG), UInt32(held.st_mode) & 0o077 == 0 else { throw ProvenanceLeaseError.uncertain }
     }
     private static func syncDirectory(_ url: URL) throws {
         let descriptor = url.path.withCString { Darwin.open($0, O_RDONLY | O_CLOEXEC) }
@@ -181,6 +192,7 @@ final class ProvenanceLeaseGate {
     func prepare(id: String, revision: UInt64, model: String, input: String) throws -> ProvenanceLeaseRecord {
         queueLock.lock(); defer { queueLock.unlock() }
         guard !scheduling else { throw ProvenanceLeaseError.busy }
+        try verifyLockIdentity()
         guard isID(id), isID(bootId), isModel(model), revision <= 9_007_199_254_740_991,
               !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, input.unicodeScalars.count <= 8_000 else { throw ProvenanceLeaseError.invalid }
         var records = try read(); try recover(&records)
@@ -193,6 +205,7 @@ final class ProvenanceLeaseGate {
     func start(id: String, leaseId: String, revision: UInt64, model: String, input: String, schedule: () throws -> Void) throws -> ProvenanceLeaseStart {
         queueLock.lock(); defer { queueLock.unlock() }
         guard !scheduling else { throw ProvenanceLeaseError.busy }
+        try verifyLockIdentity()
         guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, input.unicodeScalars.count <= 8_000 else { throw ProvenanceLeaseError.invalid }
         var records = try read(); try recover(&records)
         guard let index = records.firstIndex(where: { $0.id == id }) else { throw ProvenanceLeaseError.invalid }
@@ -216,6 +229,7 @@ final class ProvenanceLeaseGate {
     func status(id: String) throws -> ProvenanceLeaseRecord {
         queueLock.lock(); defer { queueLock.unlock() }
         guard !scheduling else { throw ProvenanceLeaseError.busy }
+        try verifyLockIdentity()
         var records = try read(); try recover(&records)
         guard let index = records.firstIndex(where: { $0.id == id }) else { throw ProvenanceLeaseError.invalid }
         let current = now(); guard current.isFinite, current >= 0 else { throw ProvenanceLeaseError.invalid }
@@ -225,6 +239,7 @@ final class ProvenanceLeaseGate {
     func cancelPrepared(id: String, leaseId: String) throws -> ProvenanceLeaseRecord {
         queueLock.lock(); defer { queueLock.unlock() }
         guard !scheduling else { throw ProvenanceLeaseError.busy }
+        try verifyLockIdentity()
         var records = try read(); try recover(&records)
         guard let index = records.firstIndex(where: { $0.id == id }), records[index].leaseId == leaseId else { throw ProvenanceLeaseError.invalid }
         if records[index].state == "prepared" { records[index].state = "rejected"; try write(records) }
