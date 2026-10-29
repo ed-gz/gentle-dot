@@ -24,11 +24,14 @@ test('background inference requires an explicit reversible choice and applies to
   await page.locator('#settings-intelligence summary').click();
   const setting = page.getByRole('checkbox', { name: 'Intentar continuar el análisis al salir' });
   await expect(setting).not.toBeChecked();
+  await expect(page.locator('#continued-inference-settings [role="status"]')).toContainText('desactivado');
   await setting.check();
+  await expect(page.locator('#continued-inference-settings [role="status"]')).toContainText('iOS puede continuar');
   await page.reload();
   await page.locator('[data-panel="settings"]').click();
   await page.locator('#settings-intelligence summary').click();
   await expect(setting).toBeChecked();
+  await expect(page.locator('#continued-inference-settings [role="status"]')).toContainText('iOS puede continuar');
   await page.locator('[data-panel="chat"]').click();
   await page.locator('#prompt').fill('Segunda pregunta');
   await page.locator('#send').click();
@@ -36,6 +39,7 @@ test('background inference requires an explicit reversible choice and applies to
   await page.locator('[data-panel="settings"]').click();
   if (!await setting.isVisible()) await page.locator('#settings-intelligence summary').click();
   await setting.uncheck();
+  await expect(page.locator('#continued-inference-settings [role="status"]')).toContainText('desactivado');
   await page.locator('[data-panel="chat"]').click();
   await page.locator('#prompt').fill('Tercera pregunta');
   await page.locator('#send').click();

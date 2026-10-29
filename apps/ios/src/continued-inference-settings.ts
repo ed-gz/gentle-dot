@@ -11,8 +11,13 @@ export function mountContinuedInferenceSettings(root: HTMLElement, dependencies:
   const native = dependencies.native ?? isTauri();
   let enabled = false;
   const storage = () => dependencies.storage ?? globalThis.localStorage;
-  try { enabled = native && storage().getItem(preferenceName) === '1'; }
-  catch { status.textContent = 'No pude leer esta preferencia. Está desactivada.'; }
+  const describe = () => enabled
+    ? 'Al salir, iOS puede continuar un paso de análisis y mostrar una actividad. Puede detenerlo; las herramientas esperan a que vuelvas.'
+    : 'El análisis extendido está desactivado. iOS puede dar un breve tiempo al paso actual; las herramientas esperan a que vuelvas.';
+  try {
+    enabled = native && storage().getItem(preferenceName) === '1';
+    if (native) status.textContent = describe();
+  } catch { status.textContent = 'No pude leer esta preferencia. Está desactivada.'; }
   toggle.checked = enabled; toggle.disabled = !native;
   if (!native) status.textContent = 'Disponible en la app instalada en el iPhone.';
   toggle.addEventListener('change', () => {
@@ -20,9 +25,7 @@ export function mountContinuedInferenceSettings(root: HTMLElement, dependencies:
     try {
       storage().setItem(preferenceName, toggle.checked ? '1' : '0');
       enabled = toggle.checked;
-      status.textContent = enabled
-        ? 'Para tus próximos mensajes, iOS mostrará un paso de análisis y el inicio puede tardar unos segundos. Las herramientas esperan a que vuelvas; iOS puede detener el paso.'
-        : 'Desactivado para los próximos mensajes. El paso actual conserva su estado.';
+      status.textContent = `${describe()} El cambio aplica a los próximos mensajes.`;
     } catch {
       enabled = previous; toggle.checked = previous;
       status.textContent = 'No pude guardar el cambio. La preferencia anterior se conserva.';
