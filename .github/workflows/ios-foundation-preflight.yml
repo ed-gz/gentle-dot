@@ -1,0 +1,30 @@
+name: Capri Foundation Models preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit in ed-gz/gentle-dot
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  foundation-probe:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: Validate source identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: '[[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Checkout pinned source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ed-gz/gentle-dot
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Probe Spanish inference without downloading assets
+        run: bash apps/ios/scripts/check-foundation-model-spanish.sh
