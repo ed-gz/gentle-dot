@@ -169,6 +169,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/VoiceRecoveryJournal.swift \
   plugin-perception/ios/Sources/VoiceRetentionBinding.swift \
   plugin-perception/ios/Sources/VoiceRetainedInspection.swift \
+  plugin-perception/ios/Sources/VoiceIncompleteExporter.swift \
   plugin-perception/ios/Sources/VoiceTranscriptBounds.swift \
   plugin-perception/ios/Sources/VoiceNativeReceipt.swift \
   plugin-perception/ios/Sources/VoiceOwners.swift \

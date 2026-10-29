@@ -7,6 +7,7 @@ fn main() {
         "cancel_voice",
         "inspect_retained_voice",
         "discard_retained_voice",
+        "export_incomplete_voice",
         "attach_retained_voice",
         "list_voice_receipts",
         "get_voice_receipt",

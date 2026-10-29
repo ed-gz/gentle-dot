@@ -9,14 +9,42 @@ private struct VoiceOwnerArgs: Decodable { let ownerId: String?; let retainDesti
 private struct RetainedVoiceArgs: Decodable { let record: VoiceRecoveryRecord }
 private struct VoiceReceiptArgs: Decodable { let receipt: VoiceNativeReceipt }
 private struct VoiceReceiptSessionArgs: Decodable { let sessionId: String }
+private struct IncompleteVoiceExportReply: Encodable {
+    let ok: Bool
+    let exported: Bool?
+    let cancelled: Bool?
+    let error: String?
+    let message: String?
+    static func failure() -> Self { Self(ok: false, exported: nil, cancelled: nil, error: "export_unconfirmed", message: "No pude confirmar la exportación. Revisa el estado del audio.") }
+}
 
 final class PerceptionPlugin: Plugin {
     private var voice: AnyObject?
     private var document: DocumentOperation?
     private var pairingCode: DocumentOperation?
     private var observers: [NSObjectProtocol] = []
+    private weak var exportWebview: WKWebView?
+    private var incompleteExporter: VoiceIncompleteExporter?
+    private var incompleteExportBusy = false
+    private var incompleteTemporary: URL?
+    private var incompleteExportInitialized = false
+    private let incompleteExportRoot = FileManager.default.temporaryDirectory.appendingPathComponent("capri-incomplete-voice-exports", isDirectory: true)
+
+    private func removeIncompleteCopy(_ url: URL) -> Bool {
+        do { try FileManager.default.removeItem(at: url); return true }
+        catch {
+            let issue = error as NSError
+            return issue.domain == NSCocoaErrorDomain && issue.code == NSFileNoSuchFileError
+        }
+    }
 
     @objc override func load(webview: WKWebView) {
+        exportWebview = webview
+        if !incompleteExportInitialized {
+            // These are protected copies only, never the journal source. A
+            // force-killed picker cannot clean them until the next launch.
+            incompleteExportInitialized = removeIncompleteCopy(incompleteExportRoot)
+        }
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification,
             object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in
@@ -43,6 +71,7 @@ final class PerceptionPlugin: Plugin {
 
     deinit {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        if let directory = incompleteTemporary { try? FileManager.default.removeItem(at: directory) }
         document?.cancel()
         pairingCode?.cancel()
     }
@@ -126,6 +155,52 @@ final class PerceptionPlugin: Plugin {
         Task { @MainActor in
             if #available(iOS 26.0, *) { invoke.resolve(await controller().discardRetained(args.record)) }
             else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
+        }
+    }
+    @objc func exportIncompleteVoice(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(RetainedVoiceArgs.self), args.record.state == .capturing else {
+            invoke.resolve(IncompleteVoiceExportReply.failure()); return
+        }
+        Task { @MainActor in
+            guard #available(iOS 26.0, *), !self.incompleteExportBusy, self.incompleteExporter == nil,
+                  UIApplication.shared.applicationState == .active else { invoke.resolve(IncompleteVoiceExportReply.failure()); return }
+            if let pending = self.incompleteTemporary {
+                guard self.removeIncompleteCopy(pending) else { invoke.resolve(IncompleteVoiceExportReply.failure()); return }
+                self.incompleteTemporary = nil
+            }
+            if !self.incompleteExportInitialized {
+                guard self.removeIncompleteCopy(self.incompleteExportRoot) else { invoke.resolve(IncompleteVoiceExportReply.failure()); return }
+                self.incompleteExportInitialized = true
+            }
+            self.incompleteExportBusy = true
+            let directory = self.incompleteExportRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            self.incompleteTemporary = directory
+            do {
+                try FileManager.default.createDirectory(at: self.incompleteExportRoot, withIntermediateDirectories: true, attributes: [.protectionKey: FileProtectionType.complete])
+                let attributes = try self.incompleteExportRoot.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard attributes.isDirectory == true, attributes.isSymbolicLink != true else { throw VoiceRecoveryJournalError.invalid }
+                var root = self.incompleteExportRoot, values = URLResourceValues(); values.isExcludedFromBackup = true; try root.setResourceValues(values)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.protectionKey: FileProtectionType.complete])
+                let copy = directory.appendingPathComponent("capri-audio-incompleto.caf")
+                try await self.controller().copyIncompleteForExport(args.record, to: copy)
+                guard let presenter = self.exportWebview?.window?.rootViewController else { throw VoiceRecoveryJournalError.busy }
+                let exporter = VoiceIncompleteExporter(file: copy) { [weak self] result in
+                    if let self {
+                        self.incompleteTemporary = self.removeIncompleteCopy(directory) ? nil : directory
+                        self.incompleteExporter = nil; self.incompleteExportBusy = false
+                    } else { try? FileManager.default.removeItem(at: directory) }
+                    switch result {
+                    case .success(let exported): invoke.resolve(IncompleteVoiceExportReply(ok: true, exported: exported, cancelled: !exported, error: nil, message: nil))
+                    case .failure: invoke.resolve(IncompleteVoiceExportReply.failure())
+                    }
+                }
+                self.incompleteExporter = exporter
+                try exporter.present(from: presenter)
+            } catch {
+                self.incompleteTemporary = self.removeIncompleteCopy(directory) ? nil : directory
+                self.incompleteExporter = nil; self.incompleteExportBusy = false
+                invoke.resolve(IncompleteVoiceExportReply.failure())
+            }
         }
     }
     @objc func attachRetainedVoice(_ invoke: Invoke) {

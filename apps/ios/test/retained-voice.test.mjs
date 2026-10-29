@@ -173,3 +173,19 @@ test('pending native discard is retried by identity and never attached as audio'
   const ambiguous = createRetainedVoiceBridge(async () => ({ ok: true, retainedAudio: capturing(), discardPending: capturing() }));
   await assert.rejects(ambiguous.inspectState());
 });
+
+test('incomplete audio export sends only the exact record and requires a picker result', async () => {
+  const calls = [];
+  let response = { ok: true, exported: true, cancelled: false };
+  const bridge = createRetainedVoiceBridge(async (command, args) => { calls.push({ command, args }); return response; });
+  assert.equal(await bridge.exportIncomplete(capturing()), 'exported');
+  assert.deepEqual(calls, [{ command: 'export_incomplete_voice', args: { record: capturing() } }]);
+  response = { ok: true, exported: false, cancelled: true };
+  assert.equal(await bridge.exportIncomplete(capturing()), 'cancelled');
+  for (const bad of [{ ok: true }, { ok: true, exported: true, cancelled: true }, { ok: false, exported: true, cancelled: false }]) {
+    response = bad; await assert.rejects(bridge.exportIncomplete(capturing()));
+  }
+  const count = calls.length;
+  await assert.rejects(bridge.exportIncomplete(ready()));
+  assert.equal(calls.length, count);
+});

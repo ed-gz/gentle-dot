@@ -365,6 +365,16 @@
           "const": "deny-discard-voice-receipt"
         },
         {
+          "description": "Enables the export_incomplete_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-incomplete-voice"
+        },
+        {
+          "description": "Denies the export_incomplete_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-incomplete-voice"
+        },
+        {
           "description": "Enables the get_voice_receipt command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-voice-receipt"

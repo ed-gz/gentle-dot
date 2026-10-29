@@ -99,6 +99,16 @@ export function createRetainedVoiceBridge(call: typeof native = native, deadline
       // have lost the reply, so absence alone is not treated as success here.
       reply(await call('discard_retained_voice', { record: inspected.state === 'none' ? expected : inspected.record }));
     },
+    /** User-initiated export of the interrupted bytes. The native picker owns
+     * the destination; this never exposes a sandbox path or claims valid audio. */
+    async exportIncomplete(input: unknown): Promise<'exported' | 'cancelled'> {
+      const expected = parseRetainedVoiceRecord(input);
+      if (expected.state !== 'capturing') throw recordError();
+      const value = reply(await call('export_incomplete_voice', { record: expected }));
+      if (value.exported === true && value.cancelled === false) return 'exported';
+      if (value.exported === false && value.cancelled === true) return 'cancelled';
+      throw new Error('El selector no confirmó la exportación del audio incompleto.');
+    },
     async stop(input: unknown): Promise<RetainedVoiceResult> {
       const expected = parseRetainedVoiceRecord(input);
       const raw = await call('stop_voice', { sessionId: expected.id, ownerId: expected.owner, retainDestination: expected.destination });

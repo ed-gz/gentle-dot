@@ -269,6 +269,50 @@ final class VoiceRecoveryJournal {
         } }
     }
 
+    /// Copy a stopped, incomplete capture to a caller-owned protected export
+    /// file. This proves only that the bytes stayed unchanged during copying;
+    /// it does not claim that the interrupted CAF is complete or playable.
+    /// The caller must first drain the native recorder and own the destination.
+    func copyIncomplete(_ expected: VoiceRecoveryRecord, to destination: URL, afterChunk: () throws -> Void = {}) throws {
+        try locked {
+          try withFileLock(shared: false) {
+            guard valid(expected), expected.state == .capturing,
+                  try readRecord(discardMarker) == nil, try read() == expected else { throw VoiceRecoveryJournalError.changed }
+            let (source, before) = try audioIdentity(expected)
+            let sourceFD = source.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+            guard sourceFD >= 0 else { throw VoiceRecoveryJournalError.invalidAudio }
+            let input = FileHandle(fileDescriptor: sourceFD, closeOnDealloc: true)
+            defer { try? input.close() }
+            var sourceStat = stat()
+            guard fstat(sourceFD, &sourceStat) == 0, sourceStat.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), sourceStat.st_nlink == 1,
+                  UInt64(truncatingIfNeeded: sourceStat.st_dev) == before.device,
+                  UInt64(truncatingIfNeeded: sourceStat.st_ino) == before.inode else { throw VoiceRecoveryJournalError.changed }
+            let targetFD = destination.path.withCString { open($0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600)) }
+            guard targetFD >= 0 else { throw VoiceRecoveryJournalError.invalid }
+            let output = FileHandle(fileDescriptor: targetFD, closeOnDealloc: true)
+            var keep = false
+            defer { try? output.close(); if !keep { try? manager.removeItem(at: destination) } }
+            #if os(iOS)
+            try manager.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: destination.path)
+            #endif
+            var bytes: Int64 = 0, hash = SHA256()
+            while let chunk = try input.read(upToCount: 65_536), !chunk.isEmpty {
+                bytes += Int64(chunk.count)
+                guard bytes <= maxAudioBytes else { throw VoiceRecoveryJournalError.invalidAudio }
+                hash.update(data: chunk); try output.write(contentsOf: chunk); try afterChunk()
+            }
+            guard bytes == before.byteCount, hash.finalize().map({ String(format: "%02x", $0) }).joined() == before.sha256 else { throw VoiceRecoveryJournalError.changed }
+            let (_, after) = try audioIdentity(expected)
+            guard after == before, try readRecord(discardMarker) == nil, try read() == expected else { throw VoiceRecoveryJournalError.changed }
+            try output.synchronize()
+            #if canImport(Darwin)
+            guard fcntl(targetFD, F_FULLFSYNC) == 0 else { throw VoiceRecoveryJournalError.invalid }
+            #endif
+            keep = true
+          }
+        }
+    }
+
     /// Exact user-authorized discard with a durable intent. A caller must
     /// surface `pendingDiscard()` before enabling this operation in the app.
     func discardDurably(_ expected: VoiceRecoveryRecord) throws {

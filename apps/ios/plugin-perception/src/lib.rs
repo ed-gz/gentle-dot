@@ -223,6 +223,17 @@ async fn discard_retained_voice<R: Runtime>(
 }
 
 #[tauri::command]
+async fn export_incomplete_voice<R: Runtime>(
+    app: AppHandle<R>,
+    record: RetainedVoiceRecord,
+) -> Result<Value, String> {
+    if !valid_retained_voice(&record) || record.state != "capturing" {
+        return Err("invalid_voice_retention".into());
+    }
+    native_call(app, "exportIncompleteVoice", json!({"record": record})).await
+}
+
+#[tauri::command]
 async fn attach_retained_voice<R: Runtime>(
     app: AppHandle<R>,
     record: RetainedVoiceRecord,
@@ -311,6 +322,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             cancel_voice,
             inspect_retained_voice,
             discard_retained_voice,
+            export_incomplete_voice,
             attach_retained_voice,
             list_voice_receipts,
             get_voice_receipt,

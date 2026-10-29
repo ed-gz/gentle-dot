@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-export-incomplete-voice"
+description = "Enables the export_incomplete_voice command without any pre-configured scope."
+commands.allow = ["export_incomplete_voice"]
+
+[[permission]]
+identifier = "deny-export-incomplete-voice"
+description = "Denies the export_incomplete_voice command without any pre-configured scope."
+commands.deny = ["export_incomplete_voice"]

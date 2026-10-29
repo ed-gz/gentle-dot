@@ -971,6 +971,22 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         }
     }
 
+    /// Stop and drain the exact owner before copying the interrupted source.
+    /// A copied CAF is not asserted to be complete, decodable or playable.
+    func copyIncompleteForExport(_ expected: VoiceRecoveryRecord, to destination: URL) async throws {
+        guard expected.state == .capturing else { throw VoiceRecoveryJournalError.invalid }
+        guard case .confirmed = await cancelAndConfirm(ownerID: expected.owner) else { throw VoiceRecoveryJournalError.busy }
+        guard sessionID == nil, !busy, !startLatch.active, !retentionLatch.active,
+              !cancellationBarrier.active, pendingCancellation == nil,
+              UIApplication.shared.applicationState == .active,
+              let root = VoiceRetentionBinding.defaultRoot() else { throw VoiceRecoveryJournalError.busy }
+        busy = true; startLatch.begin()
+        defer { startLatch.end(); busy = false }
+        try await Task.detached {
+            try VoiceRecoveryJournal(root: root).copyIncomplete(expected, to: destination)
+        }.value
+    }
+
     func listVoiceReceipts() async -> VoiceReceiptReply {
         guard let root = VoiceNativeReceiptStore.defaultRoot() else { return .failure() }
         do { let values = try await Task.detached { try VoiceNativeReceiptStore(root: root).list() }.value; return VoiceReceiptReply(ok: true, receipts: values) }
