@@ -1829,7 +1829,7 @@ element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
     const pending: PairingPending = { ticket, epoch, connection, previous };
     pairingSavePending = pending;
     await connectionSelection.stage(ticket, connection);
-    element('pairing-status').textContent = 'La laptop aprobó el acceso. Comprobando la conexión…';
+    element('pairing-status').textContent = 'La laptop entregó el acceso. Comprobando la conexión…';
     await startPairingHandshake(pending);
   } catch (error) {
     if (ticket !== undefined && !accepted) try { await connectionSelection.rollback(ticket); } catch { /* Keep the pending marker rather than restoring another credential. */ }

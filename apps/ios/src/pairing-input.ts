@@ -37,7 +37,7 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
   const first = document.createElement('li'); first.textContent = 'Abre Gentle Dot en la laptop y conecta ambos dispositivos a Tailscale.';
   const second = document.createElement('li'); second.append('En la terminal de la laptop, dentro de la carpeta del proyecto, ejecuta ');
   const command = document.createElement('code'); command.textContent = 'pnpm mobile:connect'; second.append(command, '.');
-  const third = document.createElement('li'); third.textContent = 'Escanea el QR y aprueba el acceso en la laptop. El código vence en cinco minutos.';
+  const third = document.createElement('li'); third.textContent = 'Escanea el QR, revisa el equipo y pulsa Vincular iPhone. Si la laptop solicita aprobación, confírmala allí. El código vence en cinco minutos.';
   steps.append(first, second, third); instructions.append(summary, steps);
   const controls = document.createElement('div'); controls.className = 'pairing-scan-controls';
   const status = document.createElement('p'); status.className = 'pairing-scan-status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');

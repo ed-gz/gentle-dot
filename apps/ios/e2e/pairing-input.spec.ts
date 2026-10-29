@@ -350,8 +350,70 @@ test('first-time QR help provides the laptop command without starting pairing', 
   await help.focus(); await expect(help).toBeFocused(); await page.keyboard.press('Enter');
   await expect(page.getByText('pnpm mobile:connect', { exact: true })).toBeVisible();
   await expect(page.locator('.pairing-instructions')).toContainText('Tailscale');
-  await expect(page.locator('.pairing-instructions')).toContainText('aprueba el acceso');
+  await expect(page.locator('.pairing-instructions')).toContainText('pulsa Vincular iPhone');
+  await expect(page.locator('.pairing-instructions')).toContainText('Si la laptop solicita aprobación');
   await expect(page.getByRole('button', { name: 'Escanear QR', exact: true })).toBeEnabled();
   expect(await page.evaluate(() => (globalThis as any).pairSubmits)).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('token receipt does not claim human approval or persistence before handshake', async ({ page }) => {
+  let completeHandshake: (() => void) | undefined;
+  await page.routeWebSocket('wss://laptop.example.ts.net/ws', ws => {
+    let seq = 0;
+    ws.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.type === 'hello') completeHandshake = () => ws.send(JSON.stringify({ seq: seq++, type: 'ready', agentState: 'idle', conversationId: 'fixture' }));
+      if (message.type === 'get_history') ws.send(JSON.stringify({ seq: seq++, type: 'history', conversationId: 'fixture', messages: [] }));
+    });
+  });
+  await page.addInitScript(link => {
+    const state = globalThis as any; state.isTauri = true; state.pairCalls = 0; state.selectionMarker = undefined;
+    state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('|secret_get') && args.request.account === 'capri.selected-connection.v1') return { ok: true, value: state.selectionMarker };
+      if (command.endsWith('|secret_set') && args.request.account === 'capri.selected-connection.v1') { state.selectionMarker = args.request.value; return { ok: true }; }
+      if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: link };
+      if (command.endsWith('|pair_device')) { state.pairCalls++; return { ok: true, persisted: true, connection: { url: 'wss://laptop.example.ts.net/ws', token: 'a'.repeat(64), deviceId: 'device-1', name: 'Capri iPhone' } }; }
+      if (command.endsWith('|share_list') || command.endsWith('|documents_list') || command.endsWith('results_list')) return { ok: true, items: [] };
+      return { ok: true };
+    } };
+  }, link);
+  await page.goto('/'); await page.locator('[data-panel="settings"]').click();
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
+  expect(await page.evaluate(() => (globalThis as any).pairCalls)).toBe(0);
+  await page.getByRole('button', { name: 'Vincular iPhone', exact: true }).click();
+  await expect(page.locator('#pairing-status')).toHaveText('La laptop entregó el acceso. Comprobando la conexión…');
+  await expect(page.locator('#pairing-status')).not.toContainText('aprobó');
+  await expect(page.locator('#pairing-status')).not.toContainText('guardado');
+  await expect.poll(() => typeof completeHandshake).toBe('function'); completeHandshake!();
+  await expect(page.locator('#pairing-status')).toContainText('Acceso guardado en Keychain');
+  expect(await page.evaluate(() => (globalThis as any).pairCalls)).toBe(1);
+});
+
+test('confirmed pairing reconnects after reload without redeeming the invitation again', async ({ page }) => {
+  let sockets = 0;
+  await page.routeWebSocket('wss://laptop.example.ts.net/ws', ws => {
+    sockets++; let seq = 0;
+    ws.onMessage(raw => { const message = JSON.parse(String(raw));
+      if (message.type === 'hello') ws.send(JSON.stringify({ seq: seq++, type: 'ready', agentState: 'idle', conversationId: 'fixture' }));
+      if (message.type === 'get_history') ws.send(JSON.stringify({ seq: seq++, type: 'history', conversationId: 'fixture', messages: [] }));
+    });
+  });
+  await page.addInitScript(link => {
+    const state = globalThis as any; state.isTauri = true;
+    state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('|secret_get')) return { ok: true, value: localStorage.getItem('fixture-secret:' + args.request.account) };
+      if (command.endsWith('|secret_set')) { localStorage.setItem('fixture-secret:' + args.request.account, args.request.value); return { ok: true }; }
+      if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: link };
+      if (command.endsWith('|pair_device')) { localStorage.setItem('fixture-pairs', String(Number(localStorage.getItem('fixture-pairs') || 0) + 1)); return { ok: true, persisted: true, connection: { url: 'wss://laptop.example.ts.net/ws', token: 'a'.repeat(64), deviceId: 'device-1', name: 'Capri iPhone' } }; }
+      if (command.endsWith('|share_list') || command.endsWith('|documents_list') || command.endsWith('results_list')) return { ok: true, items: [] };
+      return { ok: true };
+    } };
+  }, link);
+  await page.goto('/'); await page.locator('[data-panel="settings"]').click();
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click(); await page.getByRole('button', { name: 'Vincular iPhone', exact: true }).click();
+  await expect(page.locator('#pairing-status')).toContainText('Acceso guardado en Keychain');
+  await page.reload(); await expect.poll(() => sockets).toBe(2);
+  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+  expect(await page.evaluate(() => localStorage.getItem('fixture-pairs'))).toBe('1');
 });
