@@ -2,7 +2,7 @@ import Foundation
 
 @main
 struct VoiceOwnersTests {
-    static func main() {
+    @MainActor static func main() async {
         var owners = VoiceOwners()
         // Old cancellation arrives before old start, then a new operation starts.
         precondition(!owners.cancel("old"))
@@ -34,6 +34,26 @@ struct VoiceOwnersTests {
         precondition(!VoiceRecoveryAttempt.mayFinish(caller: nil, bound: "attempt-b", active: recovery.active))
         precondition(VoiceRecoveryAttempt.mayFinish(caller: "ATTEMPT-B", bound: "attempt-b", active: recovery.active))
         precondition(VoiceRecoveryAttempt.mayFinish(caller: nil, bound: nil, active: "capture"))
+        // A suspension may happen while audio identity is verified off actor.
+        // The current generation must be read *after* verification completes.
+        var allowed = true
+        var verificationStarted = false
+        var resumeVerification: CheckedContinuation<Bool, Never>?
+        let check = Task { @MainActor in
+            verificationStarted = true
+            let verified = await withCheckedContinuation { resumeVerification = $0 }
+            return VoiceRecoveryAttempt.mayPrepare(verified: verified, epoch: 0, currentEpoch: allowed ? 0 : 1,
+                                                   foreground: allowed, cancelled: false)
+        }
+        while !verificationStarted { await Task.yield() }
+        allowed = false
+        resumeVerification?.resume(returning: true)
+        let suspended = await check.value
+        precondition(!suspended, "suspension during verification cannot authorize preparation")
+        allowed = true
+        let permitted = VoiceRecoveryAttempt.mayPrepare(verified: true, epoch: 0, currentEpoch: 0, foreground: true, cancelled: false)
+        let missing = VoiceRecoveryAttempt.mayPrepare(verified: false, epoch: 0, currentEpoch: 0, foreground: true, cancelled: false)
+        precondition(permitted && !missing)
         // A flood of abandoned cancellations remains bounded and fails closed.
         var bounded = VoiceOwners()
         for number in 0...4096 { _ = bounded.cancel("cancelled-\(number)") }

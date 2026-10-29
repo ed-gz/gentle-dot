@@ -34,14 +34,14 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
   const [discarding, setDiscarding] = useState(false);
   const [draft, setDraft] = useState<{ id: number; text: string; receipt?: NativeVoiceReceipt }>();
   const pendingReceipt = useRef<{ id: number; receipt: NativeVoiceReceipt; destination: string } | undefined>(undefined);
-  const owner = useRef<{ epoch: number; session: string; ownerId: string; pending: boolean; retry: boolean; enabled: boolean; destination?: string; record?: RetainedVoiceRecord; needsAttach: boolean; discardPending: boolean; preparingRetained: boolean }>({ preparingRetained: false, epoch: 0, session: '', ownerId: '', pending: false, retry: false, enabled, destination, needsAttach: false, discardPending: false });
+  const owner = useRef<{ epoch: number; session: string; ownerId: string; pending: boolean; retry: boolean; enabled: boolean; destination?: string; record?: RetainedVoiceRecord; needsAttach: boolean; discardPending: boolean; preparingRetained: boolean; preparingAssets: boolean }>({ preparingAssets: false, preparingRetained: false, epoch: 0, session: '', ownerId: '', pending: false, retry: false, enabled, destination, needsAttach: false, discardPending: false });
   owner.current.enabled = enabled;
   owner.current.destination = destination;
   const release = useCallback((discardRetry: boolean, forceCancel = false) => {
     const state = owner.current;
     const ownerId = state.ownerId;
     const retainAudio = state.retry && !discardRetry && !forceCancel && !state.preparingRetained;
-    state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false; state.retry = false; state.record = undefined; state.needsAttach = false; state.discardPending = false; state.preparingRetained = false;
+    state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false; state.retry = false; state.record = undefined; state.needsAttach = false; state.discardPending = false; state.preparingRetained = false; state.preparingAssets = false;
     setPhase('idle'); setPreparing(false); setElapsed(0); setLevel(0); setPartial(''); setDraft(undefined); setNote(undefined); setRetryPending(false); setRetryCancellation(false);
     if (ownerId && !retainAudio) {
       // Navigation can outlive the cancellation callback. Keep the original
@@ -136,7 +136,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
   useEffect(() => {
     // A native permission dialog may obscure the web view before a capture is
     // established. The native controller handles real background transitions.
-    const hidden = () => { if (document.hidden && owner.current.preparingRetained) cancelPending(); else if (document.hidden && owner.current.session && !owner.current.retry) cancel(); };
+    const hidden = () => { if (document.hidden && (owner.current.preparingRetained || owner.current.preparingAssets)) cancelPending(); else if (document.hidden && owner.current.session && !owner.current.retry) cancel(); };
     document.addEventListener('visibilitychange', hidden);
     return () => document.removeEventListener('visibilitychange', hidden);
   }, [cancel, cancelPending]);
@@ -253,8 +253,11 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       }
       if (current.status === 'assets_required') {
         setNote('Descargando la voz en español de Apple. Necesitas internet para esta primera preparación…');
-        const prepared = await prepareVoice(ownerId);
-        if (state.epoch !== epoch || !state.enabled) return;
+        state.preparingAssets = true;
+        let prepared;
+        try { prepared = await prepareVoice(ownerId); }
+        finally { if (state.epoch === epoch) state.preparingAssets = false; }
+        if (state.epoch !== epoch || !state.enabled || document.hidden) return;
         setAvailability(prepared);
         if (!prepared.available) throw new Error(voiceAvailabilityNote(prepared) ?? 'Apple aún no terminó de preparar la voz. Comprueba la conexión y vuelve a intentarlo.');
       }

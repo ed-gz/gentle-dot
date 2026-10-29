@@ -600,6 +600,7 @@ let voiceStarting = false;
 let retainedVoiceRecord: RetainedVoiceRecord | undefined;
 let retainedVoiceNeedsAttach = false;
 let retainedVoicePreparing = false;
+let voicePreparingAssets = false;
 let retainedDiscardPending = false;
 const retainedVoiceBridge = createRetainedVoiceBridge();
 const nativeVoiceReceipts = createNativeVoiceReceipts();
@@ -1338,7 +1339,7 @@ document.addEventListener('visibilitychange', () => {
     // microphone request is still pending. Native iOS lifecycle handling
     // cancels an actual background transition; do not invalidate that prompt.
     // Also avoid cancelling a capture owned by the laptop-session composer.
-    if (retainedVoicePreparing || (foreignAudioBusy && voiceOwner) || (voiceSession && !voiceRetry)) void cancelDictation();
+    if (voicePreparingAssets || retainedVoicePreparing || (foreignAudioBusy && voiceOwner) || (voiceSession && !voiceRetry)) void cancelDictation();
     director.update(intent, performance.now(), true); linked.suspend();
   }
   else { if (rigNeedsPreparation && image && !preparingRig) void startRig(); lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void recoverPendingVoice(); if (isTauri()) void voiceRecovery.refresh(); void completionNotifications.refresh(); void lockScreenSettings?.refresh(); }
@@ -1637,7 +1638,8 @@ async function cancelDictation(reason: 'navigation' | 'manual' = 'navigation') {
   if (voiceCancelPending) return;
   const wasActive = voiceStarting || Boolean(voiceSession);
   const owner = voiceOwner; voiceOwner = undefined;
-  uncertainVoicePreparation = retainedVoicePreparing;
+  uncertainVoicePreparation = retainedVoicePreparing || voicePreparingAssets;
+  voicePreparingAssets = false;
   const cancellingForeignPreparation = foreignAudioBusy && Boolean(owner);
   retainedVoicePreparing = false;
   if (cancellingForeignPreparation) {
@@ -1750,7 +1752,11 @@ element('dictate').addEventListener('click', async () => {
       }
       if (availability.status === 'assets_required') {
         element('voice-status').textContent = 'Descargando la voz en español de Apple. Necesitas internet para esta primera preparación…';
-        const prepared = await prepareVoice(owner);
+        voicePreparingAssets = true;
+        let prepared;
+        try { prepared = await prepareVoice(owner); }
+        finally { if (current === voiceGeneration) voicePreparingAssets = false; }
+        if (current !== voiceGeneration || document.hidden) return;
         if (!prepared.available) throw new Error(voiceAvailabilityNote(prepared) ?? 'Apple aún no terminó de preparar la voz en español. Comprueba la conexión y vuelve a intentarlo.');
       }
       if (current !== voiceGeneration) return;

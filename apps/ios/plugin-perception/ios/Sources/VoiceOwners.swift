@@ -30,6 +30,11 @@ struct VoiceOwners {
 /// The caller must name the exact live attempt when resuming a retained file.
 /// A callback from an older attempt cannot start analysis for its successor.
 enum VoiceRecoveryAttempt {
+    /// All state is sampled synchronously after the async verification.
+    static func mayPrepare(verified: Bool, epoch: Int, currentEpoch: Int, foreground: Bool, cancelled: Bool) -> Bool {
+        verified && epoch == currentEpoch && foreground && !cancelled
+    }
+
     static func mayFinish(caller: String?, bound: String?, active: String?) -> Bool {
         guard let bound else { return caller == nil }
         guard let caller, let active else { return false }

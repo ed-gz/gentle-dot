@@ -303,25 +303,27 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     }
 
     func prepare(ownerID: String? = nil) async -> VoiceReply {
-        guard !busy, sessionID == nil, !cancellationBarrier.active, pendingCancellation == nil else { return .failure("busy", "Termina o cancela el comando de voz actual.") }
+        guard !busy, sessionID == nil, !startLatch.active, !retentionLatch.active, !cancellationBarrier.active, pendingCancellation == nil else { return .failure("busy", "Termina o cancela el comando de voz actual.") }
         guard UIApplication.shared.applicationState == .active else { return .failure("not_foreground", "Abre Capri para preparar la voz.") }
         if let ownerID, !owners.claim(ownerID) { return .failure("cancelled", "Ese dictado fue cancelado o sustituido.") }
-        busy = true
+        busy = true; startLatch.begin()
         let epoch = generation
         var prepared = false
-        defer { busy = false; if let ownerID { owners.finishAttempt(ownerID, succeeded: prepared) } }
+        defer { startLatch.end(); busy = false; if let ownerID { owners.finishAttempt(ownerID, succeeded: prepared) } }
         guard let selected = await preferredTranscriber() else {
             return .failure("unsupported_language", "Este iPhone no ofrece SpeechAnalyzer en español.")
         }
-        guard epoch == generation else { return .failure("cancelled", "Preparación cancelada.") }
+        guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else { return .failure("cancelled", "Preparación cancelada.") }
         do {
             let module = makeTranscriber(for: selected.locale, kind: selected.kind)
             let preview = makeTranscriber(for: selected.locale, kind: selected.kind, incremental: true)
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [module.module, preview.module]) {
+                guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else { return .failure("cancelled", "Preparación cancelada.") }
                 try await request.downloadAndInstall()
             }
-            guard epoch == generation, !Task.isCancelled else { return .failure("cancelled", "Preparación cancelada.") }
+            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else { return .failure("cancelled", "Preparación cancelada.") }
             let state = await check()
+            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else { return .failure("cancelled", "Preparación cancelada.") }
             prepared = state.available == true
             return state
         } catch {
@@ -813,6 +815,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     func cancel() {
         guard pendingCancellation == nil, !cancellationBarrier.active else { return }
         let cancelledOwner = owners.active
+        if let cancelledOwner { _ = owners.cancel(cancelledOwner) }
         let url = recordingURL ?? pendingStartURL
         let retainedBinding = retentionBinding
         let lease = retainedLease
@@ -931,8 +934,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             guard case .success = await work.result else { return false }
             return true
         }
-        guard await currentMatches(), epoch == generation, !Task.isCancelled,
-              UIApplication.shared.applicationState == .active else {
+        let initialVerification = await currentMatches()
+        guard VoiceRecoveryAttempt.mayPrepare(verified: initialVerification, epoch: epoch, currentEpoch: generation,
+                                             foreground: UIApplication.shared.applicationState == .active, cancelled: Task.isCancelled) else {
             return .failure("retention_changed", "No pude verificar el audio guardado. Revisa su estado.")
         }
         let locale = Locale(identifier: expected.locale)
@@ -942,24 +946,46 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             return .failure("cancelled", "Preparación interrumpida. El audio se conserva.")
         }
         if state != .installed && state != .supported {
+            let verifiedStatus = await currentMatches()
+            guard VoiceRecoveryAttempt.mayPrepare(verified: verifiedStatus, epoch: epoch, currentEpoch: generation,
+                                                 foreground: UIApplication.shared.applicationState == .active, cancelled: Task.isCancelled) else {
+                return .failure("cancelled", "Preparación interrumpida. Revisa el audio guardado.")
+            }
             return VoiceReply(ok: true, available: false, status: state.status, locale: expected.locale, assetsInstalled: false)
         }
         do {
+            let beforeReserve = await currentMatches()
+            guard VoiceRecoveryAttempt.mayPrepare(verified: beforeReserve, epoch: epoch, currentEpoch: generation,
+                                                 foreground: UIApplication.shared.applicationState == .active, cancelled: Task.isCancelled) else {
+                return .failure("cancelled", "Preparación interrumpida. Revisa el audio guardado.")
+            }
             try await AssetInventory.reserve(locale: locale)
-            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active,
-                  await currentMatches() else { return .failure("cancelled", "Preparación interrumpida. Revisa el audio guardado.") }
+            let afterReserve = await currentMatches()
+            guard VoiceRecoveryAttempt.mayPrepare(verified: afterReserve, epoch: epoch, currentEpoch: generation,
+                                                 foreground: UIApplication.shared.applicationState == .active, cancelled: Task.isCancelled) else {
+                return .failure("cancelled", "Preparación interrumpida. Revisa el audio guardado.")
+            }
             let module = makeTranscriber(for: locale, kind: kind)
             let preview = makeTranscriber(for: locale, kind: kind, incremental: true)
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [module.module, preview.module]) {
-                guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active,
-                      await currentMatches() else { return .failure("cancelled", "Preparación interrumpida. Revisa el audio guardado.") }
+                let beforeDownload = await currentMatches()
+                guard VoiceRecoveryAttempt.mayPrepare(verified: beforeDownload, epoch: epoch, currentEpoch: generation,
+                                                     foreground: UIApplication.shared.applicationState == .active, cancelled: Task.isCancelled) else {
+                    return .failure("cancelled", "Preparación interrumpida. Revisa el audio guardado.")
+                }
                 try await request.downloadAndInstall()
             }
-            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active,
-                  await currentMatches() else { return .failure("cancelled", "Preparación interrumpida o audio cambiado. Revisa su estado.") }
+            let afterDownload = await currentMatches()
+            guard VoiceRecoveryAttempt.mayPrepare(verified: afterDownload, epoch: epoch, currentEpoch: generation,
+                                                 foreground: UIApplication.shared.applicationState == .active, cancelled: Task.isCancelled) else {
+                return .failure("cancelled", "Preparación interrumpida o audio cambiado. Revisa su estado.")
+            }
             let finalState = await assetState(locale, kind: kind)
-            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active,
-                  await currentMatches() else { return .failure("retention_changed", "El audio cambió. Revisa su estado.") }
+            let beforeReply = await currentMatches()
+            guard VoiceRecoveryAttempt.mayPrepare(verified: beforeReply, epoch: epoch, currentEpoch: generation,
+                                                 foreground: UIApplication.shared.applicationState == .active, cancelled: Task.isCancelled) else {
+                return .failure("retention_changed", "El audio cambió. Revisa su estado.")
+            }
             return VoiceReply(ok: true, available: finalState == .installed, status: finalState.status, locale: expected.locale, assetsInstalled: finalState == .installed)
         } catch {
             return .failure(epoch == generation ? "asset_download_failed" : "cancelled", "No se completó la preparación de voz. El audio se conserva; revisa la conexión y el espacio.")

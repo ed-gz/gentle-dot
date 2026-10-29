@@ -1135,3 +1135,53 @@ test('a ready retained recording remains recoverable after its capture owner was
   await expect(page.locator('#prompt')).toHaveValue('Audio recuperado');
   const final=await page.evaluate(() => (globalThis as any).ownerCalls); expect(final[1][1]).toBe(final[0][1]);
 });
+
+test('background during first voice asset preparation fences the owner and ignores a late result', async ({page}) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke; state.assetActions=[];
+    state.__TAURI_INTERNALS__.invoke=async(command:string,args:any)=>{
+      if(command.endsWith('check_voice')) return {available:false,status:'assets_required',assetsInstalled:false,microphonePermission:'granted'};
+      if(command.endsWith('prepare_voice')) {state.assetActions.push(['prepare',args.ownerId]);return await new Promise(resolve=>{state.finishAssetPreparation=resolve;});}
+      if(command.endsWith('cancel_voice')) {state.assetActions.push(['cancel',args.ownerId]);return {ok:true};}
+      if(command.endsWith('start_voice')) {state.assetActions.push(['start',args.ownerId]);return {ok:false};}
+      if(command.endsWith('inspect_retained_voice')) return {ok:true,retainedAudio:null};
+      if(command.endsWith('list_voice_receipts')) return {ok:true,receipts:[]};
+      return previous(command,args);
+    };
+  });
+  await page.goto('/'); await page.locator('#dictate').click(); await expect(page.locator('#voice-status')).toContainText('Descargando');
+  const owner=await page.evaluate(()=>(globalThis as any).assetActions[0][1]);
+  await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));});
+  await expect.poll(()=>page.evaluate(()=>(globalThis as any).assetActions)).toContainEqual(['cancel',owner]);
+  await page.evaluate(()=>{(globalThis as any).finishAssetPreparation({ok:true,available:true,status:'available',assetsInstalled:true});});
+  expect(await page.evaluate(()=>(globalThis as any).assetActions.some((x:any)=>x[0]==='start'))).toBe(false);
+});
+
+test('background during retained language preparation keeps the exact audio and rejects the late reply', async ({page}) => {
+  await nativeFixture(page);
+  await page.addInitScript(()=>{
+    const state=globalThis as any, previous=state.__TAURI_INTERNALS__.invoke;
+    state.audio={id:'12345678-1234-1234-1234-123456789012',owner:'abcdef03-abcd-4bcd-8bcd-abcdef012345',destination:'chat',locale:'es-MX',kind:'speech',createdAt:1,state:'ready',byteCount:10,sha256:'a'.repeat(64)};state.assetActions=[];
+    state.__TAURI_INTERNALS__.invoke=async(command:string,args:any)=>{
+      if(command.endsWith('inspect_retained_voice'))return {ok:true,retainedAudio:state.audio};
+      if(command.endsWith('list_voice_receipts'))return {ok:true,receipts:[]};
+      if(command.endsWith('get_voice_receipt'))return {ok:true,receipt:null};
+      if(command.endsWith('check_voice'))return {available:false,status:'assets_required',assetsInstalled:false,microphonePermission:'granted'};
+      if(command.endsWith('attach_retained_voice')){state.assetActions.push('attach');return {ok:false,error:'assets_required'};}
+      if(command.endsWith('prepare_retained_voice')){state.assetActions.push(['prepare',args.ownerId]);return await new Promise(resolve=>{state.finishAssetPreparation=resolve;});}
+      if(command.endsWith('cancel_voice')){state.assetActions.push(['cancel',args.ownerId]);return {ok:true};}
+      if(command.endsWith('discard_retained_voice')){state.assetActions.push('discard');state.audio=null;return {ok:true};}
+      return previous(command,args);
+    };
+  });
+  await page.goto('/'); await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción'); await page.locator('#dictate').click();
+  await expect(page.locator('#voice-status')).toContainText('Necesitas internet');
+  const snapshot=await page.evaluate(()=>({audio:(globalThis as any).audio,owner:(globalThis as any).assetActions[1][1]}));
+  await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));});
+  await expect.poll(()=>page.evaluate(()=>(globalThis as any).assetActions)).toContainEqual(['cancel',snapshot.owner]);
+  await page.evaluate(()=>{(globalThis as any).finishAssetPreparation({ok:true,available:true,status:'available',locale:'es-MX',assetsInstalled:true});});
+  expect(await page.evaluate(()=>(globalThis as any).audio)).toEqual(snapshot.audio);
+  expect(await page.evaluate(()=>(globalThis as any).assetActions.filter((x:any)=>x==='attach').length)).toBe(1);
+  expect(await page.evaluate(()=>(globalThis as any).assetActions)).not.toContain('discard');
+});

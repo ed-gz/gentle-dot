@@ -291,3 +291,49 @@ test('audit cancelled retained audio stays in its session and retry uses a fresh
  const owners=await page.evaluate(()=>(globalThis as any).auditOwners);expect(owners).toHaveLength(2);expect(owners[0]).not.toBe(owners[1]);expect(owners).not.toContain('abcdef03-abcd-4bcd-8bcd-abcdef012345');
  await page.evaluate(()=>(globalThis as any).releaseOldAuditStop());await expect(input).toHaveValue('Texto previo\nRevisa la evidencia.');
 });
+
+test('background during first session asset preparation cancels the exact owner without starting capture', async ({page}) => {
+ await linkedPhone(page);
+ await page.evaluate(()=>{const state=globalThis as any, previous=state.__TAURI_INTERNALS__.invoke;state.voiceNeedsAssets=true;state.actions=[];
+  state.__TAURI_INTERNALS__.invoke=async(command:string,args:any)=>{
+   if(command.endsWith('prepare_voice')){state.actions.push(['prepare',args.ownerId]);return await new Promise(resolve=>{state.finishAssets=resolve;});}
+   if(command.endsWith('cancel_voice')){state.actions.push(['cancel',args.ownerId]);return {ok:true};}
+   if(command.endsWith('start_voice'))state.actions.push(['start',args.ownerId]);
+   return previous(command,args);
+  };
+ });
+ await page.locator('[data-panel="agents"]').click();await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+ const input=page.getByRole('textbox',{name:'Continuar esta sesión'});await input.fill('Texto previo');
+ await page.getByRole('button',{name:'Dictar mensaje'}).click(); await expect(page.getByText(/Descargando la voz/)).toBeVisible();
+ const owner=await page.evaluate(()=>(globalThis as any).actions[0][1]);
+ await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));});
+ await expect.poll(()=>page.evaluate(()=>(globalThis as any).actions)).toContainEqual(['cancel',owner]);
+ await page.evaluate(()=>(globalThis as any).finishAssets({ok:true,available:true,status:'available',assetsInstalled:true}));
+ await expect(input).toHaveValue('Texto previo');
+ expect(await page.evaluate(()=>(globalThis as any).actions.some((x:any)=>x[0]==='start'))).toBe(false);
+});
+
+test('background during retained session language preparation preserves audio and original session', async ({page}) => {
+ await linkedPhone(page);
+ await page.evaluate(async()=>{const state=globalThis as any,previous=state.__TAURI_INTERNALS__.invoke;const {sessionVoiceOrigin}=await import('/src/voice-origin.ts');
+  const destination=await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0']));
+  const record={id:'12345678-1234-1234-1234-123456789012',owner:'abcdef03-abcd-4bcd-8bcd-abcdef012345',destination,locale:'es-MX',kind:'speech',createdAt:1,state:'ready',byteCount:10,sha256:'a'.repeat(64)};
+  sessionStorage.setItem('session-voice-fixture',JSON.stringify({record,receipt:null}));state.actions=[];
+  state.__TAURI_INTERNALS__.invoke=async(command:string,args:any)=>{
+   if(command.endsWith('attach_retained_voice')){state.actions.push('attach');return {ok:false,error:'assets_required'};}
+   if(command.endsWith('prepare_retained_voice')){state.actions.push(['prepare',args.ownerId]);return await new Promise(resolve=>{state.finishAssets=resolve;});}
+   if(command.endsWith('cancel_voice')){state.actions.push(['cancel',args.ownerId]);return {ok:true};}
+   return previous(command,args);
+  };
+ });
+ await page.locator('[data-panel="agents"]').click();await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+ const input=page.getByRole('textbox',{name:'Continuar esta sesión'});await input.fill('Texto previo');
+ await page.getByRole('button',{name:'Reintentar transcripción'}).click();await expect(page.getByText(/Necesitas internet/)).toBeVisible();
+ const snapshot=await page.evaluate(()=>({audio:JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record,owner:(globalThis as any).actions[1][1]}));
+ await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));});
+ await expect.poll(()=>page.evaluate(()=>(globalThis as any).actions)).toContainEqual(['cancel',snapshot.owner]);
+ await page.evaluate(()=>(globalThis as any).finishAssets({ok:true,available:true,status:'available',locale:'es-MX',assetsInstalled:true}));
+ expect(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record)).toEqual(snapshot.audio);
+ expect(await page.evaluate(()=>(globalThis as any).actions.filter((x:any)=>x==='attach').length)).toBe(1);
+ await expect(input).toHaveValue('Texto previo');
+});
