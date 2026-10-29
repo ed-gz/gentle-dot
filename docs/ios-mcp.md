@@ -91,6 +91,13 @@ La prueba del SDK oficial incluye un valor no ASCII. Se rechazan anotaciones
 inválidas y se conservan límites adicionales de cabeceras y esquemas. Persisten
 otras limitaciones de la ruta y no se afirma conformidad MCP 2026 completa.
 
+La prueba `mcp-oauth-network.test.mjs` usa un servidor sintético en loopback que
+comprueba PKCE S256 y `resource`, devuelve una redirección de callback de prueba
+y rota el token sintético. También verifica cancelación, callbacks manipulados,
+cambio concurrente de conexión y respuesta de renovación perdida sin reenvío.
+El navegador de autenticación se simula: esto no valida `ASWebAuthenticationSession`,
+Keychain, TLS, la cuenta de un proveedor ni la firma en el iPhone.
+
 El descubrimiento admite hasta 64 herramientas, diez páginas y 512 KiB de catálogo.
 Cada esquema individual puede ocupar 16 KiB. Se validan tipos, propiedades,
 obligatorios, referencias locales, combinaciones, enumeraciones, constantes y
