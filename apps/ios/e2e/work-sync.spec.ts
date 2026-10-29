@@ -63,6 +63,54 @@ test('draft results persist offline; correction copies evidence and starts unapp
   expect(await page.evaluate(async id => { const inbox = await import('/src/work-inbox.ts'); const work = await inbox.readWork(id); return work.result; }, saved.id)).toMatchObject({ requiresReview: true, minutes: { items: [{ owner: 'Ana', due: null }] } });
 });
 
+test('a draft cannot replace saved minutes with evidence unrelated to confirmed source files', async ({ page }) => {
+  await page.goto('/');
+  const checks = await page.evaluate(async () => {
+    const inbox = await import('/src/work-inbox.ts'); const sync = await import('/src/work-sync.ts');
+    let item = await inbox.createWork({ title: 'Meeting', kind: 'meeting', instruction: 'Draft', files: [new File(['Ana revisará logs.'], 'transcript.txt', { type: 'text/plain' }), new File(['audio'], 'meeting.m4a', { type: 'audio/mp4' })] });
+    item = await inbox.transitionWork(item.id, item.revision, 'prepared'); item = await inbox.transitionWork(item.id, item.revision, 'approved');
+    const transfer = await sync.prepareWorkTransfer(item, 'wss://host/ws'); item = await inbox.beginWorkTransfer(item.id, item.revision, transfer);
+    item = await inbox.settleWorkTransfer(item.id, transfer.transferId, { transferId: transfer.transferId, workId: item.id, revision: transfer.manifest.revision, manifestHash: transfer.manifestHash, committedAt: 123 });
+    const result = { schema: 1, manifestHash: transfer.manifestHash, createdAt: 200, model: 'fixture', minutes: { title: 'Review', summary: 'First result', items: [{ kind: 'task', certainty: 'confirmed', text: 'Revisar logs', owner: 'Ana', due: null, evidenceIds: ['e1'] }] }, evidence: [{ id: 'e1', fileId: item.files[0].id, text: 'Ana revisará logs.', source: 'imported-text' }], transcriptComparison: 'Sólo texto.', requiresReview: true };
+    item = await inbox.saveWorkResult(item.id, transfer.transferId, result);
+    const cases = [
+      { ...result.evidence[0], fileId: 'unrelated-file' },
+      { ...result.evidence[0], fileId: item.files[1].id },
+      { ...result.evidence[0], startMs: 1000, endMs: 999 },
+      { ...result.evidence[0], startMs: 1000 },
+      { ...result.evidence[0], endMs: 1000 },
+      { ...result.evidence[0], source: 'desktop-transcriber', startMs: 0, endMs: 1000 },
+    ];
+    const outcomes = [];
+    for (const evidence of cases) {
+      try { await inbox.saveWorkResult(item.id, transfer.transferId, { ...result, minutes: { ...result.minutes, summary: 'Replacement' }, evidence: [evidence] }); outcomes.push('accepted'); }
+      catch { outcomes.push('rejected'); }
+    }
+    const saved = await inbox.readWork(item.id);
+    return { outcomes, summary: saved.result?.minutes.summary, revision: saved.revision, expectedRevision: item.revision };
+  });
+  expect(checks.outcomes).toEqual(Array(6).fill('rejected'));
+  expect(checks.summary).toBe('First result');
+  expect(checks.revision).toBe(checks.expectedRevision);
+});
+
+test('source validation accepts audio transcription and timed text from confirmed attachments', async ({ page }) => {
+  await page.goto('/');
+  const saved = await page.evaluate(async () => {
+    const inbox = await import('/src/work-inbox.ts'); const sync = await import('/src/work-sync.ts');
+    let item = await inbox.createWork({ title: 'Meeting', kind: 'meeting', instruction: '', files: [new File(['audio'], 'meeting.m4a', { type: 'audio/mp4' }), new File(['captions'], 'meeting.srt', { type: 'application/x-subrip' })] });
+    item = await inbox.transitionWork(item.id, item.revision, 'prepared'); item = await inbox.transitionWork(item.id, item.revision, 'approved');
+    const transfer = await sync.prepareWorkTransfer(item, 'wss://host/ws'); item = await inbox.beginWorkTransfer(item.id, item.revision, transfer);
+    item = await inbox.settleWorkTransfer(item.id, transfer.transferId, { transferId: transfer.transferId, workId: item.id, revision: transfer.manifest.revision, manifestHash: transfer.manifestHash, committedAt: 123 });
+    const result = { schema: 1, manifestHash: transfer.manifestHash, createdAt: 200, model: 'fixture', minutes: { title: 'Meeting', summary: 'Draft', items: [] }, evidence: [
+      { id: 'audio-evidence', fileId: item.files[0].id, text: 'Segmento', source: 'desktop-transcriber', startMs: 0, endMs: 1000 },
+      { id: 'text-evidence', fileId: item.files[1].id, text: 'Texto importado', source: 'imported-text', startMs: 1000, endMs: 2500 },
+    ], transcriptComparison: 'Borrador.', requiresReview: true };
+    return (await inbox.saveWorkResult(item.id, transfer.transferId, result)).result;
+  });
+  expect(saved.evidence.map((item: any) => item.source)).toEqual(['desktop-transcriber', 'imported-text']);
+});
+
 test('cancelling an approved upload stops subsequent chunks and keeps its immutable recovery snapshot', async ({ page }) => {
   await page.goto('/');
   const stopped = await page.evaluate(async () => {

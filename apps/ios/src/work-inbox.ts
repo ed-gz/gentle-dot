@@ -279,9 +279,22 @@ export async function settleWorkTransfer(id: string, transferId: string, outcome
 /** Receiving a draft is not approving its contents or any suggested external action. */
 export async function saveWorkResult(id: string, transferId: string, value: WorkResult): Promise<WorkItem> {
   const result = parseWorkResult(value); if (!result) throw new Error('La minuta recibida no es válida.');
+  // Check the original payload: parseWorkResult normalizes optional fields,
+  // so an unmatched end time would otherwise be lost before validation.
+  if (value.evidence.some(e => (e.startMs === undefined) !== (e.endMs === undefined)
+    || (e.startMs !== undefined && e.endMs !== undefined && e.endMs <= e.startMs))) {
+    throw new Error('La evidencia contiene un intervalo temporal incompleto o inválido.');
+  }
   const current = await readWork(id);
   return updateWork(id, current.revision, item => {
     if (item.status !== 'sent' || !item.transfer?.receipt || item.transfer.transferId !== transferId || item.transfer.manifestHash !== result.manifestHash) throw new Error('La minuta no corresponde a esta transferencia confirmada.');
+    for (const evidence of result.evidence) {
+      const file = item.transfer.manifest.files.find(candidate => candidate.id === evidence.fileId && candidate.role === 'attachment');
+      const textSource = file && (file.mime.startsWith('text/') || file.mime === 'application/x-subrip' || /\.(?:srt|vtt)$/i.test(file.name));
+      if (!file || (evidence.source === 'desktop-transcriber' ? !file.mime.startsWith('audio/') : !textSource)) {
+        throw new Error('La evidencia no corresponde a un archivo de origen confirmado para esta reunión.');
+      }
+    }
     if (item.result && JSON.stringify(item.result) === JSON.stringify(result)) return item;
     const next = nextRevision(item, Date.now()); next.result = result; return next;
   });
