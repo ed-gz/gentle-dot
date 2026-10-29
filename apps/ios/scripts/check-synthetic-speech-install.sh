@@ -11,7 +11,7 @@ trap 'rm -rf "$verification"' EXIT
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library -D CAPRI_ASSET_INSTALL_PROBE \
   -target "$(uname -m)-apple-macosx26.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/VoiceAudio.swift test/native/SpeechAnalyzerSyntheticTests.swift \
-  test/native/SpeechAnalyzerInstallProbe.swift -o "$verification/probe"
+  test/native/SpeechAnalyzerInstallProbe.swift test/native/SpeechAnalyzerReferenceMatrix.swift -o "$verification/probe"
 "$verification/probe" --diagnostics-self-test
 if [[ "${CAPRI_SPEECH_INSTALL_COMPILE_ONLY:-0}" == 1 ]]; then
   printf 'PASS: installer probe compiled; no assets requested and no transcription run.\n'

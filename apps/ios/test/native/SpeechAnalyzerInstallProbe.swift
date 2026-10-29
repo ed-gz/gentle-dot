@@ -13,7 +13,7 @@ private func diagnosticIdentifier(_ value: String, allowed: Set<String>) -> Stri
     let digest = SHA256.hash(data: Data(value.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
     return "other-sha256-\(digest)"
 }
-private func errorIdentity(_ error: Error) -> String {
+func errorIdentity(_ error: Error) -> String {
     let native = error as NSError
     let domain = diagnosticIdentifier(native.domain, allowed: ["NSOSStatusErrorDomain", "NSCocoaErrorDomain", "AVFoundationErrorDomain", "SFSpeechErrorDomain", "kAFAssistantErrorDomain", "Swift.CancellationError"])
     let type = diagnosticIdentifier(String(reflecting: Swift.type(of: error)), allowed: ["Swift.CancellationError", "Foundation.NSError", "Foundation._GenericObjCError", "Speech.SpeechError"])
@@ -44,6 +44,7 @@ private func probe() async -> Int32 {
     let before = Set((await AssetInventory.reservedLocales).map(canonical))
     var reservationAdded: Bool?
     var stage = "reserve"
+    var assetsReady = false
     var exitCode: Int32 = 1
     do {
         print("INSTALL: requesting only es-MX DictationTranscriber assets on this ephemeral runner.")
@@ -57,6 +58,7 @@ private func probe() async -> Int32 {
         }
         stage = "asset-verification"
         guard await AssetInventory.status(forModules: modules) == .installed else { throw InstallProbeError.notInstalled }
+        assetsReady = true
         print("PASS: es-MX DictationTranscriber assets installed; beginning synthetic audio probe.")
         let result = try await run(selected: .dictation(final, preview)) { phase in
             stage = phase
@@ -75,6 +77,7 @@ private func probe() async -> Int32 {
         if let underlying = native.userInfo[NSUnderlyingErrorKey] as? Error {
             print("CAUSE: \(errorIdentity(underlying))")
         }
+        if assetsReady { await runReferenceMatrix(locale: locale) }
     }
     let current = await AssetInventory.reservedLocales
     if reservationAdded == true {
