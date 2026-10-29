@@ -7,6 +7,7 @@ import WebKit
 private struct SessionArgs: Decodable { let sessionId: String; let ownerId: String?; let retainDestination: String? }
 private struct VoiceOwnerArgs: Decodable { let ownerId: String?; let retainDestination: String? }
 private struct RetainedVoiceArgs: Decodable { let record: VoiceRecoveryRecord }
+private struct PrepareRetainedVoiceArgs: Decodable { let record: VoiceRecoveryRecord; let ownerId: String }
 private struct VoiceReceiptArgs: Decodable { let receipt: VoiceNativeReceipt }
 private struct VoiceReceiptSessionArgs: Decodable { let sessionId: String }
 private struct DocumentRequestIdArgs: Decodable { let requestId: String }
@@ -204,6 +205,15 @@ final class PerceptionPlugin: Plugin {
                 self.incompleteExporter = nil; self.incompleteExportBusy = false
                 invoke.resolve(IncompleteVoiceExportReply.failure())
             }
+        }
+    }
+    @objc func prepareRetainedVoice(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(PrepareRetainedVoiceArgs.self), UUID(uuidString: args.ownerId) != nil else {
+            invoke.resolve(VoiceReply.failure("invalid_voice_retention", "No se pudo identificar el audio.")); return
+        }
+        Task { @MainActor in
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().prepareRetained(args.record, ownerID: args.ownerId)) }
+            else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
         }
     }
     @objc func attachRetainedVoice(_ invoke: Invoke) {

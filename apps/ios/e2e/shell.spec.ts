@@ -994,3 +994,105 @@ test('an old unverifiable receipt does not block chat recording while capacity r
   await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
   expect(await page.evaluate(() => (globalThis as any).oldVoiceDeletes)).toBe(0);
 });
+
+test('retained voice prepares its exact locale only on retry and cancellation fences late completion', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const record = { id: '12345678-1234-1234-1234-123456789012', owner: 'abcdef03-abcd-4bcd-8bcd-abcdef012345', destination: 'chat', locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'ready', byteCount: 10, sha256: 'a'.repeat(64) };
+    state.savedAudio = record; state.assetCalls = []; state.assetArgs = undefined;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('inspect_retained_voice')) return { ok: true, retainedAudio: state.savedAudio };
+      if (command.endsWith('list_voice_receipts')) return { ok: true, receipts: [] };
+      if (command.endsWith('get_voice_receipt')) return { ok: true, receipt: null };
+      if (command.endsWith('check_voice')) return { ok: true, available: false, status: 'assets_required', assetsInstalled: false, microphonePermission: 'granted', recording: false };
+      if (command.endsWith('attach_retained_voice')) { state.assetCalls.push('attach'); return { ok: false, error: 'assets_required' }; }
+      if (command.endsWith('prepare_retained_voice')) { state.assetCalls.push('prepare'); state.assetArgs = args; return await new Promise(resolve => { state.resolvePreparation = resolve; }); }
+      if (command.endsWith('cancel_voice')) { state.assetCalls.push(['cancel', args.ownerId]); return { ok: true }; }
+      if (command.endsWith('discard_retained_voice')) { state.assetCalls.push('discard'); state.savedAudio = null; return { ok: true }; }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/'); await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
+  expect(await page.evaluate(() => (globalThis as any).assetCalls)).toEqual([]);
+  await page.locator('#dictate').click();
+  await expect(page.locator('#voice-status')).toContainText('Necesitas internet');
+  const args = await page.evaluate(() => (globalThis as any).assetArgs);
+  expect(args.record).toEqual(await page.evaluate(() => (globalThis as any).savedAudio));
+  expect(args.ownerId).not.toBe(args.record.owner);
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Cancelar preparación de voz');
+  await page.locator('#dictate').click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).assetCalls)).toContainEqual(['cancel', args.ownerId]);
+  await page.evaluate(() => (globalThis as any).resolvePreparation({ok:true,available:true,status:'available',locale:'es-MX',assetsInstalled:true}));
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
+  expect(await page.evaluate(() => (globalThis as any).savedAudio)).toEqual(args.record);
+  expect(await page.evaluate(() => (globalThis as any).assetCalls.filter((x:any) => x === 'attach').length)).toBe(1);
+  expect(await page.evaluate(() => (globalThis as any).assetCalls)).not.toContain('discard');
+});
+
+test('retained voice prepares its exact language then retries without losing audio on transcription failure', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const record = { id:'12345678-1234-1234-1234-123456789012', owner:'abcdef03-abcd-4bcd-8bcd-abcdef012345', destination:'chat', locale:'es-ES', kind:'dictation', createdAt:1, state:'ready', byteCount:10, sha256:'a'.repeat(64) };
+    state.savedAudio = record; state.calls = []; state.prepared = false;
+    state.__TAURI_INTERNALS__.invoke = async (command:string,args:any) => {
+      if (command.endsWith('inspect_retained_voice')) return {ok:true,retainedAudio:state.savedAudio};
+      if (command.endsWith('list_voice_receipts')) return {ok:true,receipts:[]};
+      if (command.endsWith('get_voice_receipt')) return {ok:true,receipt:null};
+      if (command.endsWith('check_voice')) return {available:true,status:'available',assetsInstalled:true,microphonePermission:'granted'};
+      if (command.endsWith('attach_retained_voice')) { state.calls.push('attach'); return state.prepared ? {ok:true,retainedAudio:record,sessionId:record.id,ownerId:record.owner} : {ok:false,error:'assets_required'}; }
+      if (command.endsWith('prepare_retained_voice')) { state.calls.push(['prepare',args]); state.prepared=true; return {ok:true,available:true,status:'available',locale:record.locale,assetsInstalled:true}; }
+      if (command.endsWith('stop_voice')) { state.calls.push('stop'); return {ok:false,message:'Transcripción incompleta'}; }
+      if (command.endsWith('discard_retained_voice') || command.endsWith('release_retained_voice')) { state.calls.push('delete'); return {ok:true}; }
+      return previous(command,args);
+    };
+  });
+  await page.goto('/'); await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
+  expect(await page.evaluate(() => (globalThis as any).calls)).toEqual([]);
+  await page.locator('#dictate').click();
+  await expect(page.locator('#voice-status')).toContainText('Transcripción incompleta');
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
+  const state = await page.evaluate(() => ({calls:(globalThis as any).calls,audio:(globalThis as any).savedAudio}));
+  expect(state.calls.map((x:any) => Array.isArray(x) ? x[0] : x)).toEqual(['attach','prepare','attach','stop']);
+  expect(state.calls[1][1].record).toEqual(state.audio); expect(state.audio.locale).toBe('es-ES'); expect(state.audio.kind).toBe('dictation');
+  await page.locator('[data-panel="settings"]').click();
+  expect(await page.evaluate(() => (globalThis as any).calls)).not.toContain('delete');
+});
+
+test('audit cancelling retained preparation must not claim the microphone is recording', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const record = { id: '12345678-1234-1234-1234-123456789012', owner: 'abcdef03-abcd-4bcd-8bcd-abcdef012345', destination: 'chat', locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'ready', byteCount: 10, sha256: 'a'.repeat(64) };
+    state.savedAudio = record; state.assetCalls = []; state.assetArgs = undefined;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('inspect_retained_voice')) return { ok: true, retainedAudio: state.savedAudio };
+      if (command.endsWith('list_voice_receipts')) return { ok: true, receipts: [] };
+      if (command.endsWith('get_voice_receipt')) return { ok: true, receipt: null };
+      if (command.endsWith('check_voice')) return { ok: true, available: false, status: 'assets_required', assetsInstalled: false, microphonePermission: 'granted', recording: false };
+      if (command.endsWith('attach_retained_voice')) { state.assetCalls.push('attach'); return { ok: false, error: 'assets_required' }; }
+      if (command.endsWith('prepare_retained_voice')) { state.assetCalls.push('prepare'); state.assetArgs = args; return await new Promise(resolve => { state.resolvePreparation = resolve; }); }
+      if (command.endsWith('cancel_voice')) { state.assetCalls.push(['cancel', args.ownerId]); return await new Promise(resolve => { state.resolveCancellation = resolve; }); }
+      if (command.endsWith('discard_retained_voice')) { state.assetCalls.push('discard'); state.savedAudio = null; return { ok: true }; }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/'); await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
+  expect(await page.evaluate(() => (globalThis as any).assetCalls)).toEqual([]);
+  await page.locator('#dictate').click();
+  await expect(page.locator('#voice-status')).toContainText('Necesitas internet');
+  const args = await page.evaluate(() => (globalThis as any).assetArgs);
+  expect(args.record).toEqual(await page.evaluate(() => (globalThis as any).savedAudio));
+  expect(args.ownerId).not.toBe(args.record.owner);
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Cancelar preparación de voz');
+  await page.locator('#dictate').click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).assetCalls)).toContainEqual(['cancel', args.ownerId]);
+  await expect(page.locator('#voice-status')).not.toContainText('micrófono');
+  await page.evaluate(() => (globalThis as any).resolveCancellation({ok:true}));
+  await page.evaluate(() => (globalThis as any).resolvePreparation({ok:true,available:true,status:'available',locale:'es-MX',assetsInstalled:true}));
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
+  expect(await page.evaluate(() => (globalThis as any).savedAudio)).toEqual(args.record);
+  expect(await page.evaluate(() => (globalThis as any).assetCalls.filter((x:any) => x === 'attach').length)).toBe(1);
+  expect(await page.evaluate(() => (globalThis as any).assetCalls)).not.toContain('discard');
+});

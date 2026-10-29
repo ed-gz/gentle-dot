@@ -189,3 +189,24 @@ test('incomplete audio export sends only the exact record and requires a picker 
   await assert.rejects(bridge.exportIncomplete(ready()));
   assert.equal(calls.length, count);
 });
+
+test('exact retained asset preparation rejects altered audio, mismatched locale and old owners', async () => {
+  const fresh = '33333333-3333-4333-8333-333333333333';
+  let current = ready(); let result = { ok: true, available: true, status: 'available', locale: 'es-MX', assetsInstalled: true }; const calls = [];
+  const bridge = createRetainedVoiceBridge(async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'prepare_retained_voice') return result;
+    if (command === 'inspect_retained_voice') return { ok: true, retainedAudio: current };
+    if (command === 'attach_retained_voice') return { ok: false, error: 'assets_required' };
+    throw new Error('Unexpected operation');
+  });
+  await assert.rejects(bridge.attach(ready()), /Prepara el idioma/);
+  await assert.rejects(bridge.prepare(ready(), owner));
+  await bridge.prepare(ready(), fresh);
+  assert.deepEqual(calls.find(x => x.command === 'prepare_retained_voice').args, { record: ready(), ownerId: fresh });
+  current = { ...ready(), sha256: 'b'.repeat(64) };
+  await assert.rejects(bridge.prepare(ready(), fresh));
+  current = ready(); result = { ...result, locale: 'es-ES' };
+  await assert.rejects(bridge.prepare(ready(), fresh));
+  assert.ok(!calls.some(x => x.command.includes('discard') || x.command.includes('release')));
+});

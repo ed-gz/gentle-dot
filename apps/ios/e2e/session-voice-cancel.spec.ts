@@ -160,3 +160,84 @@ test('an unconfirmed cancellation keeps text usable and retries the original own
  const owners=await page.evaluate(() => (globalThis as any).cancelOwners); expect(owners).toHaveLength(2); expect(owners[1]).toBe(owners[0]);
  await expect(input).toHaveValue('Texto previo');
 });
+
+test('audit retained session preparation explains the explicit retry and cancel affordance', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 568 }); await page.emulateMedia({ reducedMotion: 'reduce' });
+  await linkedPhone(page); await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  await page.evaluate(async () => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const { sessionVoiceOrigin } = await import('/src/voice-origin.ts');
+    const destination = await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0']));
+    const record = { id:'12345678-1234-1234-1234-123456789012', owner:'abcdef03-abcd-4bcd-8bcd-abcdef012345', destination, locale:'es-MX', kind:'speech', createdAt:1, state:'ready', byteCount:10, sha256:'a'.repeat(64) };
+    sessionStorage.setItem('session-voice-fixture', JSON.stringify({ record, receipt:null }));
+    state.calls = [];
+    state.__TAURI_INTERNALS__.invoke = async (command:string,args:any) => {
+      if (command.endsWith('check_voice')) return {available:false,status:'unsupported_configuration',assetsInstalled:false,microphonePermission:'granted'};
+      if (command.endsWith('attach_retained_voice')) { state.calls.push('attach'); return { ok:false, error:'assets_required' }; }
+      if (command.endsWith('prepare_retained_voice')) { state.calls.push('prepare'); return await new Promise(resolve => { state.finishAsset = resolve; }); }
+      if (command.endsWith('cancel_voice')) { state.calls.push('cancel'); return { ok:true }; }
+      return previous(command,args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  await expect(page.getByText('Hay audio guardado. Toca Dictar para reintentar.')).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as any).calls)).toEqual([]);
+  const input = page.getByRole('textbox',{name:'Continuar esta sesión'}); await input.fill('Texto previo');
+  await page.getByRole('button',{name:'Reintentar transcripción'}).click();
+  await page.waitForFunction(() => typeof (globalThis as any).finishAsset === 'function');
+  await expect(page.getByText(/Necesitas internet/)).toBeVisible();
+  const cancel = page.getByRole('button',{name:'Cancelar preparación de voz'}); await expect(cancel).toBeVisible();
+  await cancel.focus(); await expect(cancel).toBeFocused(); const box = await cancel.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(44); expect(box!.height).toBeGreaterThanOrEqual(44);
+  expect(box!.y).toBeGreaterThanOrEqual(0); expect(box!.y + box!.height).toBeLessThanOrEqual(568);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.keyboard.press('Enter'); await expect(input).toHaveValue('Texto previo');
+  await expect.poll(() => page.evaluate(() => (globalThis as any).calls.includes('cancel'))).toBe(true);
+  await page.evaluate(() => (globalThis as any).finishAsset({ok:true, available:true, status:'available', locale:'es-MX', assetsInstalled:true}));
+  await expect(page.getByRole('button',{name:'Reintentar transcripción'})).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as any).calls.filter((v:string) => v === 'attach').length)).toBe(1);
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record.destination.startsWith('session:'))).toBe(true);
+  await page.getByRole('button',{name:'Todos los agentes'}).click(); await page.locator('.agent-session').filter({hasText:'Capri iOS'}).click();
+  await expect(page.getByRole('textbox',{name:'Continuar esta sesión'})).toHaveValue('');
+
+});
+
+test('audit session retained preparation remains reachable with landscape keyboard', async ({ page }) => {
+  await page.setViewportSize({ width: 568, height: 320 }); await page.emulateMedia({ reducedMotion: 'reduce' });
+  await linkedPhone(page); await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  await page.evaluate(async () => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const { sessionVoiceOrigin } = await import('/src/voice-origin.ts');
+    const destination = await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0']));
+    const record = { id:'12345678-1234-1234-1234-123456789012', owner:'abcdef03-abcd-4bcd-8bcd-abcdef012345', destination, locale:'es-MX', kind:'speech', createdAt:1, state:'ready', byteCount:10, sha256:'a'.repeat(64) };
+    sessionStorage.setItem('session-voice-fixture', JSON.stringify({ record, receipt:null }));
+    state.calls = [];
+    state.__TAURI_INTERNALS__.invoke = async (command:string,args:any) => {
+      if (command.endsWith('attach_retained_voice')) { state.calls.push('attach'); return { ok:false, error:'assets_required' }; }
+      if (command.endsWith('prepare_retained_voice')) { state.calls.push('prepare'); return await new Promise(resolve => { state.finishAsset = resolve; }); }
+      if (command.endsWith('cancel_voice')) { state.calls.push('cancel'); return { ok:true }; }
+      return previous(command,args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  await expect(page.getByText('Hay audio guardado. Toca Dictar para reintentar.')).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as any).calls)).toEqual([]);
+  const input = page.getByRole('textbox',{name:'Continuar esta sesión'}); await input.fill('Texto previo');
+  await page.getByRole('button',{name:'Reintentar transcripción'}).click();
+  await page.waitForFunction(() => typeof (globalThis as any).finishAsset === 'function');
+  await expect(page.getByText(/Necesitas internet/)).toBeVisible();
+  await input.focus(); await page.evaluate(() => { const viewport=window.visualViewport!;Object.defineProperties(viewport,{height:{configurable:true,value:180},pageTop:{configurable:true,value:0},scale:{configurable:true,value:1}});viewport.dispatchEvent(new Event('resize')); });
+  const cancel = page.getByRole('button',{name:'Cancelar preparación de voz'}); await expect(cancel).toBeVisible();
+  await cancel.focus(); await expect(cancel).toBeFocused(); const box = await cancel.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(44); expect(box!.height).toBeGreaterThanOrEqual(44); expect(box!.y).toBeGreaterThanOrEqual(0); expect(box!.y + box!.height).toBeLessThanOrEqual(180);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.keyboard.press('Enter'); await expect(input).toHaveValue('Texto previo');
+  await expect.poll(() => page.evaluate(() => (globalThis as any).calls.includes('cancel'))).toBe(true);
+  await page.evaluate(() => (globalThis as any).finishAsset({ok:true, available:true, status:'available', locale:'es-MX', assetsInstalled:true}));
+  await expect(page.getByRole('button',{name:'Reintentar transcripción'})).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as any).calls.filter((v:string) => v === 'attach').length)).toBe(1);
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record.destination.startsWith('session:'))).toBe(true);
+  await page.getByRole('button',{name:'Todos los agentes'}).click(); await page.locator('.agent-session').filter({hasText:'Capri iOS'}).click();
+  await expect(page.getByRole('textbox',{name:'Continuar esta sesión'})).toHaveValue('');
+
+});

@@ -900,6 +900,68 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         }
     }
 
+    /// Only an explicit retry may prepare the original audio's exact modules.
+    /// A fresh owner fences cancellation without altering the journal owner.
+    func prepareRetained(_ expected: VoiceRecoveryRecord, ownerID: String) async -> VoiceReply {
+        guard expected.state == .ready, UUID(uuidString: ownerID) != nil,
+              ownerID.lowercased() != expected.owner.lowercased(),
+              !busy, sessionID == nil, !startLatch.active, !retentionLatch.active,
+              !cancellationBarrier.active, pendingCancellation == nil, !previewDrain.active, !finalDrain.active else {
+            return .failure("busy", "Termina el dictado actual antes de preparar este audio.")
+        }
+        guard UIApplication.shared.applicationState == .active, let root = VoiceRetentionBinding.defaultRoot(),
+              owners.claim(ownerID) else { return .failure("cancelled", "Abre Capri y vuelve a intentar la preparación.") }
+        busy = true; startLatch.begin()
+        let epoch = generation
+        defer { startLatch.end(); busy = false; owners.clearIfOwned(ownerID) }
+        let leaseWork = Task.detached(priority: .userInitiated) { () throws -> VoiceRecoveryReadLease in
+            let lease = try VoiceRecoveryJournal(root: root).acquire(expected)
+            do { try lease.verify(); return lease } catch { lease.close(); throw error }
+        }
+        guard case .success(let lease) = await leaseWork.result else {
+            return .failure("retention_changed", "No pude verificar el audio guardado. Revisa su estado.")
+        }
+        defer { lease.close() }
+        func currentMatches() async -> Bool {
+            let work = Task.detached(priority: .userInitiated) { try lease.verify() }
+            guard case .success = await work.result else { return false }
+            return true
+        }
+        guard await currentMatches(), epoch == generation, !Task.isCancelled,
+              UIApplication.shared.applicationState == .active else {
+            return .failure("retention_changed", "No pude verificar el audio guardado. Revisa su estado.")
+        }
+        let locale = Locale(identifier: expected.locale)
+        let kind: VoiceTranscriberKind = expected.kind == .speech ? .speech : .dictation
+        let state = await assetState(locale, kind: kind)
+        guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
+            return .failure("cancelled", "Preparación interrumpida. El audio se conserva.")
+        }
+        if state != .installed && state != .supported {
+            return VoiceReply(ok: true, available: false, status: state.status, locale: expected.locale, assetsInstalled: false)
+        }
+        do {
+            try await AssetInventory.reserve(locale: locale)
+            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active,
+                  await currentMatches() else { return .failure("cancelled", "Preparación interrumpida. Revisa el audio guardado.") }
+            let module = makeTranscriber(for: locale, kind: kind)
+            let preview = makeTranscriber(for: locale, kind: kind, incremental: true)
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [module.module, preview.module]) {
+                guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active,
+                      await currentMatches() else { return .failure("cancelled", "Preparación interrumpida. Revisa el audio guardado.") }
+                try await request.downloadAndInstall()
+            }
+            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active,
+                  await currentMatches() else { return .failure("cancelled", "Preparación interrumpida o audio cambiado. Revisa su estado.") }
+            let finalState = await assetState(locale, kind: kind)
+            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active,
+                  await currentMatches() else { return .failure("retention_changed", "El audio cambió. Revisa su estado.") }
+            return VoiceReply(ok: true, available: finalState == .installed, status: finalState.status, locale: expected.locale, assetsInstalled: finalState == .installed)
+        } catch {
+            return .failure(epoch == generation ? "asset_download_failed" : "cancelled", "No se completó la preparación de voz. El audio se conserva; revisa la conexión y el espacio.")
+        }
+    }
+
     /// Explicitly reconnect a verified, completed recording to its original
     /// owner and destination. This never begins recording or transcribing.
     func attachRetained(_ expected: VoiceRecoveryRecord) async -> VoiceReply {
@@ -925,10 +987,24 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         let locale = Locale(identifier: expected.locale)
         let kind: VoiceTranscriberKind
         switch expected.kind { case .speech: kind = .speech; case .dictation: kind = .dictation }
-        guard await assetState(locale, kind: kind) == .installed else {
-            return .failure("assets_required", "Prepara el idioma del audio para volver a transcribirlo.")
-        }
+        let assets = await assetState(locale, kind: kind)
+        guard assets == .installed else { return .failure(assets.status, assets.message) }
         let module = makeTranscriber(for: locale, kind: kind)
+        let preview = makeTranscriber(for: locale, kind: kind, incremental: true)
+        do {
+            try await AssetInventory.reserve(locale: locale)
+            guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
+                return .failure("cancelled", "La recuperación fue interrumpida; el audio se conserva.")
+            }
+            guard try await AssetInventory.assetInstallationRequest(supporting: [module.module, preview.module]) == nil else {
+                return .failure("assets_required", "Prepara el idioma de este audio para volver a transcribirlo.")
+            }
+        } catch {
+            return .failure("asset_reservation_failed", "Apple no pudo reservar el idioma de este audio. Revisa el espacio disponible e inténtalo de nuevo.")
+        }
+        guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
+            return .failure("cancelled", "La recuperación fue interrumpida; el audio se conserva.")
+        }
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module.module]) else {
             return .failure("audio_format_unavailable", "No hay un formato compatible para el audio guardado.")
         }

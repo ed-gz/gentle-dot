@@ -276,3 +276,43 @@ test('audit ready orphan controls fit small viewport and large text without over
   await expect(input).toHaveValue(draft);
   await checkActions(568);
 });
+
+test('orphan language preparation is explicit and can be cancelled without changing its destination', async ({ page }) => {
+  await linkedPhone(page);
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
+  await page.locator('[data-panel="chat"]').click();
+  await page.evaluate(() => {
+    const saved = JSON.parse(sessionStorage.getItem('session-voice-fixture')!);
+    saved.record = { ...saved.record, state: 'ready', byteCount: 10, sha256: 'a'.repeat(64) };
+    sessionStorage.setItem('session-voice-fixture', JSON.stringify(saved));
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke; state.assetCalls = [];
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('attach_retained_voice')) { state.assetCalls.push('attach'); return { ok:false,error:'assets_required' }; }
+      if (command.endsWith('prepare_retained_voice')) { state.assetCalls.push(['prepare',args]); return await new Promise(resolve => { state.resolveAsset = resolve; }); }
+      if (command.endsWith('cancel_voice')) { state.assetCalls.push(['cancel',args.ownerId]); return await new Promise(resolve => { state.resolveCancel = resolve; }); }
+      return previous(command,args);
+    };
+  });
+  await page.locator('[data-panel="settings"]').click(); await page.locator('[data-panel="chat"]').click();
+  const button = page.getByRole('button',{name:'Transcribir audio de otra sesión'}); await expect(button).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as any).assetCalls)).toEqual([]);
+  await button.click(); await expect(page.getByRole('button',{name:'Cancelar preparación de voz'})).toBeEnabled();
+  await expect(page.locator('#voice-status')).toContainText('Necesitas internet');
+  const info = await page.evaluate(() => ({ calls: (globalThis as any).assetCalls, saved: JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record }));
+  expect(info.calls[1][1].record).toEqual(info.saved); expect(info.calls[1][1].ownerId).not.toBe(info.saved.owner);
+  await page.getByRole('button',{name:'Cancelar preparación de voz'}).click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).assetCalls.some((x:any)=>Array.isArray(x) && x[0] === 'cancel'))).toBe(true);
+  await expect(page.locator('#voice-status')).toHaveText('Cancelando la preparación de voz…');
+  await expect(button).toBeDisabled();
+  await button.evaluate(element => element.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(await page.evaluate(() => (globalThis as any).assetCalls.filter((x:any)=>x==='attach').length)).toBe(1);
+  await page.evaluate(() => (globalThis as any).resolveAsset({ok:true,available:true,status:'available',locale:'es-MX',assetsInstalled:true}));
+  await page.evaluate(() => (globalThis as any).resolveCancel({ok:true}));
+  await expect(button).toBeEnabled();
+  expect(await page.evaluate(() => (globalThis as any).assetCalls.filter((x:any)=>x==='attach').length)).toBe(1);
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record)).toEqual(info.saved);
+  await expect(page.locator('#prompt')).toHaveValue('');
+});

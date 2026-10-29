@@ -30,6 +30,10 @@ export interface VoiceControls {
 	phase: VoicePhase;
 	/** A platform is preparing this composer's microphone or awaiting permission. */
 	inputBusy?: boolean;
+	/** A retained recording is preparing its original language after an explicit retry. */
+	preparingRetained?: boolean;
+	/** A retained recording can be retried without starting a new capture. */
+	retryPending?: boolean;
 	/** Seconds since recording started. */
 	elapsed: number;
 	/** Microphone level, 0 to 1. */

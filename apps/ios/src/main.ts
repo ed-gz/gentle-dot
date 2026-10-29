@@ -25,7 +25,7 @@ import { createConversationJournal } from './conversation-journal.ts';
 import { mountReservationRescue } from './reservation-rescue-view.ts';
 import { createConversationDraftRescue } from './conversation-draft-rescue.ts';
 import { mountConversationDraftRecovery } from './conversation-draft-recovery-view.ts';
-import { createRetainedVoiceBridge, type RetainedVoiceRecord } from './retained-voice.ts';
+import { createRetainedVoiceBridge, RetainedVoiceAssetsRequired, type RetainedVoiceRecord } from './retained-voice.ts';
 import { createNativeVoiceReceipts, type NativeVoiceReceipt } from './native-voice-receipts.ts';
 import { createNativeVoiceDelivery, prepareNativeVoiceDelivery, type NativeVoiceDeliveryIntent } from './native-voice-delivery.ts';
 import { mountNativeVoiceRecovery } from './native-voice-recovery-view.ts';
@@ -404,7 +404,8 @@ function showPanel(next: string) {
   manuallyPlaced = false;
   panel = next;
   updateLaptopView();
-  if (next !== 'chat' && voiceRetry) {
+  if (next !== 'chat' && retainedVoicePreparing) void cancelDictation();
+  else if (next !== 'chat' && voiceRetry) {
     // Relinquish the view, not the preserved native recording. Its origin is
     // retained so only this conversation may later adopt it.
     voiceGeneration++; voiceSession = undefined; voiceOwner = undefined; voiceRetry = false; element('discard-voice').hidden = true;
@@ -591,12 +592,14 @@ let voiceOwner: string | undefined;
 // and offer an owner-scoped retry before starting any other recording.
 let uncertainVoiceOwner: string | undefined;
 let voiceCancelPending = false;
+let uncertainVoicePreparation = false;
 let voiceRetry = false;
 let voiceStopping = false;
 let foreignVoiceOwner: string | undefined;
 let voiceStarting = false;
 let retainedVoiceRecord: RetainedVoiceRecord | undefined;
 let retainedVoiceNeedsAttach = false;
+let retainedVoicePreparing = false;
 let retainedDiscardPending = false;
 const retainedVoiceBridge = createRetainedVoiceBridge();
 const nativeVoiceReceipts = createNativeVoiceReceipts();
@@ -1335,7 +1338,7 @@ document.addEventListener('visibilitychange', () => {
     // microphone request is still pending. Native iOS lifecycle handling
     // cancels an actual background transition; do not invalidate that prompt.
     // Also avoid cancelling a capture owned by the laptop-session composer.
-    if (voiceSession && !voiceRetry) void cancelDictation();
+    if (retainedVoicePreparing || (voiceSession && !voiceRetry)) void cancelDictation();
     director.update(intent, performance.now(), true); linked.suspend();
   }
   else { if (rigNeedsPreparation && image && !preparingRig) void startRig(); lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void recoverPendingVoice(); if (isTauri()) void voiceRecovery.refresh(); void completionNotifications.refresh(); void lockScreenSettings?.refresh(); }
@@ -1537,23 +1540,48 @@ async function recoverPendingVoice() {
   } catch { element('voice-status').textContent = 'No pude revisar el audio. Vuelve a intentarlo.'; }
 }
 foreignAudioButton.addEventListener('click', () => {
+  if (foreignAudioBusy && retainedVoicePreparing) { void cancelDictation('manual'); return; }
+  if (uncertainVoiceOwner || voiceCancelPending || pendingVoiceCancellation()) return;
   const record = retainedVoiceRecord;
   if (voiceStarting || !record || record.destination === 'chat' || record.state !== 'ready' || retainedDiscardPending) return;
   const generation = ++voiceGeneration;
   let completed = false;
   voiceStarting = true; voiceStopping = true; foreignAudioBusy = true; foreignAudioButton.disabled = true; element<HTMLButtonElement>('dictate').disabled = true; element<HTMLButtonElement>('discard-voice').disabled = true; updateControls();
   element('voice-status').textContent = 'Transcribiendo el audio de la otra sesión…';
-  void protectedVoice.recover(record).then(async () => {
+  void (async () => {
+    try { return await protectedVoice.recover(record); }
+    catch (error) {
+      if (!(error instanceof RetainedVoiceAssetsRequired) || generation !== voiceGeneration) throw error;
+      const preparationOwner = localIdentifier();
+      voiceOwner = preparationOwner; retainedVoicePreparing = true;
+      foreignAudioButton.disabled = false; foreignAudioButton.textContent = 'Cancelar preparación de voz';
+      element('voice-status').textContent = 'Preparando el idioma de este audio. Necesitas internet; puedes cancelar sin borrar el audio.';
+      try {
+        await retainedVoiceBridge.prepare(record, preparationOwner);
+        if (generation !== voiceGeneration || document.hidden || panel !== 'chat') return;
+      } finally {
+        if (generation === voiceGeneration) {
+          voiceOwner = undefined; retainedVoicePreparing = false;
+          foreignAudioButton.disabled = true; foreignAudioButton.textContent = 'Transcribir audio de otra sesión';
+        }
+      }
+      element('voice-status').textContent = 'Transcribiendo el audio de la otra sesión…';
+      return protectedVoice.recover(record);
+    }
+  })().then(async (result) => {
+    if (!result) return;
     if (generation !== voiceGeneration) return;
     completed = true;
     element('voice-status').textContent = 'Dictado listo para revisar. Sigue vinculado a su sesión original.';
     await voiceRecovery.refresh();
-  }).catch(() => {
-    if (generation === voiceGeneration) element('voice-status').textContent = 'No pude transcribir el audio. Revisa su estado y vuelve a intentarlo.';
+  }).catch((error) => {
+    if (generation === voiceGeneration) element('voice-status').textContent = `No pude transcribir el audio. ${errorText(error)}`;
   }).finally(() => {
-    if (generation === voiceGeneration) { voiceStarting = false; voiceStopping = false; }
-    foreignAudioBusy = false; foreignAudioButton.disabled = false; element<HTMLButtonElement>('dictate').disabled = false; element<HTMLButtonElement>('discard-voice').disabled = false; updateControls();
-    if (completed && panel === 'chat') void recoverPendingVoice();
+    if (generation === voiceGeneration) {
+      voiceStarting = false; voiceStopping = false; foreignAudioBusy = false; foreignAudioButton.disabled = false;
+      element<HTMLButtonElement>('dictate').disabled = false; element<HTMLButtonElement>('discard-voice').disabled = false; updateControls();
+      if (completed && panel === 'chat') void recoverPendingVoice();
+    }
   });
 });
 incompleteAudioButton.addEventListener('click', () => {
@@ -1604,6 +1632,13 @@ async function cancelDictation(reason: 'navigation' | 'manual' = 'navigation') {
   if (voiceCancelPending) return;
   const wasActive = voiceStarting || Boolean(voiceSession);
   const owner = voiceOwner; voiceOwner = undefined;
+  uncertainVoicePreparation = retainedVoicePreparing;
+  const cancellingForeignPreparation = foreignAudioBusy && retainedVoicePreparing;
+  retainedVoicePreparing = false;
+  if (cancellingForeignPreparation) {
+    foreignAudioBusy = false; foreignAudioButton.disabled = true; foreignAudioButton.textContent = 'Transcribir audio de otra sesión';
+    element<HTMLButtonElement>('discard-voice').disabled = false;
+  }
   voiceGeneration++; voiceController?.abort(); voiceSession = undefined; voiceRetry = false; voiceStopping = false; clearTimeout(voiceTimer); stopVoicePreview();
   element('discard-voice').hidden = true;
   voiceStarting = false;
@@ -1627,7 +1662,7 @@ async function retryVoiceCancellation(reason: 'navigation' | 'manual' = 'manual'
   updateControls();
   const control = element<HTMLButtonElement>('dictate');
   control.disabled = true;
-  element('voice-status').textContent = 'Deteniendo el micrófono…';
+  element('voice-status').textContent = uncertainVoicePreparation ? 'Cancelando la preparación de voz…' : 'Deteniendo el micrófono…';
   try {
     await voiceCancelWithDeadline(() => cancelVoice(owner));
     if (uncertainVoiceOwner !== owner) return;
@@ -1635,13 +1670,14 @@ async function retryVoiceCancellation(reason: 'navigation' | 'manual' = 'manual'
     clearVoiceCancellation(owner);
     forgetVoiceOrigin(owner);
     control.setAttribute('aria-label', 'Dictar');
-    element('voice-status').textContent = reason === 'manual'
+    element('voice-status').textContent = uncertainVoicePreparation ? 'Preparación cancelada. Puedes volver a intentar el audio guardado.' : reason === 'manual'
       ? 'Dictado cancelado. Toca el micrófono para volver a intentarlo.'
       : 'El dictado se interrumpió al salir de Capri. Toca el micrófono para intentarlo de nuevo.';
+    uncertainVoicePreparation = false; foreignAudioButton.disabled = false;
   } catch (error) {
     if (uncertainVoiceOwner !== owner) return;
     control.setAttribute('aria-label', 'Reintentar detener micrófono');
-    element('voice-status').textContent = error instanceof VoiceCancelUnconfirmed ? error.message : 'No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.';
+    element('voice-status').textContent = uncertainVoicePreparation ? 'No pude confirmar la cancelación de la preparación. Toca el micrófono para reintentar.' : error instanceof VoiceCancelUnconfirmed ? error.message : 'No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.';
   } finally {
     voiceCancelPending = false;
     control.disabled = false;
@@ -1668,7 +1704,21 @@ element('dictate').addEventListener('click', async () => {
       element('voice-status').textContent = 'Transcribiendo en este iPhone…';
       const record = retainedVoiceRecord;
       if (!record || record.id.toLowerCase() !== id.toLowerCase()) throw new Error('No pude verificar el audio de este dictado.');
-      const saved = retainedVoiceNeedsAttach ? await protectedVoice.recover(record) : await protectedVoice.finish(record);
+      let saved;
+      try { saved = retainedVoiceNeedsAttach ? await protectedVoice.recover(record) : await protectedVoice.finish(record); }
+      catch (error) {
+        if (!(error instanceof RetainedVoiceAssetsRequired) || !retainedVoiceNeedsAttach || current !== voiceGeneration) throw error;
+        const preparationOwner = localIdentifier();
+        voiceOwner = preparationOwner; retainedVoicePreparing = true;
+        element('voice-status').textContent = 'Preparando el idioma de este audio. Necesitas internet; puedes cancelar sin borrar el audio.';
+        control.setAttribute('aria-label', 'Cancelar preparación de voz');
+        try {
+          await retainedVoiceBridge.prepare(record, preparationOwner);
+          if (current !== voiceGeneration || document.hidden || panel !== 'chat') return;
+        } finally { if (current === voiceGeneration) { voiceOwner = owner; retainedVoicePreparing = false; } }
+        element('voice-status').textContent = 'Transcribiendo en este iPhone…';
+        saved = await protectedVoice.recover(record);
+      }
       if (current !== voiceGeneration) return;
       retainedVoiceRecord = saved.receipt.audio; retainedVoiceNeedsAttach = false;
       let inserted = false;
@@ -1829,7 +1879,7 @@ element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
     const pending: PairingPending = { ticket, epoch, connection, previous };
     pairingSavePending = pending;
     await connectionSelection.stage(ticket, connection);
-    element('pairing-status').textContent = 'La laptop entregó el acceso. Comprobando la conexión…';
+    element('pairing-status').textContent = 'La laptop aprobó el acceso. Comprobando la conexión…';
     await startPairingHandshake(pending);
   } catch (error) {
     if (ticket !== undefined && !accepted) try { await connectionSelection.rollback(ticket); } catch { /* Keep the pending marker rather than restoring another credential. */ }

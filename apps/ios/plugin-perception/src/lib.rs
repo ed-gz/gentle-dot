@@ -239,6 +239,27 @@ async fn export_incomplete_voice<R: Runtime>(
 }
 
 #[tauri::command]
+async fn prepare_retained_voice<R: Runtime>(
+    app: AppHandle<R>,
+    record: RetainedVoiceRecord,
+    owner_id: String,
+) -> Result<Value, String> {
+    if !valid_retained_voice(&record)
+        || record.state != "ready"
+        || !valid_session_id(&owner_id)
+        || owner_id.eq_ignore_ascii_case(&record.owner)
+    {
+        return Err("invalid_voice_retention".into());
+    }
+    native_call(
+        app,
+        "prepareRetainedVoice",
+        json!({"record": record, "ownerId": owner_id}),
+    )
+    .await
+}
+
+#[tauri::command]
 async fn attach_retained_voice<R: Runtime>(
     app: AppHandle<R>,
     record: RetainedVoiceRecord,
@@ -341,6 +362,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             discard_retained_voice,
             export_incomplete_voice,
             attach_retained_voice,
+            prepare_retained_voice,
             list_voice_receipts,
             get_voice_receipt,
             discard_voice_receipt,

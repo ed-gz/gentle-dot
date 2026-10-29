@@ -1,5 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import { parseVoiceSession, parseVoiceTranscript, voiceCancelWithDeadline, voiceStartWithDeadline, type VoiceSession, type VoiceTranscript } from './perception.ts';
+import { parseVoiceAvailability, voiceAvailabilityNote, parseVoiceSession, parseVoiceTranscript, voiceCancelWithDeadline, voiceStartWithDeadline, type VoiceSession, type VoiceTranscript } from './perception.ts';
 
 /** Experimental boundary only: no UI calls it and no receipt authorizes audio deletion. */
 export type RetainedVoiceRecord = {
@@ -13,6 +13,17 @@ const uuid = (value: unknown): value is string => typeof value === 'string' && /
 const destinationOK = (value: unknown): value is string => value === 'chat' || (typeof value === 'string' && /^session:[a-f0-9]{64}$/.test(value));
 const localeOK = (value: unknown): value is string => typeof value === 'string' && value.length <= 40 && /^es(?:-[a-z0-9]{1,8})*$/i.test(value);
 const recordError = () => new Error('No pude verificar el audio. Revisa su estado antes de continuar.');
+export class RetainedVoiceAssetsRequired extends Error {
+  constructor() { super('Prepara el idioma del audio para volver a transcribirlo.'); this.name = 'RetainedVoiceAssetsRequired'; }
+}
+function retainedAssetFailure(raw: unknown): void {
+  if (!isObject(raw) || raw.ok !== false || typeof raw.error !== 'string') return;
+  if (raw.error === 'assets_required') throw new RetainedVoiceAssetsRequired();
+  if (raw.error === 'asset_reservation_failed') throw new Error('Apple no pudo reservar el idioma de este audio. Revisa el espacio disponible e inténtalo de nuevo.');
+  if (['assets_downloading', 'unsupported_configuration', 'asset_status_unknown'].includes(raw.error)) {
+    throw new Error(voiceAvailabilityNote({ available: false, status: raw.error, microphonePermission: 'undetermined', assetsInstalled: false, recording: false, readyToTranscribe: false, busy: false }) ?? 'No pude preparar la voz.');
+  }
+}
 
 export function parseRetainedVoiceRecord(input: unknown): RetainedVoiceRecord {
   const value: unknown = structuredClone(input);
@@ -82,11 +93,27 @@ export function createRetainedVoiceBridge(call: typeof native = native, deadline
     async attach(input: unknown): Promise<RetainedVoiceRecord> {
       const record = parseRetainedVoiceRecord(input);
       if (record.state !== 'ready') throw recordError();
-      const value = reply(await call('attach_retained_voice', { record }));
+      const raw = await call('attach_retained_voice', { record }); retainedAssetFailure(raw);
+      const value = reply(raw);
       const actual = parseRetainedVoiceRecord(value.retainedAudio);
       if (!sameRecord(record, actual) || typeof value.sessionId !== 'string' || value.sessionId.toLowerCase() !== record.id.toLowerCase()
         || typeof value.ownerId !== 'string' || value.ownerId.toLowerCase() !== record.owner.toLowerCase()) throw recordError();
       return actual;
+    },
+    /** Explicit user retry only. A fresh preparation owner never replaces the
+     * recording's owner or destination. Native validates the exact journal. */
+    async prepare(input: unknown, owner: string): Promise<void> {
+      const expected = parseRetainedVoiceRecord(input);
+      if (expected.state !== 'ready' || !uuid(owner) || owner.toLowerCase() === expected.owner.toLowerCase()) throw recordError();
+      const raw = await call('prepare_retained_voice', { record: expected, ownerId: owner });
+      if (!isObject(raw) || raw.ok !== true) {
+        retainedAssetFailure(raw);
+        throw new Error('No se completó la preparación de voz. El audio se conserva; revisa la conexión y el espacio.');
+      }
+      const state = parseVoiceAvailability(raw);
+      if (!state.available || state.locale?.toLowerCase() !== expected.locale.toLowerCase()) throw new Error(voiceAvailabilityNote(state) ?? 'Apple aún no terminó de preparar este idioma. El audio se conserva.');
+      const current = await inspectState();
+      if (current.state !== 'retained' || !sameRecord(current.record, expected)) throw recordError();
     },
     async discard(input: unknown): Promise<void> {
       const expected = parseRetainedVoiceRecord(input);

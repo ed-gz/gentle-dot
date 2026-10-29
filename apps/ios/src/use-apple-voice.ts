@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceControls, VoicePhase } from '@gentle-dot/ui/src/useVoice.ts';
 import { checkVoice, prepareVoice, cancelVoice, voiceCancelWithDeadline, voiceAvailabilityNote, VoiceCancelUnconfirmed, VoiceRetryPending, type VoiceAvailability } from './perception.ts';
-import { createRetainedVoiceBridge, type RetainedVoiceRecord } from './retained-voice.ts';
+import { createRetainedVoiceBridge, RetainedVoiceAssetsRequired, type RetainedVoiceRecord } from './retained-voice.ts';
 import { createNativeVoiceReceipts, type NativeVoiceReceipt } from './native-voice-receipts.ts';
 import { createProtectedVoice, cleanupDeliveredVoiceReceipt, prepareNativeVoiceCapacity } from './protected-voice.ts';
 import { createSessionVoiceDrafts } from './session-voice-drafts.ts';
@@ -34,14 +34,14 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
   const [discarding, setDiscarding] = useState(false);
   const [draft, setDraft] = useState<{ id: number; text: string; receipt?: NativeVoiceReceipt }>();
   const pendingReceipt = useRef<{ id: number; receipt: NativeVoiceReceipt; destination: string } | undefined>(undefined);
-  const owner = useRef<{ epoch: number; session: string; ownerId: string; pending: boolean; retry: boolean; enabled: boolean; destination?: string; record?: RetainedVoiceRecord; needsAttach: boolean; discardPending: boolean }>({ epoch: 0, session: '', ownerId: '', pending: false, retry: false, enabled, destination, needsAttach: false, discardPending: false });
+  const owner = useRef<{ epoch: number; session: string; ownerId: string; pending: boolean; retry: boolean; enabled: boolean; destination?: string; record?: RetainedVoiceRecord; needsAttach: boolean; discardPending: boolean; preparingRetained: boolean }>({ preparingRetained: false, epoch: 0, session: '', ownerId: '', pending: false, retry: false, enabled, destination, needsAttach: false, discardPending: false });
   owner.current.enabled = enabled;
   owner.current.destination = destination;
   const release = useCallback((discardRetry: boolean, forceCancel = false) => {
     const state = owner.current;
     const ownerId = state.ownerId;
-    const retainAudio = state.retry && !discardRetry && !forceCancel;
-    state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false; state.retry = false; state.record = undefined; state.needsAttach = false; state.discardPending = false;
+    const retainAudio = state.retry && !discardRetry && !forceCancel && !state.preparingRetained;
+    state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false; state.retry = false; state.record = undefined; state.needsAttach = false; state.discardPending = false; state.preparingRetained = false;
     setPhase('idle'); setPreparing(false); setElapsed(0); setLevel(0); setPartial(''); setDraft(undefined); setNote(undefined); setRetryPending(false); setRetryCancellation(false);
     if (ownerId && !retainAudio) {
       // Navigation can outlive the cancellation callback. Keep the original
@@ -135,10 +135,10 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
   useEffect(() => {
     // A native permission dialog may obscure the web view before a capture is
     // established. The native controller handles real background transitions.
-    const hidden = () => { if (document.hidden && owner.current.session && !owner.current.retry) cancel(); };
+    const hidden = () => { if (document.hidden && owner.current.preparingRetained) cancelPending(); else if (document.hidden && owner.current.session && !owner.current.retry) cancel(); };
     document.addEventListener('visibilitychange', hidden);
     return () => document.removeEventListener('visibilitychange', hidden);
-  }, [cancel]);
+  }, [cancel, cancelPending]);
   const stop = useCallback(() => {
     const state = owner.current;
     if (!state.session || state.pending) return;
@@ -147,7 +147,22 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     const record = state.record;
     void (async () => {
       if (!record || !originalDestination || record.id.toLowerCase() !== id.toLowerCase()) throw new Error('No pude verificar el audio de este dictado.');
-      const saved = state.needsAttach ? await protectedVoice.recover(record) : await protectedVoice.finish(record);
+      let saved;
+      try { saved = state.needsAttach ? await protectedVoice.recover(record) : await protectedVoice.finish(record); }
+      catch (error) {
+        if (!(error instanceof RetainedVoiceAssetsRequired) || !state.needsAttach || state.epoch !== epoch) throw error;
+        const preparationOwner = localIdentifier();
+        state.ownerId = preparationOwner; state.preparingRetained = true;
+        setNote('Preparando el idioma de este audio. Necesitas internet; puedes cancelar sin borrar el audio.');
+        try {
+          await retainedBridge.prepare(record, preparationOwner);
+          if (state.epoch !== epoch || !state.enabled || state.destination !== originalDestination || document.hidden) return;
+        } finally {
+          if (state.epoch === epoch) { state.ownerId = originalOwner; state.preparingRetained = false; }
+        }
+        setNote('Transcribiendo en este iPhone…');
+        saved = await protectedVoice.recover(record);
+      }
       if (state.epoch !== epoch || !state.enabled || state.destination !== originalDestination) return;
       if (originalOwner) forgetVoiceOrigin(originalOwner);
       state.retry = false; state.record = saved.receipt.audio; state.needsAttach = false;
@@ -255,8 +270,8 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       state.ownerId = ''; setNote(error.message);
     } }).finally(() => { if (state.epoch === epoch) { state.pending = false; setPreparing(false); } });
   }, [availability, destination, retryAvailability, stop]);
-  return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : retryCancellation || retryAvailability || retryableVoiceStatus(availability) ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
-    phase, inputBusy: preparing, elapsed, level, partial, note, draft, start, stop, cancel, cancelPending, retryPending, discarding, discardPending,
+  return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : retryPending || retryCancellation || retryAvailability || retryableVoiceStatus(availability) ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
+    phase, inputBusy: preparing, preparingRetained: owner.current.preparingRetained, elapsed, level, partial, note, draft, start, stop, cancel, cancelPending, retryPending, discarding, discardPending,
     deferDraft: id => {
       const pending = pendingReceipt.current;
       if (!pending || pending.id !== id) return;

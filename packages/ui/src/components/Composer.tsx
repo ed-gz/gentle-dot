@@ -82,7 +82,7 @@ export function Composer({
 	const voiceInputPending = capriMobile && inputOnly && Boolean(voice?.inputBusy || recording || voice?.phase === "transcribing" || voice?.draft);
 	const cancelPendingVoice = Boolean(capriMobile && inputOnly && voice?.cancelPending && (voice.inputBusy || voice.phase === "transcribing"));
 	const voiceStatus =
-		voice?.phase === "transcribing" ? copy("Transcribing…", "Transcribiendo…") : voice?.note;
+		voice?.preparingRetained ? voice.note : voice?.phase === "transcribing" ? copy("Transcribing…", "Transcribiendo…") : voice?.note;
 
 	// A dictation to review joins what was already typed, and the cursor waits at its end.
 	const draft = voice?.draft;
@@ -288,14 +288,14 @@ export function Composer({
 						type="button"
 						className={`composer-mic${recording ? " composer-mic-on" : ""}`}
 						aria-label={
-							cancelPendingVoice ? "Cancelar dictado" : recording
+							cancelPendingVoice ? (voice.preparingRetained ? "Cancelar preparación de voz" : "Cancelar dictado") : recording
 								? voice.sendOnStop
 									? copy("Stop and send", "Terminar y enviar")
 									: copy("Stop and review", "Terminar y revisar")
-								: copy("Talk", "Dictar mensaje")
+								: voice.retryPending ? "Reintentar transcripción" : copy("Talk", "Dictar mensaje")
 						}
 						title={
-							cancelPendingVoice ? "Cancelar dictado" : voice.mic.available
+							cancelPendingVoice ? (voice.preparingRetained ? "Cancelar preparación de voz" : "Cancelar dictado") : voice.retryPending ? "Reintentar transcripción" : voice.mic.available
 								? voice.sendOnStop
 									? copy("Tap to talk, tap again to send", "Toca para hablar y otra vez para enviar")
 									: copy(
