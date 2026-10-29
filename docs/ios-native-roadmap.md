@@ -66,11 +66,11 @@ El arte personal 240 × 420 permanece fuera del Git público. El build personal 
 | Paso Apple | Instrucción UI hasta 2 400 caracteres; bridge agent_step hasta 8 000 escalares, respuesta hasta 768 tokens; ciclo hasta 16 pasos | Catálogo abreviado y esquemas por demanda; observaciones/contexto acotados. La ruta anterior respond conserva su límite 4 000/384 |
 | Contexto del host | Hasta cuatro turnos locales recientes desde la última confirmación host; envoltura hasta 1 200 y petición total 8 000 | No envía el archivo completo por defecto; transportText ayuda a reconciliar el texto enviado |
 | Enlace | Payload hasta 1 MB, handshake 12 s, reconexión hasta 30 s | No reenvía prompts al reconectar; el eco conversacional vence en 15 s y no es el ACK de trabajos |
-| Trabajos | 100 trabajos, 10 archivos, 25 MiB por archivo / 50 MiB total, 100 versiones de hasta 200 000 caracteres | Las reuniones que excedan capacidad necesitan dividirse o una ampliación explícita, no truncamiento silencioso |
-| Dictado | Comando temporal de hasta 90 s, texto hasta 32 000 y 2 000 segmentos | El CAF se elimina; no es un archivo reproducible de reunión |
+| Trabajos | 100 trabajos, 10 archivos, audio hasta 128 MiB, otros archivos hasta 25 MiB, 256 MiB de adjuntos por trabajo y 100 versiones de hasta 200 000 caracteres | El host debe anunciar los límites ampliados; con un host anterior se conservan 25 MiB por audio y 50 MiB por trabajo. No se trunca el material silenciosamente |
+| Dictado | Comando de hasta 90 s, texto hasta 32 000 y 2 000 segmentos | El audio puede conservarse para recuperar un dictado no confirmado; no sustituye Notas de Voz para grabar reuniones |
 | Vision | 12 MiB, 20 páginas PDF, hasta 2 400 px por dimensión, 200 000 caracteres | Evidencia con hash/cajas; PDF protegido o límites excedidos se rechazan explícitamente |
 | Conexiones | Hasta 32 conexiones; credenciales Keychain hasta 16 KiB; registro hasta 1 000 ejecuciones | Capacidad finita y resultados inciertos conservados; sin limpieza automática que habilite duplicados |
-| Gmail adjuntos | Hasta cinco, 800 kB totales antes de MIME | Límite del transporte nativo; no confundir con los 50 MiB de la bandeja |
+| Gmail adjuntos | Hasta cinco, 800 kB totales antes de MIME | Límite del transporte nativo; no confundirlo con la capacidad de la bandeja |
 
 Los estados de trabajo local/prepared/approved/sending/sent/uncertain/failed conservan revisiones y aprobación exacta. Editar invalida la aprobación. sent requiere recibo durable de ese snapshot; no significa minuta lista ni acción externa ejecutada. Un sending recuperado no se promueve por inferencia.
 
