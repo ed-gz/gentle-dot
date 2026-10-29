@@ -72,6 +72,7 @@ final class VoiceRecoveryJournal {
     private let syncDirectory: (URL) throws -> Void
     private let maxAudioBytes: Int64 = 128 * 1024 * 1024
     private var manifest: URL { root.appendingPathComponent("current.json") }
+    private var discardMarker: URL { root.appendingPathComponent(".discard.json") }
     private var lockFile: URL { root.appendingPathComponent(".journal.lock") }
 
     init(root: URL, manager: FileManager = .default, syncDirectory: @escaping (URL) throws -> Void = VoiceRecoveryJournal.syncDirectory) {
@@ -83,6 +84,21 @@ final class VoiceRecoveryJournal {
         guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         defer { _ = closeVoiceDescriptor(fd) }
         guard fsync(fd) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+    }
+
+    private func syncFile(_ url: URL) throws {
+        let fd = url.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        defer { _ = closeVoiceDescriptor(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), info.st_nlink == 1 else {
+            throw VoiceRecoveryJournalError.corrupt
+        }
+        #if canImport(Darwin)
+        guard fcntl(fd, F_FULLFSYNC) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        #else
+        guard fsync(fd) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        #endif
     }
 
     private func locked<T>(_ operation: () throws -> T) rethrows -> T {
@@ -155,18 +171,19 @@ final class VoiceRecoveryJournal {
         defer { _ = flock(fd, LOCK_UN); _ = closeVoiceDescriptor(fd) }
         return try operation()
     }
-    private func read() throws -> VoiceRecoveryRecord? {
-        guard try exists(manifest) else { return nil }
-        let values = try manifest.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+    private func readRecord(_ url: URL) throws -> VoiceRecoveryRecord? {
+        guard try exists(url) else { return nil }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
         guard values.isRegularFile == true, values.isSymbolicLink != true,
               let size = values.fileSize, size > 0, size <= 8192 else { throw VoiceRecoveryJournalError.corrupt }
-        let data = try Data(contentsOf: manifest)
+        let data = try Data(contentsOf: url)
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let state = object["state"] as? String,
               Set(object.keys) == Set(["id", "owner", "destination", "locale", "kind", "createdAt", "state"] + (state == "ready" ? ["byteCount", "sha256"] : [])),
               let record = try? JSONDecoder().decode(VoiceRecoveryRecord.self, from: data), valid(record) else { throw VoiceRecoveryJournalError.corrupt }
         return record
     }
+    private func read() throws -> VoiceRecoveryRecord? { try readRecord(manifest) }
     private func write(_ record: VoiceRecoveryRecord) throws {
         let data = try JSONEncoder().encode(record)
         try data.write(to: manifest, options: .atomic)
@@ -222,12 +239,84 @@ final class VoiceRecoveryJournal {
             device: UInt64(truncatingIfNeeded: before.st_dev), inode: UInt64(truncatingIfNeeded: before.st_ino),
             modifiedSeconds: beforeTime.0, modifiedNanoseconds: beforeTime.1))
     }
-    func current() throws -> VoiceRecoveryRecord? { try locked { try withFileLock(shared: true) { try read() } } }
+    func current() throws -> VoiceRecoveryRecord? { try locked { try withFileLock(shared: true) {
+        guard try readRecord(discardMarker) == nil else { throw VoiceRecoveryJournalError.busy }
+        return try read()
+    } } }
+
+    /// Opt-in recovery boundary. Until the caller surfaces this state, the
+    /// existing remove operation remains unchanged.
+    func pendingDiscard() throws -> VoiceRecoveryRecord? {
+        try locked { try withFileLock(shared: true) { try readRecord(discardMarker) } }
+    }
+
+    func inspectWithDiscard() throws -> (record: VoiceRecoveryRecord?, discardPending: VoiceRecoveryRecord?) {
+        try locked { try withFileLock(shared: true) {
+            let pending = try readRecord(discardMarker), record = try read()
+            if let pending {
+                guard record == nil || record == pending else { throw VoiceRecoveryJournalError.corrupt }
+                return (nil, pending)
+            }
+            return (record, nil)
+        } }
+    }
+
+    /// Exact user-authorized discard with a durable intent. A caller must
+    /// surface `pendingDiscard()` before enabling this operation in the app.
+    func discardDurably(_ expected: VoiceRecoveryRecord) throws {
+        try locked {
+          try withFileLock(shared: false) {
+            guard valid(expected) else { throw VoiceRecoveryJournalError.invalid }
+            let marker = try readRecord(discardMarker)
+            let current = try read()
+            if let marker {
+                guard marker == expected, current == nil || current == expected else { throw VoiceRecoveryJournalError.changed }
+                // An earlier callback may have failed after the marker rename.
+                try syncFile(discardMarker); try syncDirectory(root)
+            } else {
+                if current == nil {
+                    // A callback or final directory sync may have failed after
+                    // the marker was unlinked. Confirm only the present empty
+                    // state; never remove unexpectedly reappearing audio.
+                    guard !(try exists(audio(expected))) else { throw VoiceRecoveryJournalError.changed }
+                    try syncDirectory(root)
+                    return
+                }
+                guard current == expected else { throw VoiceRecoveryJournalError.changed }
+                try JSONEncoder().encode(expected).write(to: discardMarker, options: .atomic)
+                #if os(iOS)
+                try manager.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: discardMarker.path)
+                #endif
+                try syncFile(discardMarker); try syncDirectory(root)
+            }
+            let file = audio(expected)
+            if try exists(file) {
+                if expected.state == .ready {
+                    let (_, identity) = try audioIdentity(expected)
+                    guard identity.byteCount == expected.byteCount, identity.sha256 == expected.sha256 else { throw VoiceRecoveryJournalError.changed }
+                } else {
+                    var info = stat()
+                    guard file.path.withCString({ lstat($0, &info) }) == 0,
+                          info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), info.st_nlink == 1 else {
+                        throw VoiceRecoveryJournalError.invalidAudio
+                    }
+                }
+                try manager.removeItem(at: file)
+            }
+            try syncDirectory(root)
+            if current != nil { try manager.removeItem(at: manifest) }
+            try syncDirectory(root)
+            try manager.removeItem(at: discardMarker)
+            try syncDirectory(root)
+          }
+        }
+    }
     func acquire(_ expected: VoiceRecoveryRecord) throws -> VoiceRecoveryReadLease {
         try locked {
             try ensureRoot()
             let fd = try acquireFileLock(shared: true)
             do {
+                guard try readRecord(discardMarker) == nil else { throw VoiceRecoveryJournalError.busy }
                 guard valid(expected), expected.state == .ready, try read() == expected else { throw VoiceRecoveryJournalError.changed }
                 let (file, identity) = try audioIdentity(expected)
                 guard expected.byteCount == identity.byteCount, expected.sha256 == identity.sha256 else { throw VoiceRecoveryJournalError.changed }
@@ -269,6 +358,7 @@ final class VoiceRecoveryJournal {
     func publish(_ expected: VoiceRecoveryRecord) throws -> VoiceRecoveryRecord {
         try locked {
           try withFileLock(shared: false) {
+            guard try readRecord(discardMarker) == nil else { throw VoiceRecoveryJournalError.busy }
             guard valid(expected), expected.state == .capturing else { throw VoiceRecoveryJournalError.invalid }
             guard try read() == expected else { throw VoiceRecoveryJournalError.changed }
             let (file, identity) = try audioIdentity(expected)
@@ -291,6 +381,7 @@ final class VoiceRecoveryJournal {
     func remove(_ expected: VoiceRecoveryRecord) throws {
         try locked {
           try withFileLock(shared: false) {
+            guard try readRecord(discardMarker) == nil else { throw VoiceRecoveryJournalError.busy }
             guard valid(expected), try read() == expected else { throw VoiceRecoveryJournalError.changed }
             let file = audio(expected)
             if try exists(file) { try manager.removeItem(at: file) }
@@ -304,6 +395,7 @@ final class VoiceRecoveryJournal {
     func releaseExact(_ expected: VoiceRecoveryRecord) throws {
         try locked {
           try withFileLock(shared: false) {
+            guard try readRecord(discardMarker) == nil else { throw VoiceRecoveryJournalError.busy }
             guard valid(expected), expected.state == .ready else { throw VoiceRecoveryJournalError.invalid }
             let existing = try read()
             if existing == nil {

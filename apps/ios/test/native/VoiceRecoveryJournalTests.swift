@@ -87,6 +87,78 @@ struct VoiceRecoveryJournalTests {
         check(reject { _ = try journal.reserve(id: orphanID, owner: owner, destination: "chat", locale: "es-MX", kind: .speech) }, "never overwrite an orphan symlink")
         check(reject { _ = try journal.reserve(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-MX", kind: .speech) }, "an orphan with another identity blocks reservation")
         try fm.removeItem(at: orphan)
+        let discardRoot = root.appendingPathComponent("discard-test")
+        let discard = VoiceRecoveryJournal(root: discardRoot)
+        let (discardCapture, discardFile) = try discard.reserve(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-MX", kind: .speech)
+        try Data([10, 11]).write(to: discardFile)
+        let discardReady = try discard.publish(discardCapture)
+        var discardSyncs = 0
+        let interruptedDiscard = VoiceRecoveryJournal(root: discardRoot, syncDirectory: { _ in
+            discardSyncs += 1
+            if discardSyncs == 3 { throw VoiceRecoveryJournalError.invalid }
+        })
+        check(reject { try interruptedDiscard.discardDurably(discardReady) }, "failure after manifest unlink is never confirmed")
+        check(try discard.pendingDiscard() == discardReady, "an exact durable intent remains visible for recovery")
+        let pendingView = try discard.inspectWithDiscard()
+        check(pendingView.record == nil && pendingView.discardPending == discardReady, "atomic inspection distinguishes pending discard from an empty journal")
+        check(reject { _ = try discard.current() } && !fm.fileExists(atPath: discardFile.path), "inspection must not call an unfinished discard empty")
+        check(reject { _ = try discard.acquire(discardReady) } && reject { try discard.releaseExact(discardReady) }, "other journal operations cannot bypass a pending discard")
+        check(reject { _ = try discard.reserve(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-MX", kind: .speech) }, "pending discard blocks a new reservation")
+        let wrongDiscard = VoiceRecoveryRecord(id: UUID().uuidString, owner: owner, destination: discardReady.destination,
+            locale: discardReady.locale, kind: discardReady.kind, createdAt: discardReady.createdAt,
+            state: discardReady.state, byteCount: discardReady.byteCount, sha256: discardReady.sha256)
+        check(reject { try discard.discardDurably(wrongDiscard) }, "another identity cannot complete a pending discard")
+        let differentCapture = VoiceRecoveryRecord(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-MX",
+            kind: .speech, createdAt: discardReady.createdAt, state: .capturing, byteCount: nil, sha256: nil)
+        let differentFile = discardRoot.appendingPathComponent("\(differentCapture.id.lowercased()).caf")
+        try JSONEncoder().encode(differentCapture).write(to: discardRoot.appendingPathComponent("current.json"), options: .atomic)
+        try Data([99]).write(to: differentFile)
+        check(reject { _ = try discard.inspectWithDiscard() } && reject { try discard.discardDurably(discardReady) }, "contradictory current identity fails closed")
+        check(fm.fileExists(atPath: differentFile.path), "contradictory capture is never removed")
+        try fm.removeItem(at: discardRoot.appendingPathComponent("current.json"))
+        try fm.removeItem(at: differentFile)
+        // Model the old audio reappearing after an interrupted filesystem sync.
+        try Data([10, 11]).write(to: discardFile, options: .atomic)
+        try discard.discardDurably(discardReady)
+        check(try discard.pendingDiscard() == nil && !fm.fileExists(atPath: discardFile.path), "exact recovery completes the discard")
+        let emptyView = try discard.inspectWithDiscard()
+        check(emptyView.record == nil && emptyView.discardPending == nil, "completed discard inspects as empty")
+        let (newCapture, newFile) = try discard.reserve(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-MX", kind: .speech)
+        try Data([12]).write(to: newFile)
+        check(reject { try discard.discardDurably(discardReady) }, "a stale retry cannot remove a new capture")
+        check(try discard.current() == newCapture && fm.fileExists(atPath: newFile.path), "new capture survives stale discard")
+        try discard.remove(newCapture)
+        let (unsafeCapture, unsafeFile) = try discard.reserve(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-MX", kind: .speech)
+        try fm.createDirectory(at: unsafeFile, withIntermediateDirectories: false)
+        let nested = unsafeFile.appendingPathComponent("keep")
+        try Data([42]).write(to: nested)
+        check(reject { try discard.discardDurably(unsafeCapture) }, "a substituted directory is not deleted recursively")
+        check(try fm.fileExists(atPath: nested.path) && discard.pendingDiscard() == unsafeCapture, "unexpected bytes and discard intent remain for review")
+        try fm.removeItem(at: unsafeFile)
+        try discard.discardDurably(unsafeCapture)
+        let (lastCapture, lastFile) = try discard.reserve(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-MX", kind: .speech)
+        try Data([7, 8]).write(to: lastFile)
+        let lastReady = try discard.publish(lastCapture)
+        var lastSyncs = 0
+        let lastSyncFailure = VoiceRecoveryJournal(root: discardRoot, syncDirectory: { _ in
+            lastSyncs += 1
+            if lastSyncs == 4 { throw VoiceRecoveryJournalError.invalid }
+        })
+        check(reject { try lastSyncFailure.discardDurably(lastReady) }, "failure after marker unlink never returns success")
+        check(try discard.pendingDiscard() == nil && discard.current() == nil, "last failure may leave no visible marker or manifest")
+        try Data([7, 8]).write(to: lastFile, options: .atomic)
+        check(reject { try discard.discardDurably(lastReady) } && fm.fileExists(atPath: lastFile.path), "reappearing audio without marker is preserved")
+        try fm.removeItem(at: lastFile)
+        var retries = 0
+        let retryDiscard = VoiceRecoveryJournal(root: discardRoot, syncDirectory: { _ in retries += 1 })
+        try retryDiscard.discardDurably(lastReady)
+        check(retries == 1, "empty retry synchronizes the directory before confirming the current state")
+        let (lastNewCapture, lastNewFile) = try discard.reserve(id: UUID().uuidString, owner: owner, destination: "chat", locale: "es-MX", kind: .speech)
+        try Data([13]).write(to: lastNewFile)
+        check(reject { try discard.discardDurably(lastReady) }, "a lost callback retry cannot remove a later capture")
+        check(try discard.current() == lastNewCapture && fm.fileExists(atPath: lastNewFile.path), "later capture survives final-sync retry")
+        try discard.remove(lastNewCapture)
+        try fm.removeItem(at: discardRoot)
         let alias = root.deletingLastPathComponent().appendingPathComponent("\(root.lastPathComponent)-alias")
         try fm.createSymbolicLink(at: alias, withDestinationURL: root)
         defer { try? fm.removeItem(at: alias) }
