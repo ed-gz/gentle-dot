@@ -37,6 +37,7 @@ struct VoiceReply: Encodable {
     /// Present only for an explicitly requested, verified journal copy. The
     /// copy is not an acknowledgement that the draft was saved.
     var retainedAudio: VoiceRecoveryRecord? = nil
+    var failureDiagnostic: VoiceFailureDiagnostic? = nil
 
     static func failure(_ error: String, _ message: String) -> VoiceReply {
         VoiceReply(message: message, error: error)
@@ -149,12 +150,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     }
 
     private func installed(_ locale: Locale, kind: VoiceTranscriberKind) async -> Bool {
-        let locales: [Locale]
-        switch kind {
-        case .speech: locales = await SpeechTranscriber.installedLocales
-        case .dictation: locales = await DictationTranscriber.installedLocales
-        }
-        return locales.contains { $0.identifier(.bcp47) == locale.identifier(.bcp47) }
+        let final = makeTranscriber(for: locale, kind: kind)
+        let preview = makeTranscriber(for: locale, kind: kind, incremental: true)
+        return await AssetInventory.status(forModules: [final.module, preview.module]) == .installed
     }
 
     // Use the shipping initializer, with the same configuration for asset
@@ -250,8 +248,8 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         }
     }
 
-    private func pending(_ id: String, reason: String) -> VoiceReply {
-        let message = VoiceRecoveryMessage.forReason(reason)
+    private func pending(_ id: String, reason: String, diagnostic: VoiceFailureDiagnostic? = nil) -> VoiceReply {
+        let message = VoiceRecoveryMessage.forReason(reason, diagnostic: diagnostic)
         recoveryIssue = message
         var reply = VoiceReply.failure("preview_pending", message)
         reply.sessionId = id
@@ -302,7 +300,8 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         guard epoch == generation else { return .failure("cancelled", "Preparación cancelada.") }
         do {
             let module = makeTranscriber(for: selected.locale, kind: selected.kind)
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [module.module]) {
+            let preview = makeTranscriber(for: selected.locale, kind: selected.kind, incremental: true)
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [module.module, preview.module]) {
                 try await request.downloadAndInstall()
             }
             guard epoch == generation, !Task.isCancelled else { return .failure("cancelled", "Preparación cancelada.") }
@@ -335,7 +334,21 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             return .failure("unsupported_language", "SpeechAnalyzer no está disponible en español en este iPhone.")
         }
         guard await installed(selected.locale, kind: selected.kind) else { return .failure("assets_required", "Prepara los modelos de voz antes de dictar sin conexión.") }
+        guard epoch == generation, !Task.isCancelled else { return .failure("cancelled", "Dictado cancelado.") }
         let module = makeTranscriber(for: selected.locale, kind: selected.kind)
+        let preview = makeTranscriber(for: selected.locale, kind: selected.kind, incremental: true)
+        do {
+            // installedLocales is device-wide; a downloaded model can belong
+            // to another app. Reserve this app's locale even on the fast path
+            // which skips prepare(), and verify both module configurations.
+            try await AssetInventory.reserve(locale: selected.locale)
+            guard try await AssetInventory.assetInstallationRequest(supporting: [module.module, preview.module]) == nil else {
+                return .failure("assets_required", "Prepara los modelos de voz antes de dictar sin conexión.")
+            }
+        } catch {
+            return .failure("asset_reservation_failed", "Apple no pudo reservar la voz en español para Capri. Revisa el espacio disponible e inténtalo de nuevo.")
+        }
+        guard epoch == generation, !Task.isCancelled else { return .failure("cancelled", "Dictado cancelado.") }
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module.module]) else {
             return .failure("audio_format_unavailable", "No hay un formato de audio compatible con el transcriptor.")
         }
@@ -376,7 +389,6 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             try audio.setActive(true)
             startupAudioActive = true
             liveTranscript = LiveTranscript(); previewIssue = nil
-            let preview = makeTranscriber(for: selected.locale, kind: selected.kind, incremental: true)
             let previewFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [preview.module])
             guard epoch == generation, !Task.isCancelled, UIApplication.shared.applicationState == .active else {
                 let cancelled = epoch != generation || Task.isCancelled
@@ -610,6 +622,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             let convertedURL = Self.temporaryDirectory.appendingPathComponent("\(id).analysis.caf")
             defer { try? FileManager.default.removeItem(at: convertedURL) }
             var preparingAudio = true
+            var phase = VoiceFailureDiagnostic.Phase.analysis
             do {
                 // Conversion is bounded but can be slow. Keep it off the main
                 // actor so timeout/background can release the UI promptly.
@@ -633,7 +646,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                     // indication that speech recognition found no words.
                     return .failure("empty_audio", "No se capturó una instrucción.")
                 }
+                phase = .finalization
                 try await analysis.finalizeAndFinish(through: lastSample)
+                phase = .results
                 let segments = try await results.value
                 guard !Task.isCancelled else { return .failure("cancelled", "Dictado cancelado.") }
                 if !segments.isEmpty && !VoiceTranscriptBounds.valid(segments.map { (text: $0.text, start: $0.startSeconds, end: $0.endSeconds) }, duration: duration) {
@@ -647,7 +662,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                 // The phase is enough to guide the user; do not expose error
                 // payloads which may contain paths or other private details.
                 let reason = error is VoiceEvidenceError ? "invalid_evidence" : preparingAudio ? "audio_format_unavailable" : "transcription_failed"
-                return .failure(reason, "No pude completar la transcripción local.")
+                var reply = VoiceReply.failure(reason, "No pude completar la transcripción local.")
+                if reason == "transcription_failed" { reply.failureDiagnostic = VoiceFailureDiagnostic(phase: phase, error: error) }
+                return reply
             }
         }
         finalOperation = work
@@ -668,7 +685,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         guard var result, result.ok else {
             requestFinalShutdown()
             preserve = true
-            return pending(id, reason: result?.error ?? "transcription_timeout")
+            return pending(id, reason: result?.error ?? "transcription_timeout", diagnostic: result?.failureDiagnostic)
         }
         finalOperation = nil
         finalResults = nil

@@ -1,9 +1,41 @@
 import Foundation
 
+/// Only fixed stage names, known system domains and bounded numeric codes
+/// leave the native bridge. Never include NSError descriptions or userInfo.
+struct VoiceFailureDiagnostic: Encodable {
+    enum Phase: String, Encodable { case analysis, finalization, results }
+    let phase: Phase
+    let category: String
+    let code: Int?
+
+    init(phase: Phase, error: Error) {
+        let native = error as NSError
+        self.phase = phase
+        switch native.domain {
+        case "SFSpeechErrorDomain": category = "Speech"
+        case NSOSStatusErrorDomain: category = "Audio"
+        case NSCocoaErrorDomain: category = "Sistema"
+        default: category = "Otro"
+        }
+        // Unrecognized domains and arbitrary error payloads are not safe to expose.
+        code = category != "Otro" && (-999_999...999_999).contains(native.code) ? native.code : nil
+    }
+
+    var description: String {
+        let label: String
+        switch phase {
+        case .analysis: label = "análisis"
+        case .finalization: label = "finalización"
+        case .results: label = "resultados"
+        }
+        return "Etapa: \(label) · \(category)\(code.map { " \($0)" } ?? "")."
+    }
+}
+
 /// Fixed, non-sensitive messages. Never surface an underlying NSError, audio,
 /// transcript, file path, or device identifier through this diagnostic.
 enum VoiceRecoveryMessage {
-    static func forReason(_ reason: String) -> String {
+    static func forReason(_ reason: String, diagnostic: VoiceFailureDiagnostic? = nil) -> String {
         let message: String
         switch reason {
         case "no_speech":
@@ -31,6 +63,7 @@ enum VoiceRecoveryMessage {
         default:
             message = "Apple no pudo completar la transcripción. Toca el micrófono para reintentar."
         }
-        return "\(message) El audio puede perderse si iOS cierra Capri."
+        let detail = reason == "transcription_failed" ? diagnostic.map { " \($0.description)" } ?? "" : ""
+        return "\(message)\(detail) El audio puede perderse si iOS cierra Capri."
     }
 }
