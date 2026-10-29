@@ -56,6 +56,7 @@ const activityLabels: Record<string, string> = {
   session_list: 'Consultando sesiones de la PC', session_read: 'Revisando avance en la PC', session_send: 'Preparando instrucción para Pi',
   session_abort: 'Revisando detención de Pi', work_sync: 'Preparando transferencia', work_recover: 'Comprobando entrega',
   work_process: 'Preparando minuta', work_result: 'Recuperando resultado', work_correct: 'Conservando corrección',
+  work_propose_action: 'Preparando propuesta', work_proposals: 'Revisando propuestas', work_review_action: 'Revisando acción de la minuta',
   connections_list: 'Consultando conexiones', connection_tools: 'Descubriendo herramientas del servicio', connection_call: 'Preparando operación con el servicio',
   recall_history: 'Recuperando nuestra conversación', search_memory: 'Buscando en nuestra conversación', external_prepare: 'Preparando borrador',
 };
@@ -130,7 +131,7 @@ export function createAgentRunner(options: {
             continue;
           }
           const key = JSON.stringify([decision.toolName, canonical(args)]);
-          const readOnly = new Set(['local_capabilities', 'work_list', 'work_read', 'file_list', 'file_read', 'file_ocr', 'session_list', 'session_read', 'work_result', 'connections_list', 'connection_tools', 'recall_history', 'search_memory']).has(decision.toolName);
+          const readOnly = new Set(['local_capabilities', 'work_list', 'work_read', 'file_list', 'file_read', 'file_ocr', 'session_list', 'session_read', 'work_result', 'work_proposals', 'connections_list', 'connection_tools', 'recall_history', 'search_memory']).has(decision.toolName);
           if (!readOnly && invoked.has(key)) throw new Error('Capri intentó repetir la misma operación. Conservé el resultado anterior; revisa el progreso antes de continuar.');
           invoked.add(key);
           const trace: AgentTrace = { id: localIdentifier(), name: decision.toolName, label: activityLabels[decision.toolName] ?? tool.definition.description.slice(0, 120), status: 'running' };

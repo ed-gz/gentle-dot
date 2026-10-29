@@ -102,6 +102,13 @@ test('known read tools can observe advancing state without replaying a mutation'
   assert.deepEqual(f.traces.map(trace => trace.status), ['running', 'done', 'running', 'done']);
 });
 
+test('minute proposals can be checked again after their state changes', async () => {
+  let reads = 0;
+  const reader = { definition: { name: 'work_proposals', description: 'Read proposals.', parameters: { type: 'object' } }, validate: value => value, execute: async () => ({ revision: ++reads }) };
+  const f = sequence([call('tool_describe', { name: 'work_proposals' }), call('work_proposals', { id: 'one' }), call('work_proposals', { id: 'one' }), prompt => { assert.match(prompt, /\"revision\":2/); return answer('Revisado.'); }], { tools: [reader] });
+  assert.equal(await f.runner.run(run()), 'Revisado.'); assert.equal(reads, 2);
+});
+
 test('cancellation discards late inference before it can execute tools', async () => {
   const controller = new AbortController(); let finish, began;
   const started = new Promise(resolve => { began = resolve; }); let executions = 0;
@@ -172,7 +179,7 @@ test('the complete app catalog fits a maximum instruction and preserves each req
   const tools = [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(),
     ...createDesktopTools({ getConnection: () => undefined }),
     ...createWorkTools({ getHost: () => undefined, getDispatcher: () => undefined }).filter(tool =>
-      ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct'].includes(tool.definition.name))];
+      ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct', 'work_propose_action', 'work_proposals', 'work_review_action'].includes(tool.definition.name))];
   assert.ok(tools.length >= 24);
   const instruction = '🦊'.repeat(2400);
   for (const current of tools) {
