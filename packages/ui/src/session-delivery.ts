@@ -13,6 +13,8 @@ export interface OutgoingMessage {
 	attachmentNames?: string[];
 	/** IndexedDB revision used for compare-and-swap across views. */
 	storageVersion?: number;
+	/** An archived suppression marker; never write it back as a delivery. */
+	archived?: true;
 }
 /** Legacy identities were colon-delimited and cannot reliably identify an owner. */
 export const legacyDeliveryIdentity = (identity: string) => `legacy:${JSON.stringify(identity)}`;
@@ -91,10 +93,14 @@ function deliveryKey(item: Pick<OutgoingMessage, "id" | "identity">) { return JS
 function terminal(item: OutgoingMessage) { return item.status === "dismissed" || (item.status === "delivered" && item.evidence === "correlated-v1"); }
 function openDatabase(): Promise<IDBDatabase> {
 	return new Promise((resolve, reject) => {
-		const request = indexedDB.open(DATABASE, 1);
+		const request = indexedDB.open(DATABASE, 2);
 		let settled = false;
 		const timer = setTimeout(() => { settled = true; reject(new Error("El almacén no respondió.")); }, 12_000);
-		request.onupgradeneeded = () => request.result.createObjectStore("deliveries");
+		request.onupgradeneeded = () => {
+			const db = request.result;
+			if (!db.objectStoreNames.contains("deliveries")) db.createObjectStore("deliveries");
+			if (!db.objectStoreNames.contains("archived")) db.createObjectStore("archived");
+		};
 		request.onerror = () => { clearTimeout(timer); settled = true; reject(request.error ?? new Error("No se pudo abrir el almacén.")); };
 		request.onblocked = () => { clearTimeout(timer); settled = true; reject(new Error("El almacén está bloqueado por otra ventana.")); };
 		request.onsuccess = () => { if (settled) request.result.close(); else { clearTimeout(timer); settled = true; resolve(request.result); } };
@@ -118,16 +124,23 @@ async function transactRestore(): Promise<OutgoingMessage[]> {
 	const db = await openDatabase();
 	try {
 		return await new Promise((resolve, reject) => {
-			const tx = db.transaction("deliveries", "readwrite");
+			const tx = db.transaction(["deliveries", "archived"], "readwrite");
 			const store = tx.objectStore("deliveries");
 			const request = store.getAll();
+			const archived = tx.objectStore("archived").getAll();
 			let result: OutgoingMessage[] = [];
 			let failure: unknown;
 			const timer = setTimeout(() => { try { tx.abort(); } catch { /* It may already have committed. */ } reject(new Error("El almacenamiento no confirmó la operación.")); }, 12_000);
-			request.onsuccess = () => {
+			let remaining = 2;
+			const ready = () => {
+				if (--remaining) return;
 				try {
 					const known = new Map<string, OutgoingMessage>();
-					for (const value of request.result) { const item = decode(value, false); known.set(deliveryKey(item), item); }
+					for (const value of archived.result) {
+						const item = decode(value, false), key = deliveryKey(item);
+						known.set(key, { ...item, archived: true });
+					}
+					for (const value of request.result) { const item = decode(value, false); if (known.has(deliveryKey(item))) throw new Error("El envío archivado reapareció; revisa el almacenamiento."); known.set(deliveryKey(item), item); }
 					for (const item of previous) {
 						const key = deliveryKey(item);
 						if (!known.has(key)) { known.set(key, item); store.put(encode(item), key); }
@@ -135,6 +148,7 @@ async function transactRestore(): Promise<OutgoingMessage[]> {
 					result = [...known.values()];
 				} catch (error) { failure = error; tx.abort(); }
 			};
+			request.onsuccess = ready; archived.onsuccess = ready;
 			tx.oncomplete = () => { clearTimeout(timer); resolve(result); };
 			tx.onabort = () => { clearTimeout(timer); reject(failure ?? tx.error ?? new Error("No se pudo guardar el envío.")); };
 			tx.onerror = () => { /* onabort reports the failed transaction */ };
@@ -146,22 +160,26 @@ async function transactRestore(): Promise<OutgoingMessage[]> {
  * never load every stored payload just to send or update one message. */
 async function writeRecords(items: OutgoingMessage[]): Promise<void> {
 	readLegacy(); // Fail closed if legacy data cannot be read or is malformed.
+	if (items.some(item => item.archived)) throw new Error("Los marcadores archivados no son envíos activos.");
 	const keys = items.map(deliveryKey);
 	if (new Set(keys).size !== keys.length) throw new Error("El envío está repetido.");
 	const db = await openDatabase();
 	try {
 		await new Promise<void>((resolve, reject) => {
-			const tx = db.transaction("deliveries", "readwrite");
+			const tx = db.transaction(["deliveries", "archived"], "readwrite");
 			const store = tx.objectStore("deliveries");
+			const archived = tx.objectStore("archived");
 			const count = store.count();
 			const reads = keys.map(key => store.get(key));
+			const markers = keys.map(key => archived.get(key));
 			const updated: Array<{ item: OutgoingMessage; version: number }> = [];
 			let failure: unknown;
-			let pending = reads.length + 1;
+			let pending = reads.length + markers.length + 1;
 			const timer = setTimeout(() => { try { tx.abort(); } catch { /* It may already have committed. */ } reject(new Error("El almacenamiento no confirmó la operación.")); }, 12_000);
 			const ready = () => {
 				if (--pending) return;
 				try {
+					if (markers.some(marker => marker.result !== undefined)) throw new Error("El envío ya fue archivado; vuelve a leer la bandeja.");
 					const old = reads.map(read => read.result === undefined ? undefined : decode(read.result, false));
 					const newCount = old.filter(item => !item).length;
 					if (newCount && count.result + newCount > MAX_OUTBOX_RECORDS) throw new Error("La bandeja alcanzó su capacidad.");
@@ -176,14 +194,78 @@ async function writeRecords(items: OutgoingMessage[]): Promise<void> {
 				} catch (error) { failure = error; tx.abort(); }
 			};
 			count.onsuccess = ready;
-			for (const read of reads) read.onsuccess = ready;
+			for (const read of [...reads, ...markers]) read.onsuccess = ready;
 			tx.oncomplete = () => { clearTimeout(timer); for (const entry of updated) entry.item.storageVersion = entry.version; resolve(); };
 			tx.onabort = () => { clearTimeout(timer); reject(failure ?? tx.error ?? new Error("No se pudo guardar el envío.")); };
 			tx.onerror = () => { /* onabort reports the failed transaction */ };
 		});
 	} finally { db.close(); }
 }
-export async function restoreDeliveries(): Promise<OutgoingMessage[]> { return (await transactRestore()).map(item => decode(encode(item))); }
+export async function restoreDeliveries(): Promise<OutgoingMessage[]> { return (await transactRestore()).map(item => ({ ...decode(encode(item)), ...(item.archived ? { archived: true as const } : {}) })); }
 export async function persistDeliveries(items: OutgoingMessage[]): Promise<boolean> {
 	try { await writeRecords(items); return true; } catch { return false; }
+}
+
+const ARCHIVE_BATCH = 250;
+export interface DeliveryArchive {
+	readonly bytes: Uint8Array;
+	readonly sha256: string;
+	readonly count: number;
+	readonly records: readonly OutgoingMessage[];
+}
+/** Freeze only resolved records. Pending messages are never candidates. */
+export async function prepareDeliveryArchive(hashBytes?: (bytes: Uint8Array) => Promise<string>): Promise<DeliveryArchive> {
+	let records = (await transactRestore()).filter(item => !item.archived && !isLegacyDelivery(item) && terminal(item))
+		.sort((a, b) => a.createdAt - b.createdAt).slice(0, ARCHIVE_BATCH);
+	if (!records.length) throw new Error("No hay envíos resueltos compatibles para archivar; los registros heredados se conservan.");
+	let bytes = new TextEncoder().encode(JSON.stringify({ format: "capri-session-deliveries", version: 1, records: records.map(encode) }));
+	while (bytes.length > 8 * 1024 * 1024 && records.length > 1) {
+		records = records.slice(0, Math.ceil(records.length / 2));
+		bytes = new TextEncoder().encode(JSON.stringify({ format: "capri-session-deliveries", version: 1, records: records.map(encode) }));
+	}
+	if (bytes.length > 8 * 1024 * 1024) throw new Error("Un registro excede el límite de exportación. No se archivó nada.");
+	if (!hashBytes && !globalThis.crypto?.subtle) throw new Error("Este dispositivo no puede verificar el archivo.");
+	const sha256 = hashBytes ? await hashBytes(bytes) : [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(byte => byte.toString(16).padStart(2, "0")).join("");
+	if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error("No se pudo comprobar la copia.");
+	return { bytes, sha256, count: records.length, records };
+}
+/** Compact only after the user reopens the exact exported bytes; keep a marker
+ * for every key to suppress stale host receipts. Legacy records remain intact. */
+export async function compactDeliveryArchive(archive: DeliveryArchive, exported: Uint8Array): Promise<number> {
+	if (archive.bytes.length !== exported.length || archive.bytes.some((byte, i) => exported[i] !== byte)) throw new Error("El archivo elegido no coincide con la copia descargada. No se archivó nada.");
+	if (!archive.records.length || archive.records.length > ARCHIVE_BATCH || archive.count !== archive.records.length) throw new Error("La selección de envíos no es válida.");
+	const expectedBytes = new TextEncoder().encode(JSON.stringify({ format: "capri-session-deliveries", version: 1, records: archive.records.map(encode) }));
+	if (expectedBytes.length !== exported.length || expectedBytes.some((byte, i) => exported[i] !== byte)) throw new Error("La selección de envíos cambió. Descarga otra copia.");
+	readLegacy();
+	const keys = archive.records.map(deliveryKey);
+	if (new Set(keys).size !== keys.length || archive.records.some(item => item.archived || isLegacyDelivery(item) || !terminal(item))) throw new Error("La selección de envíos no es válida.");
+	const db = await openDatabase();
+	try {
+		return await new Promise<number>((resolve, reject) => {
+			const tx = db.transaction(["deliveries", "archived"], "readwrite");
+			const store = tx.objectStore("deliveries"), markers = tx.objectStore("archived");
+			const reads = keys.map(key => store.get(key));
+			const existing = keys.map(key => markers.get(key));
+			let pending = reads.length + existing.length, failure: unknown;
+			const timer = setTimeout(() => { try { tx.abort(); } catch { /* Already settled. */ } reject(new Error("El almacenamiento no confirmó el archivo.")); }, 12_000);
+			const ready = () => {
+				if (--pending) return;
+				try {
+					for (let i = 0; i < keys.length; i++) {
+						const current = reads[i]!.result === undefined ? undefined : decode(reads[i]!.result, false);
+						if (!current || existing[i]!.result !== undefined || !terminal(current) || JSON.stringify(encode(current)) !== JSON.stringify(encode(archive.records[i]!))) throw new Error("Un envío cambió durante la revisión. Descarga otra copia.");
+					}
+					for (const item of archive.records) {
+						const marker: OutgoingMessage = { id: item.id, identity: item.identity, createdAt: item.createdAt, text: "", payload: "", status: "dismissed", baseline: new Set() };
+						const key = deliveryKey(item);
+						markers.put(encode(marker), key); store.delete(key);
+					}
+				} catch (error) { failure = error; tx.abort(); }
+			};
+			for (const read of [...reads, ...existing]) read.onsuccess = ready;
+			tx.oncomplete = () => { clearTimeout(timer); resolve(keys.length); };
+			tx.onabort = () => { clearTimeout(timer); reject(failure ?? tx.error ?? new Error("No se pudo archivar la bandeja.")); };
+			tx.onerror = () => {};
+		});
+	} finally { db.close(); }
 }

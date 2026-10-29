@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AgentConversation, AgentSession, OrchestrationClient } from "../orchestration.ts";
 import type { OrchestrationControls } from "../useOrchestration.ts";
-import { isLegacyDelivery, sessionDeliveryIdentity, reconcileDeliveries, restoreDeliveries, persistDeliveries, type OutgoingMessage } from "../session-delivery.ts";
+import { isLegacyDelivery, sessionDeliveryIdentity, reconcileDeliveries, restoreDeliveries, persistDeliveries, prepareDeliveryArchive, compactDeliveryArchive, type DeliveryArchive, type OutgoingMessage } from "../session-delivery.ts";
 import { useSessionPolling } from "../useSessionPolling.ts";
 import { reconcileRecentConversation } from "../session-history.ts";
 import { publishCompanionActivity, useCompanionResponse } from "../companion-activity.ts";
@@ -47,6 +47,8 @@ export function OrchestrationPanel({
 	requestedSession,
 	identityScope = "",
 	createMessageId = () => crypto.randomUUID(),
+	exportDeliveryArchive,
+	hashDeliveryArchive,
 }: {
 	controls: OrchestrationControls;
 	client: OrchestrationClient;
@@ -59,6 +61,8 @@ export function OrchestrationPanel({
 	/** Prevent saved session drafts/receipts from crossing linked hosts. */
 	identityScope?: string;
 	createMessageId?(): string;
+	exportDeliveryArchive?(bytes: Uint8Array, sha256: string): Promise<boolean>;
+	hashDeliveryArchive?(bytes: Uint8Array): Promise<string>;
 }) {
 	const { snapshot, busy, error, act, refresh } = controls;
 	const [selected, updateSelected] = useState<string>();
@@ -69,6 +73,9 @@ export function OrchestrationPanel({
 	const [instruction, setInstruction] = useState("");
 	const [receipt, setReceipt] = useState<string>();
 	const [deliveryStorageError, setDeliveryStorageError] = useState(false);
+	const [deliveryArchive, setDeliveryArchive] = useState<DeliveryArchive>();
+	const [archiveMessage, setArchiveMessage] = useState<string>();
+	const [archiving, setArchiving] = useState(false);
 	const [outbox, setOutbox] = useState<OutgoingMessage[]>([]);
 	const [deliveryStorageReady, setDeliveryStorageReady] = useState(false);
 	const deliveryWrites = useRef<Promise<void>>(Promise.resolve());
@@ -449,7 +456,43 @@ export function OrchestrationPanel({
 			Trabajando…
 		</div>
 	) : null;
-	const storageNotice = deliveryStorageError ? <div className="orchestration-error" role="alert">No se pudieron leer o guardar los envíos en este dispositivo. Se conservan los datos anteriores; revisa el almacenamiento antes de enviar. <button type="button" onClick={() => void reloadDeliveries()}>Volver a leer</button></div> : null;
+	const storageNotice = deliveryStorageError ? <div className="orchestration-error" role="alert">
+		No se pudieron leer o guardar los envíos en este dispositivo. Se conservan los datos anteriores; revisa el almacenamiento antes de enviar. <button type="button" onClick={() => void reloadDeliveries()}>Volver a leer</button>
+		<details><summary>Guardar y liberar registros resueltos</summary>
+			<p>Descarga una copia y vuelve a seleccionarla para comprobarla. Los envíos pendientes se conservan.</p>
+			<button type="button" disabled={archiving} onClick={() => void (async () => {
+				setArchiving(true); setArchiveMessage(undefined); setDeliveryArchive(undefined);
+				try {
+					await deliveryWrites.current;
+					const archive = await prepareDeliveryArchive(hashDeliveryArchive);
+					if (exportDeliveryArchive) {
+						if (!await exportDeliveryArchive(archive.bytes, archive.sha256)) { setArchiveMessage("Guardado cancelado; no se archivó nada."); return; }
+					} else {
+						if (capriMobile) throw new Error("La exportación nativa no está disponible; no se archivó nada.");
+						const url = URL.createObjectURL(new Blob([archive.bytes as BlobPart], { type: "application/json" }));
+						const link = document.createElement("a"); link.href = url; link.download = `capri-envios-${Date.now()}.json`; link.click();
+						setTimeout(() => URL.revokeObjectURL(url), 60_000);
+					}
+					setDeliveryArchive(archive);
+				} catch (error) { setArchiveMessage(error instanceof Error ? error.message : "No se pudo preparar la copia."); }
+				finally { setArchiving(false); }
+			})()}>Descargar copia</button>
+			{deliveryArchive ? <><p>{deliveryArchive.count} registros · SHA-256: {deliveryArchive.sha256}</p>
+				<label>Comprobar copia y liberar espacio <input type="file" accept="application/json,.json" disabled={archiving} onChange={event => {
+					const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (!file) return;
+					void (async () => {
+						setArchiving(true); setArchiveMessage(undefined);
+						try {
+							if (file.size !== deliveryArchive.bytes.length) throw new Error("El tamaño del archivo no coincide con la copia descargada. No se archivó nada.");
+							await deliveryWrites.current; const count = await compactDeliveryArchive(deliveryArchive, new Uint8Array(await file.arrayBuffer())); setDeliveryArchive(undefined); await reloadDeliveries(); setReceipt(`${count} registros resueltos archivados en la copia verificada.`);
+						}
+						catch (error) { setArchiveMessage(error instanceof Error ? error.message : "No se pudo comprobar o archivar la copia."); }
+						finally { setArchiving(false); }
+					})();
+				}} /></label></> : null}
+			{archiveMessage ? <p role="status">{archiveMessage}</p> : null}
+		</details>
+	</div> : null;
 	const selectedView = session ? (
 		<section className="agent-detail" aria-label={`Sesión ${session.label}`}>
 			{storageNotice}

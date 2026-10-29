@@ -102,3 +102,9 @@ node --test apps/ios/test/work-sync.test.mjs apps/ios/test/work-tools.test.mjs a
 node_modules/.bin/tsc -b packages/protocol packages/daemon --pretty false
 CAPRI_BROWSER_PATH=/home/egarza/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell node_modules/.bin/playwright test -c playwright.ios.config.ts apps/ios/e2e/work-sync.spec.ts --workers 1
 ```
+
+### Capacidad de los envíos de sesiones
+
+Si el registro de sesiones llega a su límite o falla el almacenamiento, el aviso ofrece descargar una copia de hasta 250 envíos resueltos y volver a seleccionarla. Capri iOS usa el selector nativo de Archivos: cancelar la exportación no activa la compactación. El tamaño y todos los bytes de la copia seleccionada deben coincidir; sólo entonces una transacción comprueba que cada registro siga igual y sustituye los resueltos por marcadores de deduplicación. Los envíos pendientes y todos los registros heredados no se archivan; estos últimos pueden seguir siendo escritos por una versión antigua. Si el límite está ocupado sólo por registros heredados, esta operación no libera espacio; hace falta una migración con recuperación explícita.
+
+Los marcadores también ocupan espacio, de modo que esta operación no ofrece capacidad ilimitada. Una versión antigua abierta con el esquema anterior de IndexedDB no puede abrir el almacén actualizado; una vista ya abierta puede mostrar estado obsoleto hasta que vuelva a leerlo, pero sus escrituras con ese esquema no pueden sobrescribir la compactación. La exportación y la selección de vuelta tienen cobertura automatizada con datos sintéticos; quedan pendientes las pruebas del selector y de la cuota en iPhone real.
