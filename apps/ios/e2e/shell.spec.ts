@@ -10,6 +10,15 @@ async function nativeFixture(page: import('@playwright/test').Page, delayed = fa
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('results_list')) return { ok: true, items: [] };
       state.nativeCalls.push(command);
+      if (command.endsWith('secret_get')) {
+        const request = args.request;
+        const value = sessionStorage.getItem(`fixture-keychain:${request.scope}:${request.account}`);
+        return value === null ? { ok: true } : { ok: true, value };
+      }
+      if (command.endsWith('secret_set')) {
+        const request = args.request;
+        sessionStorage.setItem(`fixture-keychain:${request.scope}:${request.account}`, request.value); return { ok: true };
+      }
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('agent_step')) {
@@ -694,11 +703,11 @@ test('native cancellation of a pending microphone request remains visible and ca
   await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
 });
 
-test('a delayed old cancellation cannot stop a newer dictation', async ({ page }) => {
+test('a delayed cancellation is confirmed before a newer dictation starts', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
-    state.voiceOwners = []; state.cancelledCurrent = false;
+    state.voiceOwners = []; state.cancelledOwners = [];
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) {
@@ -708,7 +717,7 @@ test('a delayed old cancellation cannot stop a newer dictation', async ({ page }
       if (command.endsWith('cancel_voice')) {
         const captured = args.ownerId;
         await new Promise(resolve => { state.releaseOldCancel = resolve; });
-        if (state.activeVoiceOwner === captured) state.cancelledCurrent = true;
+        if (state.activeVoiceOwner === captured) state.cancelledOwners.push(captured);
         return { ok: true };
       }
       return previous(command, args);
@@ -718,12 +727,16 @@ test('a delayed old cancellation cannot stop a newer dictation', async ({ page }
   await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
   await page.locator('[data-panel="settings"]').click();
   await expect.poll(() => page.evaluate(() => typeof (globalThis as any).releaseOldCancel)).toBe('function');
-  await page.locator('[data-panel="chat"]').click(); await page.locator('#dictate').click();
-  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  await page.locator('[data-panel="chat"]').click();
+  await expect(page.locator('#dictate')).toBeDisabled();
+  expect(await page.evaluate(() => (globalThis as any).voiceOwners)).toHaveLength(1);
   await page.evaluate(() => (globalThis as any).releaseOldCancel());
-  expect(await page.evaluate(() => (globalThis as any).cancelledCurrent)).toBe(false);
+  await expect(page.locator('#dictate')).toBeEnabled();
+  await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
   const ids = await page.evaluate(() => (globalThis as any).voiceOwners);
   expect(ids).toHaveLength(2); expect(ids[0]).toMatch(/^[a-f0-9-]{36}$/i); expect(ids[1]).not.toBe(ids[0]);
+  expect(await page.evaluate(() => (globalThis as any).cancelledOwners)).toEqual([ids[0]]);
 });
 
 test('an interrupted recording does not leave a false recording indicator', async ({ page }) => {
@@ -780,7 +793,7 @@ test('linked stream, intermediate completion, error and reconnect remain honest'
   await page.locator('#url').fill('wss://fixture.example/ws');
   await page.locator('#token').fill('fixture-only');
   await page.locator('#connection button[type="submit"]').click();
-  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot. Acceso guardado en Keychain.');
   await expect(page.locator('#token')).toHaveValue('');
   await chooseEngine(page, 'gentle');
   await page.locator('#prompt').fill('Continúa desde la laptop');

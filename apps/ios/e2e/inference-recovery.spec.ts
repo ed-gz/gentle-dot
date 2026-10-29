@@ -158,13 +158,14 @@ test('a recovered answer locates its original turn outside the visible 120-messa
     sessionStorage.setItem('fixture-journal', JSON.stringify([answer])); sessionStorage.setItem('fixture-events', '[]');
   }, { turn, answer });
   await page.reload();
-  await expect(page.locator('#cards')).toContainText('Recuperé una respuesta anterior. Está disponible en Archivo.');
-  await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-events') || '[]').length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-events') || '[]').length), { timeout: 15000 }).toBe(1);
+  await expect(page.locator('#cards')).toContainText('Recuperé una respuesta anterior. Puedes consultarla en tus datos guardados.');
   const event = await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-events') || '[]')[0]);
   expect(event.entry).toBeUndefined();
   expect(event.archived).toMatchObject({ id: turn, state: 'complete', text: response });
   expect(await page.locator('.chat-card').count()).toBe(120);
-  await openRecoveryHarness(page);
+  await expect(page.locator('#rescue-history')).toBeVisible();
+  await page.locator('#rescue-history').click();
   await page.getByText('Consultar mensajes anteriores', { exact: true }).click();
   await page.locator('#memory-query').fill(response);
   await page.locator('#memory-search button[type="submit"]').click();
