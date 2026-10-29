@@ -71,7 +71,8 @@ struct VoiceAudioTests {
             let signal = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: 16_000)!
             signal.frameLength = signal.frameCapacity
             for i in 0..<Int(signal.frameLength) { signal.floatChannelData![0][i] = Float(sin(Double(i) * 2 * .pi * 440 / 16_000) * 0.4) }
-            try writer.write(from: signal); writer.close()
+            try writer.write(from: signal)
+            if #available(macOS 15.0, *) { writer.close() }
         }
         let originalBytes = try Data(contentsOf: int16Source)
         let unused = root.appendingPathComponent("unused-int16.caf")
@@ -94,7 +95,8 @@ struct VoiceAudioTests {
                 signal.floatChannelData![0][i] = Float(sin(Double(i) * 2 * .pi * 440 / 48_000) * 0.4)
                 signal.floatChannelData![1][i] = Float(sin(Double(i) * 2 * .pi * 660 / 48_000) * 0.4)
             }
-            try writer.write(from: signal); writer.close()
+            try writer.write(from: signal)
+            if #available(macOS 15.0, *) { writer.close() }
         }
         let stereo = try VoiceAudio.openForAnalysis(source: stereoSource, converted: root.appendingPathComponent("stereo-resampled.caf"), format: stereoTarget, maximumSeconds: 90)
         precondition(stereo.processingFormat.commonFormat == .pcmFormatFloat32 && stereo.processingFormat.channelCount == 2 && stereo.processingFormat.sampleRate == 16_000)
@@ -110,7 +112,8 @@ struct VoiceAudioTests {
                                          commonFormat: .pcmFormatFloat32, interleaved: false)
             let signal = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: 32_000)!
             signal.frameLength = signal.frameCapacity
-            try writer.write(from: signal); writer.close()
+            try writer.write(from: signal)
+            if #available(macOS 15.0, *) { writer.close() }
         }
         let longBytes = try Data(contentsOf: longSource)
         do { _ = try VoiceAudio.openForAnalysis(source: longSource, converted: unused, format: int16Target, maximumSeconds: 0.001); preconditionFailure("oversized matching input accepted") }
