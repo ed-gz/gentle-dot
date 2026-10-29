@@ -46,6 +46,10 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
     if (safe.engine !== 'iphone' || safe.role !== 'assistant' || (safe.replyTo && safe.replyTo !== prior.replyTo)) return entries;
     safe.replyTo = prior.replyTo;
   }
+  if (prior?.transportText !== undefined) {
+    if (safe.engine !== prior.engine || safe.role !== prior.role || (safe.transportText !== undefined && safe.transportText !== prior.transportText)) return entries;
+    safe.transportText = prior.transportText;
+  }
   if (index < 0) next.push(safe); else next[index] = safe;
   return next.slice(-MAX_ENTRIES);
 }
@@ -250,9 +254,10 @@ export async function saveConversation(value: Conversation): Promise<void> {
             if (record(current)) {
               const earlier = conversationSnapshot(current as Conversation).entries;
               for (const prior of earlier) {
-                if (!prior.replyTo) continue;
                 const replacement = next.entries.find(entry => entry.id === prior.id);
-                if (replacement && (replacement.engine !== 'iphone' || replacement.role !== 'assistant' || replacement.replyTo !== prior.replyTo)) throw new Error('El vínculo de una respuesta existente cambió. Se conserva la conversación anterior.');
+                if (!replacement) continue;
+                if (prior.replyTo && (replacement.engine !== 'iphone' || replacement.role !== 'assistant' || replacement.replyTo !== prior.replyTo)) throw new Error('El vínculo de una respuesta existente cambió. Se conserva la conversación anterior.');
+                if (prior.transportText !== undefined && (replacement.engine !== prior.engine || replacement.role !== prior.role || replacement.transportText !== prior.transportText)) throw new Error('El contexto de transporte de un mensaje cambió. Se conserva la conversación anterior.');
               }
             }
             store.put(next, 'current');

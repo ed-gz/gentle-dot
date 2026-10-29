@@ -218,6 +218,24 @@ test('transport text survives storage for history reconciliation but stays bound
   assert.equal(Object.hasOwn(updated[0], 'transportText'), false);
 });
 
+test('a partial update cannot erase or replace an existing host transport alias', async () => {
+  const original = entry('host:wss://example.test/ws|main|message', { engine: 'gentle', role: 'user', text: 'Mensaje', transportText: 'Contexto\nMensaje', at: 10 });
+  const { transportText: _alias, ...partial } = original;
+  const updated = updateEntry([original], { ...partial, text: 'Mensaje visible', at: 20 });
+  assert.equal(updated[0].transportText, original.transportText);
+  assert.equal(updated[0].at, 10);
+  for (const changed of [{ ...original, transportText: 'Contexto distinto' }, { ...original, role: 'assistant' }, { ...original, engine: 'iphone' }]) {
+    assert.equal(updateEntry(updated, changed), updated);
+  }
+  const read = storage({ entries: [original], draft: '', revision: 1 });
+  for (const changed of [{ ...partial }, { ...original, transportText: 'otro' }, { ...original, role: 'assistant' }]) {
+    await assert.rejects(saveConversation({ entries: [changed], draft: '', revision: 2 }), /contexto de transporte/);
+  }
+  assert.equal(read().entries[0].transportText, original.transportText);
+  await saveConversation({ entries: updated, draft: '', revision: 2 });
+  assert.equal((await loadConversation()).entries[0].transportText, original.transportText);
+});
+
 const host = 'host:wss://fixture.example/ws|c1|';
 const remote = (id, changes = {}) => entry(host + id, { engine: 'gentle', ...changes });
 const snapshot = (id, role, text) => ({ id, role, text });
