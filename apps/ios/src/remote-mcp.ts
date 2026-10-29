@@ -5,7 +5,7 @@ import { prepareMCPAccess } from './mcp-oauth-store.ts';
 import type { Tool, ToolContext } from './agent-tools.ts';
 
 const PREFERRED_VERSION = '2025-11-25';
-const SUPPORTED_VERSIONS = new Set([PREFERRED_VERSION, '2025-06-18']);
+const SUPPORTED_VERSIONS = new Set([PREFERRED_VERSION, '2025-06-18', '2025-03-26']);
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 export function canonicalJSON(value: unknown): string {
   function normalize(input: unknown, depth = 0): unknown {
@@ -81,7 +81,7 @@ async function hash(text: string): Promise<string> {
   if (!globalThis.crypto?.subtle) return nativeSHA256(text);
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
-export function parseMCPResponse(response: HTTPSResponse, id: string): unknown {
+export function parseMCPResponse(response: HTTPSResponse, id: string, version?: string): unknown {
   if (response.status !== 200 || new TextEncoder().encode(response.body).length > 2 * 1024 * 1024) throw new Error(`MCP no confirmó la solicitud (HTTP ${response.status}).`);
   const type = response.headers['content-type']?.split(';')[0]?.trim();
   let messages: unknown[];
@@ -91,8 +91,20 @@ export function parseMCPResponse(response: HTTPSResponse, id: string): unknown {
     messages = events.flatMap(event => { const data = event.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n'); return data ? [JSON.parse(data)] : []; });
   } else if (type === 'application/json') messages = [JSON.parse(response.body)];
   else throw new Error('El servidor no respondió JSON o SSE finito.');
-  let found: Record<string, unknown> | undefined;
+  // Only the 2025-03-26 transport permits batched JSON-RPC responses. During
+  // initialization, confirm the offered revision after matching the response.
+  const flattened: unknown[] = [];
+  let batched = false;
   for (const message of messages) {
+    if (Array.isArray(message)) {
+      if ((version !== undefined && version !== '2025-03-26') || message.length === 0 || flattened.length + message.length > 1000) throw new Error('Lote MCP no admitido o demasiado grande.');
+      batched = true;
+      flattened.push(...message);
+    } else flattened.push(message);
+    if (flattened.length > 1000) throw new Error('Demasiados mensajes MCP.');
+  }
+  let found: Record<string, unknown> | undefined;
+  for (const message of flattened) {
     if (!object(message) || message.jsonrpc !== '2.0') throw new Error('Mensaje MCP inválido.');
     if (typeof message.method === 'string') {
       if ('id' in message) throw new Error('Capri no habilita solicitudes del servidor, sampling, roots ni elicitación.');
@@ -102,6 +114,7 @@ export function parseMCPResponse(response: HTTPSResponse, id: string): unknown {
     found = message;
   }
   if (!found || ('error' in found) === ('result' in found)) throw new Error('El servidor no devolvió un resultado MCP verificable.');
+  if (batched && version === undefined && (!object(found.result) || found.result.protocolVersion !== '2025-03-26')) throw new Error('Lote MCP no admitido durante la inicialización.');
   if ('error' in found) throw new Error('El servidor MCP rechazó la solicitud.');
   return found.result;
 }
@@ -133,11 +146,11 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
       if (value !== undefined && (!/^[\x21-\x7e]{1,1024}$/.test(value))) throw new Error('Identificador de sesión MCP inválido.');
       session = value;
     }
-    return parseMCPResponse(result, id);
+    return parseMCPResponse(result, id, negotiatedVersion);
   }
   const init = await rpc('initialize', { protocolVersion: PREFERRED_VERSION, capabilities: {}, clientInfo: { name: 'Capri iOS', version: '0.1.0' } });
   if (!object(init) || typeof init.protocolVersion !== 'string' || !SUPPORTED_VERSIONS.has(init.protocolVersion))
-    throw new Error('El servidor ofreció una versión MCP no compatible. Capri admite 2025-11-25 y 2025-06-18.');
+    throw new Error('El servidor ofreció una versión MCP no compatible. Capri admite 2025-11-25, 2025-06-18 y 2025-03-26.');
   if (!object(init.capabilities) || !object(init.capabilities.tools)) throw new Error('El servidor no ofrece la capacidad de herramientas MCP.');
   negotiatedVersion = init.protocolVersion;
   initialized = true;

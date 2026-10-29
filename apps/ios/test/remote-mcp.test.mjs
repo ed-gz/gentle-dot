@@ -9,7 +9,7 @@ const base = () => ({ id, kind: 'mcp', label: 'Servidor propio', endpoint: 'http
 const schema = () => ({ type: 'object', properties: { text: { type: 'string', minLength: 1, maxLength: 100 } }, required: ['text'], additionalProperties: false });
 const remote = () => ({ name: 'custom.send', description: 'Envía al servicio configurado', inputSchema: schema() });
 function fixture(version = '2025-06-18') {
-  const calls = []; const journal = []; let connection = base(); let changedSchema = false; let failCall = false; let token = 'secret-stays-in-headers'; let taskSupport; let outputSchema; let callResult;
+  const calls = []; const journal = []; let connection = base(); let changedSchema = false; let failCall = false; let token = 'secret-stays-in-headers'; let taskSupport; let outputSchema; let callResult; let batchResponses = false;
   const services = {
     prepare: async () => connection,
     getConnection: async () => connection,
@@ -24,7 +24,9 @@ function fixture(version = '2025-06-18') {
       if (rpc.method === 'initialize') result = { protocolVersion: version, capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' } };
       if (rpc.method === 'tools/list') result = { tools: [{ ...remote(), ...(changedSchema ? { inputSchema: { ...schema(), additionalProperties: true } } : {}), ...(taskSupport === undefined ? {} : { execution: { taskSupport } }), ...(outputSchema === undefined ? {} : { outputSchema }) }] };
       if (rpc.method === 'tools/call') { if (failCall) throw new Error('network'); assert.equal(journal.at(-1).state, 'executing'); result = callResult ?? { content: [{ type: 'text', text: 'Confirmado' }] }; }
-      return { status: 200, headers: { 'content-type': 'application/json', ...(rpc.method === 'initialize' ? { 'mcp-session-id': 'session-123' } : {}) }, body: JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }) };
+      const reply = { jsonrpc: '2.0', id: rpc.id, result };
+      const body = batchResponses && rpc.method !== 'initialize' ? [{ jsonrpc: '2.0', method: 'notifications/progress', params: {} }, reply] : reply;
+      return { status: 200, headers: { 'content-type': 'application/json', ...(rpc.method === 'initialize' ? { 'mcp-session-id': 'session-123' } : {}) }, body: JSON.stringify(body) };
     },
   };
   return { services, calls, journal, changeSchema: () => { changedSchema = true; },
@@ -32,7 +34,7 @@ function fixture(version = '2025-06-18') {
       connection = { ...connection, revision: connection.revision + 1, credentialAccount: '00000000-0000-4000-8000-000000000002' };
       token = 'test-next';
     }, failCall: () => { failCall = true; }, recover: () => { failCall = false; }, setTaskSupport: value => { taskSupport = value; },
-    setOutputSchema: value => { outputSchema = value; }, setCallResult: value => { callResult = value; } };
+    setOutputSchema: value => { outputSchema = value; }, setCallResult: value => { callResult = value; }, setBatchResponses: value => { batchResponses = value; } };
 }
 const context = askApproval => ({ signal: new AbortController().signal, askApproval });
 
@@ -67,7 +69,7 @@ test('MCP initialization and tool call retain session, protocol, exact approval 
   assert.equal(JSON.stringify(f.journal).includes('secret-stays-in-headers'), false);
 });
 test('negotiation uses the offered supported version on every subsequent request', async () => {
-  for (const version of ['2025-11-25', '2025-06-18']) {
+  for (const version of ['2025-11-25', '2025-06-18', '2025-03-26']) {
     const f = fixture(version); const [tool] = await discoverMCPTools(id, f.services);
     assert.equal(f.calls[0].rpc.params.protocolVersion, '2025-11-25');
     await tool.execute({ text: 'Exacto' }, context(async () => true));
@@ -79,12 +81,42 @@ test('negotiation uses the offered supported version on every subsequent request
   }
 });
 test('unsupported versions stop after initialization without advertising readiness or calling a tool', async () => {
-  for (const version of ['2026-07-28', '2025-03-26', '', null, ['2025-11-25']]) {
+  for (const version of ['2026-07-28', '', null, ['2025-11-25']]) {
     const f = fixture(version);
     await assert.rejects(discoverMCPTools(id, f.services), /versión MCP no compatible/);
     assert.deepEqual(f.calls.map(call => call.rpc.method), ['initialize']);
     assert.equal(f.journal.length, 0);
   }
+});
+test('MCP 2025-03-26 accepts correlated batches while preserving review and journal ordering', async () => {
+  const f = fixture('2025-03-26'); f.setBatchResponses(true);
+  const [tool] = await discoverMCPTools(id, f.services);
+  const denied = await tool.execute({ text: 'Sin autorización' }, context(async () => false));
+  assert.deepEqual(denied, { executed: false, approved: false });
+  assert.equal(f.journal.length, 0);
+  let review;
+  const result = await tool.execute({ text: 'Contenido revisado' }, context(async value => { review = JSON.parse(value.details); return true; }));
+  assert.equal(result.confirmed, true); assert.deepEqual(review.arguments, { text: 'Contenido revisado' });
+  assert.equal(f.journal[0].state, 'succeeded');
+  assert.equal(f.calls.find(call => call.rpc.method === 'tools/call').headers['MCP-Protocol-Version'], '2025-03-26');
+});
+test('legacy batches are bounded, version-scoped and require a single correlated response', () => {
+  const notification = { jsonrpc: '2.0', method: 'notifications/progress', params: {} };
+  const response = { jsonrpc: '2.0', id: 'one', result: { value: 1 } };
+  const json = body => ({ status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  assert.deepEqual(parseMCPResponse(json([notification, response]), 'one', '2025-03-26'), { value: 1 });
+  assert.throws(() => parseMCPResponse(json([response]), 'one', '2025-06-18'), /Lote MCP/);
+  assert.throws(() => parseMCPResponse(json([response]), 'one'), /Lote MCP/);
+  const initialization = { jsonrpc: '2.0', id: 'one', result: { protocolVersion: '2025-03-26', capabilities: { tools: {} } } };
+  assert.equal(parseMCPResponse(json([initialization]), 'one').protocolVersion, '2025-03-26');
+  assert.throws(() => parseMCPResponse(json([{ ...initialization, result: { protocolVersion: '2025-06-18' } }]), 'one'), /Lote MCP/);
+  assert.throws(() => parseMCPResponse(json([]), 'one', '2025-03-26'), /Lote MCP/);
+  assert.throws(() => parseMCPResponse(json([response, response]), 'one', '2025-03-26'), /duplicada/);
+  assert.throws(() => parseMCPResponse(json([response, { ...response, id: 'different' }]), 'one', '2025-03-26'), /correlacionada/);
+  assert.throws(() => parseMCPResponse(json([response, { jsonrpc: '2.0', id: 'server', method: 'sampling/createMessage' }]), 'one', '2025-03-26'), /sampling/);
+  assert.throws(() => parseMCPResponse(json(Array.from({ length: 1001 }, () => notification)), 'one', '2025-03-26'), /Lote MCP/);
+  const sse = { status: 200, headers: { 'content-type': 'text/event-stream' }, body: `data: ${JSON.stringify([notification, response])}\n\n` };
+  assert.deepEqual(parseMCPResponse(sse, 'one', '2025-03-26'), { value: 1 });
 });
 test('required MCP tasks never execute without task support, including a change during approval', async () => {
   for (const version of ['2025-11-25', '2025-06-18']) {
