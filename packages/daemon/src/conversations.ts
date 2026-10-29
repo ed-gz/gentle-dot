@@ -104,6 +104,16 @@ export interface HistoryPage {
 	branchVerified?: true;
 }
 
+/** A correlated request must not turn an invalid cursor into a false end of history. */
+export function validLinearHistoryCursor(chain: string[], before: string): boolean {
+	const match = PAGE_ID.exec(before);
+	if (!match) return false;
+	const file = Number(match[1]), turn = Number(match[2]);
+	if (!Number.isSafeInteger(file) || !Number.isSafeInteger(turn) || file < 0 || file >= chain.length || turn < 1 || before !== `s${file}-${turn}`) return false;
+	const path = chain[file]!;
+	return existsSync(path) && turn <= sessionIndex(path).turns.length;
+}
+
 /**
  * One page of the chat kept in `chain` (session files, oldest first; the last
  * one is open), ending just before the message `before`, or at the newest one.

@@ -33,6 +33,7 @@ import {
 	type HistoryPage,
 	listConversations,
 	pageHistory,
+	validLinearHistoryCursor,
 	resolveConversation,
 } from "./conversations.ts";
 import { directAccess, type EngineAccess } from "./engine-access.ts";
@@ -770,7 +771,7 @@ export class DotBridge {
 					...(correlated && (message.conversationId ?? conversationId) !== undefined ? { conversationId: message.conversationId ?? conversationId } : {}) };
 				try {
 					if (message.conversationId !== undefined && message.conversationId !== conversationId) throw new Error("Conversation changed");
-					const page = await this.currentHistory(message.before);
+					const page = await this.currentHistory(message.before, message.requestId !== undefined);
 					if (this.supervisor.sessionFile !== file || this.supervisor.sessionId !== sessionId || this.conversationRef().conversationId !== conversationId) throw new Error("Conversation changed");
 					this.deliver(client, { type: "earlier", before: message.before, ...ref, ...page });
 				} catch { this.deliver(client, { type: "error", code: "history_unavailable", message: "No pude verificar la rama anterior. El historial guardado se conserva.", ...ref }); }
@@ -1292,19 +1293,25 @@ export class DotBridge {
 	 * History replaces what a window shows, so it must not be older than the
 	 * messages already sent: read it again when one arrived while loading.
 	 */
-	private async currentHistory(before?: string): Promise<HistoryPage> {
+	private async currentHistory(before?: string, strictCursor = false): Promise<HistoryPage> {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			const seen = this.nextMessage;
 			// The engine writes a message to its session file right after announcing it;
 			// one round trip makes sure everything announced so far is on disk.
 			await this.supervisor.request({ type: "get_state" });
 			const chain = this.chain(); const active = chain.at(-1); const sessionId = this.supervisor.sessionId;
-			if (!active) return { messages: [], hasEarlier: false };
+			if (!active) {
+				if (strictCursor && before !== undefined) throw new Error("History cursor is unavailable");
+				return { messages: [], hasEarlier: false };
+			}
 			const metadata = this.engine(() => chain.map(lastIndexedPiEntry));
 			if (metadata.slice(0, -1).some(value => !value.exists)) throw new Error("Earlier session file missing");
 			const current = metadata.at(-1)!;
 			if (current.legacy) {
-				const page = this.engine(() => metadata.some(value => value.hasFork) ? pageBranchHistory(chain, this.pageSize(), null, before) : pageHistory(chain, this.pageSize(), before));
+				const page = this.engine(() => {
+					if (!metadata.some(value => value.hasFork) && strictCursor && before !== undefined && !validLinearHistoryCursor(chain, before)) throw new Error("History cursor is unavailable");
+					return metadata.some(value => value.hasFork) ? pageBranchHistory(chain, this.pageSize(), null, before) : pageHistory(chain, this.pageSize(), before);
+				});
 				if (this.nextMessage === seen && this.supervisor.sessionFile === active) return page;
 				continue;
 			}
@@ -1318,8 +1325,10 @@ export class DotBridge {
 			const first = await getLeaf();
 			if (first.changed || this.supervisor.sessionFile !== active || this.supervisor.sessionId !== sessionId) continue;
 			const branched = metadata.some(value => value.hasFork) || first.leaf !== (current.id ?? null);
-			const page = this.engine(() => branched
-				? pageBranchHistory(chain, this.pageSize(), first.leaf, before) : pageHistory(chain, this.pageSize(), before));
+			const page = this.engine(() => {
+				if (!branched && strictCursor && before !== undefined && !validLinearHistoryCursor(chain, before)) throw new Error("History cursor is unavailable");
+				return branched ? pageBranchHistory(chain, this.pageSize(), first.leaf, before) : pageHistory(chain, this.pageSize(), before);
+			});
 			const second = await getLeaf();
 			if (!second.changed && second.leaf === first.leaf && this.nextMessage === seen && this.supervisor.sessionFile === active && this.supervisor.sessionId === sessionId && JSON.stringify(this.chain()) === JSON.stringify(chain)) return branched ? { ...page, branchVerified: true } : page;
 		}

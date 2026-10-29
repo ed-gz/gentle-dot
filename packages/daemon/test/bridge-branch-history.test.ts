@@ -6,12 +6,12 @@ import { expect, it, vi } from 'vitest';
 import { DotBridge } from '../src/bridge.ts';
 import { fakeSupervisor, tempDir } from './helpers.ts';
 
-function setup() {
+function setup(branched = true) {
   const dataDir = tempDir(), sessionDir = join(dataDir, 'sessions'); mkdirSync(sessionDir);
   const manager = SessionManager.create(dataDir, sessionDir);
   const root = manager.appendMessage({ role: 'user', content: 'Root', timestamp: 1 });
   const abandoned = manager.appendMessage({ role: 'user', content: 'Abandoned', timestamp: 2 });
-  manager.branch(root); const current = manager.appendMessage({ role: 'user', content: 'Current', timestamp: 3 });
+  if (branched) manager.branch(root); const current = manager.appendMessage({ role: 'user', content: 'Current', timestamp: 3 });
   const { supervisor } = fakeSupervisor({ dataDir }); supervisor.state = 'ready'; supervisor.sessionFile = manager.getSessionFile(); supervisor.sessionId = manager.getSessionId();
   let leaves: (string | null)[] = [], calls = 0;
   vi.spyOn(supervisor, 'request').mockImplementation(async command => {
@@ -37,6 +37,19 @@ it('serves only the live Pi branch, with source-bound IDs and branch-aware pagin
   const earlier = f.received.findLast(message => message.type === 'earlier'); if (earlier?.type !== 'earlier') throw Error('earlier');
   expect(earlier.messages.map(message => message.text)).toEqual(['Root']); expect(earlier.hasEarlier).toBe(false);
   expect(f.calls()).toBe(4);
+});
+
+it('correlated linear pages reject invalid cursors without changing legacy behavior', async () => {
+  const f = setup(false);
+  const conversationId = (f.received[0] as Extract<ServerPayload, { type: 'ready' }>).conversationId!;
+  for (const before of ['s0-9999', 's0-0', 's00-1', 's0-xabc', 's999999999999999999999-1']) {
+    await f.bridge.handle(f.client, { type: 'get_earlier', before, requestId: 'req-' + before, conversationId });
+    expect(f.received.at(-1)).toMatchObject({ type: 'error', code: 'history_unavailable', requestId: 'req-' + before, conversationId });
+  }
+  await f.bridge.handle(f.client, { type: 'get_earlier', before: 's0-2', requestId: 'valid', conversationId });
+  expect(f.received.at(-1)).toMatchObject({ type: 'earlier', requestId: 'valid', messages: [{ text: 'Root' }], hasEarlier: false });
+  await f.bridge.handle(f.client, { type: 'get_earlier', before: 's0-xabc' });
+  expect(f.received.at(-1)).toMatchObject({ type: 'earlier', messages: [], hasEarlier: false });
 });
 
 it('correlates pages and errors to the requested conversation while preserving legacy responses', async () => {
