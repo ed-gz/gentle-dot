@@ -68,6 +68,33 @@ async function connectPhone(page: Page) {
   await expect(page.locator('#status')).toContainText('Acceso guardado en Keychain');
 }
 
+test('the session composer is one readable surface with accessible actions', async ({ page }) => {
+  test.slow(); await linkedPhone(page);
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const prompt = page.getByRole('textbox', { name: 'Continuar esta sesión' });
+  await expect(prompt).toBeEnabled();
+  for (const size of [{ width: 390, height: 844 }, { width: 320, height: 568 }, { width: 844, height: 390 }]) {
+    await page.setViewportSize(size);
+    for (const scale of ['100%', '200%']) {
+      await page.evaluate(value => { document.documentElement.style.fontSize = value; }, scale);
+      await prompt.focus(); await expect(prompt).toBeFocused();
+      const metrics = await page.locator('#panel-agents .agent-reply .composer').evaluate(form => {
+        const input = form.querySelector('textarea')!, css = getComputedStyle(input), box = input.getBoundingClientRect();
+        const controls = [...form.querySelectorAll<HTMLElement>('.composer-attach, button')].filter(el => el.getClientRects().length).map(el => el.getBoundingClientRect());
+        const overlaps = controls.some(r => r.left < box.right && r.right > box.left && r.top < box.bottom && r.bottom > box.top);
+        return { border: css.borderTopWidth, background: css.backgroundColor, textWidth: box.width,
+          controls: controls.map(r => ({ width: r.width, height: r.height })), overlaps, bounds: form.getBoundingClientRect().toJSON(), viewport: { width: innerWidth, height: innerHeight } };
+      });
+      expect(metrics.border).toBe('0px'); expect(metrics.background).toBe('rgba(0, 0, 0, 0)');
+      expect(metrics.textWidth).toBeGreaterThan(40); expect(metrics.overlaps).toBe(false);
+      expect(metrics.controls.every(r => r.width >= 44 && r.height >= 44)).toBe(true);
+      expect(metrics.bounds.left).toBeGreaterThanOrEqual(0); expect(metrics.bounds.right).toBeLessThanOrEqual(metrics.viewport.width);
+      expect(metrics.bounds.bottom).toBeLessThanOrEqual(metrics.viewport.height + 1);
+    }
+  }
+});
+
 test('Capri restores the conversation reaction after leaving a working session', async ({ page }) => {
   test.slow();
   await page.emulateMedia({ reducedMotion: 'reduce' });

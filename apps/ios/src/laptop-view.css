@@ -30,8 +30,10 @@
 #panel-agents .agent-detail { flex: 1; height: auto; min-height: 0; }
 #panel-agents .agent-detail-scroll { overscroll-behavior: contain; }
 #panel-agents .agent-detail-scroll > .session-mobile-controls { max-height: none; overflow: visible; }
-#panel-agents .agent-reply .composer { display: flex; align-items: end; max-height: none; overflow: visible; border: 0; box-shadow: none; }
-#panel-agents .agent-reply .composer textarea { width: 0; flex: 1; min-height: 48px; max-height: 120px; margin: 0; }
+#panel-agents .agent-reply .composer { display: flex; align-items: end; max-height: none; overflow: visible; border: 1px solid color-mix(in srgb, var(--muted) 28%, transparent); border-radius: 26px; background: color-mix(in srgb, var(--panel) 94%, var(--violet)); box-shadow: 0 6px 24px #0003; }
+#panel-agents .agent-reply .composer:focus-within { border-color: color-mix(in srgb, var(--pink) 65%, var(--panel)); }
+#panel-agents .agent-reply .composer textarea { width: 0; flex: 1; min-height: 48px; max-height: 120px; margin: 0; border: 0; border-radius: 12px; background: transparent; box-shadow: none; }
+#panel-agents .agent-reply .composer textarea:focus-visible { outline-offset: -3px; }
 /* WKWebView can retain the full layout viewport while the keyboard reduces
    the visible viewport; base the draft height on the latter. */
 #panel-agents .agent-reply:focus-within .composer textarea { max-height: min(120px, max(48px, calc(var(--app-height, 100dvh) * .2))); }
