@@ -1,5 +1,103 @@
 import { expect, test } from './fixtures.ts';
 
+test('a lost draft backup callback leaves the copy and can retry with a newer sequence', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createJournalConversationPersistence } = await import('/src/journal-conversation-persistence.ts');
+    const { createConversationJournal } = await import('/src/conversation-journal.ts');
+    const { createConversationArchive } = await import('/src/conversation-archive.ts');
+    const { createConversationDraftRescue } = await import('/src/conversation-draft-rescue.ts');
+    const suffix = crypto.randomUUID(), name = `adapter-draft-lost-${suffix}`, owner = crypto.randomUUID();
+    const archive = createConversationArchive({ databaseName: `adapter-draft-lost-archive-${suffix}` });
+    const journal = createConversationJournal({ databaseName: name, archive }), store = createConversationDraftRescue({ databaseName: name });
+    const readBase = () => new Promise<any>((resolve, reject) => {
+      const open = indexedDB.open(name, 1); open.onupgradeneeded = () => open.result.createObjectStore('conversation'); open.onerror = () => reject(open.error);
+      open.onsuccess = () => { const db = open.result, tx = db.transaction('conversation', 'readonly'), get = tx.objectStore('conversation').get('current'); get.onsuccess = () => resolve(get.result); tx.oncomplete = () => db.close(); tx.onabort = () => reject(tx.error); };
+    });
+    let lost = true;
+    const draftRescue = { save: async (input: unknown) => { const saved = await store.save(input); if (lost) { lost = false; throw new Error('callback perdido'); } return saved; } };
+    const writer = createJournalConversationPersistence({ journal, readBase, draftRescue, rescueOwner: owner }); writer.bindBase(undefined);
+    await writer.persist({ entries: [], draft: 'Primera copia' });
+    const blocked = writer.status(), afterLost = await store.list(), pending = await journal.pending();
+    await writer.persist({ entries: [], draft: 'Texto más reciente' });
+    return { blocked, afterLost, pending, final: writer.status(), saved: await readBase(), backups: await store.list() };
+  });
+  expect(result.blocked).toMatchObject({ blocked: true, conversationError: 'callback perdido' });
+  expect(result.afterLost[0]).toMatchObject({ sequence: 1, draft: 'Primera copia' });
+  expect(result.pending).toBeUndefined();
+  expect(result.final.blocked).toBe(false);
+  expect(result.saved.draft).toBe('Texto más reciente');
+  expect(result.backups[0]).toMatchObject({ sequence: 2, draft: 'Texto más reciente' });
+});
+
+test('a blocked archive preserves a later draft separately and completes it after recovery', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createJournalConversationPersistence } = await import('/src/journal-conversation-persistence.ts');
+    const { createConversationJournal } = await import('/src/conversation-journal.ts');
+    const { createConversationArchive } = await import('/src/conversation-archive.ts');
+    const { createConversationDraftRescue } = await import('/src/conversation-draft-rescue.ts');
+    const suffix = crypto.randomUUID(), name = `adapter-draft-${suffix}`, rescueOwner = crypto.randomUUID();
+    const actual = createConversationArchive({ databaseName: `adapter-draft-archive-${suffix}` });
+    let quota = true;
+    const archive = { upsert: async (...args: Parameters<typeof actual.upsert>) => { if (quota) throw new Error('Cuota agotada'); return actual.upsert(...args); }, verifyExactBatch: actual.verifyExactBatch };
+    const journal = createConversationJournal({ databaseName: name, archive });
+    const rescue = createConversationDraftRescue({ databaseName: name });
+    const readBase = () => new Promise<any>((resolve, reject) => {
+      const open = indexedDB.open(name, 1); open.onupgradeneeded = () => open.result.createObjectStore('conversation'); open.onerror = () => reject(open.error);
+      open.onsuccess = () => { const db = open.result, tx = db.transaction('conversation', 'readonly'), get = tx.objectStore('conversation').get('current'); get.onsuccess = () => resolve(get.result); tx.oncomplete = () => db.close(); tx.onabort = () => reject(tx.error); };
+    });
+    const writer = createJournalConversationPersistence({ journal, readBase, draftRescue: rescue, rescueOwner });
+    writer.bindBase(undefined);
+    const entry = { id: crypto.randomUUID(), engine: 'iphone', role: 'user', state: 'complete', text: 'Conservar turno', at: 1000 };
+    await writer.persist({ entries: [entry], draft: 'Primero', attachedWork: 'work_a' });
+    const first = await journal.pending();
+    await writer.persist({ entries: [entry], draft: 'Escrito después de la cuota', attachedWork: 'work_b' });
+    const blocked = writer.status(), unchanged = await journal.pending(), backups = await rescue.list();
+    quota = false;
+    await writer.persist({ entries: [entry], draft: 'Escrito después de la cuota', attachedWork: 'work_b' });
+    return { first, unchanged, blocked, backups, saved: await readBase(), remaining: await rescue.list(), final: writer.status() };
+  });
+  expect(result.blocked).toMatchObject({ blocked: true, conversationError: 'Cuota agotada' });
+  expect(result.unchanged.id).toBe(result.first.id);
+  expect(result.unchanged.snapshot.draft).toBe('Primero');
+  expect(result.backups).toHaveLength(1);
+  expect(result.backups[0]).toMatchObject({ sequence: 2, draft: 'Escrito después de la cuota', attachedWork: 'work_b' });
+  expect(result.saved).toMatchObject({ draft: 'Escrito después de la cuota', attachedWork: 'work_b' });
+  expect(result.final.blocked).toBe(false);
+  expect(result.remaining).toHaveLength(1);
+  expect(result.remaining[0]).toMatchObject({ sequence: 3, draft: 'Escrito después de la cuota', attachedWork: 'work_b' });
+});
+
+test('competing writers cannot replace the same archived message before winning a reservation', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createJournalConversationPersistence } = await import('/src/journal-conversation-persistence.ts');
+    const { createConversationJournal } = await import('/src/conversation-journal.ts');
+    const { createConversationArchive } = await import('/src/conversation-archive.ts');
+    const suffix = crypto.randomUUID(), name = `adapter-same-id-${suffix}`;
+    const archive = createConversationArchive({ databaseName: `adapter-same-id-archive-${suffix}` });
+    const journal = createConversationJournal({ databaseName: name, archive });
+    const readBase = () => new Promise<any>((resolve, reject) => {
+      const open = indexedDB.open(name, 1); open.onupgradeneeded = () => open.result.createObjectStore('conversation'); open.onerror = () => reject(open.error);
+      open.onsuccess = () => { const db = open.result, tx = db.transaction('conversation', 'readonly'), get = tx.objectStore('conversation').get('current'); get.onsuccess = () => resolve(get.result); tx.oncomplete = () => db.close(); tx.onabort = () => reject(tx.error); };
+    });
+    const first = createJournalConversationPersistence({ journal, readBase });
+    const second = createJournalConversationPersistence({ journal, readBase });
+    first.bindBase(undefined); second.bindBase(undefined);
+    const sharedId = crypto.randomUUID(), base = { id: sharedId, engine: 'iphone', role: 'user', state: 'complete', at: 1000 };
+    const a = { ...base, text: 'Contenido A' }, b = { ...base, text: 'Contenido B' };
+    await Promise.all([first.persist({ entries: [a], draft: 'A' }), second.persist({ entries: [b], draft: 'B' })]);
+    const current = await readBase(), archived = await archive.load(JSON.stringify(['iphone', 'iphone:main', sharedId]));
+    return { first: first.status(), second: second.status(), current, archived, pendingA: first.pending(), pendingB: second.pending() };
+  });
+  expect([result.first.blocked, result.second.blocked].sort()).toEqual([false, true]);
+  expect(result.archived.text).toBe(result.current.entries[0].text);
+  const loser = result.first.blocked ? result.pendingA : result.pendingB;
+  expect(loser[0].id).toBe(result.current.entries[0].id);
+  expect(loser[0].text).not.toBe(result.archived.text);
+});
+
 test('two journal writers preserve the losing window and never overwrite its base', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {

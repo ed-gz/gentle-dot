@@ -81,7 +81,7 @@ test('restart restores one completed answer and ACK observes both committed stor
   expect(JSON.parse(state.journal!)).toEqual([]);
   await page.reload(); await expect(page.locator('#cards')).toContainText(response);
   expect(await page.locator('.chat-card').filter({ hasText: response }).count()).toBe(1);
-  expect(await page.locator('#prompt')).toHaveValue('Borrador intacto');
+  await expect(page.locator('#prompt')).toHaveValue('Borrador intacto');
 });
 
 test('failed persistence keeps the native copy and sends no ACK', async ({ page }) => {
@@ -143,7 +143,7 @@ test('a failed initial checkpoint keeps the instruction and never starts the mod
   await expect(page.locator('#cards')).toContainText('no inicié el modelo local');
   await expect(page.locator('#send')).toBeDisabled();
   expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('fixture-events') || '[]'))).toEqual([]);
-  await expect.poll(async () => page.evaluate(async () => (await (await import('/src/conversation.ts' as string)).loadConversation()).entries.some((item: { text: string }) => item.text === 'Conserva esta instrucción antes de inferir.'))).toBe(true);
+  await expect.poll(async () => page.evaluate(async () => (await (await import('/src/conversation-journal.ts' as string)).createConversationJournal().pending())?.pending.some((item: { text: string }) => item.text === 'Conserva esta instrucción antes de inferir.') ?? false)).toBe(true);
 });
 
 test('explicit cancellation wins over a late native answer after restarting', async ({ page }) => {

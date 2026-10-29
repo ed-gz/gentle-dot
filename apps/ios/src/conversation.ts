@@ -203,8 +203,7 @@ async function access<T>(mode: IDBTransactionMode, operation: (store: IDBObjectS
     } catch (error) { finish(error); }
   });
 }
-export async function loadConversation(): Promise<Conversation> {
-  const saved: unknown = await access('readonly', store => store.get('current'));
+function visibleConversation(saved: unknown): Conversation {
   if (!record(saved)) return { entries: [], draft: '' };
   return {
     entries: cleanEntries(saved.entries, true),
@@ -213,16 +212,36 @@ export async function loadConversation(): Promise<Conversation> {
     draft: typeof saved.draft === 'string' ? saved.draft.slice(0, 8000) : '',
   };
 }
-/** The unprojected durable base for an experimental journal. Unlike the UI
- * restore, this never turns pending entries into interrupted ones or drops
- * malformed fields. Rejecting a damaged base preserves it for recovery. */
-export async function loadConversationBase(): Promise<Conversation | undefined> {
-  const saved: unknown = await access('readonly', store => store.get('current'));
+export async function loadConversation(): Promise<Conversation> {
+  return visibleConversation(await access('readonly', store => store.get('current')));
+}
+export function exactConversationBase(saved: unknown): Conversation | undefined {
   if (saved === undefined) return undefined;
   if (!record(saved)) throw new Error('La conversación guardada requiere revisión. No se modificó.');
   const base = conversationSnapshot(saved as Conversation);
   if (!sameValue(base, saved)) throw new Error('La conversación guardada contiene datos que no se pueden conservar. No se modificó.');
   return base;
+}
+/** Return visible recovery and its unprojected CAS base from one IDB read. */
+export async function loadConversationForWrite(): Promise<{ visible: Conversation; base: Conversation | undefined }> {
+  const saved: unknown = await access('readonly', store => store.get('current'));
+  return { visible: visibleConversation(saved), base: exactConversationBase(saved) };
+}
+/** The unprojected durable base for the journal. Unlike the UI
+ * restore, this never turns pending entries into interrupted ones or drops
+ * malformed fields. Rejecting a damaged base preserves it for recovery. */
+export async function loadConversationBase(): Promise<Conversation | undefined> {
+  return exactConversationBase(await access('readonly', store => store.get('current')));
+}
+/** Confirm the attachment reference in an intact current snapshot, with no
+ * outstanding reservation, in one transaction. */
+export async function hasConfirmedConversationAttachment(id: string): Promise<boolean> {
+  const saved: unknown = await access('readonly', (store, fail) => {
+    const guard = store.get(CONVERSATION_JOURNAL_KEY);
+    guard.onsuccess = () => { if (guard.result !== undefined) fail(new Error('Hay una reserva de conversación pendiente.')); };
+    return store.get('current');
+  });
+  return exactConversationBase(saved)?.attachedWork === id;
 }
 function conversationSnapshot(value: Conversation): Conversation {
   return {

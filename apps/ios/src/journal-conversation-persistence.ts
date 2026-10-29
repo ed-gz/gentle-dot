@@ -2,6 +2,7 @@ import { createConversationJournal, JournalReservationRejected, type Conversatio
 import { loadConversationBase, type ChatEntry, type Conversation } from './conversation.ts';
 import { localIdentifier } from './local-identifiers.ts';
 import type { PersistenceStatus } from './conversation-persistence.ts';
+import type { createConversationDraftRescue, DraftRescue } from './conversation-draft-rescue.ts';
 
 type Journal = Pick<ReturnType<typeof createConversationJournal>, 'pending' | 'begin' | 'resume'>;
 type JournalOperation = { id: string; baseRevision: number; base?: Conversation; nextRevision: number; snapshot: Conversation; pending: ChatEntry[] };
@@ -31,20 +32,26 @@ export async function recoverConversationReservation(journal: Journal = createCo
   catch (error) { return { state: 'blocked', journal: pending, error: describe(error) }; }
 }
 
-/** Drop-in-shaped experimental writer. It is NOT enabled in the app yet.
- * The caller must bind the exact unprojected base before restoring or editing,
+/** Journal-backed writer. The caller must bind the exact unprojected base before restoring or editing,
  * keep each UI capture descended from that base, recover old reservations
  * before accepting input, and make every archive writer cooperate. It never
- * acknowledges inference, deletes native work, or changes the visible UI. */
+ * acknowledges inference, deletes native work, or changes the visible UI itself. */
 export function createJournalConversationPersistence(options: {
   journal?: Journal;
   readBase?: () => Promise<Conversation | undefined>;
   identifier?: () => string;
+  /** Optional separate draft backup; still requires a visible recovery UI. */
+  draftRescue?: Pick<ReturnType<typeof createConversationDraftRescue>, 'save'> & Partial<Pick<ReturnType<typeof createConversationDraftRescue>, 'retireIfCurrent'>>;
+  rescueOwner?: string;
+  /** Requires every writer to use the reservation protocol. */
+  retireConfirmedDraftRescue?: boolean;
   onStatus?: (status: PersistenceStatus) => void;
 } = {}) {
   const journal = options.journal ?? createConversationJournal();
   const readBase = options.readBase ?? loadConversationBase;
   const identifier = options.identifier ?? localIdentifier;
+  const rescueOwner = options.draftRescue ? (options.rescueOwner ?? identifier()) : undefined;
+  let rescueSequence = 0;
   const pending = new Map<string, ChatEntry>(), seen = new WeakSet<ChatEntry>();
   let base: Conversation | undefined, bound = false, archiveFloor = 0, owned: JournalOperation | undefined;
   let ownedRejected = false;
@@ -71,8 +78,19 @@ export function createJournalConversationPersistence(options: {
     if (!bound) return Promise.reject(new Error('Recupera y vincula la base antes de guardar.'));
     enqueue(value.entries);
     const capture: Capture = { snapshot: structuredClone(value), pending: [...pending.entries()] };
+    let rescue: DraftRescue | undefined;
+    let rescueSaved: Promise<Error | undefined> | undefined;
+    if (options.draftRescue && rescueOwner) {
+      rescue = { schema: 'capri-draft-rescue/v1', owner: rescueOwner, sequence: ++rescueSequence, baseRevision: base?.revision ?? 0,
+        draft: capture.snapshot.draft, ...(capture.snapshot.attachedWork === undefined ? {} : { attachedWork: capture.snapshot.attachedWork }) };
+      // A blocked archive operation must not delay preserving a newer draft.
+      // Attach rejection immediately even while the older chain is running.
+      rescueSaved = options.draftRescue.save(rescue).then(() => undefined, error => error instanceof Error ? error : new Error('No se confirmó el rescate del borrador.'));
+    }
     chain = chain.then(async () => {
       try {
+        const rescueError = await rescueSaved;
+        if (rescueError) throw rescueError;
         if (owned) {
           const reserved = await journal.pending();
           // If a proven pre-reservation rejection was followed by an
@@ -115,6 +133,9 @@ export function createJournalConversationPersistence(options: {
           throw error;
         }
         await finish(operation, capture.pending);
+        if (rescue && options.draftRescue?.retireIfCurrent && options.retireConfirmedDraftRescue) {
+          try { await options.draftRescue.retireIfCurrent(rescue); } catch { /* The extra copy remains. */ }
+        }
         issue = undefined;
       } catch (error) { issue = describe(error); }
       notify();

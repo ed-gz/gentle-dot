@@ -16,10 +16,15 @@ import { mountContinuedInferenceSettings } from './continued-inference-settings.
 import { createLiveActivityCoordinator } from './live-activity-coordinator.ts';
 import { mountLiveActivitySettings } from './live-activity-settings.ts';
 import type { ActivityPhase, ActivityEnd } from './live-activity.ts';
-import { loadConversation, loadConversationBase, updateEntry, reconcileHostHistory, HostHistoryIdentityError, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
+import { loadConversationForWrite, loadConversationBase, hasConfirmedConversationAttachment, updateEntry, reconcileHostHistory, HostHistoryIdentityError, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
 import { conversationArchive } from './conversation-archive.ts';
-import { applyConversationEntry, createConversationPersistence } from './conversation-persistence.ts';
+import { applyConversationEntry } from './conversation-persistence.ts';
+import { createJournalConversationPersistence, recoverConversationReservation } from './journal-conversation-persistence.ts';
+import { createConversationJournal } from './conversation-journal.ts';
+import { mountReservationRescue } from './reservation-rescue-view.ts';
+import { createConversationDraftRescue } from './conversation-draft-rescue.ts';
+import { mountConversationDraftRecovery } from './conversation-draft-recovery-view.ts';
 import { createMemoryTools } from './conversation-memory-tools.ts';
 import { mountMemoryView } from './memory-view.ts';
 import { createAgentRunner } from './agent-runner.ts';
@@ -426,6 +431,9 @@ let composerSelectionError = '';
 const retryAttachment = document.createElement('button');
 retryAttachment.type = 'button'; retryAttachment.id = 'retry-attachment'; retryAttachment.textContent = 'Reintentar adjunto'; retryAttachment.hidden = true;
 element('view-material').after(retryAttachment);
+const retryMaterial = document.createElement('button');
+retryMaterial.type = 'button'; retryMaterial.textContent = 'Reintentar material'; retryMaterial.hidden = true;
+retryAttachment.after(retryMaterial);
 function showAttachedWork(id: string | undefined, label?: string) {
   attachedWork = id;
   const button = element<HTMLButtonElement>('view-material');
@@ -433,12 +441,22 @@ function showAttachedWork(id: string | undefined, label?: string) {
   // Do not let a fast navigation/reload outrun the durable conversation
   // reference. The work itself is saved independently in IndexedDB.
   button.disabled = Boolean(id);
+  retryMaterial.hidden = true;
   if (label !== undefined) element('attachment-context').textContent = label;
   else if (!id) element('attachment-context').textContent = '';
 }
-function releaseAttachedWork(id: string | undefined) {
-  if (id && id === attachedWork && conversationReady) element<HTMLButtonElement>('view-material').disabled = false;
+async function releaseAttachedWork(id: string | undefined) {
+  if (!id || id !== attachedWork || !conversationReady) return;
+  if (persistence.status().blocked) { retryMaterial.hidden = false; return; }
+  try {
+    const confirmed = await hasConfirmedConversationAttachment(id);
+    if (id !== attachedWork || !conversationReady) return;
+    const ready = confirmed && !persistence.status().blocked;
+    element<HTMLButtonElement>('view-material').disabled = !ready;
+    retryMaterial.hidden = ready;
+  } catch { if (id === attachedWork) retryMaterial.hidden = false; }
 }
+retryMaterial.addEventListener('click', () => { retryMaterial.disabled = true; void persist().finally(() => { retryMaterial.disabled = false; }); });
 let connectionEpoch = 0;
 const connectionSelection = createConnectionSelectionStore();
 type ManualAttempt = { connection: SelectedConnection & { source: 'manual' }; ticket: number; epoch: number; previous?: SelectedConnection };
@@ -546,7 +564,24 @@ let voiceTimer: ReturnType<typeof setTimeout> | undefined;
 let voicePreviewTimer: ReturnType<typeof setInterval> | undefined;
 let voiceRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let persistenceWarning = '';
-const persistence = createConversationPersistence({ onStatus(status) {
+const draftRescueStore = createConversationDraftRescue();
+const earlyDraftOwner = localIdentifier();
+let earlyDraftSequence = 0;
+let earlyDraft: Parameters<typeof draftRescueStore.save>[0] | undefined;
+let earlyDraftWrite: Promise<void> = Promise.resolve();
+const earlyDraftStatus = document.createElement('p');
+earlyDraftStatus.setAttribute('role', 'status');
+earlyDraftStatus.hidden = true;
+element('chat-notice').after(earlyDraftStatus);
+const conversationJournal = createConversationJournal();
+let reservationStatusEpoch = 0;
+const reservationRescueRoot = document.createElement('section');
+element('chat-notice').after(reservationRescueRoot);
+const reservationRescue = mountReservationRescue(reservationRescueRoot, { pending: conversationJournal.pending });
+const persistence = createJournalConversationPersistence({ journal: conversationJournal, draftRescue: draftRescueStore, retireConfirmedDraftRescue: true, onStatus(status) {
+  const epoch = ++reservationStatusEpoch;
+  if (status.blocked) void conversationJournal.pending().then(journal => { if (epoch === reservationStatusEpoch && journal) reservationRescue.show(journal); }).catch(() => {});
+  else reservationRescue.clear();
   rescueHistory.hidden = !status.blocked && !recoveredHistoryAvailable && !conversationRestoreFailed;
   if (status.blocked) {
     persistenceWarning = `No se confirmó el guardado local. ${status.archiveError ?? status.conversationError} ${status.pending} mensajes siguen en memoria. Los envíos están detenidos: usa Rescatar datos guardados para reintentar o exportar antes de cerrar Capri.`;
@@ -555,12 +590,45 @@ const persistence = createConversationPersistence({ onStatus(status) {
   memoryView.updateStatus(); updateControls();
 } });
 function persist(): Promise<void> {
-  if (!conversationReady) return Promise.resolve();
   clearTimeout(saveTimer);
-  return persistence.persist({ entries, draft: prompt.value, attachedWork });
+  if (!conversationReady) {
+    if (!draftEdited) return Promise.resolve();
+    const sequence = ++earlyDraftSequence;
+    const record = { schema: 'capri-draft-rescue/v1', owner: earlyDraftOwner, sequence, baseRevision: 0,
+      draft: prompt.value, ...(attachedWork === undefined ? {} : { attachedWork }) };
+    earlyDraft = record;
+    const write = draftRescueStore.save(record).then(() => {
+      if (sequence === earlyDraftSequence) { earlyDraftStatus.hidden = true; earlyDraftStatus.textContent = ''; }
+    }, () => {
+      if (sequence === earlyDraftSequence) { earlyDraftStatus.hidden = false; earlyDraftStatus.textContent = 'No pude guardar este borrador. Conserva la app abierta y reintenta la recuperación.'; }
+    });
+    earlyDraftWrite = write;
+    return write;
+  }
+  return persistence.persist({ entries, draft: prompt.value, attachedWork }).then(async () => {
+    // Pre-restore edits use an independent owner. Remove only an exact copy
+    // already present in a validated, later durable snapshot and no journal.
+    await earlyDraftWrite;
+    if (earlyDraft && !persistence.status().blocked) {
+      try { if (await draftRescueStore.retireIfCurrent(earlyDraft)) earlyDraft = undefined; } catch { /* Keep the copy for recovery. */ }
+    }
+    await releaseAttachedWork(attachedWork);
+  });
 }
 
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 250); }
+const draftRecoveryRoot = document.createElement('section');
+element('chat-notice').after(draftRecoveryRoot);
+const draftRecovery = mountConversationDraftRecovery(draftRecoveryRoot, { store: draftRescueStore,
+  confirmDiscard: () => window.confirm('¿Descartar esta copia del borrador?'),
+  append: async record => {
+    if (record.attachedWork && attachedWork && record.attachedWork !== attachedWork) throw new Error('Ya hay otro material adjunto.');
+    const merged = prompt.value === record.draft ? prompt.value : `${prompt.value}${prompt.value.trim() && record.draft ? '\n' : ''}${record.draft}`;
+    if (merged.length > 8000) throw new Error('El borrador no cabe completo.');
+    prompt.value = merged; draftEdited = true; if (record.attachedWork && !attachedWork) showAttachedWork(record.attachedWork);
+    sizeDraft(); prompt.focus(); await persist(); await releaseAttachedWork(record.attachedWork);
+  } });
+
 async function recoverLocalInference() {
   if (!conversationReady || localBusy || recoveringLocal || document.hidden) return;
   recoveringLocal = true; localRecoveryReady = false; clearTimeout(localRecoveryTimer); updateControls();
@@ -568,8 +636,13 @@ async function recoverLocalInference() {
     const hadActive = recoveringNativeId;
     let recoveredFromArchive = false;
     const result = await recoverInferenceResults({ list: listInferenceResults,
-      find: async id => entries.find(entry => entry.id === id && entry.engine === 'iphone')
-        ?? await conversationArchive.load(JSON.stringify(['iphone', 'iphone:main', id])),
+      find: async id => {
+        const visible = entries.find(entry => entry.id === id && entry.engine === 'iphone');
+        if (visible) return visible;
+        const archived = await conversationArchive.load(JSON.stringify(['iphone', 'iphone:main', id]));
+        if (!archived || archived.scope !== 'iphone:main' || archived.engine !== 'iphone' || archived.id !== id) return undefined;
+        return updateEntry([], archived)[0];
+      },
       apply(entry) {
         const current = entries.find(item => item.id === entry.id && item.engine === 'iphone');
         if (current?.localCancelled) return;
@@ -1072,8 +1145,21 @@ async function restoreConversation() {
   const retry = element<HTMLButtonElement>('retry-conversation');
   retry.disabled = true;
   try {
-    const saved = await loadConversation();
+    const reservation = await recoverConversationReservation(conversationJournal);
+    if (reservation.state === 'blocked') { reservationRescue.show(reservation.journal); throw new Error(reservation.error); }
+    reservationRescue.clear();
+    const { visible: saved, base } = await loadConversationForWrite();
     const recovered = await conversationArchive.restoreState(saved);
+    // Typing during restore owns the composer, but it must not erase the
+    // previous durable draft (or its attachment) when the new snapshot lands.
+    // Save that older version separately before binding or writing anything.
+    if (draftEdited && (saved.draft || saved.attachedWork)
+      && (saved.draft !== prompt.value || saved.attachedWork !== attachedWork)) {
+      const preserved = await draftRescueStore.save({ schema: 'capri-draft-rescue/v1', owner: localIdentifier(), sequence: 1,
+        baseRevision: saved.revision ?? 0, draft: saved.draft, ...(saved.attachedWork === undefined ? {} : { attachedWork: saved.attachedWork }) });
+      if (preserved === 'superseded') throw new Error('No se confirmó la copia del borrador anterior.');
+    }
+    persistence.bindBase(base, recovered.revision);
     saved.entries = recovered.entries; persistence.setRevision(recovered.revision);
     // Capture the restored window before live startup events can cause pruning.
     persistence.seed(recovered.preserved); persistence.enqueue(entries, true);
@@ -1085,7 +1171,7 @@ async function restoreConversation() {
     retry.hidden = true;
     rescueHistory.hidden = !persistence.status().blocked && !recoveredHistoryAvailable;
     if (element('chat-notice').textContent === recoveryMessage) element('chat-notice').textContent = '';
-    renderChat(); sizeDraft(); await persist(); releaseAttachedWork(attachedWork); await recoverLocalInference();
+    renderChat(); sizeDraft(); await persist(); await releaseAttachedWork(attachedWork); await recoverLocalInference();
   } catch {
     element('history-loading').hidden = true;
     conversationRestoreFailed = true;
@@ -1094,11 +1180,13 @@ async function restoreConversation() {
     retry.hidden = false;
     rescueHistory.hidden = false;
   } finally {
+    void draftRecovery.refresh();
     conversationLoading = false; retry.disabled = false; updateControls();
     conversationRestored = true; redraw(); maybeStartCompanionIntro();
   }
 }
-element('retry-conversation').addEventListener('click', () => void restoreConversation());
+element('retry-conversation').addEventListener('pointerdown', event => { if (event.pointerType === 'mouse' || event.pointerType === 'touch' || event.pointerType === 'pen') event.preventDefault(); });
+element('retry-conversation').addEventListener('click', () => { if (conversationReady) void recoverLocalInference(); else void restoreConversation(); });
 async function initialize() {
   updateControls();
   void completionNotifications.refresh();
@@ -1356,7 +1444,7 @@ async function saveComposerSelection(files: File[], control: HTMLInputElement) {
     const item = await createWork({ title: files[0]!.name.slice(0, 120), kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: prompt.value.trim() || 'Material adjunto a la conversación de Capri.', files });
     showAttachedWork(item.id, item.title);
     element('attachment-context').title = 'Guardado en este iPhone';
-    await persist(); releaseAttachedWork(item.id);
+    await persist(); await releaseAttachedWork(item.id);
     retryComposerSelection = undefined; control.value = '';
     if (element('chat-notice').textContent === composerSelectionError) element('chat-notice').textContent = '';
     composerSelectionError = ''; void inbox.refresh();
@@ -1495,7 +1583,7 @@ function importSharedFiles(): Promise<void> {
           const work = await createImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: item.notes || 'Material compartido con Capri. Pendiente de instrucciones.', files });
           showAttachedWork(work.id, work.title);
           notice(`Recibí ${work.title}. Material guardado localmente como trabajo ${work.id}; dime qué hacemos con él.`, 'iphone', `shared:${item.id}`);
-          await persist(); releaseAttachedWork(work.id);
+          await persist(); await releaseAttachedWork(work.id);
         });
       });
       await inbox.refresh();
@@ -1521,7 +1609,7 @@ function importDocumentFiles(fresh = false): Promise<void> {
             instruction: 'Material adjunto a la conversación de Capri.', files });
           showAttachedWork(work.id, `${files.length} archivo${files.length === 1 ? '' : 's'} · ${work.title}`);
           notice(`Conservé ${work.title} en este iPhone. Dime qué hacemos con el material.`, 'iphone', `document:${item.id}`);
-          await persist(); releaseAttachedWork(work.id);
+          await persist(); await releaseAttachedWork(work.id);
         });
       });
       await inbox.refresh();

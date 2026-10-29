@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, loadConversation, loadConversationBase, saveConversation } from '../src/conversation.ts';
+import { updateEntry, reconcileHostHistory, localPrompt, linkedPrompt, loadConversation, loadConversationBase, loadConversationForWrite, saveConversation } from '../src/conversation.ts';
 
 const entry = (id, changes = {}) => ({ id, role: 'user', text: `Message ${id}`, engine: 'iphone', state: 'complete', at: 1, ...changes });
 const previousIndexedDB = globalThis.indexedDB;
@@ -42,6 +42,18 @@ function storage(saved, pendingJournal) {
   };
   return () => stored;
 }
+
+test('writer restores its exact base separately from the interrupted visible projection', async () => {
+  const pending = entry('live', { role: 'assistant', state: 'pending', engine: 'gentle', transportText: 'host alias' });
+  const original = { entries: [pending], draft: 'Texto escrito', attachedWork: 'work_123', revision: 4 };
+  storage(original);
+  const restored = await loadConversationForWrite();
+  assert.deepEqual(restored.base, original);
+  assert.equal(restored.visible.entries[0].state, 'interrupted');
+  assert.equal(restored.visible.entries[0].transportText, 'host alias');
+  assert.equal(restored.visible.draft, 'Texto escrito');
+  assert.equal(restored.visible.attachedWork, 'work_123');
+});
 
 test('finishing a streamed entry preserves its place and never mutates the prior snapshot', () => {
   const activity = { id: 't', title: 'Consulta', kind: 'read', status: 'done' };

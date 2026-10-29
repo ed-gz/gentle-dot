@@ -284,7 +284,7 @@ test('shell stops new sends after archive failure, preserves the draft and expor
   await expect(page.locator('#cards')).toContainText('Respuesta que debe conservarse.');
   await expect(page.locator('#send')).toBeDisabled(); await expect(page.locator('#chat-notice')).toContainText('Los envíos están detenidos');
   await page.locator('#prompt').fill('Siguiente borrador, todavía sin enviar.');
-  await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).draft)).toBe('Siguiente borrador, todavía sin enviar.');
+  await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation-draft-rescue.ts')).createConversationDraftRescue().list()).some(x => x.draft === 'Siguiente borrador, todavía sin enviar.'))).toBe(true);
   await expect(page.locator('#rescue-history')).toBeVisible();
   await page.locator('#rescue-history').click(); await expect(page.locator('#memory-status')).toContainText('1 mensajes pendientes');
   // This case verifies the browser fallback; native delivery has its own fixture suite.
@@ -292,9 +292,10 @@ test('shell stops new sends after archive failure, preserves the draft and expor
   const download = page.waitForEvent('download'); await page.locator('#memory-export').click();
   const exported = await download; expect(exported.suggestedFilename()).toMatch(/^capri-conversacion-.*\.ndjson$/);
   const lines = (await readFile((await exported.path())!, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  expect(lines.find(line => line.schema === 'capri-conversation-pending/v1')).toMatchObject({ entries: 1, committed: false });
+  expect(lines.find(line => line.schema === 'capri-conversation-pending/v1')).toMatchObject({ entries: 2, committed: false, source: 'visible-and-pending-rescue' });
   expect(lines.find(line => line.schema === 'capri-conversation-draft/v1')).toMatchObject({ submitted: false, text: 'Siguiente borrador, todavía sin enviar.' });
   expect(lines.some(line => line.text === 'Respuesta que debe conservarse.')).toBe(true);
+  expect(lines.some(line => line.text === 'Conservar aunque falle el archivo.')).toBe(true);
   await page.evaluate(async () => { (await import('/src/conversation-archive.ts')).conversationArchive.upsert = (globalThis as any).restoreArchive; });
   await page.locator('#memory-retry').click(); await expect(page.locator('#memory-status')).toContainText('2 mensajes');
   await page.locator('[data-panel="chat"]').click(); await expect(page.locator('#send')).toBeEnabled();
@@ -339,6 +340,7 @@ test('legacy archive hydration keeps a newer receipt and rescue exports visible 
     return archive.restoreWindow([old]);
   });
   expect(migration[0]).toMatchObject({ state: 'complete', text: 'Confirmed legacy receipt' });
+  await expect.poll(() => page.evaluate(async () => Boolean(await (await import('/src/conversation-journal.ts')).createConversationJournal().pending()))).toBe(false);
   await page.evaluate(async () => {
     const { saveConversation } = await import('/src/conversation.ts');
     // Capture-phase handler simulates losing the old WebView without a final save.

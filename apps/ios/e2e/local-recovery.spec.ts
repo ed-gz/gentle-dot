@@ -62,7 +62,7 @@ test('failed conversation restoration preserves stored history and retries with 
     const conversation = await import('/src/conversation.ts' as string);
     await conversation.saveConversation({
       entries: [{ id: 'retained-history', role: 'assistant', text: savedText, engine: 'iphone', state: 'complete', at: 1 }],
-      draft: oldDraft,
+      draft: oldDraft, revision: 1000,
     });
   }, { savedText, oldDraft });
   await page.addInitScript(() => {
@@ -103,4 +103,71 @@ test('failed conversation restoration preserves stored history and retries with 
     return { texts: stored.entries.map((entry: { text: string }) => entry.text), draft: stored.draft };
   })).toEqual({ texts: [savedText], draft: editedDraft });
   expect(await page.evaluate(() => (globalThis as any).nativePrompts)).toEqual([]);
+});
+
+test('conversation recovery control remains keyboard focusable and activates with Enter', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const originalOpen = IDBFactory.prototype.open; let failed = false;
+    IDBFactory.prototype.open = function (name: string, version?: number) {
+      if (name === 'capri-ios-conversation' && !failed) { failed = true; throw new DOMException('Fixture', 'UnknownError'); }
+      return Reflect.apply(originalOpen, this, version === undefined ? [name] : [name, version]);
+    };
+  });
+  await page.goto('/');
+  const retry = page.getByRole('button', { name: 'Reintentar recuperación' });
+  await expect(retry).toBeVisible();
+  await retry.focus(); await expect(retry).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(retry).toBeHidden();
+  await expect(page.locator('#send')).toBeEnabled();
+});
+
+test('draft edited before a failed restoration survives closing and reopening', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const originalOpen = IDBFactory.prototype.open;
+    IDBFactory.prototype.open = function (name: string, version?: number) {
+      if (name === 'capri-ios-conversation' && !sessionStorage.getItem('failed-conversation-once')) {
+        sessionStorage.setItem('failed-conversation-once', 'yes');
+        throw new DOMException('Temporary read failure', 'UnknownError');
+      }
+      return Reflect.apply(originalOpen, this, version === undefined ? [name] : [name, version]);
+    };
+  });
+  await page.goto('/');
+  await page.locator('[data-panel="chat"]').click();
+  await expect(page.locator('#retry-conversation')).toBeVisible();
+  await page.locator('#prompt').fill('Texto escrito antes de recuperar');
+  await expect.poll(async () => page.evaluate(async () => (await (await import('/src/conversation-draft-rescue.ts')).createConversationDraftRescue().list()).some(record => record.draft === 'Texto escrito antes de recuperar'))).toBe(true);
+  await page.reload();
+  await page.locator('[data-panel="chat"]').click();
+  const card = page.locator('details').filter({ hasText: 'Borrador para recuperar' });
+  await expect(card).toBeVisible();
+  await card.locator('summary').click();
+  await expect(card).toContainText('Texto escrito antes de recuperar');
+  await card.getByRole('button', { name: 'Añadir al mensaje' }).click();
+  await expect(page.locator('#prompt')).toHaveValue('Texto escrito antes de recuperar');
+});
+
+test('failure to back up an early draft stays visible and a later edit can retry', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const originalOpen = IDBFactory.prototype.open; let failedRestore = false;
+    IDBFactory.prototype.open = function (name: string, version?: number) {
+      if (name === 'capri-ios-conversation' && (!failedRestore || (globalThis as any).rejectEarlyBackup)) {
+        failedRestore = true; throw new DOMException('Storage unavailable', 'UnknownError');
+      }
+      return Reflect.apply(originalOpen, this, version === undefined ? [name] : [name, version]);
+    };
+  });
+  await page.goto('/'); await page.locator('[data-panel="chat"]').click();
+  await expect(page.locator('#retry-conversation')).toBeVisible();
+  await page.evaluate(() => { (globalThis as any).rejectEarlyBackup = true; });
+  await page.locator('#prompt').fill('Primera edición');
+  await expect(page.getByRole('status').filter({ hasText: 'No pude guardar este borrador' })).toBeVisible();
+  await page.evaluate(() => { (globalThis as any).rejectEarlyBackup = false; });
+  await page.locator('#prompt').fill('Edición reintentada');
+  await expect.poll(async () => page.evaluate(async () => (await (await import('/src/conversation-draft-rescue.ts')).createConversationDraftRescue().list()).some(record => record.draft === 'Edición reintentada'))).toBe(true);
+  await expect(page.getByRole('status').filter({ hasText: 'No pude guardar este borrador' })).toBeHidden();
 });
