@@ -43,7 +43,7 @@ import { createConnectionTools } from './connection-tools.ts';
 import { createWorkTools } from './work-tools.ts';
 import { createWorkDispatcher } from './work-sync.ts';
 import { createDesktopTools } from './desktop-tools.ts';
-import { createLocalTools } from './agent-tools.ts';
+import { createLocalTools, type ToolApprovalRequest } from './agent-tools.ts';
 import { createTrustedApprovals } from './trusted-approvals.ts';
 import { createConversationRequests } from './conversation-requests.ts';
 import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCancelWithDeadline, voiceAvailabilityNote, VoiceCancelUnconfirmed, VoiceRetryPending } from './perception.ts';
@@ -693,6 +693,8 @@ earlyDraftStatus.hidden = true;
 element('chat-notice').after(earlyDraftStatus);
 const conversationJournal = createConversationJournal();
 let reservationStatusEpoch = 0;
+// Assigned once the tray exists; the connection callback can fire before that.
+let refreshTrayForHost: (() => void) | undefined;
 const reservationRescueRoot = document.createElement('section');
 element('chat-notice').after(reservationRescueRoot);
 const reservationRescue = mountReservationRescue(reservationRescueRoot, { pending: conversationJournal.pending });
@@ -1195,6 +1197,9 @@ const linked = createLinkedChat({
     } else if (value === 'rejected' && !pairingFailed) { if (!connectionBusy) connectionEpoch++; runtimeConnection = undefined; }
     updateLaptopView();
     linkedStatus = value; reviews.connection(value === 'ready');
+    // Tray actions depend on what the host actually announces, so a connection
+    // change must re-render them instead of leaving a stale disabled button.
+    refreshTrayForHost?.();
     if (value !== 'ready') laptopScreenSettings?.disconnected(); else laptopScreenSettings?.render();
     element('status').textContent = { offline: 'Sin conexión', connecting: 'Conectando…', ready: 'Vinculado a Gentle Dot', rejected: 'Acceso rechazado. Revisa token y versión.' }[value];
     element('connection-badge').textContent = value === 'ready' ? 'VINCULADO' : 'LOCAL';
@@ -1310,13 +1315,7 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
       if (!reset.ok) throw new Error('No pude confirmar que el motor local esté listo. La solicitud se conserva sin ejecutar.');
       if (generation !== localGeneration) return;
       observeLocalActivity(id, 'thinking');
-      const runner = createAgentRunner({ waitUntilActive: waitForForeground, tools: [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: operation => {
-        if (!linked.ready()) return undefined;
-        if (!linked.supportsWorkSync()) throw new Error('Actualiza Gentle Dot en la laptop para transferir trabajos. La conversación sigue disponible y el trabajo local se conserva.');
-        if (operation === 'process' && !linked.supportsMeetingDrafts()) throw new Error('Este Gentle Dot no tiene disponible el procesamiento de reuniones. El material confirmado se conserva.');
-        const approvedHost = host;
-        return createWorkDispatcher(request => linked.exchange(request, approvedHost), approvedHost, linked.workSyncLimits());
-      } }).filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct', 'work_propose_action', 'work_proposals', 'work_review_action'].includes(tool.definition.name))], step: prompt => agentStep(prompt, id, allowBackground), async onTrace(trace) {
+      const runner = createAgentRunner({ waitUntilActive: waitForForeground, tools: [...createLocalTools(), ...createMemoryTools(), ...createConnectionTools(), ...createDesktopTools({ getConnection: () => runtimeConnection }), ...agentWorkTools], step: prompt => agentStep(prompt, id, allowBackground), async onTrace(trace) {
         const entry = entries.find(item => item.id === id) ?? turnEntry;
         const activities = [...entry.activities ?? []]; const at = activities.findIndex(item => item.id === trace.id);
         const activity = { id: trace.id, kind: 'other' as const, title: trace.label, status: trace.status, detail: trace.detail };
@@ -1438,7 +1437,41 @@ element('disconnect').addEventListener('click', () => void (async () => {
 element('check-local').addEventListener('click', () => void checkModel());
 element<HTMLInputElement>('url').value = settings.url;
 const connectionSettings = mountConnectionSettings();
-const inbox = mountInbox(text => { draftEdited = true; prompt.value = text; scheduleSave(); showPanel('chat'); prompt.focus(); });
+// Built once so the tray and the agent drive the very same transfer and
+// meeting-draft path, with the same limits, revisions and human reviews.
+const workTools = createWorkTools({ getHost: () => linked.ready() ? host : undefined, getDispatcher: operation => {
+  if (!linked.ready()) return undefined;
+  if (!linked.supportsWorkSync()) throw new Error('Actualiza Gentle Dot en la laptop para transferir trabajos. La conversación sigue disponible y el trabajo local se conserva.');
+  if (operation === 'process' && !linked.supportsMeetingDrafts()) throw new Error('Este Gentle Dot no tiene disponible el procesamiento de reuniones. El material confirmado se conserva.');
+  const approvedHost = host;
+  return createWorkDispatcher(request => linked.exchange(request, approvedHost), approvedHost, linked.workSyncLimits());
+} });
+const agentWorkTools = workTools.filter(tool => ['work_sync', 'work_recover', 'work_process', 'work_result', 'work_correct', 'work_propose_action', 'work_proposals', 'work_review_action'].includes(tool.definition.name));
+const hostCanDraftMeetings = () => linked.ready() && linked.supportsWorkSync() && linked.supportsMeetingDrafts();
+/** Transfer the exact revision, then ask the host for a draft minute. Both steps keep
+ * their own human review, and the tools refuse a second transfer while one is in
+ * flight, so the durable work status is what prevents a duplicate send. */
+async function generateMeetingMinute(id: string): Promise<void> {
+  const sync = workTools.find(tool => tool.definition.name === 'work_sync');
+  const process = workTools.find(tool => tool.definition.name === 'work_process');
+  if (!sync || !process) throw new Error('Falta la acción de minuta en esta instalación.');
+  // The review card is mounted in the conversation, so the person must be
+  // looking at it before anything asks for approval.
+  showPanel('chat');
+  const controller = new AbortController();
+  const context = { signal: controller.signal, askApproval: (request: ToolApprovalRequest) => reviews.approve(request, controller.signal) };
+  let item = await readWork(id);
+  if (!item.transfer?.receipt || item.status !== 'sent') {
+    await sync.execute(sync.validate({ id, revision: item.revision }), context);
+    item = await readWork(id);
+  }
+  if (controller.signal.aborted) return;
+  await process.execute(process.validate({ id, revision: item.revision }), context);
+  if (controller.signal.aborted) return;
+  element('work-status').textContent = 'La minuta quedó guardada como borrador. Revísala antes de aprobarla.';
+}
+const inbox = mountInbox(text => { draftEdited = true; prompt.value = text; scheduleSave(); showPanel('chat'); prompt.focus(); }, { generate: item => generateMeetingMinute(item.id), available: hostCanDraftMeetings });
+refreshTrayForHost = () => void inbox.refresh();
 const memoryView = mountMemoryView({ status: persistence.status, pending: persistence.pending, visible: () => structuredClone(entries), draft: () => prompt.value, retry: persist });
 element('view-material').addEventListener('click', () => {
   if (!attachedWork) return;

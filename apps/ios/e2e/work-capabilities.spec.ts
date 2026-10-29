@@ -52,7 +52,14 @@ for (const supported of [false, true]) test(`${supported ? 'capable host confirm
   await page.locator('[data-panel="settings"]').click(); await page.getByText('Conexión manual', { exact: true }).click();
   await page.locator('#url').fill('wss://capability.example/ws'); await page.locator('#token').fill('fixture-only'); await page.locator('#connection button[type="submit"]').click();
   await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot. Acceso guardado en Keychain.');
-  await page.locator('[data-panel="chat"]').click(); await page.locator('#prompt').fill('Transfiere mi trabajo a Gentle Dot.'); await page.locator('#send').click();
+  await page.locator('[data-panel="chat"]').click();
+  // The work tools live in the iPhone agent. Automatic routing now prefers a
+  // ready laptop (S9), so this case must ask for the local engine explicitly.
+  await page.locator('.engine-details').evaluate(el => { (el as HTMLDetailsElement).open = true; });
+  await expect(page.locator('#engine')).toBeEnabled({ timeout: 20000 });
+  await page.locator('#engine').selectOption('iphone');
+  await expect(page.locator('#engine-summary')).toHaveText('Este iPhone');
+  await page.locator('#prompt').fill('Transfiere mi trabajo a Gentle Dot.'); await page.locator('#send').click();
   if (supported) {
     const approval = page.locator('#requests .review-card'); await expect(approval).toContainText('Material local');
     expect(requests.some(request => request.type === 'work_sync')).toBe(false);
@@ -73,7 +80,8 @@ for (const supported of [false, true]) test(`${supported ? 'capable host confirm
     expect(work.prompts.at(-1)).toContain('Actualiza Gentle Dot');
     await expect(page.locator('#requests .review-card')).toHaveCount(0);
   }
-  await page.locator('.engine-details summary').click(); await page.locator('#engine').selectOption('gentle');
+  await page.locator('.engine-details').evaluate(el => { (el as HTMLDetailsElement).open = true; });
+  await page.locator('#engine').selectOption('gentle');
   await page.locator('#prompt').fill('Continuamos con el chat.'); await page.locator('#send').click();
   await expect(page.locator('#cards')).toContainText('Chat del host disponible.');
   await expect(page.locator('#connection-badge')).toHaveText('VINCULADO');

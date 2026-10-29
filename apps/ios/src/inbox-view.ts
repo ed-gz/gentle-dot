@@ -105,7 +105,7 @@ function renderMinute(result: WorkResult, item: WorkItem): HTMLElement {
   return content;
 }
 
-export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<void>; saveDraft(text: string): Promise<void>; openWork(id: string): Promise<void>; openAll(): Promise<void> } {
+export function mountInbox(onUse: (text: string) => void, minutes?: { generate(item: WorkItem): Promise<void>; available(): boolean }): { refresh(): Promise<void>; saveDraft(text: string): Promise<void>; openWork(id: string): Promise<void>; openAll(): Promise<void> } {
   const find = <T extends HTMLElement>(id: string) => {
     const element = document.getElementById(id);
     if (!element) throw new Error(`Falta un elemento de la bandeja: ${id}`);
@@ -214,6 +214,28 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
     use.disabled = !item.instruction.trim();
     use.addEventListener('click', () => useInstructions(item.instruction));
     actions.append(use);
+    if (item.kind === 'meeting') {
+      // The action reuses the agent's own transfer + draft path. The durable work
+      // status is what refuses a second send, so no extra local lock is invented.
+      const draft = button('Generar minuta con la laptop');
+      const inFlight = item.status === 'sending' || (item.transfer !== undefined && !item.transfer.receipt);
+      const waitingReview = Boolean(item.result) && !validMinuteApproval(item);
+      const reason = !minutes ? 'Esta instalación no ofrece la acción de minuta.'
+        : inFlight ? 'Una transferencia de esta reunión sigue en curso; espera su confirmación antes de pedir la minuta.'
+        : waitingReview ? 'Ya hay una minuta guardada sin aprobar. Revísala antes de pedir otra.'
+        : !minutes.available() ? 'Conecta la laptop y usa un Gentle Dot que anuncie minutas de reuniones.' : '';
+      draft.disabled = Boolean(reason);
+      if (reason) draft.title = reason;
+      draft.addEventListener('click', async () => {
+        if (!minutes || draft.disabled) return;
+        draft.disabled = true; status.textContent = 'Pidiendo la minuta a la laptop…';
+        try { await minutes.generate(item); status.textContent = 'Minuta guardada como borrador. Revísala antes de aprobarla.'; }
+        catch (error) { status.textContent = error instanceof Error ? error.message : 'No se pudo generar la minuta.'; }
+        finally { await refresh(); }
+      });
+      actions.append(draft);
+      if (reason) actions.append(node('p', reason, 'hint'));
+    }
     article.append(heading, meta, body, actions);
 
     if (item.minuteActionLock) article.append(node('p', 'Una acción de esta minuta sigue en revisión o sin confirmación. Puedes consultar y copiar la minuta. Contrasta el estado con el servicio; no se reenvía automáticamente.', 'hint'));
