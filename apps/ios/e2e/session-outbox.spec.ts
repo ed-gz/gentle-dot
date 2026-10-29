@@ -78,3 +78,37 @@ test('a lost commit callback leaves the send unconfirmed and recoverable', async
   }, moduleUrl);
   expect(result).toEqual({saved:false, status:'unconfirmed', text:'Guardado'});
 });
+
+test('full outbox blocks additions, keeps pending data and updates without scanning records', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async url => {
+    const module = await import(/* @vite-ignore */ url);
+    const open = indexedDB.open('gentle-dot:session-outbox:v2', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('deliveries');
+    const db: IDBDatabase = await new Promise((resolve, reject) => { open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
+    const owner = module.sessionDeliveryIdentity('', 'pane', 'session');
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('deliveries', 'readwrite'), store = tx.objectStore('deliveries');
+      for (let i=0; i<module.MAX_OUTBOX_RECORDS; i++) {
+        const id = `record-${i}`;
+        store.put({id,identity:owner,text:'x',payload:i<2?'original':'',createdAt:1,status:i<2?'unconfirmed':'dismissed',baseline:[],storageVersion:0}, JSON.stringify([owner,id]));
+      }
+      tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+    const getAll = IDBObjectStore.prototype.getAll;
+    IDBObjectStore.prototype.getAll = function() { throw new Error('A write must not read all payloads'); };
+    try {
+      const added = await module.persistDeliveries([{id:'new',identity:owner,text:'new',payload:'new',createdAt:1,status:'unconfirmed',baseline:new Set()}]);
+      const updated = await module.persistDeliveries([{id:'record-0',identity:owner,text:'x',payload:'original',createdAt:1,status:'dismissed',baseline:new Set(),storageVersion:0}]);
+      return {added,updated};
+    } finally { IDBObjectStore.prototype.getAll = getAll; }
+  }, moduleUrl);
+  expect(result).toEqual({added:false,updated:true});
+  const retained = await page.evaluate(async url => {
+    const records = await (await import(/* @vite-ignore */ url)).restoreDeliveries();
+    const pending = records.find((item: {id:string}) => item.id === 'record-1');
+    return {count:records.length,status:pending.status,payload:pending.payload};
+  }, moduleUrl);
+  expect(retained).toEqual({count:10000,status:'unconfirmed',payload:'original'});
+});

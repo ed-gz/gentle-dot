@@ -60,6 +60,9 @@ export function reconcileDeliveries(
 
 const STORAGE_KEY = "gentle-dot:session-outbox:v1";
 const DATABASE = "gentle-dot:session-outbox:v2";
+// Do not evict pending work or tombstones to make space. At the limit new
+// records fail closed; updates to existing records remain available.
+export const MAX_OUTBOX_RECORDS = 10_000;
 type StoredDelivery = Omit<OutgoingMessage, "baseline"> & { baseline: string[] };
 function decode(value: unknown, recover = true): OutgoingMessage {
 	if (!value || typeof value !== "object") throw new Error("El registro de envío no es válido.");
@@ -97,20 +100,21 @@ function openDatabase(): Promise<IDBDatabase> {
 		request.onsuccess = () => { if (settled) request.result.close(); else { clearTimeout(timer); settled = true; resolve(request.result); } };
 	});
 }
-/** A readwrite transaction merges per-record updates so another view's outbox
- * cannot be replaced. Legacy bytes are retained: an old view can still write
- * them, and localStorage and IndexedDB cannot be migrated atomically together. */
-async function transact(incoming?: OutgoingMessage[]): Promise<OutgoingMessage[]> {
+function readLegacy(): OutgoingMessage[] {
 	const raw = localStorage.getItem(STORAGE_KEY);
 	const legacy: unknown = raw === null ? [] : JSON.parse(raw);
 	if (!Array.isArray(legacy)) throw new Error("El registro anterior no es válido.");
-	const previous = legacy.map(value => {
+	return legacy.map(value => {
 		const item = decode(value);
 		// The old store had no correlation contract, even if an unexpected field
 		// happens to use the new marker's name.
 		const { evidence: _legacyEvidence, ...safe } = item;
 		return { ...safe, status: item.status === "delivered" ? "unconfirmed" as const : item.status, identity: legacyDeliveryIdentity(item.identity) };
 	});
+}
+/** Retain legacy bytes because an old view can still write them. */
+async function transactRestore(): Promise<OutgoingMessage[]> {
+	const previous = readLegacy();
 	const db = await openDatabase();
 	try {
 		return await new Promise((resolve, reject) => {
@@ -118,7 +122,6 @@ async function transact(incoming?: OutgoingMessage[]): Promise<OutgoingMessage[]
 			const store = tx.objectStore("deliveries");
 			const request = store.getAll();
 			let result: OutgoingMessage[] = [];
-			const updated: Array<{ item: OutgoingMessage; version: number }> = [];
 			let failure: unknown;
 			const timer = setTimeout(() => { try { tx.abort(); } catch { /* It may already have committed. */ } reject(new Error("El almacenamiento no confirmó la operación.")); }, 12_000);
 			request.onsuccess = () => {
@@ -129,25 +132,58 @@ async function transact(incoming?: OutgoingMessage[]): Promise<OutgoingMessage[]
 						const key = deliveryKey(item);
 						if (!known.has(key)) { known.set(key, item); store.put(encode(item), key); }
 					}
-					for (const item of incoming ?? []) {
-						const key = deliveryKey(item), old = known.get(key);
-						// Compare the revision inside the same transaction as the write.
-						if (old && (item.storageVersion === undefined || (old.storageVersion ?? 0) !== item.storageVersion)) throw new Error("El envío cambió en otra ventana.");
-						if (old && terminal(old) && !terminal(item)) throw new Error("El envío ya fue resuelto en otra ventana.");
-						const next = { ...item, storageVersion: (old?.storageVersion ?? -1) + 1 };
-						known.set(key, next); store.put(encode(next), key);
-						updated.push({item, version: next.storageVersion});
-					}
 					result = [...known.values()];
 				} catch (error) { failure = error; tx.abort(); }
 			};
-			tx.oncomplete = () => { clearTimeout(timer); for (const entry of updated) entry.item.storageVersion = entry.version; resolve(result); };
+			tx.oncomplete = () => { clearTimeout(timer); resolve(result); };
 			tx.onabort = () => { clearTimeout(timer); reject(failure ?? tx.error ?? new Error("No se pudo guardar el envío.")); };
 			tx.onerror = () => { /* onabort reports the failed transaction */ };
 		});
 	} finally { db.close(); }
 }
-export async function restoreDeliveries(): Promise<OutgoingMessage[]> { return (await transact()).map(item => decode(encode(item))); }
+
+/** Check and update only requested keys in a single transaction. In particular,
+ * never load every stored payload just to send or update one message. */
+async function writeRecords(items: OutgoingMessage[]): Promise<void> {
+	readLegacy(); // Fail closed if legacy data cannot be read or is malformed.
+	const keys = items.map(deliveryKey);
+	if (new Set(keys).size !== keys.length) throw new Error("El envío está repetido.");
+	const db = await openDatabase();
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const tx = db.transaction("deliveries", "readwrite");
+			const store = tx.objectStore("deliveries");
+			const count = store.count();
+			const reads = keys.map(key => store.get(key));
+			const updated: Array<{ item: OutgoingMessage; version: number }> = [];
+			let failure: unknown;
+			let pending = reads.length + 1;
+			const timer = setTimeout(() => { try { tx.abort(); } catch { /* It may already have committed. */ } reject(new Error("El almacenamiento no confirmó la operación.")); }, 12_000);
+			const ready = () => {
+				if (--pending) return;
+				try {
+					const old = reads.map(read => read.result === undefined ? undefined : decode(read.result, false));
+					const newCount = old.filter(item => !item).length;
+					if (newCount && count.result + newCount > MAX_OUTBOX_RECORDS) throw new Error("La bandeja alcanzó su capacidad.");
+					for (let i = 0; i < items.length; i++) {
+						const item = items[i]!, prior = old[i];
+						if (prior && (item.storageVersion === undefined || (prior.storageVersion ?? 0) !== item.storageVersion)) throw new Error("El envío cambió en otra ventana.");
+						if (prior && terminal(prior) && !terminal(item)) throw new Error("El envío ya fue resuelto en otra ventana.");
+						const next = { ...item, storageVersion: (prior?.storageVersion ?? -1) + 1 };
+						store.put(encode(next), keys[i]!);
+						updated.push({ item, version: next.storageVersion });
+					}
+				} catch (error) { failure = error; tx.abort(); }
+			};
+			count.onsuccess = ready;
+			for (const read of reads) read.onsuccess = ready;
+			tx.oncomplete = () => { clearTimeout(timer); for (const entry of updated) entry.item.storageVersion = entry.version; resolve(); };
+			tx.onabort = () => { clearTimeout(timer); reject(failure ?? tx.error ?? new Error("No se pudo guardar el envío.")); };
+			tx.onerror = () => { /* onabort reports the failed transaction */ };
+		});
+	} finally { db.close(); }
+}
+export async function restoreDeliveries(): Promise<OutgoingMessage[]> { return (await transactRestore()).map(item => decode(encode(item))); }
 export async function persistDeliveries(items: OutgoingMessage[]): Promise<boolean> {
-	try { await transact(items); return true; } catch { return false; }
+	try { await writeRecords(items); return true; } catch { return false; }
 }

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { IDBObjectStore } from "fake-indexeddb";
 import { OrchestrationPanel, SessionTurns } from "../src/components/OrchestrationPanel.tsx";
-import { persistDeliveries, restoreDeliveries, reconcileDeliveries, sessionDeliveryIdentity, legacyDeliveryIdentity, type OutgoingMessage } from "../src/session-delivery.ts";
+import { MAX_OUTBOX_RECORDS, persistDeliveries, restoreDeliveries, reconcileDeliveries, sessionDeliveryIdentity, legacyDeliveryIdentity, type OutgoingMessage } from "../src/session-delivery.ts";
 import * as deliveryStore from "../src/session-delivery.ts";
 import type { AgentConversation, OrchestrationClient, OrchestrationSnapshot } from "../src/orchestration.ts";
 import type { OrchestrationControls } from "../src/useOrchestration.ts";
@@ -33,6 +33,7 @@ it("shows sending, accepted, queued and consumed separately while the user retai
  const client:OrchestrationClient = {snapshot:vi.fn(),act:vi.fn(),inspect:vi.fn(async () => page)};
  const {container} = render(<OrchestrationPanel client={client} controls={controls}/>);
  await userEvent.click(screen.getByRole("button",{name:"Proyecto · Trabajando"}));
+ await waitFor(() => expect(screen.getByLabelText("Continuar esta sesión")).toBeEnabled());
  fireEvent.change(screen.getByLabelText("Continuar esta sesión"),{target:{value:"Revisa primero la compilación"}});
  fireEvent.click(screen.getByRole("button",{name:"Enviar instrucción"}));
  expect(await screen.findByText("Enviando al equipo…")).toBeVisible();
@@ -62,6 +63,7 @@ it("retains failed acknowledgement and assigns a new ID to a new send of identic
  const client:OrchestrationClient = {snapshot:vi.fn(),act:vi.fn(),inspect:vi.fn(async () => page)};
  render(<OrchestrationPanel client={client} controls={controls}/>);
  await userEvent.click(screen.getByRole("button",{name:"Proyecto · Trabajando"}));
+ await waitFor(() => expect(screen.getByLabelText("Continuar esta sesión")).toBeEnabled());
  fireEvent.change(screen.getByLabelText("Continuar esta sesión"),{target:{value:"Mensaje para reintentar"}});
  fireEvent.click(screen.getByRole("button",{name:"Enviar instrucción"}));
  expect(await screen.findByText("Sin confirmación. Revisa el historial: reintentar podría duplicar el mensaje.")).toBeVisible();
@@ -234,6 +236,38 @@ it("does not overwrite an existing message if a newly generated ID collides", as
  expect(await persistDeliveries([elsewhere])).toBe(true);
  expect(await restoreDeliveries()).toHaveLength(2);
 });
+
+it("bounds new records without evicting pending work and does not load the whole store on writes", async () => {
+ const first = pending({id:"volume-0", createdAt:Date.now(), storageVersion:0});
+ const request = indexedDB.open("gentle-dot:session-outbox:v2", 1);
+ request.onupgradeneeded = () => request.result.createObjectStore("deliveries");
+ const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+ await new Promise<void>((resolve, reject) => {
+  const tx = db.transaction("deliveries", "readwrite"), store = tx.objectStore("deliveries");
+  for (let i = 0; i < MAX_OUTBOX_RECORDS; i++) {
+   const item = {...first, id:`volume-${i}`, status:i > 1 ? "dismissed" : "unconfirmed", payload:i > 1 ? "" : first.payload, baseline:[]};
+   store.put(item, JSON.stringify([item.identity, item.id]));
+  }
+  tx.oncomplete = () => resolve();
+  tx.onabort = () => reject(tx.error);
+ });
+ db.close();
+ const readAll = vi.spyOn(IDBObjectStore.prototype, "getAll");
+ try {
+  expect(await persistDeliveries([pending({id:"too-many"})])).toBe(false);
+  expect(await persistDeliveries([{...first,status:"dismissed"}])).toBe(true);
+  expect(readAll).not.toHaveBeenCalled();
+ } finally { readAll.mockRestore(); }
+ const recovered = await restoreDeliveries();
+ expect(recovered).toHaveLength(MAX_OUTBOX_RECORDS);
+ expect(recovered.find(item => item.id === first.id)?.status).toBe("dismissed");
+ expect(recovered.find(item => item.id === "volume-1")).toMatchObject({status:"unconfirmed",payload:first.payload});
+ const legacy = {...pending({id:"legacy-over-limit",identity:"old:owner"}),baseline:[]};
+ localStorage.setItem("gentle-dot:session-outbox:v1", JSON.stringify([legacy]));
+ const migrated = await restoreDeliveries();
+ expect(migrated).toHaveLength(MAX_OUTBOX_RECORDS + 1);
+ expect(migrated.find(item => item.id === legacy.id)).toMatchObject({identity:legacyDeliveryIdentity(legacy.identity),payload:legacy.payload});
+}, 20_000);
 
 it("two restored panels can resolve one send and create a different send without overwriting it", async () => {
  const item = pending({createdAt:Date.now()});
