@@ -7,9 +7,11 @@ export type MCPOAuthGrant = { resource: string; issuer: string; tokenEndpoint: s
 export type ProviderCredentialBundle = { accessToken: string; refreshToken?: string; expiresAt?: number; provider?: Provider; clientId?: string; redirectUri?: string; scopes?: string[]; obtainedAt?: number; refreshState?: 'ready' | 'refreshing' | 'uncertain'; mcpOAuth?: MCPOAuthGrant };
 export type ExternalConnection = { id: string; kind: 'mcp' | 'https-api'; label: string; endpoint: string; revision: number; enabled: boolean; credentialAccount?: string; createdAt: number; updatedAt: number; provider?: Provider; apiMode?: 'json2' | 'legacy'; database?: string; uid?: number };
 export type ConnectionInput = Pick<ExternalConnection, 'kind' | 'label' | 'endpoint' | 'provider' | 'apiMode' | 'database' | 'uid'> & { id?: string; enabled?: boolean };
-export type RemoteExecution = { requestId: string; fingerprint: string; connectionId: string; connectionRevision: number; endpoint: string; toolName: string; schemaJSON: string; argumentsJSON: string; state: 'executing' | 'succeeded' | 'uncertain'; createdAt: number; updatedAt: number; resultJSON?: string };
+export type RemoteExecution = { requestId: string; fingerprint: string; connectionId: string; connectionRevision: number; endpoint: string; toolName: string; schemaJSON: string; argumentsJSON: string; state: 'executing' | 'succeeded' | 'uncertain' | 'reviewed'; createdAt: number; updatedAt: number; resultJSON?: string };
 const DATABASE = 'capri-ios-external-connections';
 const OPERATION_STATE = 'operation-state';
+const ENDPOINT_OPERATION_STATE = 'endpoint-operation-state';
+const EXECUTION_STATE = 'execution-state';
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export function validEndpoint(input: string): string {
   if (typeof input !== 'string' || input.length > 2048 || /[\u0000-\u0020\\#]/.test(input)) throw new Error('Usa un endpoint HTTPS sin credenciales.');
@@ -55,7 +57,7 @@ async function database(): Promise<IDBDatabase> {
     if (!globalThis.indexedDB) { reject(new Error('El almacenamiento de conexiones no está disponible.')); return; }
     let settled = false;
     const timer = setTimeout(() => { settled = true; reject(new Error('El almacenamiento de conexiones no respondió.')); }, 8000);
-    const open = indexedDB.open(DATABASE, 2);
+    const open = indexedDB.open(DATABASE, 3);
     open.onupgradeneeded = () => {
       if (settled) { open.transaction?.abort(); return; }
       const db = open.result;
@@ -67,6 +69,12 @@ async function database(): Promise<IDBDatabase> {
       // binds schema/revision; replay protection binds the actual operation.
       if (!executions.indexNames.contains(OPERATION_STATE)) executions.createIndex(OPERATION_STATE,
         ['connectionId', 'endpoint', 'toolName', 'argumentsJSON', 'state']);
+      // Recreating a connection or changing credentials cannot erase an
+      // uncertain operation at the same endpoint. Account identity is not
+      // assumed from a local connection ID.
+      if (!executions.indexNames.contains(ENDPOINT_OPERATION_STATE)) executions.createIndex(ENDPOINT_OPERATION_STATE,
+        ['endpoint', 'toolName', 'argumentsJSON', 'state']);
+      if (!executions.indexNames.contains(EXECUTION_STATE)) executions.createIndex(EXECUTION_STATE, 'state');
     };
     open.onerror = () => { clearTimeout(timer); reject(new Error('No se pudo abrir el almacenamiento de conexiones.')); };
     open.onblocked = () => { clearTimeout(timer); settled = true; reject(new Error('Cierra otras ventanas de Capri para abrir las conexiones.')); };
@@ -163,14 +171,17 @@ export async function beginRemoteExecution(value: RemoteExecution): Promise<void
       for (const state of ['executing', 'uncertain']) {
         // Count indexed keys rather than loading potentially large saved results.
         // An older schema-dependent fingerprint cannot bypass this stable key.
-        const pending = store.index(OPERATION_STATE).count([value.connectionId, value.endpoint, value.toolName, value.argumentsJSON, state]);
+        const pending = store.index(ENDPOINT_OPERATION_STATE).count([value.endpoint, value.toolName, value.argumentsJSON, state]);
         pending.onsuccess = () => {
           if (pending.result > 0) { fail(new Error('Esta operación ya está ejecutándose o quedó incierta. Verifica el servicio antes de repetir.')); return; }
           if (++checked !== 2) return;
-          const count = store.count(); count.onsuccess = () => {
-            if (count.result >= 1000) { fail(new Error('El registro de ejecuciones está lleno; conserva su evidencia antes de continuar.')); return; }
+          const active = store.index(EXECUTION_STATE).count('executing'), uncertain = store.index(EXECUTION_STATE).count('uncertain');
+          let counted=0; const checkLimit=()=>{
+            if (++counted!==2) return;
+            if (active.result + uncertain.result >= 1000) { fail(new Error('Hay demasiadas operaciones sin resolver; revisa la evidencia antes de continuar.')); return; }
             store.add(value); done();
           };
+          active.onsuccess=checkLimit; uncertain.onsuccess=checkLimit;
         };
       }
     };
@@ -187,4 +198,44 @@ export async function finishRemoteExecution(requestId: string, state: 'succeeded
 }
 export async function listRemoteExecutions(): Promise<RemoteExecution[]> {
   return transaction(['executions'], 'readonly', (tx, done) => { const read = tx.objectStore('executions').getAll(); read.onsuccess = () => done(read.result); });
+}
+export type PendingRemoteExecution = { requestId:string; endpoint:string; toolName:string; state:'executing'|'uncertain'; argumentsPreview:string; truncated:boolean };
+/** Page unresolved records via their state index; do not load completed results. */
+export async function listPendingRemoteExecutions(offset: number, limit: number): Promise<{items:PendingRemoteExecution[];total:number;offset:number;nextOffset?:number}> {
+  if (!Number.isSafeInteger(offset)||offset<0||offset>1000||!Number.isSafeInteger(limit)||limit<1||limit>20) throw new Error('Rango inválido.');
+  return transaction(['executions'],'readonly',(tx,done,fail)=>{
+    const index=tx.objectStore('executions').index(EXECUTION_STATE), active=index.count('executing'), uncertain=index.count('uncertain');let counted=0;
+    const start=()=>{if(++counted!==2)return;const total=active.result+uncertain.result,items:PendingRemoteExecution[]=[];let skip=offset;
+      const read=(state:'executing'|'uncertain')=>{const cursor=index.openCursor(IDBKeyRange.only(state));cursor.onsuccess=()=>{
+        try {const item=cursor.result;if(!item){if(state==='executing'){read('uncertain');return;}done({items,total,offset,...(offset+items.length<total?{nextOffset:offset+items.length}:{})});return;}
+          if(skip>0){skip--;item.continue();return;}
+          const value=item.value as RemoteExecution;
+          if(!value || !uuid.test(value.requestId)||typeof value.endpoint!=='string'||validEndpoint(value.endpoint)!==value.endpoint||typeof value.toolName!=='string'||!value.toolName||value.toolName.length>256||typeof value.argumentsJSON!=='string'||value.argumentsJSON.length>100_000||value.state!==state)throw new Error('El registro requiere revisión y no se modificó.');
+          items.push({requestId:value.requestId,endpoint:value.endpoint,toolName:value.toolName,state,argumentsPreview:value.argumentsJSON.slice(0,1000),truncated:value.argumentsJSON.length>1000});
+          if(items.length===limit){done({items,total,offset,...(offset+items.length<total?{nextOffset:offset+items.length}:{})});return;}item.continue();
+        }catch(error){fail(error instanceof Error?error:new Error('El registro requiere revisión.'));}
+      };};
+      read('executing');
+    };
+    active.onsuccess=start;uncertain.onsuccess=start;
+  });
+}
+export async function getRemoteExecution(id:string):Promise<RemoteExecution | null> {
+  if(!uuid.test(id)) throw new Error('ID de operación inválido.');
+  return transaction(['executions'],'readonly',(tx,done)=>{const read=tx.objectStore('executions').get(id);read.onsuccess=()=>done(read.result??null);});
+}
+/** Human review closes only the exact unresolved record; it does not send,
+ * cancel the original request or assert that the remote action succeeded. */
+export async function reviewRemoteExecution(expected: RemoteExecution): Promise<void> {
+  if (!expected || !uuid.test(expected.requestId) || !['executing','uncertain'].includes(expected.state)) throw new Error('El registro no requiere esta revisión.');
+  const original = structuredClone(expected);
+  await transaction<void>(['executions'], 'readwrite', (tx, done, fail) => {
+    const store = tx.objectStore('executions'), read = store.get(original.requestId);
+    read.onsuccess = () => {
+      if (!read.result || JSON.stringify(read.result) !== JSON.stringify(original) || !['executing','uncertain'].includes(read.result.state)) {
+        fail(new Error('La operación cambió después de la revisión.')); return;
+      }
+      store.put({ ...read.result, state:'reviewed', updatedAt:Date.now() }); done();
+    };
+  });
 }

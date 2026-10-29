@@ -144,19 +144,29 @@ No significa por sí mismo que una operación de negocio tuvo éxito.
 
 Un fallo de transporte, respuesta inválida o pérdida de confirmación conserva
 `uncertain`; un reinicio no cambia `executing` a exitoso. La identidad estable de
-la operación es conexión, endpoint, nombre de herramienta y argumentos canónicos.
+la operación protegida es endpoint, nombre de herramienta y argumentos canónicos.
 Si sigue `executing` o `uncertain`, bloquea otra llamada incluso después de una
-aprobación nueva, un esquema distinto o una rotación de token/revisión. El esquema
+aprobación nueva, un esquema distinto, una rotación de token/revisión o la
+recreación de la conexión. Esto también bloquea por precaución la misma operación
+en otra cuenta del mismo endpoint: el identificador local de conexión no demuestra
+que las cuentas sean distintas. El esquema
 y revisión siguen vinculados a la aprobación y evidencia; no reinician la protección
-contra duplicados. IndexedDB versión 2 añade un índice compuesto a los registros
+contra duplicados. IndexedDB versión 3 añade un índice compuesto a los registros
 existentes sin borrarlos, incluyendo huellas antiguas que incorporaban el esquema.
 La comprobación consulta claves del índice sin cargar los resultados guardados.
 No hay reenvío automático de mutaciones ni recuperación SSE mediante replay.
 Las sesiones caducadas exigen volver a descubrir las herramientas, sin repetir la
-operación anterior. El registro admite hasta 1000 ejecuciones y conserva resultados
-de hasta 2 MiB. `listRemoteExecutions` permite mostrar la evidencia; todavía no hay
-una resolución automática de resultados inciertos, que requieren contrastar con
-el servicio.
+operación anterior. El registro admite hasta 1000 ejecuciones sin resolver y conserva resultados
+de hasta 2 MiB. `connection_execution_list` permite consultar pendientes incluso
+si la conexión original se eliminó. Tras contrastar la operación con el servicio,
+`connection_execution_resolve` solicita aprobación humana del endpoint, herramienta,
+esquema y argumentos exactos y cierra sólo el registro revisado; no reenvía, cancela
+ni afirma un resultado. Una operación anterior aún podría estar ejecutándose; la
+advertencia lo dice antes de cerrar el aviso. Un cambio concurrente invalida la
+revisión. Los registros terminales no bloquean por ese límite, pero se conservan y
+pueden agotar la cuota real del dispositivo; falta una gestión de exportación y
+archivado sin pérdida. La consulta del agente pagina mediante el índice de estado y
+no carga resultados de ejecuciones ya terminadas.
 
 Las pruebas Node verifican negociación de ambas versiones, rechazo de versiones
 desconocidas, sesiones, paginación, validación,
@@ -166,6 +176,13 @@ y migración de un journal versión 1. Cambiar esquema o credenciales mantiene e
 bloqueo; argumentos distintos siguen creando una operación nueva revisable.
 Son fixtures de protocolo, no evidencia de autenticación contra un proveedor real
 ni de ejecución de URLSession en el iPhone instalado.
+
+La ampliación del índice a varias conexiones se revisó independientemente: 62
+pruebas Node focales y nueve pruebas Chromium aisladas pasaron, incluyendo
+recreación con credenciales distintas, reservas concurrentes, revisión obsoleta,
+migración de versión 2 y mil resultados terminados sin cargar el historial completo.
+Para revertirla se revierte el commit que contiene el índice v3, las herramientas
+de revisión y sus pruebas; no se eliminan registros ni credenciales existentes.
 
 Referencias de protocolo: [negociación MCP](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [herramientas](https://modelcontextprotocol.io/specification/2025-11-25/server/tools) y [tareas](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks).
 
