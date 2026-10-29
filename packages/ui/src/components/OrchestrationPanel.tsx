@@ -118,6 +118,7 @@ export function OrchestrationPanel({
 	const canCreate = connected && (!snapshot?.providers || Boolean(creationProvider));
 	const id = useId();
 	const viewedSession = useRef<string | undefined>(undefined);
+	const viewedClient = useRef(client);
 	const conversationViewport = useRef<HTMLDivElement>(null);
 	const panel = useRef<HTMLElement>(null);
 	const handledRequest = useRef<number | undefined>(undefined);
@@ -173,7 +174,25 @@ export function OrchestrationPanel({
 		return () => onVisibleSession?.(undefined);
 	}, [visiblePaneId, visibleSessionId, onVisibleSession]);
 	useLayoutEffect(() => {
-		if (viewedSession.current === identity) return;
+		const clientChanged = viewedClient.current !== client;
+		if (clientChanged) {
+			// A new connection must not recover drafts from its predecessor, even
+			// if the replacement reports identical pane and session identifiers.
+			viewedClient.current = client;
+			viewedSession.current = undefined;
+			drafts.current.clear();
+			positions.current.clear();
+			history.current.clear();
+		}
+		if (!clientChanged && viewedSession.current === identity) return;
+		// Discovery can temporarily lose a terminal or replace the session in its
+		// pane without a selection click. Preserve the previous owner's draft and
+		// loaded history before switching; never carry either into the new owner.
+		const previous = viewedSession.current;
+		if (previous) {
+			drafts.current.set(previous, instruction);
+			if (conversation) history.current.set(previous, conversation);
+		}
 		viewedSession.current = identity;
 		pageAbort.current?.abort();
 		setLoadingEarlier(false);
@@ -185,7 +204,7 @@ export function OrchestrationPanel({
 		setConversationError(undefined);
 		setInstruction(identity ? (drafts.current.get(identity) ?? "") : "");
 		setReceipt(undefined);
-	}, [identity]);
+	}, [identity, client]);
 	useLayoutEffect(() => {
 		const element = conversationViewport.current;
 		if (active && !wasActive.current && identity) restoreTop.current = positions.current.get(identity)?.top;

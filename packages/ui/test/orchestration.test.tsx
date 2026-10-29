@@ -10,6 +10,29 @@ import { initialState } from "../src/store.ts";
 
 beforeEach(() => localStorage.removeItem("gentle-dot:session-outbox:v1"));
 
+it("preserves a session draft when discovery temporarily loses the pane", async () => {
+	const { controls, client, view } = setup({ ...snapshot, approvals: [] });
+	fireEvent.click(screen.getByRole("button", { name: /Release/ }));
+	await screen.findByText("The checks passed.");
+	fireEvent.change(screen.getByLabelText("Continuar esta sesión"), { target: { value: "Borrador aún sin enviar" } });
+	view.rerender(<OrchestrationPanel controls={{ ...controls, snapshot: { ...controls.snapshot!, sessions: [] } }} client={client} mobile capriMobile />);
+	expect(screen.queryByLabelText("Continuar esta sesión")).not.toBeInTheDocument();
+	view.rerender(<OrchestrationPanel controls={controls} client={client} mobile capriMobile />);
+	expect(await screen.findByLabelText("Continuar esta sesión")).toHaveValue("Borrador aún sin enviar");
+});
+
+it("never carries a vanished session draft to a replacement in the same pane", async () => {
+	const { controls, client, view } = setup({ ...snapshot, approvals: [] });
+	fireEvent.click(screen.getByRole("button", { name: /Release/ }));
+	await screen.findByText("The checks passed.");
+	fireEvent.change(screen.getByLabelText("Continuar esta sesión"), { target: { value: "Solo para la primera sesión" } });
+	const replacement = { ...controls.snapshot!, sessions: controls.snapshot!.sessions.map(session => ({ ...session, sessionId: "s2" })) };
+	view.rerender(<OrchestrationPanel controls={{ ...controls, snapshot: replacement }} client={client} mobile capriMobile />);
+	expect(screen.getByLabelText("Continuar esta sesión")).toHaveValue("");
+	view.rerender(<OrchestrationPanel controls={controls} client={client} mobile capriMobile />);
+	expect(await screen.findByLabelText("Continuar esta sesión")).toHaveValue("Solo para la primera sesión");
+});
+
 it("confirms a persisted attachment send on a fresh client from transcript evidence, not a stale receipt", async () => {
  const at = Date.now()-60_000;
  localStorage.setItem("gentle-dot:session-outbox:v1", JSON.stringify([{id:"restored-send",identity:"p1:s1",text:"Dos bugs a resolver",payload:JSON.stringify(["Dos bugs a resolver",null,"steer"]),createdAt:at,status:"unconfirmed",baseline:[],attachmentNames:["uno.png","dos.png"]}]));
