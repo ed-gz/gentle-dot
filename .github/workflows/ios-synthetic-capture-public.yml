@@ -1,0 +1,32 @@
+name: Capri synthetic capture verification
+
+# This job uses generated audio only. It never includes personal art, credentials,
+# builds, or artifacts. Restrict automatic execution to edits of this workflow.
+on:
+  push:
+    branches:
+      - fix/android-capri-motion-mobile
+    paths:
+      - .github/workflows/ios-synthetic-capture-public.yml
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-capture:
+    if: github.repository == 'ed-gz/gentle-dot'
+    runs-on: macos-26
+    timeout-minutes: 8
+    steps:
+      - name: Checkout this commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Compile and check diagnostics
+        env:
+          CAPRI_SPEECH_INSTALL_COMPILE_ONLY: '1'
+        run: bash apps/ios/scripts/check-synthetic-speech-install.sh
+      - name: Test Spanish synthetic capture in this ephemeral runner
+        env:
+          CAPRI_EPHEMERAL_SPEECH_INSTALL: '1'
+        run: bash apps/ios/scripts/check-synthetic-speech-install.sh
