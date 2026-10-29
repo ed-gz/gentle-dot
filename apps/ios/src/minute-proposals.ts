@@ -1,9 +1,9 @@
-import { readWork, validMinuteApproval, type MinuteApproval, type WorkItem } from './work-inbox.ts';
+import { readWork, validMinuteApproval, assertNoMinuteActionLock, type MinuteApproval, type WorkItem } from './work-inbox.ts';
 import { canonicalJSON } from './remote-mcp.ts';
 import { localIdentifier } from './local-identifiers.ts';
 
-export type Proposal = { id: string; workId: string; revision: number; approval: MinuteApproval; connectionId: string; tool: string; description: string; argumentsJSON: string; createdAt: number };
-export type ProposalView = Omit<Proposal, 'approval'> & { current: boolean; executed: false; actionApproved: false };
+export type Proposal = { id: string; workId: string; revision: number; approval: MinuteApproval; connectionId: string; tool: string; description: string; argumentsJSON: string; createdAt: number; state?: 'reviewing' | 'executing' | 'responded' | 'uncertain' };
+export type ProposalView = Omit<Proposal, 'approval'> & { current: boolean; executed: false | null; responseReceived: boolean; actionApproved: boolean };
 const DB = 'capri-ios-work-inbox';
 const LIMIT = 10;
 const TIMEOUT = 8000;
@@ -61,7 +61,8 @@ function matching(work: Awaited<ReturnType<typeof readWork>>, proposal: Proposal
 }
 function view(work: WorkItem, proposal: Proposal): ProposalView {
   const { approval: _approval, ...safe } = proposal;
-  return { ...safe, current: matching(work, proposal), executed: false, actionApproved: false };
+  const executed = proposal.state === 'responded' || proposal.state === 'executing' || proposal.state === 'uncertain' ? null : false;
+  return { ...safe, current: matching(work, proposal), executed, responseReceived: proposal.state === 'responded', actionApproved: proposal.state === 'executing' || proposal.state === 'responded' || proposal.state === 'uncertain' };
 }
 function proposalsOf(work: WorkItem): Proposal[] {
   const values = (work as WorkItem & { minuteProposals?: unknown }).minuteProposals;
@@ -77,6 +78,7 @@ export async function createMinuteProposal(value: unknown): Promise<ProposalView
       try {
         const work = get.result as WorkItem | undefined;
         if (!work || work.revision !== safe.revision || !validMinuteApproval(work) || !work.minuteApproval) throw new Error('Primero revisa y aprueba la versión actual de la minuta.');
+        assertNoMinuteActionLock(work);
         const previous = proposalsOf(work);
         if (previous.length >= LIMIT) throw new Error('Esta minuta ya tiene 10 propuestas. Elimina una antes de continuar.');
         const proposal: Proposal = { id: localIdentifier(), workId: work.id, revision: work.revision, approval: structuredClone(work.minuteApproval), connectionId: safe.connectionId, tool: safe.tool, description: safe.description, argumentsJSON: safe.argumentsJSON, createdAt: Date.now() };
@@ -98,9 +100,59 @@ export async function deleteMinuteProposal(id: string, workId: string): Promise<
       try {
         const work = get.result as WorkItem | undefined;
         if (!work) throw new Error('El trabajo ya no está disponible.');
-        const previous = proposalsOf(work), kept = previous.filter(value => value.id !== id);
+        assertNoMinuteActionLock(work);
+        const previous = proposalsOf(work), target = previous.find(value => value.id === id);
+        if (target?.state === 'uncertain' || target?.state === 'executing' || target?.state === 'reviewing') throw new Error('La acción está sin confirmar y debe conservarse para revisión.');
+        const kept = previous.filter(value => value.id !== id);
         if (kept.length === previous.length) throw new Error('La propuesta ya no está disponible.');
         const put = store.put({ ...work, minuteProposals: kept }); put.onerror = () => fail(put.error); put.onsuccess = () => done();
+      } catch (error) { fail(error); }
+    };
+  });
+}
+
+/** Persistent lease fences edits, deletion and all other proposals during review and dispatch. */
+export async function acquireMinuteAction(workId: string, proposalId: string): Promise<{ leaseId: string; proposal: ProposalView }> {
+  return transact('readwrite', (store, done, fail) => {
+    const get = store.get(workId); get.onerror = () => fail(get.error); get.onsuccess = () => {
+      try {
+        const work = get.result as WorkItem | undefined;
+        if (!work) throw new Error('El trabajo ya no está disponible.');
+        assertNoMinuteActionLock(work);
+        const proposals = proposalsOf(work), index = proposals.findIndex(value => value.id === proposalId);
+        if (index < 0 || !matching(work, proposals[index]!) || proposals[index]!.state !== undefined) throw new Error('La propuesta ya no puede revisarse; comprueba la minuta y el estado anterior.');
+        const leaseId = localIdentifier(); const nextProposal = { ...proposals[index]!, state: 'reviewing' as const };
+        const next = { ...work, minuteProposals: proposals.map((value, i) => i === index ? nextProposal : value), minuteActionLock: { proposalId, leaseId } };
+        const put = store.put(next); put.onerror = () => fail(put.error); put.onsuccess = () => done({ leaseId, proposal: view(next, nextProposal) });
+      } catch (error) { fail(error); }
+    };
+  });
+}
+/** A successful transition is the fence immediately before permitting the reviewed call. */
+export async function markMinuteActionExecuting(workId: string, proposalId: string, leaseId: string): Promise<void> {
+  await updateLease(workId, proposalId, leaseId, 'reviewing', 'executing', false);
+}
+/** Explicitly cancel a review; its later approval cannot transition the removed lease. */
+export async function cancelMinuteActionReview(workId: string, proposalId: string, leaseId: string): Promise<void> {
+  await updateLease(workId, proposalId, leaseId, 'reviewing', undefined, true);
+}
+/** Call only after the associated operation has fully settled; no automatic replay. */
+export async function finishMinuteAction(workId: string, proposalId: string, leaseId: string, outcome: 'denied' | 'responded' | 'uncertain'): Promise<void> {
+  if (outcome === 'denied') await updateLease(workId, proposalId, leaseId, 'reviewing', undefined, true);
+  else await updateLease(workId, proposalId, leaseId, 'executing', outcome, true);
+}
+async function updateLease(workId: string, proposalId: string, leaseId: string, expected: 'reviewing' | 'executing', state: Proposal['state'], unlock: boolean): Promise<void> {
+  await transact<void>('readwrite', (store, done, fail) => {
+    const get = store.get(workId); get.onerror = () => fail(get.error); get.onsuccess = () => {
+      try {
+        const work = get.result as WorkItem | undefined;
+        if (!work || work.minuteActionLock?.proposalId !== proposalId || work.minuteActionLock.leaseId !== leaseId) throw new Error('La revisión de la acción cambió.');
+        const proposals = proposalsOf(work), index = proposals.findIndex(value => value.id === proposalId), proposal = proposals[index];
+        if (!proposal || proposal.state !== expected || !matching(work, proposal)) throw new Error('La minuta o propuesta cambió durante la revisión.');
+        const nextProposal = { ...proposal, state };
+        const next = { ...work, minuteProposals: proposals.map((value, i) => i === index ? nextProposal : value) };
+        if (unlock) delete next.minuteActionLock;
+        const put = store.put(next); put.onerror = () => fail(put.error); put.onsuccess = () => done();
       } catch (error) { fail(error); }
     };
   });

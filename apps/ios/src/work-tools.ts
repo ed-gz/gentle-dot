@@ -1,12 +1,14 @@
 import type { Tool, ToolContext } from './agent-tools.ts';
 import * as inbox from './work-inbox.ts';
 import { createWorkDispatcher, prepareWorkTransfer } from './work-sync.ts';
-import { createMinuteProposal, listMinuteProposals, validateMinuteProposal } from './minute-proposals.ts';
+import { acquireMinuteAction, createMinuteProposal, finishMinuteAction, listMinuteProposals, markMinuteActionExecuting, validateMinuteProposal } from './minute-proposals.ts';
+import { createConnectionTools } from './connection-tools.ts';
 export type WorkToolDependencies = {
   getHost: () => string | undefined;
   getDispatcher: (operation?: 'process') => ReturnType<typeof createWorkDispatcher> | undefined;
   inbox?: typeof inbox;
   prepareTransfer?: typeof prepareWorkTransfer;
+  connectionCall?: Tool;
 };
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 function input(value: unknown): Record<string, unknown> { if (!record(value)) throw new Error('Argumentos de trabajo inválidos.'); return value; }
@@ -17,6 +19,7 @@ const summary = (item: inbox.WorkItem) => ({ id: item.id, title: item.title, kin
 export function createWorkTools(dependencies: WorkToolDependencies): Tool[] {
   const store = dependencies.inbox ?? inbox;
   const prepare = dependencies.prepareTransfer ?? prepareWorkTransfer;
+  const connectionCall = dependencies.connectionCall ?? createConnectionTools().find(tool => tool.definition.name === 'connection_call')!;
   const schema = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', additionalProperties: false, properties, required });
   const id = { id: { type: 'string' } }; const versioned = { ...id, revision: { type: 'integer', minimum: 1 } };
   const getLinked = (operation?: 'process') => {
@@ -67,6 +70,38 @@ export function createWorkTools(dependencies: WorkToolDependencies): Tool[] {
       async execute(args, context) { context.signal.throwIfAborted(); return createMinuteProposal(args); } },
     { definition: { name: 'work_proposals', description: 'Consulta propuestas locales de una minuta y si siguen vinculadas a su versión aprobada. Ninguna implica aprobación o ejecución de la acción externa.', parameters: schema(id, ['id']) },
       validate(args) { return { id: idOf(args) }; }, async execute(args, context) { context.signal.throwIfAborted(); return listMinuteProposals(idOf(args)); } },
+    { definition: { name: 'work_review_action', description: 'Solicita revisión humana de una propuesta vigente y ejecuta sólo si se aprueban servicio y argumentos exactos. Nunca repite una llamada incierta; una interrupción puede dejar el trabajo protegido para revisión.', parameters: schema({ ...id, proposalId: { type: 'string' } }, ['id','proposalId']) },
+      validate(args) { const value = input(args); const id = idOf(value); if (typeof value.proposalId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(value.proposalId)) throw new Error('Propuesta inválida.'); return { id, proposalId: value.proposalId }; },
+      async execute(args, context) {
+        const value = input(args), id = idOf(value), proposalId = value.proposalId;
+        if (typeof proposalId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(proposalId) || !context.askApproval) throw new Error('La acción necesita una revisión humana.');
+        context.signal.throwIfAborted();
+        const lease = await acquireMinuteAction(id, proposalId); let approved = false;
+        try {
+          const proposal = lease.proposal;
+          // MCP calls always ask; the provider allowlist contains only write tools.
+          if (!/^(?:mcp_[a-f0-9]{24}|api_[a-f0-9]{32}_(?:create_issue|send_message|create_task|update_task))$/.test(proposal.tool)) throw new Error('Esta propuesta no es una acción compatible para revisión.');
+          const request = { connectionId: proposal.connectionId, tool: proposal.tool, arguments: JSON.parse(proposal.argumentsJSON) };
+          const result = await connectionCall.execute(connectionCall.validate(request), { ...context, askApproval: async review => {
+            context.signal.throwIfAborted();
+            const current = await inbox.readWork(id);
+            const accepted = await context.askApproval!({ ...review, details: `Minuta aprobada: ${current.title} · revisión ${proposal.revision}. Propuesta: ${proposal.description}.\n${review.details}` });
+            if (!accepted) return false;
+            context.signal.throwIfAborted();
+            await markMinuteActionExecuting(id, proposalId, lease.leaseId);
+            approved = true; return true;
+          } });
+          if (!approved) { await finishMinuteAction(id, proposalId, lease.leaseId, 'denied'); return { executed: false, approved: false }; }
+          if (!record(result) || result.confirmed !== true) throw new Error('La respuesta no confirmó la operación.');
+          await finishMinuteAction(id, proposalId, lease.leaseId, 'responded');
+          return { ...result, minuteWorkId: id, proposalId };
+        } catch (error) {
+          try { await finishMinuteAction(id, proposalId, lease.leaseId, approved ? 'uncertain' : 'denied'); }
+          catch { throw new Error('No se confirmó el estado de la acción. Revisa el trabajo y el servicio antes de continuar.'); }
+          if (approved) throw new Error('La acción quedó sin confirmar. No se volverá a enviar automáticamente; revisa el servicio.');
+          throw error;
+        }
+      } },
     { definition: { name: 'work_correct', description: 'Crea una copia local editable de una minuta recuperada, conservando adjuntos, evidencia y recibo de origen. La corrección empieza sin aprobar.', parameters: schema(versioned, ['id','revision']) }, validate(args) { return { id: idOf(args), revision: revisionOf(args) }; }, execute: async (args, context) => { context.signal.throwIfAborted(); return summary(await store.createWorkFromResult(idOf(args), revisionOf(args))); } },
   ];
 }

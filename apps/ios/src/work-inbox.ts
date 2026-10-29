@@ -25,6 +25,8 @@ export type WorkItem = {
   /** Local human approval only; never authorizes a transfer or an external action. */
   minuteApproval?: MinuteApproval;
   minuteProposals?: Proposal[];
+  /** Only a held review/execution lease may release this barrier. */
+  minuteActionLock?: { proposalId: string; leaseId: string };
   source?: { id: string; hash: string };
 };
 export type WorkInput = {
@@ -163,6 +165,10 @@ export function approveMinuteItem(item: WorkItem, kind: MinuteApproval['kind'], 
   const next = nextRevision(item, now);
   next.minuteApproval = { kind, revision: next.revision, approvedAt: now, snapshot, ...(versionId ? { versionId } : {}) };
   return next;
+}
+
+export function assertNoMinuteActionLock(item: WorkItem): void {
+  if (item.minuteActionLock) throw new Error('Hay una acción de la minuta en revisión o sin confirmación. Conserva el trabajo y revisa su estado antes de modificarlo.');
 }
 
 function assertEditable(item: WorkItem): void {
@@ -333,6 +339,7 @@ function updateWork(id: string, expectedRevision: number, update: (item: WorkIte
     whenReady<WorkItem | undefined>(store.get(id), current => {
       const item = requireItem(current);
       assertWorkRevision(item, expectedRevision);
+      assertNoMinuteActionLock(item);
       const next = update(item);
       store.put(next);
       result(next);
@@ -681,6 +688,7 @@ export function deleteWork(id: string, expectedRevision: number): Promise<void> 
     whenReady<WorkItem | undefined>(store.get(id), current => {
       const item = requireItem(current);
       assertWorkRevision(item, expectedRevision);
+      assertNoMinuteActionLock(item);
       if (item.status === 'sending') throw new Error('Resuelve el envío en curso antes de eliminar el trabajo.');
       const files = transaction.objectStore(FILES);
       let pending = item.files.length;

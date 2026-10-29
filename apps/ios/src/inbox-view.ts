@@ -5,7 +5,7 @@ import {
 import { isTauri } from '@tauri-apps/api/core';
 import { exportFileName, exportNativeFile } from './file-export.ts';
 import { parseWorkResult, type WorkResult } from '@gentle-dot/protocol';
-import { deleteMinuteProposal, listMinuteProposals } from './minute-proposals.ts';
+import { cancelMinuteActionReview, deleteMinuteProposal, listMinuteProposals } from './minute-proposals.ts';
 import { getConnection } from './external-connections.ts';
 
 const statusLabels: Record<WorkStatus, string> = {
@@ -212,6 +212,7 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
     actions.append(use);
     article.append(heading, meta, body, actions);
 
+    if (item.minuteActionLock) article.append(node('p', 'Una acción de esta minuta sigue en revisión o sin confirmación. Puedes consultar y copiar la minuta. Contrasta el estado con el servicio; no se reenvía automáticamente.', 'hint'));
     if (item.status === 'sending' || item.status === 'uncertain') {
       article.append(node('p', 'La entrega anterior no está confirmada. La bandeja conserva este estado y no reintenta el envío.', 'hint'));
     }
@@ -297,16 +298,26 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
           const row = node('div');
           let label = 'Servicio no disponible';
           try { label = (await getConnection(proposal.connectionId))?.label ?? label; } catch { /* Keep the proposal visible if settings cannot be read. */ }
-          row.append(node('strong', proposal.description), node('p', `${label} · ${proposal.current ? 'Minuta vigente al consultar' : 'Vigencia sin confirmar'} · acción sin aprobar`, 'hint'));
+          const actionState = proposal.state === 'responded' ? 'respuesta del servicio recibida' : proposal.state === 'uncertain' ? 'resultado sin confirmar' : proposal.state === 'executing' ? 'ejecución sin confirmar' : proposal.state === 'reviewing' ? 'revisión en curso' : 'acción sin aprobar';
+          row.append(node('strong', proposal.description), node('p', `${label} · ${proposal.current ? 'Minuta vigente al consultar' : 'Vigencia sin confirmar'} · ${actionState}`, 'hint'));
           const content = node('details'), preview = node('pre', proposal.argumentsJSON); preview.style.whiteSpace = 'pre-wrap'; preview.style.overflowWrap = 'anywhere';
           content.append(node('summary', 'Ver contenido propuesto'), preview);
-          const removeProposal = button('Eliminar propuesta');
+          const removeProposal = button('Eliminar propuesta'); removeProposal.disabled = Boolean(item.minuteActionLock) || proposal.state === 'uncertain' || proposal.state === 'executing' || proposal.state === 'reviewing';
           removeProposal.addEventListener('click', () => {
             if (!window.confirm('¿Eliminar esta propuesta local? La minuta y los servicios no se modificarán.')) return;
             removeProposal.disabled = true;
             void deleteMinuteProposal(proposal.id, item.id).then(() => { row.remove(); if (details.querySelectorAll('div').length === 0) details.remove(); status.textContent = 'Propuesta eliminada de este iPhone.'; }).catch(() => { status.textContent = 'No se pudo eliminar la propuesta.'; removeProposal.disabled = false; });
           });
-          row.append(content, removeProposal); details.append(row);
+          row.append(content, removeProposal);
+          if (proposal.state === 'reviewing' && item.minuteActionLock?.proposalId === proposal.id) {
+            const cancelReview = button('Cancelar revisión pendiente');
+            cancelReview.addEventListener('click', () => {
+              cancelReview.disabled = true;
+              void cancelMinuteActionReview(item.id, proposal.id, item.minuteActionLock!.leaseId).then(async () => { status.textContent = 'Revisión cancelada. La acción no fue enviada.'; await refresh(); }).catch(() => { status.textContent = 'No se pudo confirmar la cancelación. Revisa el estado antes de continuar.'; cancelReview.disabled = false; });
+            });
+            row.append(cancelReview);
+          }
+          details.append(row);
         }
         if (article.isConnected) article.append(details);
       }).catch(() => { if (article.isConnected) article.append(node('p', 'No se pudieron leer las acciones propuestas.', 'hint')); });
