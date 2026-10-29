@@ -40,7 +40,7 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
       const result = query ? await conversationArchive.search(query, { cursor, limit: 20 }) : await conversationArchive.page({ cursor, limit: 20 });
       const nodes = result.entries.map(entry => {
         const article = document.createElement('article'); article.className = 'chat-card';
-        const label = document.createElement('p'); label.className = 'hint'; label.textContent = `${new Date(entry.at).toLocaleString('es-MX')} · ${entry.engine === 'iphone' ? 'iPhone' : 'Gentle Dot'} · ${entry.role} · ${entry.state}${entry.branchUnverified ? ' · Rama no verificada' : ''}`;
+        const label = document.createElement('p'); label.className = 'hint'; label.textContent = `${new Date(entry.at).toLocaleString('es-MX')} · ${entry.engine === 'iphone' ? 'iPhone' : 'Gentle Dot'} · ${entry.role} · ${entry.state}${entry.branchUnverified ? ' · Rama no verificada' : entry.engine === 'gentle' ? ' · Vigencia de rama no comprobada' : ''}`;
         const body = document.createElement('p'); body.textContent = entry.text;
         const details = document.createElement('details');
         const summary = document.createElement('summary'); summary.textContent = 'Detalles de origen';

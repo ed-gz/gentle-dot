@@ -35,13 +35,18 @@ test('missing storage never pretends the archive or export succeeded', async () 
   await assert.rejects(archive.export(), /no está disponible/);
 });
 test('memory tools return exact snippets with provenance, pagination and uncertainty', async () => {
-  const record = { ...archiveEntry(entry({ state: 'interrupted', text: 'x'.repeat(800) + 'Ana verificó logs.' })), key: 'archive-key', sequence: 1, storedAt: 1000, updatedAt: 1000, bytes: 900 };
+  const record = { ...archiveEntry(entry({ engine:'gentle', state: 'interrupted', text: 'x'.repeat(800) + 'Ana verificó logs.' })), key: 'archive-key', sequence: 1, storedAt: 1000, updatedAt: 1000, bytes: 900 };
   const calls = []; const store = { page: async input => { calls.push(input); return { entries: [record], cursor: 'next', hasMore: true, scanned: 1000 }; }, search: async (query, input) => { calls.push({ query, ...input }); return { entries: [record], cursor: 'next', hasMore: true, scanned: 1000 }; }, load: async key => key === record.key ? record : undefined };
   const tools = createMemoryTools(store); const context = { signal: new AbortController().signal };
   const found = await tools.find(tool => tool.definition.name === 'search_memory').execute({ query: 'Ana' }, context);
   assert.equal(found.hasMore, true); assert.equal(found.cursor, 'next'); assert.equal(found.records[0].source.state, 'interrupted'); assert.equal(found.records[0].source.timestamp, '1970-01-01T00:00:01.000Z');
+  assert.equal(found.records[0].source.warning, 'El archivo por sí solo no confirma la pertenencia a la rama activa actual.');
+  assert.equal(found.records[0].source.branchUnverified, undefined);
   assert.equal(found.records[0].text, record.text.slice(found.records[0].offset, found.records[0].end)); assert.equal(found.evidenceOnly, true);
-  const read = await tools[0].execute({ entryKey: record.key, offset: 800 }, context); assert.equal(read.text, 'Ana verificó logs.');
+  const read = await tools[0].execute({ entryKey: record.key, offset: 800 }, context); assert.equal(read.text, 'Ana verificó logs.'); assert.equal(read.source.warning, found.records[0].source.warning);
+  const local = {...record, engine:'iphone', scope:'iphone:main'};
+  const localTool = createMemoryTools({page:async()=>({entries:[local],hasMore:false,scanned:1}),search:store.search,load:store.load})[0];
+  const localPage = await localTool.execute({}, context); assert.equal(localPage.records[0].source.warning, undefined);
   await assert.rejects(tools[0].execute({ entryKey: record.key, offset: 10000 }, context), /supera/);
   assert.throws(() => tools[1].validate({ query: 'Ana', secret: 'private' }), /inválidos/);
 });

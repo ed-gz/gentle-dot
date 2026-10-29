@@ -8,7 +8,7 @@ test('unverified previous session remains labelled after save and reload without
  await page.reload();await expect(old).toContainText('Rama no verificada');await expect(current).not.toContainText('Rama no verificada');
  const records=await page.evaluate(async()=>{const a=await import('/src/conversation-archive.ts');return (await a.conversationArchive.page({limit:100})).entries.filter(e=>e.text==='Texto anterior');});expect(records).toMatchObject([{branchUnverified:true}]);
  const memory=await page.evaluate(async()=>{const {createMemoryTools}=await import('/src/conversation-memory-tools.ts');const tools=createMemoryTools();const context={signal:new AbortController().signal};const found:any=await tools.find(t=>t.definition.name==='search_memory')!.execute({query:'Texto anterior'},context);const recalled:any=await tools.find(t=>t.definition.name==='recall_history')!.execute({entryKey:found.records[0].source.key},context);return {found,recalled};});
- expect(memory.found.records[0].source).toMatchObject({branchUnverified:true,warning:'La pertenencia a la rama activa no está verificada.'});
+ expect(memory.found.records[0].source).toMatchObject({branchUnverified:true,warning:'El archivo por sí solo no confirma la pertenencia a la rama activa actual.'});
  expect(memory.recalled.source).toMatchObject({branchUnverified:true});
 });
 
