@@ -150,9 +150,9 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     }
 
     private func installed(_ locale: Locale, kind: VoiceTranscriberKind) async -> Bool {
-        let final = makeTranscriber(for: locale, kind: kind)
+        let finalModule = makeTranscriber(for: locale, kind: kind)
         let preview = makeTranscriber(for: locale, kind: kind, incremental: true)
-        return await AssetInventory.status(forModules: [final.module, preview.module]) == .installed
+        return await AssetInventory.status(forModules: [finalModule.module, preview.module]) == .installed
     }
 
     // Use the shipping initializer, with the same configuration for asset
