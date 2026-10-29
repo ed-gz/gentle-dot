@@ -141,6 +141,7 @@ it("closes the open mobile controls with Escape or native Back before leaving th
 	render(<OrchestrationPanel mobile client={client} controls={controls} />);
 	await openSession();
 	const draft = screen.getByLabelText("Continuar esta sesión");
+	await waitFor(() => expect(draft).toBeEnabled());
 	await userEvent.type(draft, "Conservar borrador");
 	const details = screen.getByRole("button", { name: /Detalles y actividad/ });
 	await userEvent.click(details);
