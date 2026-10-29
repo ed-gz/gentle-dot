@@ -18,12 +18,14 @@ function availabilityNote(value: VoiceAvailability): string | undefined {
 const deferredTranscripts = new Map<string, string>();
 
 /** Session dictation is an Apple transcript left in the composer for review. */
-export function useAppleVoice(enabled: boolean, destination?: string): VoiceControls {
+export function useAppleVoice(enabled: boolean, destination?: string): VoiceControls & { retryPending: boolean; discarding: boolean; discardPending(): void } {
   const [availability, setAvailability] = useState<VoiceAvailability>();
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [partial, setPartial] = useState('');
   const [note, setNote] = useState<string>();
+  const [retryPending, setRetryPending] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [draft, setDraft] = useState<VoiceControls['draft']>();
   const owner = useRef({ epoch: 0, session: '', ownerId: '', pending: false, retry: false, enabled, destination });
   owner.current.enabled = enabled;
@@ -33,12 +35,24 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     const ownerId = state.ownerId;
     const retainAudio = state.retry && !discardRetry;
     state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false; state.retry = false;
-    setPhase('idle'); setElapsed(0); setPartial(''); setDraft(undefined); setNote(undefined);
+    setPhase('idle'); setElapsed(0); setPartial(''); setDraft(undefined); setNote(undefined); setRetryPending(false);
     if (ownerId && !retainAudio) { forgetVoiceOrigin(ownerId); void cancelVoice(ownerId).catch(() => {}); }
   }, []);
   // Shared session components call cancel on unmount; preserve a completed
   // recording awaiting recovery through that cleanup.
   const cancel = useCallback(() => release(false), [release]);
+  const discardPending = useCallback(() => {
+    const state = owner.current, id = state.ownerId, epoch = state.epoch;
+    if (!state.retry || !id || state.pending || discarding || !window.confirm('¿Descartar el audio pendiente de transcripción?')) return;
+    state.pending = true;
+    setDiscarding(true);
+    void cancelVoice(id).then(() => {
+      forgetVoiceOrigin(id);
+      if (state.epoch === epoch) release(false);
+    }).catch(error => {
+      if (state.epoch === epoch) { state.pending = false; setNote(error.message || 'No pude descartar el audio. Inténtalo de nuevo.'); }
+    }).finally(() => setDiscarding(false));
+  }, [discarding, release]);
   useEffect(() => {
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -60,7 +74,8 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
         if (!live) return;
         if (expected && voiceOrigin(value.ownerId) === expected) {
           owner.current.session = value.sessionId; owner.current.ownerId = value.ownerId; owner.current.retry = true;
-          setAvailability(value); setNote('El audio está guardado. Toca Dictar para reintentar la transcripción sin volver a grabar.');
+          setRetryPending(true);
+          setAvailability(value); setNote(value.recoveryIssue ?? 'El audio está guardado. Toca Dictar para reintentar la transcripción sin volver a grabar.');
         } else {
           setAvailability({ ...value, available: false, status: 'recovery_elsewhere' });
           setNote('Hay un audio pendiente en otra conversación. Vuelve a su destino original para reintentar.');
@@ -84,7 +99,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     const state = owner.current;
     if (!state.session || state.pending) return;
     const id = state.session, epoch = state.epoch, originalDestination = state.destination, originalOwner = state.ownerId;
-    state.pending = true; state.retry = true; setPartial(''); setPhase('transcribing');
+    state.pending = true; state.retry = true; setRetryPending(false); setPartial(''); setPhase('transcribing');
     void stopVoice(id).then(value => {
       if (originalOwner) forgetVoiceOrigin(originalOwner);
       if (state.epoch === epoch && state.enabled) { state.retry = false; setNote(undefined); setDraft({ id: epoch, text: value.text }); }
@@ -93,7 +108,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
         else deferredTranscripts.set(originalDestination, value.text);
       }
     }).catch(error => {
-      if (state.epoch === epoch) { state.retry = error instanceof VoiceRetryPending; if (!state.retry && state.ownerId) forgetVoiceOrigin(state.ownerId); setNote(error.message); }
+      if (state.epoch === epoch) { state.retry = error instanceof VoiceRetryPending; setRetryPending(state.retry); if (!state.retry && state.ownerId) forgetVoiceOrigin(state.ownerId); setNote(error.message); }
     }).finally(() => {
       if (state.epoch === epoch) { state.pending = false; if (!state.retry) { state.session = ''; state.ownerId = ''; } setPhase('idle'); }
     });
@@ -155,8 +170,8 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       setNote('Grabando. Toca el micrófono otra vez para revisar la transcripción.');
     })().catch(error => { if (state.epoch === epoch) { forgetVoiceOrigin(ownerId); state.ownerId = ''; setNote(error.message); } }).finally(() => { if (state.epoch === epoch) state.pending = false; });
   }, [availability, destination, stop]);
-  return { mic: availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
-    phase, elapsed, level: 0, partial, note, draft, start, stop, cancel,
+  return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
+    phase, elapsed, level: 0, partial, note, draft, start, stop, cancel, retryPending, discarding, discardPending,
     draftTaken: id => setDraft(value => value?.id === id ? undefined : value),
     speaking: false, muted: true, stopSpeaking() {}, setMuted() {}, typed() {}, sent() {}, sendOnStop: false, setSendOnStop() {} };
 }

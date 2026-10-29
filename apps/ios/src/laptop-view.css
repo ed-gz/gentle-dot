@@ -52,6 +52,9 @@
 }
 
 #panel-agents .agent-reply .composer textarea { min-height: max(48px, calc(1.5em + 22px)); height: auto; }
+#panel-agents .voice-discard-pending { min-height: 44px; margin: 4px 12px; padding: 8px 14px; border: 1px solid var(--violet); border-radius: 14px; background: transparent; color: var(--text); font: inherit; }
+#panel-agents .voice-discard-pending:focus-visible { outline: 3px solid var(--violet); outline-offset: 2px; }
+#panel-agents .voice-discard-pending:disabled { opacity: .6; }
 
 /* File lists and status can scroll/shrink in landscape while the action row stays usable. */
 #panel-agents .agent-reply { display: flex; flex-direction: column; flex-shrink: 1; min-height: 0; max-height: 65%; }

@@ -261,11 +261,11 @@ test('a preserved voice command returns to its original chat after navigation', 
     state.voiceRecoveryCancels = 0;
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
-        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id } : {}) };
+        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id, recoveryIssue: 'No detecté palabras. Descarta este audio y vuelve a dictar.' } : {}) };
       if (command.endsWith('start_voice')) { owner = args.ownerId; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
       if (command.endsWith('cancel_voice')) { state.voiceRecoveryCancels++; pending = false; return { ok: true }; }
       if (command.endsWith('stop_voice')) {
-        if (++stops === 1) { pending = true; return { ok: false, error: 'preview_pending', sessionId: id, message: 'Audio guardado.' }; }
+        if (++stops === 1) { pending = true; return { ok: false, error: 'preview_pending', sessionId: id, message: 'No detecté palabras. Descarta este audio y vuelve a dictar.' }; }
         pending = false; return { ok: true, sessionId: id, text: 'Transcripción recuperada.', locale: 'es-MX', durationSeconds: 2,
           source: 'apple-speech-analyzer', segments: [{ text: 'Transcripción recuperada.', startSeconds: 0, endSeconds: 2 }] };
       }
@@ -280,6 +280,7 @@ test('a preserved voice command returns to its original chat after navigation', 
   expect(await page.evaluate(() => (globalThis as any).voiceRecoveryCancels)).toBe(0);
   await page.locator('[data-panel="chat"]').click();
   await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
+  await expect(page.locator('#voice-status')).toContainText('No detecté palabras');
   await page.locator('#dictate').click();
   await expect(page.locator('#prompt')).toHaveValue('Transcripción recuperada.');
   await expect(page.locator('#discard-voice')).toBeHidden();

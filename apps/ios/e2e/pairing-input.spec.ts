@@ -68,6 +68,37 @@ test('cancellation blocks a late result and pending scan blocks form submission'
   expect(await page.evaluate(() => (globalThis as any).qrCommands)).toContain('plugin:device-bridge|pairing_scan_cancel');
 });
 
+test('camera permission obscuring the web view does not cancel the native scanner', async ({ page }) => {
+  await fixture(page, { hold: true });
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
+  await page.waitForFunction(() => typeof (globalThis as any).finishQR === 'function');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(await page.evaluate(() => (globalThis as any).qrCommands)).not.toContain('plugin:device-bridge|pairing_scan_cancel');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    document.dispatchEvent(new Event('visibilitychange'));
+    (globalThis as any).finishQR();
+  });
+  await expect(page.locator('#invitation')).toHaveValue(link);
+  await expect(page.getByRole('button', { name: 'Vincular iPhone', exact: true })).toBeEnabled();
+});
+
+test('a photo scan still cancels when the web view is hidden', async ({ page }) => {
+  await fixture(page, { hold: true });
+  await page.getByLabel('Foto guardada para leer QR').setInputFiles({ name: 'qr.png', mimeType: 'image/png', buffer: png });
+  await page.waitForFunction(() => typeof (globalThis as any).finishQR === 'function');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    (globalThis as any).finishQR();
+  });
+  await expect(page.locator('#invitation')).toHaveValue('');
+  expect(await page.evaluate(() => (globalThis as any).qrCommands)).toContain('plugin:perception|cancel_pairing_code');
+});
+
 test('edited invitation wins over a late scan and browser preview keeps paste available', async ({ page }) => {
   await fixture(page, { hold: true });
   await page.getByLabel('Foto guardada para leer QR').setInputFiles({ name: 'qr.png', mimeType: 'image/png', buffer: png });
@@ -133,4 +164,60 @@ test('installed settings lead with the camera and keep pasted codes secondary un
   expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(375);
   await page.getByText('Pegar una invitación', { exact: true }).click();
   await expect(page.locator('#pairing-invitation')).toBeVisible();
+});
+
+test('pairing tells the user to approve on the laptop while the host request is pending', async ({ page }) => {
+  await page.addInitScript(link => {
+    const state = globalThis as any; state.isTauri = true;
+    state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
+      if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: link };
+      if (command.endsWith('|pair_device')) return new Promise(resolve => { state.finishPairing = () => resolve({ ok: false, status: 403 }); });
+      if (command.endsWith('|share_list') || command.endsWith('|documents_list') || command.endsWith('results_list')) return { ok: true, items: [] };
+      return { ok: true };
+    } };
+  }, link);
+  await page.goto('/');
+  await page.locator('[data-panel="settings"]').click();
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
+  await page.getByRole('button', { name: 'Vincular iPhone', exact: true }).click();
+  await expect(page.locator('#pairing-status')).toContainText('aprueba el acceso');
+  await page.waitForFunction(() => typeof (globalThis as any).finishPairing === 'function');
+  await page.evaluate(() => (globalThis as any).finishPairing());
+  await expect(page.locator('#pairing-status')).toContainText('no aprobó');
+});
+
+test('a paired credential that could not be saved can be retried without redeeming the QR again', async ({ page }) => {
+  await page.addInitScript(link => {
+    const state = globalThis as any; state.isTauri = true; state.pairCalls = 0; state.saveCalls = 0;
+    state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
+      if (command.endsWith('|pairing_scan')) return { ok: true, cancelled: false, value: link };
+      if (command.endsWith('|pair_device')) {
+        state.pairCalls++;
+        return { ok: true, persisted: false, connection: { url: 'wss://laptop.example.ts.net/ws', token: 'a'.repeat(64), deviceId: 'device-1', name: 'Capri iPhone' } };
+      }
+      if (command.endsWith('|secret_set') && args.request.scope === 'daemon-pairing') {
+        state.saveCalls++;
+        if (state.saveCalls === 1) return { ok: false, error: 'storage' };
+        return new Promise(resolve => { state.finishSave = () => resolve({ ok: true }); });
+      }
+      if (command.endsWith('|share_list') || command.endsWith('|documents_list') || command.endsWith('results_list')) return { ok: true, items: [] };
+      return { ok: true };
+    } };
+  }, link);
+  await page.goto('/'); await page.locator('[data-panel="settings"]').click();
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
+  await page.getByRole('button', { name: 'Vincular iPhone', exact: true }).click();
+  const retry = page.getByRole('button', { name: 'Volver a guardar acceso' });
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await expect(page.locator('#pairing-status')).toContainText('No se pudo guardar');
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await page.waitForFunction(() => typeof (globalThis as any).finishSave === 'function');
+  await page.evaluate(() => document.querySelector<HTMLFormElement>('#connection')!.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true })));
+  await expect(page.locator('#pairing-status')).toContainText('Espera');
+  await page.evaluate(() => (globalThis as any).finishSave());
+  await expect(page.locator('#pairing-status')).toContainText('Acceso guardado en Keychain');
+  await expect(retry).toBeHidden();
+  expect(await page.evaluate(() => [(globalThis as any).pairCalls, (globalThis as any).saveCalls])).toEqual([1, 2]);
 });

@@ -62,6 +62,16 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 "$verification/voice-audio-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/VoiceRecoveryMessage.swift \
+  test/native/VoiceRecoveryMessageTests.swift -o "$verification/voice-recovery-message-tests"
+"$verification/voice-recovery-message-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/VoiceTranscriptBounds.swift \
+  test/native/VoiceTranscriptBoundsTests.swift -o "$verification/voice-transcript-bounds-tests"
+"$verification/voice-transcript-bounds-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/VoiceOwners.swift \
   test/native/VoiceOwnersTests.swift -o "$verification/voice-owner-tests"
 "$verification/voice-owner-tests"
@@ -98,11 +108,15 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
   "$verification/AgentTypes.swift" \
+  plugin-local-intelligence/ios/Sources/AgentCheckpointJournal.swift \
+  plugin-local-intelligence/ios/Sources/AgentCheckpointRunner.swift \
   plugin-local-intelligence/ios/Sources/InferenceJournal.swift \
   plugin-local-intelligence/ios/Sources/InferenceStartGate.swift \
   plugin-local-intelligence/ios/Sources/ContinuedInferenceLease.swift \
   plugin-local-intelligence/ios/Sources/CompletionNotifications.swift \
   plugin-perception/ios/Sources/VoiceAudio.swift \
+  plugin-perception/ios/Sources/VoiceRecoveryMessage.swift \
+  plugin-perception/ios/Sources/VoiceTranscriptBounds.swift \
   plugin-perception/ios/Sources/VoiceOwners.swift \
   plugin-perception/ios/Sources/LiveAudioBuffer.swift \
   plugin-perception/ios/Sources/LiveTranscript.swift \

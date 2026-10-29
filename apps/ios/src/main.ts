@@ -36,6 +36,7 @@ import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin } from './voice-ori
 import { isTauri } from '@tauri-apps/api/core';
 import { secretGet, secretSet, secretDelete, listSharedImports, importSharedItem, recoverImportBatch } from './device-bridge.ts';
 import { parseInvitation, pairDevice, restorePairing } from './device-pairing.ts';
+import { mountPairingSaveRecovery } from './pairing-save-recovery.ts';
 import { createWork, createImportedWork } from './work-inbox.ts';
 import { companionBounds, constrainCompanion, mountPhoneViewport } from './companion-layout.ts';
 import { connectionHealth, healthActionLabel, type HealthAction } from './connection-health.ts';
@@ -137,12 +138,16 @@ function animate(now: number) {
     safePerches = phonePerches({ x: 0, y: 0, width: area.width, height: area.height },
       { width: rig.offsetWidth, height: rig.offsetHeight }, occupied);
     rig.style.visibility = '';
-    if (roaming && !manuallyPlaced && !drag && !travel) {
+    if (!manuallyPlaced && !drag && !travel) {
       const here = { x: position.x + (area.width - rig.offsetWidth) / 2, y: position.y + (area.height - rig.offsetHeight) / 2, width: rig.offsetWidth, height: rig.offsetHeight };
-      // Newly loaded controls take precedence over a perch from the old view.
-      // Relocate immediately, without spending a teleport blocking a button.
-      if (!phonePositionFree(here, occupied) && !safePerches.length) rig.style.visibility = 'hidden';
-      if (!phonePositionFree(here, occupied) && safePerches[0]) place(safePerches[0][0] - (area.width - rig.offsetWidth) / 2, safePerches[0][1] - (area.height - rig.offsetHeight) / 2);
+      // A manual placement or resting pose must not cover controls introduced
+      // later. Preserve it when safe, otherwise choose the closest free perch.
+      if (!phonePositionFree(here, occupied)) {
+        const closest = safePerches.reduce<[number, number] | undefined>((best, candidate) =>
+          !best || Math.hypot(candidate[0] - here.x, candidate[1] - here.y) < Math.hypot(best[0] - here.x, best[1] - here.y) ? candidate : best, undefined);
+        if (!closest) rig.style.visibility = 'hidden';
+        else place(closest[0] - (area.width - rig.offsetWidth) / 2, closest[1] - (area.height - rig.offsetHeight) / 2);
+      }
     }
   }
   if (roaming && !drag && !travel && now >= nextRoam) {
@@ -263,7 +268,7 @@ rig.addEventListener('pointermove', event => {
   if (Math.hypot(dx, dy) > 5) drag.moved = true;
   if (drag.moved) { manuallyPlaced = true; roamDirector.dragged(performance.now()); place(drag.start.x + dx, drag.start.y + dy); setIntent({ ...intent, dragging: true }); }
 });
-function release() { if (!drag) return; suppressClick = drag.moved; drag = undefined; const { dragging: _dragging, ...current } = intent; setIntent(current); }
+function release() { if (!drag) return; suppressClick = drag.moved; drag = undefined; measuredAt = -Infinity; const { dragging: _dragging, ...current } = intent; setIntent(current); }
 rig.addEventListener('pointerup', release); rig.addEventListener('pointercancel', release); rig.addEventListener('lostpointercapture', release);
 rig.addEventListener('click', () => { if (suppressClick) { suppressClick = false; return; } if (image) gesture('saludar'); else showPanel('settings'); });
 rig.addEventListener('keydown', event => {
@@ -308,7 +313,10 @@ let manualToSave: { url: string; token: string } | undefined;
 let runtimeConnection: { url: string; token: string } | undefined;
 let laptop: ReturnType<typeof import('./laptop-view.tsx')['mountLaptopView']> | undefined;
 let laptopLoading = false;
-new MutationObserver(() => { measuredAt = -Infinity; if (panel === 'agents') redraw(); }).observe(element('laptop-root'), { childList: true, subtree: true });
+function contentMoved() { manuallyPlaced = false; measuredAt = -Infinity; if (panel === 'agents' || panel === 'chat') redraw(); }
+const contentObserver = new MutationObserver(contentMoved);
+for (const id of ['laptop-root', 'cards', 'requests']) contentObserver.observe(element(id), { childList: true, subtree: true });
+for (const id of ['laptop-root', 'conversation-scroll']) element(id).addEventListener('scroll', contentMoved, { passive: true, capture: true });
 function updateLaptopView() {
   if (laptop) { laptop.update({ connection: runtimeConnection, active: panel === 'agents' }); return; }
   if (panel !== 'agents' || laptopLoading) return;
@@ -821,7 +829,7 @@ async function recoverPendingVoice() {
     }
     foreignVoiceOwner = undefined;
     voiceSession = state.sessionId; voiceOwner = state.ownerId; voiceRetry = true;
-    element('voice-status').textContent = 'El audio está guardado. Toca el micrófono para reintentar la transcripción sin volver a grabar.';
+    element('voice-status').textContent = state.recoveryIssue ?? 'El audio está guardado. Toca el micrófono para reintentar la transcripción sin volver a grabar.';
     element('dictate').setAttribute('aria-pressed', 'false'); element('dictate').setAttribute('aria-label', 'Reintentar transcripción');
     element('discard-voice').hidden = false;
   } catch { /* A failed status check cannot prove the recording was removed. */ }
@@ -959,21 +967,28 @@ async function importComposerSelection(event: Event) {
 element<HTMLInputElement>('chat-files').addEventListener('change', importComposerSelection);
 element<HTMLInputElement>('chat-camera').addEventListener('change', importComposerSelection);
 const pairingUI = mountPairingInput(element<HTMLFormElement>('pairing'), element<HTMLInputElement>('pairing-invitation'));
+const pairingSaveRecovery = mountPairingSaveRecovery({
+  status: element('pairing-status'), pairingBusy: pairingUI.setSubmitting,
+  manualForm: element<HTMLFormElement>('connection'), disconnect: element('disconnect'),
+  current: () => runtimeConnection, epoch: () => connectionEpoch,
+});
 element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
   event.preventDefault();
   pairingUI.setSubmitting(true);
   try {
     const invitation = parseInvitation(element<HTMLInputElement>('pairing-invitation').value);
     const epoch = ++connectionEpoch;
-    element('pairing-status').textContent = 'Esperando la vinculación con Gentle Dot…';
+    element('pairing-status').textContent = 'Esperando a Gentle Dot. Si aparece una solicitud en tu laptop, aprueba el acceso allí.';
     const result = await pairDevice(invitation);
     if (epoch !== connectionEpoch) return;
+    pairingSaveRecovery.clear();
     linked.connect(result.connection.url, result.connection.token);
     runtimeConnection = result.connection; host = result.connection.url;
     settings.url = host; saveSettings(settings); element<HTMLInputElement>('url').value = host;
     element<HTMLInputElement>('pairing-invitation').value = '';
     element('pairing-invitation').dispatchEvent(new Event('input', { bubbles: true }));
     element('pairing-status').textContent = result.persisted ? 'iPhone vinculado. Acceso guardado en Keychain.' : result.message ?? 'Vinculado; el acceso no se pudo guardar.';
+    if (!result.persisted) pairingSaveRecovery.offer(invitation.origin, result.connection, epoch);
   } catch (error) { element('pairing-status').textContent = errorText(error); }
   finally { pairingUI.setSubmitting(false); }
 });
@@ -986,7 +1001,7 @@ async function restoreDeviceConnection() {
     let paired;
     try { paired = await restorePairing(origin); } catch { /* Manual hosts may not use Tailscale. */ }
     const token = paired?.token ?? await secretGet('daemon-manual', origin);
-    if (token && epoch === connectionEpoch) { runtimeConnection = { url: restoredURL, token }; linked.connect(restoredURL, token); }
+    if (token && epoch === connectionEpoch) { runtimeConnection = paired ?? { url: restoredURL, token }; linked.connect(restoredURL, token); }
   } catch { if (epoch !== connectionEpoch) return; element('status').textContent = 'No se pudo recuperar el acceso guardado. Puedes volver a vincular este iPhone.'; }
 }
 function importSharedFiles(): Promise<void> {

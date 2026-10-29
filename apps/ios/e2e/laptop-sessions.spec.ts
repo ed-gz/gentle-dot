@@ -264,7 +264,7 @@ test('a preserved session recording cannot migrate to another session or chat', 
     state.voiceRecoveryCancels = 0;
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
-        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id } : {}) };
+        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id, recoveryIssue: 'No detecté palabras. Descarta este audio y vuelve a dictar.' } : {}) };
       if (command.endsWith('start_voice')) { owner = args.ownerId; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
       if (command.endsWith('cancel_voice')) { state.voiceRecoveryCancels++; pending = false; return { ok: true }; }
       if (command.endsWith('stop_voice')) {
@@ -291,7 +291,7 @@ test('a preserved session recording cannot migrate to another session or chat', 
   await page.locator('[data-panel="agents"]').click();
   await page.getByRole('button', { name: 'Todos los agentes' }).click();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
-  await expect(page.getByText(/audio está guardado/i)).toBeVisible();
+  await expect(page.getByText(/No detecté palabras/i)).toBeVisible();
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Sólo en operaciones.');
 });
@@ -330,6 +330,48 @@ test('returning to the original session while stopping reveals its eventual retr
   await expect(page.getByText(/audio está guardado/i)).toBeVisible();
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Recuperado al volver.');
+});
+
+test('a session can discard a silent recording explicitly, and a failed discard stays recoverable', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '12345678-1234-1234-1234-123456789012';
+    let owner = '', pending = false;
+    state.voiceDiscardCalls = 0;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
+        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id, recoveryIssue: 'No detecté palabras. Descarta este audio y vuelve a dictar.' } : {}) };
+      if (command.endsWith('start_voice')) { owner = args.ownerId; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('stop_voice')) { pending = true; return { ok: false, error: 'preview_pending', sessionId: id, message: 'No detecté palabras. Descarta este audio y vuelve a dictar.' }; }
+      if (command.endsWith('cancel_voice')) {
+        state.voiceDiscardCalls++;
+        if (state.voiceDiscardCalls === 1) return { ok: false, message: 'No pude descartar el audio.' };
+        pending = false; return { ok: true };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(page.getByText(/No detecté palabras/i)).toBeVisible();
+  const discard = page.getByRole('button', { name: 'Descartar audio pendiente' });
+  await expect(discard).toBeVisible();
+  page.once('dialog', dialog => dialog.dismiss());
+  await discard.click();
+  expect(await page.evaluate(() => (globalThis as any).voiceDiscardCalls)).toBe(0);
+  page.once('dialog', dialog => dialog.accept());
+  await discard.click();
+  await expect(page.getByText('No pude descartar el audio.')).toBeVisible();
+  await expect(discard).toBeVisible();
+  page.once('dialog', dialog => dialog.accept());
+  await discard.click();
+  await expect(discard).toHaveCount(0);
+  expect(await page.evaluate(() => (globalThis as any).voiceDiscardCalls)).toBe(2);
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
 });
 
 

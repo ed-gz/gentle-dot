@@ -41,6 +41,10 @@ test('voice availability requires downloaded assets and never infers microphone 
   assert.equal(preview.partial, 'texto provisional'); assert.equal(preview.previewIssue, 'Vista previa interrumpida.');
   assert.throws(() => parseVoiceAvailability({ status: 'available', partial: 'x'.repeat(4_801) }));
   assert.throws(() => parseVoiceAvailability({ status: 'available', previewIssue: 1 }));
+  const pending = parseVoiceAvailability({ status: 'available', recoveryPending: true, recoveryIssue: 'No detecté palabras.' });
+  assert.equal(pending.recoveryIssue, 'No detecté palabras.');
+  assert.throws(() => parseVoiceAvailability({ status: 'available', recoveryIssue: 'x'.repeat(501) }));
+  assert.throws(() => parseVoiceAvailability({ status: 'available', recoveryIssue: 1 }));
 });
 
 test('voice session accepts only bounded native recordings and valid request identity', () => {

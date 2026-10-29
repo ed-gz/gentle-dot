@@ -83,6 +83,34 @@ test('personal package starts with the shared animated rig and real draggable tr
   await page.reload(); await expect(rig).toHaveAttribute('data-ready', 'true', { timeout: 15000 });
 });
 
+test('new controls remain reachable when Capri was manually placed and motion is reduced', async ({ page }) => {
+  test.slow();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await personalBuild(page);
+  await page.locator('#prompt').fill('Continuemos con las tareas.');
+  await page.locator('#send').click();
+  await expect(page.locator('.chat-text ul li')).toHaveCount(2);
+  const rig = page.locator('#rig-handle');
+  await expect(rig).toBeVisible();
+  await rig.focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.evaluate(() => {
+    const rig = document.querySelector<HTMLElement>('#rig-handle')!.getBoundingClientRect();
+    const control = document.createElement('button');
+    control.id = 'new-control-fixture'; control.textContent = 'Abrir';
+    Object.assign(control.style, { position: 'fixed', left: `${rig.left + rig.width / 2 - 22}px`, top: `${rig.top + rig.height / 2 - 22}px`, width: '44px', height: '44px' });
+    control.addEventListener('click', () => { control.dataset.clicked = 'true'; });
+    document.querySelector('#cards')!.append(control);
+  });
+  const control = page.locator('#new-control-fixture');
+  await expect.poll(() => control.evaluate(el => {
+    const r = el.getBoundingClientRect();
+    return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el;
+  })).toBe(true);
+  await control.click();
+  await expect(control).toHaveAttribute('data-clicked', 'true');
+});
+
 test('conversation keeps composer and companion reachable in short viewport and enlarged text', async ({ page }) => {
   test.slow(); // Real shared WebGL shaders also run on CI software renderers.
   await personalBuild(page);

@@ -59,7 +59,11 @@ export function mountPairingInput(form: HTMLFormElement, input: HTMLInputElement
   camera.onclick = () => void read(); photo.onclick = () => picker.click();
   const cancelCurrent = () => { if (!busy) return; epoch++; controller?.abort(); status.textContent = 'Lectura cancelada. No se vinculó ningún equipo.'; stop.disabled = true; void (live ? cancelLive() : cancel()).catch(() => {}).finally(() => { stop.disabled = false; }); };
   stop.onclick = cancelCurrent;
-  const visibility = () => { if (document.hidden) cancelCurrent(); }; document.addEventListener('visibilitychange', visibility);
+  // UIKit may obscure the web view while requesting camera permission or
+  // presenting the scanner. Native PairingScanner cancels on a real app
+  // background transition; treating WebView visibility as background here
+  // would cancel a first-time scan before the user can grant permission.
+  const visibility = () => { if (document.hidden && !live) cancelCurrent(); }; document.addEventListener('visibilitychange', visibility);
   const mount: PairingMount = { setSubmitting(value) { submitting = value; setBusy(busy); }, dispose() { if (disposed) return; disposed = true; epoch++; controller?.abort(); if (busy) void (live ? cancelLive() : cancel()).catch(() => {});
     document.removeEventListener('visibilitychange', visibility); input.removeEventListener('input', clearCandidate); form.removeEventListener('submit', blockSubmit, true); region.remove(); mounted.delete(form); } };
   mounted.set(form, mount); return mount;

@@ -28,6 +28,8 @@ export interface VoiceAvailability {
   sessionId?: string;
   ownerId?: string;
   recoveryPending?: boolean;
+  /** Bounded, non-sensitive explanation of why this recording needs review or retry. */
+  recoveryIssue?: string;
   /** Provisional text is display-only and must never be sent as a final transcript. */
   partial?: string;
   previewIssue?: string;
@@ -114,6 +116,7 @@ export function parseVoiceAvailability(value: unknown): VoiceAvailability {
     ...(reply.sessionId !== undefined ? { sessionId: sessionId(reply.sessionId) } : {}),
     ...(reply.ownerId !== undefined ? { ownerId: sessionId(reply.ownerId) } : {}),
     ...(reply.recoveryPending === true ? { recoveryPending: true } : {}),
+    ...(reply.recoveryIssue !== undefined ? { recoveryIssue: string(reply.recoveryIssue, 500) } : {}),
     ...(reply.partial !== undefined ? { partial: string(reply.partial, 4_800, true) } : {}),
     ...(reply.previewIssue !== undefined ? { previewIssue: string(reply.previewIssue, 500) } : {}),
   };

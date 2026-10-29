@@ -25,6 +25,7 @@ struct VoiceReply: Encodable {
     var sessionId: String? = nil
     var ownerId: String? = nil
     var recoveryPending: Bool? = nil
+    var recoveryIssue: String? = nil
     var maxDurationSeconds: Int? = nil
     var partial: String? = nil
     var previewIssue: String? = nil
@@ -78,6 +79,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     private var finalDeadline: VoiceDeadline<VoiceReply>?
     private var finalInterrupted = false
     private var recoveryPending = false
+    private var recoveryIssue: String?
     private var stoppingCapture = false
     private var liveTranscript = LiveTranscript()
     private var previewIssue: String?
@@ -220,6 +222,14 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         }
     }
 
+    private func pending(_ id: String, reason: String) -> VoiceReply {
+        let message = VoiceRecoveryMessage.forReason(reason)
+        recoveryIssue = message
+        var reply = VoiceReply.failure("preview_pending", message)
+        reply.sessionId = id
+        return reply
+    }
+
     func check() async -> VoiceReply {
         let permission: String
         switch AVAudioSession.sharedInstance().recordPermission {
@@ -232,7 +242,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             return VoiceReply(ok: true, available: true, status: "available", locale: locale.identifier(.bcp47),
                 assetsInstalled: true, microphonePermission: permission, recording: recording,
                 readyToTranscribe: !recording, busy: busy, sessionId: id,
-                ownerId: owners.active, recoveryPending: recoveryPending, maxDurationSeconds: Int(maximumDuration),
+                ownerId: owners.active, recoveryPending: recoveryPending, recoveryIssue: recoveryIssue, maxDurationSeconds: Int(maximumDuration),
                 partial: liveTranscript.text, previewIssue: previewIssue)
         }
         guard let selected = await preferredTranscriber() else {
@@ -365,9 +375,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         guard !busy, id == sessionID, let url = recordingURL, let locale = recordedLocale, let kind = recordedKind,
               let format = recordedFormat else { return .failure("invalid_voice_session", "Ese comando de voz ya terminó o fue cancelado.") }
         if finalDrain.active {
-            var reply = VoiceReply.failure("preview_pending", "Apple todavía está cerrando la transcripción anterior. El audio sigue guardado; reintenta en un momento.")
-            reply.sessionId = id
-            return reply
+            return pending(id, reason: "closing")
         }
         busy = true
         let epoch = generation
@@ -404,9 +412,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             }
             recoveryPending = true
             preserve = true
-            var reply = VoiceReply.failure("preview_pending", "El audio está guardado. Toca el micrófono para reintentar la transcripción sin volver a grabar.")
-            reply.sessionId = id
-            return reply
+            return pending(id, reason: "preview_pending")
         }
         guard epoch == generation, !Task.isCancelled else {
             deactivateAudio()
@@ -419,9 +425,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             deactivateAudio()
             recoveryPending = true
             preserve = true
-            var reply = VoiceReply.failure("preview_pending", "El audio está guardado. Vuelve a Capri y toca el micrófono para transcribirlo.")
-            reply.sessionId = id
-            return reply
+            return pending(id, reason: "background")
         }
         deactivateAudio()
         let module = makeTranscriber(for: locale, kind: kind)
@@ -436,11 +440,12 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                 let text = String(resultText.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                 let start = CMTimeGetSeconds(range.start)
                 let end = CMTimeGetSeconds(CMTimeRangeGetEnd(range))
-                guard !text.isEmpty, start.isFinite, end.isFinite, start >= 0, end >= start,
-                      end <= self.maximumDuration + 1 else { return }
-                characterCount += text.count + (segments.isEmpty ? 0 : 1)
+                guard !text.isEmpty else { return }
+                guard start.isFinite, end.isFinite, start >= 0, end >= start,
+                      end <= self.maximumDuration + 1 else { throw VoiceEvidenceError.invalid }
+                characterCount += text.utf16.count + (segments.isEmpty ? 0 : 1)
                 guard segments.count < 2_000, characterCount <= 32_000 else {
-                    throw NSError(domain: "CapriVoiceLimit", code: 1)
+                    throw VoiceEvidenceError.invalid
                 }
                 segments.append(VoiceSegment(text: text, startSeconds: start, endSeconds: end))
             }
@@ -457,6 +462,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             defer { results.cancel() }
             let convertedURL = url.deletingPathExtension().appendingPathExtension("analysis.caf")
             defer { try? FileManager.default.removeItem(at: convertedURL) }
+            var preparingAudio = true
             do {
                 // Conversion is bounded but can be slow. Keep it off the main
                 // actor so timeout/background can release the UI promptly.
@@ -467,22 +473,34 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                 }
                 let audioFile = try await preparation.value
                 try Task.checkCancellation()
+                preparingAudio = false
                 let duration = Double(audioFile.length) / audioFile.processingFormat.sampleRate
-                guard duration.isFinite, duration > 0, duration <= self.maximumDuration + 1 else {
+                guard audioFile.length > 0 else {
                     return .failure("empty_audio", "No se capturó una instrucción.")
                 }
+                guard duration.isFinite, duration >= 0.001, duration <= self.maximumDuration + 1 else {
+                    return .failure("invalid_evidence", "No pude verificar la duración del audio.")
+                }
                 guard let lastSample = try await analysis.analyzeSequence(from: audioFile) else {
-                    return .failure("no_speech", "No detecté palabras.")
+                    // Apple documents nil here as an empty input file, not an
+                    // indication that speech recognition found no words.
+                    return .failure("empty_audio", "No se capturó una instrucción.")
                 }
                 try await analysis.finalizeAndFinish(through: lastSample)
                 let segments = try await results.value
                 guard !Task.isCancelled else { return .failure("cancelled", "Dictado cancelado.") }
+                if !segments.isEmpty && !VoiceTranscriptBounds.valid(segments.map { (text: $0.text, start: $0.startSeconds, end: $0.endSeconds) }, duration: duration) {
+                    return .failure("invalid_evidence", "No pude verificar los tiempos de la transcripción.")
+                }
                 let text = segments.map(\.text).joined(separator: " ")
                 guard !text.isEmpty else { return .failure("no_speech", "No detecté palabras.") }
                 return VoiceReply(ok: true, locale: locale.identifier(.bcp47), sessionId: id, text: text,
                     segments: segments, durationSeconds: duration, source: "apple-speech-analyzer")
             } catch {
-                return .failure("transcription_failed", "No pude completar la transcripción local.")
+                // The phase is enough to guide the user; do not expose error
+                // payloads which may contain paths or other private details.
+                let reason = error is VoiceEvidenceError ? "invalid_evidence" : preparingAudio ? "audio_format_unavailable" : "transcription_failed"
+                return .failure(reason, "No pude completar la transcripción local.")
             }
         }
         finalOperation = work
@@ -498,20 +516,17 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         if finalInterrupted || UIApplication.shared.applicationState != .active {
             requestFinalShutdown()
             preserve = true
-            var reply = VoiceReply.failure("preview_pending", "El audio está guardado. Vuelve a Capri y toca el micrófono para transcribirlo.")
-            reply.sessionId = id
-            return reply
+            return pending(id, reason: "background")
         }
         guard let result, result.ok else {
             requestFinalShutdown()
             preserve = true
-            var reply = VoiceReply.failure("preview_pending", "No pude terminar la transcripción. El audio sigue guardado; toca el micrófono para reintentar.")
-            reply.sessionId = id
-            return reply
+            return pending(id, reason: result?.error ?? "transcription_timeout")
         }
         finalOperation = nil
         finalResults = nil
         recoveryPending = false
+        recoveryIssue = nil
         return result
     }
 
@@ -570,6 +585,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         liveTranscript = LiveTranscript()
         previewIssue = nil
         recoveryPending = false
+        recoveryIssue = nil
         owners.clear()
     }
 
