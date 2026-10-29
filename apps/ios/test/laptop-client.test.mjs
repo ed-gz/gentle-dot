@@ -29,6 +29,19 @@ test('cancelling a native read releases the session view before the late bridge 
   await assert.rejects(result, { name: 'AbortError' }); resolve(reply(state));
 });
 
+test('legacy toolResult entries remain visible without changing their content or order', async () => {
+  const client = createLaptopClient(connection, { current: () => connection, request: async () => reply({
+    sessionId: 's', messages: [
+      { id: 'a', role: 'assistant', content: [{ type: 'text', text: 'Revisando.' }] },
+      { id: 't', role: 'toolResult', isError: true, content: [{ type: 'text', text: 'Error real' }] },
+    ],
+  }) });
+  const value = await client.inspect('p', 's');
+  assert.deepEqual(value.messages.map(message => [message.id, message.role, message.isError, message.content[0].text]), [
+    ['a', 'assistant', undefined, 'Revisando.'], ['t', 'tool', true, 'Error real'],
+  ]);
+});
+
 test('a large history page is retried at a smaller size with the same cursor, never replaying mutations', async () => {
   const calls = [];
   const client = createLaptopClient(connection, { current: () => connection, request: async request => {

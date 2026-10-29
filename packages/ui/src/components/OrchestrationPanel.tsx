@@ -409,10 +409,10 @@ export function OrchestrationPanel({
 								{loadingEarlier ? "Cargando…" : "Ver mensajes anteriores"}
 							</button>
 						) : null}
-						{conversationMessages.length === 0 && !outbox.some(item => item.identity === identity && !["delivered", "dismissed"].includes(item.status)) ? <p className="muted">Todavía no hay mensajes.</p> : null}
+						{(capriMobile ? !conversation.messages.some(message => message.role === "user" || message.role === "assistant" || message.role === "tool") : conversationMessages.length === 0) && !outbox.some(item => item.identity === identity && !["delivered", "dismissed"].includes(item.status)) ? <p className="muted">Todavía no hay mensajes.</p> : null}
 						<SessionTurns messages={conversation.messages} pending={outbox.filter(item => item.identity === identity)}
 							onRetry={item => void retryDelivery(item)} onDiscard={item => setOutbox(current => current.map(entry => entry === item ? {...entry, status:"dismissed"} : entry))}
-							retryDisabled={!active || !connected || !session.connected || busy} waiting={conversation.status === "waiting"} />
+							retryDisabled={!active || !connected || !session.connected || busy} waiting={conversation.status === "waiting"} chronological={mobile && capriMobile} />
 					</section>
 				) : null}
 
@@ -670,13 +670,12 @@ export function OrchestrationPanel({
 							{mobile && capriMobile ? <span className="capri-session-type" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="m5 6 6 6-6 6m8 0h6" /></svg></span> : null}
 							<span className="agent-session-top">
 								<strong>{entry.label || "Sesión sin nombre"}</strong>
-								<span className="agent-session-state">{entry.connected && entry.state === "working" ? <span className="session-working-dot" aria-hidden="true" /> : null}<SessionStatus session={entry} /><span aria-hidden="true">{entry.connected ? STATES[entry.state] : "Sin conexión"}</span></span>
+								<span className="agent-session-state">{entry.connected && entry.state === "working" && !(mobile && capriMobile) ? <span className="session-working-dot" aria-hidden="true" /> : null}<SessionStatus session={entry} /><span aria-hidden="true">{entry.connected ? STATES[entry.state] : "Sin conexión"}</span></span>
 							</span>
 							{mobile && capriMobile && entry.cwd ? <span className="capri-session-project">{entry.provider ? PROVIDERS[entry.provider] : "TI"} · {entry.cwd.split("/").filter(Boolean).at(-1)}</span> : null}
-							<span className="agent-preview">
-								{entry.lastMessage ||
-									((entry.capabilities?.prompt ?? entry.managed) ? "Abre la conversación" : "Sólo lectura")}
-							</span>
+							{entry.lastMessage || !(mobile && capriMobile) ? <span className="agent-preview">
+								{entry.lastMessage || ((entry.capabilities?.prompt ?? entry.managed) ? "Abre la conversación" : "Sólo lectura")}
+							</span> : null}
 						</button>
 						<SessionMenu session={entry} controls={controls} connected={connected} active={active} onClosed={() => setSelected(undefined)} />
 						</div>
@@ -694,11 +693,12 @@ function SessionGroups({ sessions, enabled, children }: {
 	children: (session: AgentSession) => ReactNode;
 }) {
 	if (!enabled) return <div className="agent-sessions">{sessions.map(children)}</div>;
-	const ongoing = (session: AgentSession) => session.state === "working" || session.state === "blocked";
+	const ongoing = (session: AgentSession) => session.connected && (session.state === "working" || session.state === "blocked");
 	return <div className="capri-session-groups">{[
 		{ title: "En curso", entries: sessions.filter(ongoing) },
-		{ title: "Disponibles", entries: sessions.filter(session => !ongoing(session)) },
-	].map(group => <details className="capri-session-group" key={group.title} open>
+		{ title: "Disponibles", entries: sessions.filter(session => session.connected && !ongoing(session)) },
+		{ title: "Sin conexión", entries: sessions.filter(session => !session.connected) },
+	].filter(group => group.entries.length > 0).map(group => <details className="capri-session-group" key={group.title} open>
 		<summary>{group.title} · {group.entries.length}</summary>
 		<div className="agent-sessions">{group.entries.map(children)}</div>
 	</details>)}</div>;
@@ -711,9 +711,9 @@ function mergeMessages(earlier: AgentConversation["messages"], later: AgentConve
 }
 
 /** User entries are the only turn boundaries; delegated replies never create new turns. */
-export function SessionTurns({ messages, pending = [], onRetry, onDiscard, retryDisabled = false, waiting = false }: {
+export function SessionTurns({ messages, pending = [], onRetry, onDiscard, retryDisabled = false, waiting = false, chronological = false }: {
 	messages: AgentConversation["messages"]; pending?: OutgoingMessage[];
-	onRetry?(item: OutgoingMessage): void; onDiscard?(item: OutgoingMessage): void; retryDisabled?: boolean; waiting?: boolean;
+	onRetry?(item: OutgoingMessage): void; onDiscard?(item: OutgoingMessage): void; retryDisabled?: boolean; waiting?: boolean; chronological?: boolean;
 }) {
 	const timeline = [...messages];
 	const pendingById = new Map<string, OutgoingMessage>();
@@ -745,16 +745,45 @@ export function SessionTurns({ messages, pending = [], onRetry, onDiscard, retry
 					<button type="button" disabled={pendingItem.status === "sending"} onClick={() => onDiscard?.(pendingItem)}>Descartar</button>
 				</div>
 			</article> : null}
-			{turn.filter(message => message.role === "user" && !pendingById.has(message.id)).map(message => <TurnMessage key={message.id} message={message} />)}
-			{work.length ? <details className="session-turn-work"><summary>Trabajó: {actions} {actions === 1 ? "acción" : "acciones"}</summary>
-				{work.map(message => <div key={message.id} className="session-turn-action">
-					{message.role === "tool" ? <span role="img" aria-label={message.isError ? "Error" : "Ejecutada"}>{message.isError ? "!" : "✓"}</span> : null}
-					<AgentMessageContent message={message} />
-				</div>)}
-			</details> : null}
-			{turn.filter(message => message.role === "assistant" && !work.includes(message)).map(message => <TurnMessage key={message.id} message={message} reply={!message.provenance} />)}
+			{chronological ? <ChronologicalMessages messages={turn} pendingIds={pendingById} /> : <>
+				{turn.filter(message => message.role === "user" && !pendingById.has(message.id)).map(message => <TurnMessage key={message.id} message={message} />)}
+				{work.length ? <details className="session-turn-work"><summary>Trabajó: {actions} {actions === 1 ? "acción" : "acciones"}</summary>
+					{work.map(message => <div key={message.id} className="session-turn-action">
+						{message.role === "tool" ? <span role="img" aria-label={message.isError ? "Error" : "Ejecutada"}>{message.isError ? "!" : "✓"}</span> : null}
+						<AgentMessageContent message={message} />
+					</div>)}
+				</details> : null}
+				{turn.filter(message => message.role === "assistant" && !work.includes(message)).map(message => <TurnMessage key={message.id} message={message} reply={!message.provenance} />)}
+			</>}
 		</section>;
 	})}</>;
+}
+
+/** iPhone history keeps each assistant's actual text visible in its original
+ * order. Tool results remain expandable, even when a page ends in a tool call. */
+function ChronologicalMessages({ messages, pendingIds }: { messages: AgentConversation["messages"]; pendingIds: Map<string, OutgoingMessage> }) {
+	const result: ReactNode[] = [];
+	let tools: AgentConversation["messages"] = [];
+	const flush = () => {
+		if (!tools.length) return;
+		const group = tools; tools = [];
+		result.push(<details className="session-turn-work" key={`tools:${group[0]!.id}`}><summary>Trabajó: {group.length} {group.length === 1 ? "acción" : "acciones"}</summary>
+			{group.map(message => <div key={message.id} className="session-turn-action">
+				<span role="img" aria-label={message.isError ? "Error" : "Ejecutada"}>{message.isError ? "!" : "✓"}</span>
+				<AgentMessageContent message={message} />
+			</div>)}
+		</details>);
+	};
+	for (const message of messages) {
+		if (message.role === "tool") { tools.push(message); continue; }
+		if (message.role !== "user" && message.role !== "assistant") continue;
+		if (pendingIds.has(message.id)) continue;
+		if (message.role === "assistant" && !message.content.some(part => part.type === "text" && part.text.trim())) continue;
+		flush();
+		result.push(<TurnMessage key={message.id} message={message} reply={message.role === "assistant" && !message.provenance} />);
+	}
+	flush();
+	return <>{result}</>;
 }
 function TurnMessage({ message, reply = false }: { message: AgentConversation["messages"][number]; reply?: boolean }) {
 	return <article className={`agent-message agent-message-${message.role}${reply ? " session-turn-reply" : ""}${message.provenance ? " agent-message-delegated" : ""}`} data-message-id={message.id} aria-label={message.provenance ? messageSource(message) : message.role === "user" ? "Tu mensaje" : "Respuesta"}>

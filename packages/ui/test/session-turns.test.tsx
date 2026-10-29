@@ -28,3 +28,21 @@ it("separates realistic prompts, collapsed execution and final replies without l
  expect(screen.getByText("Todo listo").closest("article")).toHaveClass("session-turn-reply");
  expect(container.querySelector("time")).toHaveAttribute("datetime", "2026-10-25T12:30:00Z");
 });
+
+it("shows every assistant text in chronological order on Capri even if the page ends with a tool result", () => {
+ const messages = [
+  {id:"a1",role:"assistant",stopReason:"toolUse",content:[{type:"text",text:"Estoy revisando el error."}]},
+  {id:"t1",role:"tool",content:[{type:"text",text:"Salida de la primera herramienta"}]},
+  {id:"a2",role:"assistant",content:[{type:"text",text:"Encontré la causa y sigo investigando."}]},
+  {id:"t2",role:"tool",content:[{type:"text",text:"Salida de la segunda herramienta"}]},
+ ] as AgentConversation["messages"];
+ const {container} = render(<SessionTurns messages={messages} chronological/>);
+ expect(screen.getByText("Estoy revisando el error.")).toBeVisible();
+ expect(screen.getByText("Encontré la causa y sigo investigando.")).toBeVisible();
+ expect(screen.getByText("Salida de la primera herramienta")).not.toBeVisible();
+ expect(screen.getByText("Salida de la segunda herramienta")).not.toBeVisible();
+ expect([...container.querySelectorAll(".session-turn > article, .session-turn > details")].map(element => element.textContent)).toEqual([
+  expect.stringContaining("Estoy revisando el error."), expect.stringContaining("Salida de la primera herramienta"),
+  expect.stringContaining("Encontré la causa y sigo investigando."), expect.stringContaining("Salida de la segunda herramienta"),
+ ]);
+});

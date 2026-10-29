@@ -77,7 +77,11 @@ export function createLaptopClient(connection: DesktopConnection, options: {
       typeof message.id !== 'string' || message.id.length > 256 ||
       !['user', 'assistant', 'system', 'tool', 'toolResult'].includes(message.role) ||
       !Array.isArray(message.content) || message.content.some(block => !block || block.type !== 'text' || typeof block.text !== 'string' || block.text.length > 200_000))) throw new Error('El historial no corresponde a esta sesión.');
-    return value;
+    // Older adapters use Pi's `toolResult` role. The shared session view uses
+    // `tool`; accepting the former without translating it silently hides real
+    // history. Keep identity, text, error flags and ordering unchanged.
+    return { ...value, messages: value.messages.map(message =>
+      (message as { role: string }).role === 'toolResult' ? { ...message, role: 'tool' as const } : message) };
   };
   client.uploadAttachment = (paneId, sessionId, file, uploadId, signal) => {
     current();

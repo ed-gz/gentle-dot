@@ -26,7 +26,9 @@
 #panel-agents .agent-reply .composer button { background: var(--accent); color: var(--bg); border: 0; border-radius: 50%; }
 #panel-agents .agent-reply .composer button[aria-label*=dictado], #panel-agents .agent-reply .composer button[aria-label*=voz] { background: transparent; color: var(--text); }
 
-#panel-agents .voice-meter { display: none; } /* Apple bridge does not report audio levels. */
+#panel-agents .voice-meter { appearance: none; display: block; flex: none; width: 36px; height: 4px; border: 0; border-radius: 4px; background: var(--surface-2); }
+#panel-agents .voice-meter::-webkit-meter-bar { height: 4px; border: 0; border-radius: 4px; background: var(--surface-2); }
+#panel-agents .voice-meter::-webkit-meter-optimum-value { border-radius: 4px; background: var(--accent); }
 
 #panel-agents .agent-message-content, #panel-agents .agent-reply textarea { font-size: 1rem; }
 
@@ -36,13 +38,16 @@
   main:has(#panel-agents:not([hidden]) .agent-detail) .masthead { display: none; }
 }
 
-#panel-agents .agent-session { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 4px 12px; padding: 16px 0; text-align: left; }
+#panel-agents .agent-session { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 3px 10px; padding: 12px 0; text-align: left; }
 #panel-agents .capri-session-type { grid-column: 1; grid-row: 1 / span 3; color: var(--accent); }
 #panel-agents .agent-session-top, #panel-agents .capri-session-project, #panel-agents .agent-preview { grid-column: 2; }
-#panel-agents .agent-session-top { display: flex; flex-direction: column; gap: 4px; }
+#panel-agents .agent-session-top { display: flex; flex-direction: row; justify-content: space-between; align-items: center; gap: 4px 12px; }
+#panel-agents .agent-session-top strong { min-width: 0; flex: 1; }
+#panel-agents .agent-session-state { flex: none; }
 #panel-agents .capri-session-project { font-size: .8rem; color: var(--muted); }
 #panel-agents .agent-preview { font-size: .85rem; }
 #panel-agents .session-refresh, #panel-agents .session-create-button { border: 0; background: transparent; }
+#panel-agents .agent-detail .agent-conversation { padding-right: 8px; }
 #panel-agents .agent-reply { padding-inline: 0; padding-bottom: 0; }
 #panel-agents .agent-detail-navigation, #panel-agents .agent-detail-scroll, #panel-agents .agent-session-work { padding-inline: 0; }
 #panel-agents .composer-mic { background: transparent !important; color: var(--text) !important; }
