@@ -828,7 +828,16 @@ test('character artwork persists; appearance and motion controls fit small and l
   await page.locator('[data-panel="settings"]').click();
   await expect(page.locator('#panel-settings')).toBeVisible();
   await page.locator('#art').setInputFiles({ name: 'capri-test.png', mimeType: 'image/png', buffer: Buffer.from(png!, 'base64') });
-  await expect(page.locator('#settings-status')).toHaveText('Arte guardado en este dispositivo.');
+  try { await expect(page.locator('#settings-status')).toHaveText('Arte guardado en este dispositivo.'); }
+  catch (error) {
+    console.log('Artwork selection failure', await page.evaluate(async () => ({
+      fileCount: (document.querySelector('#art') as HTMLInputElement).files?.length,
+      savedBytes: (await (await import('/src/local-state.ts' as string)).loadArtwork())?.size,
+      status: document.getElementById('art-status')?.textContent,
+      ready: document.getElementById('rig-handle')?.dataset.ready,
+    })), errors);
+    throw error;
+  }
   await page.locator('#settings-character > summary').click();
   await page.locator('#motion').selectOption('reduced');
   await page.reload();
