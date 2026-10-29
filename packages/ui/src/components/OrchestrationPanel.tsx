@@ -373,6 +373,12 @@ export function OrchestrationPanel({
 	const selectedView = session ? (
 		<section className="agent-detail" aria-label={`Sesión ${session.label}`}>
 			{!capriMobile ? sessionWork : null}
+			{capriMobile && (error || conversationError) ? (
+				<div className="session-connection-notices" role="region" tabIndex={0} aria-label="Avisos de la sesión">
+					{error ? <p className="orchestration-error" role="alert">{error}</p> : null}
+					{conversationError && conversationError !== error ? <p className="orchestration-error" role="status">{conversationError}</p> : null}
+				</div>
+			) : null}
 			<div
 				className="agent-detail-scroll"
 				ref={conversationViewport}
@@ -395,12 +401,12 @@ export function OrchestrationPanel({
 						{receipt}
 					</p>
 				) : null}
-				{error ? (
+				{!capriMobile && error ? (
 					<p className="orchestration-error" role="alert">
 						{error}
 					</p>
 				) : null}
-				{conversationError ? (
+				{!capriMobile && conversationError ? (
 					<p className="orchestration-error" role="status">
 						{conversationError}
 					</p>

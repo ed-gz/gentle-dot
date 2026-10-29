@@ -13,6 +13,9 @@
 #panel-agents .agent-current-session > .capri-session-metadata { grid-column: 2; }
 #panel-agents .capri-session-metadata { display: block; color: var(--muted); font-size: .75rem; line-height: 1.3; overflow-wrap: anywhere; }
 #panel-agents .agent-detail-scroll { flex: 1; min-height: 0; overflow: auto; }
+/* Keep connection notices outside the scrollable conversation. */
+#panel-agents .session-connection-notices { flex: none; max-height: 3lh; overflow-y: auto; }
+#panel-agents .session-connection-notices .orchestration-error { margin: 2px 0; font-size: .85rem; }
 #panel-agents .agent-reply { flex: none; }
 #panel-agents .agent-session { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
 #panel-agents .agent-detail .agent-message-user { background: #251b2c; border: 0; border-radius: 12px 12px 3px 12px; }
