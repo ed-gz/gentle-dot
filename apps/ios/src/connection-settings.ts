@@ -142,11 +142,11 @@ export function mountConnectionSettings(): { refresh(): Promise<void>; cancel():
       const connections = await listConnections();
       if (epoch !== renderSequence) return;
       const list = element('connections-list'); list.replaceChildren();
-      if (!connections.length) { const empty = document.createElement('p'); empty.className = 'hint'; empty.textContent = 'Todavía no hay cuentas conectadas.'; list.append(empty); }
+      if (!connections.length) { const empty = document.createElement('p'); empty.className = 'hint'; empty.textContent = 'Todavía no hay servicios configurados.'; list.append(empty); }
       for (const connection of connections) {
         const item = document.createElement('article'); item.className = 'work-item';
         const title = document.createElement('strong'); title.textContent = connection.label;
-        const detail = document.createElement('p'); detail.className = 'hint'; detail.textContent = `${names[connection.provider ?? 'mcp']} · ${connection.enabled ? 'Disponible para Capri' : 'Desactivada'}\n${connection.endpoint}\n${connection.credentialAccount ? 'Credencial guardada en Keychain; acceso pendiente de comprobar al usarla.' : 'Sin credencial guardada.'}`;
+        const detail = document.createElement('p'); detail.className = 'hint'; detail.textContent = `${names[connection.provider ?? 'mcp']} · ${connection.enabled ? 'Habilitada · conexión sin comprobar' : 'Desactivada'}\n${connection.endpoint}\n${connection.credentialAccount ? 'Credencial guardada en Keychain; acceso pendiente de comprobar al usarla.' : 'Sin credencial guardada.'}`;
         const actions = document.createElement('div'); actions.className = 'actions';
         const editButton = document.createElement('button'); editButton.type = 'button'; editButton.textContent = 'Editar acceso'; editButton.disabled = busy; editButton.onclick = () => { void edit(connection); };
         const toggle = document.createElement('button'); toggle.type = 'button'; toggle.textContent = connection.enabled ? 'Desactivar' : 'Activar'; toggle.disabled = busy;

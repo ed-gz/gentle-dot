@@ -63,6 +63,11 @@ test('provider form stores PAT only in Keychain and binds edits to the visible r
   await expect(page.locator('#connections-status')).toContainText('Configuración guardada');
   const stored = await metadata(page); expect(stored).toHaveLength(1);
   expect(stored[0]).toMatchObject({ provider: 'github', endpoint: 'https://api.github.com/', revision: 1 });
+  const card = page.locator('#connections-list article').filter({ hasText: 'Mi GitHub' });
+  await expect(card).toContainText('Habilitada');
+  await expect(card).toContainText('sin comprobar');
+  await expect(card).not.toContainText('Disponible para Capri');
+  expect(await page.evaluate(() => (globalThis as any).settingsRequests)).toEqual([]);
   expect(JSON.stringify(stored)).not.toContain('fixture-personal-token');
   expect(await page.locator('body').innerText()).not.toContain('fixture-personal-token');
   const secret = await page.evaluate(() => [...(globalThis as any).settingsVault.values()]);
