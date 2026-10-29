@@ -35,3 +35,11 @@ test('mismatched responses invalidate the inspection, while unsupported browser 
   await assert.rejects(bridge.start(request), /Consulta/);
   await assert.rejects(createLiveActivityBridge({ installed: false }).list(), /instalada/);
 });
+test('laptop activity carries the actual observation time and rejects a rewritten timestamp', async () => {
+  const observedAt=1_800_000_000_000, laptop={...request,origin:'laptop',phase:'working',observedAt};let sent;
+  const bridge=createLiveActivityBridge({installed:true,call:async(name,args)=>{
+    if(name==='list')return {ok:true,items:[]};sent=args;return {ok:true,id:item.id,items:[{...item,...laptop,observedAt:observedAt+5000}]};
+  }});
+  await bridge.list();await assert.rejects(bridge.start(laptop),/observación/);assert.equal(sent.observedAt,observedAt);
+  await assert.rejects(bridge.start({...laptop,observedAt:undefined}),/no es válido/);
+});

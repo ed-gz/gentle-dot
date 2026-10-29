@@ -1,6 +1,6 @@
 import { createLiveActivityBridge, type ActivityEnd, type ActivityItem, type ActivityOrigin, type ActivityPhase } from './live-activity.ts';
 
-export type LiveTurn = { turnId: string; origin: ActivityOrigin; phase: ActivityPhase };
+export type LiveTurn = { turnId: string; origin: ActivityOrigin; phase: ActivityPhase; observedAt?: number };
 export type LiveEnd = { turnId: string; origin: ActivityOrigin; phase: ActivityEnd };
 export type LiveCoordinatorState = {
   enabled: boolean;
@@ -15,6 +15,7 @@ const ends = new Set(['finished', 'interrupted', 'dismissed']);
 const keyOf = (turn: { turnId: string; origin: ActivityOrigin }) => `${turn.origin}:${turn.turnId}`;
 function valid(turn: LiveTurn | LiveEnd, ending: boolean): boolean {
   return !!turn && uuid.test(turn.turnId) && ['iphone', 'laptop'].includes(turn.origin)
+    && (ending || turn.origin !== 'laptop' || ('observedAt' in turn && Number.isSafeInteger(turn.observedAt) && Number(turn.observedAt) >= 0))
     && (ending ? ends : phases).has(turn.phase);
 }
 const errorText = (error: unknown) => error instanceof Error ? error.message : 'No se confirmó el estado de la actividad.';
@@ -104,17 +105,17 @@ export function createLiveActivityCoordinator(options: { bridge?: Bridge; onChan
         if (current && !isActive(current)) throw new Error('La actividad ya terminó; consulta su estado.');
         try {
           if (!current) {
-            const item = await bridge.start({ turnId: turn.turnId, origin: turn.origin, phase: turn.phase, sequence: 1 });
+            const item = await bridge.start({ turnId: turn.turnId, origin: turn.origin, phase: turn.phase, sequence: 1, ...('observedAt' in turn && turn.observedAt !== undefined ? {observedAt:turn.observedAt} : {}) });
             // Preserve the system-returned phase/revision, not a guessed state.
             publish({ enabled: state.enabled, status: 'active', activity: item });
           } else {
             const sequence = nextSequence(current);
-            await bridge.update({ turnId: turn.turnId, origin: turn.origin, phase: turn.phase, id: current.id, sequence });
+            await bridge.update({ turnId: turn.turnId, origin: turn.origin, phase: turn.phase, id: current.id, sequence, ...('observedAt' in turn && turn.observedAt !== undefined ? {observedAt:turn.observedAt} : {}) });
             // The system may reject or defer a visual update even after a bridge
             // callback. Publish only the state observed from ActivityKit itself.
             const items = await bridge.list();
             const confirmed = items.length === 1 ? items[0] : undefined;
-            if (!confirmed || confirmed.id !== current.id || keyOf(confirmed) !== key || confirmed.sequence !== sequence || confirmed.phase !== turn.phase)
+            if (!confirmed || confirmed.id !== current.id || keyOf(confirmed) !== key || confirmed.sequence !== sequence || confirmed.phase !== turn.phase || (turn.origin === 'laptop' && Math.abs(confirmed.observedAt - turn.observedAt!) >= 1))
               throw new Error('No se confirmó la revisión de la actividad. Consulta su estado.');
             publish({ enabled: state.enabled, status: 'active', activity: confirmed });
           }

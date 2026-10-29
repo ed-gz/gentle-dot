@@ -1,6 +1,7 @@
 import type { ServerMessage } from '../../../packages/protocol/src/index.ts';
 import type { createLiveActivityCoordinator } from './live-activity-coordinator.ts';
 import type { ActivityPhase } from './live-activity.ts';
+import { localIdentifier } from './local-identifiers.ts';
 
 type Coordinator = Pick<ReturnType<typeof createLiveActivityCoordinator>, 'snapshot' | 'observe' | 'finish'>;
 type StateEvent = Extract<ServerMessage, { type: 'ready' | 'agent_state' }>;
@@ -14,8 +15,8 @@ export function createLaptopLiveActivity(options: {
   onError?: (error: unknown) => void;
 }) {
   const { coordinator } = options;
-  const identifier = options.identifier ?? (() => crypto.randomUUID());
-  let enabled = false, generation = 0, observationId: string | undefined;
+  const identifier = options.identifier ?? localIdentifier;
+  let enabled = false, generation = 0, observationId: string | undefined, mayStart = false;
   let pending: Promise<void> = Promise.resolve();
   const report = (error: unknown) => { try { options.onError?.(error); } catch { /* Observers do not affect ordering. */ } };
   function enqueue(operation: () => Promise<void>) {
@@ -31,7 +32,8 @@ export function createLaptopLiveActivity(options: {
     /** This separate opt-in must not be inferred from the local-turn setting. */
     setEnabled(value: boolean): Promise<void> {
       enabled = value; generation++;
-      if (value) return Promise.resolve(); // Wait for a fresh, authenticated daemon event.
+      mayStart = false;
+      if (value) return Promise.resolve(); // Enabling never starts a presentation.
       return enqueue(async () => {
         const current = owned(); observationId = undefined;
         if (current) await coordinator.finish({ origin: 'laptop', turnId: current.turnId, phase: 'dismissed' });
@@ -40,8 +42,17 @@ export function createLaptopLiveActivity(options: {
     disconnected(): void {
       // Do not refresh or end the last state. ActivityKit marks it stale.
       generation++;
+      mayStart = false;
+      enabled = false;
     },
-    message(message: StateEvent): Promise<void> {
+    /** Called only by the explicit human control, with an authenticated observation. */
+    start(message: StateEvent, observedAt: number): Promise<void> {
+      if (!enabled) return Promise.reject(new Error('Activa primero la pantalla bloqueada.'));
+      mayStart = true;
+      return this.message(message, observedAt);
+    },
+    message(message: StateEvent, observedAt: number): Promise<void> {
+      if (!Number.isSafeInteger(observedAt) || observedAt < 0) return Promise.reject(new Error('La observación no tiene hora verificable.'));
       if (!enabled || (message.type !== 'ready' && message.type !== 'agent_state')) return Promise.resolve();
       const state = message.type === 'ready' ? message.agentState : message.state;
       const phase: ActivityPhase | undefined = state === 'thinking' ? 'thinking'
@@ -54,12 +65,16 @@ export function createLaptopLiveActivity(options: {
           // idle, startup, restart and error are not proof of completion.
           if (current) await coordinator.finish({ origin: 'laptop', turnId: current.turnId, phase: 'dismissed' });
           observationId = undefined;
+          mayStart = false;
           return;
         }
         // A local turn or an unowned activity always wins; never replace it.
         if (!snapshot.enabled || !['ready', 'active'].includes(snapshot.status) || (snapshot.activity && !current)) return;
-        if (!current) observationId = identifier();
-        await coordinator.observe({ origin: 'laptop', turnId: observationId!, phase });
+        if (!current) {
+          if (!mayStart) return;
+          mayStart = false; observationId = identifier();
+        }
+        await coordinator.observe({ origin: 'laptop', turnId: observationId!, phase, observedAt });
       });
     },
   };

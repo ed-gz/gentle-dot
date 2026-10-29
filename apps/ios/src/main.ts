@@ -15,6 +15,7 @@ import { mountCompletionNotifications } from './completion-notifications.ts';
 import { mountContinuedInferenceSettings } from './continued-inference-settings.ts';
 import { createLiveActivityCoordinator } from './live-activity-coordinator.ts';
 import { mountLiveActivitySettings } from './live-activity-settings.ts';
+import { mountLaptopLiveActivity } from './laptop-live-activity-settings.ts';
 import type { ActivityPhase, ActivityEnd } from './live-activity.ts';
 import { loadConversationForWrite, loadConversationBase, hasConfirmedConversationAttachment, updateEntry, reconcileHostHistory, isLocalContextWrapper, HostHistoryIdentityError, localPrompt, linkedPrompt, type ChatEntry, type Engine } from './conversation.ts';
 import { mountInbox } from './inbox-view.ts';
@@ -555,7 +556,8 @@ const reviews = createConversationRequests(element('requests'), { append: conver
 const completionNotifications = mountCompletionNotifications(element('completion-notifications'));
 const continuedInference = mountContinuedInferenceSettings(element('continued-inference-settings'));
 let lockScreenSettings: ReturnType<typeof mountLiveActivitySettings> | undefined;
-const lockScreenActivity = createLiveActivityCoordinator({ onChange: state => lockScreenSettings?.render(state) });
+let laptopScreenSettings: ReturnType<typeof mountLaptopLiveActivity> | undefined;
+const lockScreenActivity = createLiveActivityCoordinator({ onChange: state => { lockScreenSettings?.render(state); laptopScreenSettings?.render(); } });
 lockScreenSettings = mountLiveActivitySettings(element('live-activity-settings'), lockScreenActivity);
 function observeLocalActivity(turnId: string, phase: ActivityPhase) {
   void lockScreenActivity.observe({ turnId, origin: 'iphone', phase }).catch(() => { /* The state is visible in Settings; never retry a mutation. */ });
@@ -565,6 +567,7 @@ function endLocalActivity(turnId: string, phase: ActivityEnd) {
 }
 let availability: Availability = { available: false, status: 'checking', supportsSpanish: false };
 let linkedStatus: LinkedStatus = 'offline';
+laptopScreenSettings = mountLaptopLiveActivity(element('laptop-live-activity'), lockScreenActivity, { connected: () => linkedStatus === 'ready', visible: () => !document.hidden });
 let linkedBusy = false;
 let hostAgentState = 'idle';
 let healthAction: HealthAction | undefined;
@@ -956,6 +959,7 @@ async function receiveEarlier(message: Extract<ServerMessage, { type: 'earlier' 
 }
 const activeHostAsks = new Map<string, object>();
 function handleMessage(message: ServerMessage) {
+  if (message.type === 'ready' || message.type === 'agent_state') laptopScreenSettings?.observe(message);
   if (message.type === 'ready') { hostAgentState = message.agentState; remoteConversation = message.conversationId ?? 'default'; linkedBusy = ['thinking', 'working', 'needs_you'].includes(message.agentState); }
   if (message.type === 'agent_state') {
     hostAgentState = message.state;
@@ -1138,6 +1142,7 @@ const linked = createLinkedChat({
     } else if (value === 'rejected' && !pairingFailed) { if (!connectionBusy) connectionEpoch++; runtimeConnection = undefined; }
     updateLaptopView();
     linkedStatus = value; reviews.connection(value === 'ready');
+    if (value !== 'ready') laptopScreenSettings?.disconnected(); else laptopScreenSettings?.render();
     element('status').textContent = { offline: 'Sin conexión', connecting: 'Conectando…', ready: 'Vinculado a Gentle Dot', rejected: 'Acceso rechazado. Revisa token y versión.' }[value];
     element('connection-badge').textContent = value === 'ready' ? 'VINCULADO' : 'LOCAL';
     if (value !== 'ready') {

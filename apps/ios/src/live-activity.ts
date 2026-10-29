@@ -3,7 +3,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 export type ActivityOrigin = 'iphone' | 'laptop';
 export type ActivityPhase = 'thinking' | 'working' | 'attention' | 'waiting';
 export type ActivityEnd = 'finished' | 'interrupted' | 'dismissed';
-export type ActivityUpdate = { turnId: string; origin: ActivityOrigin; phase: ActivityPhase | ActivityEnd; sequence: number; id?: string };
+export type ActivityUpdate = { turnId: string; origin: ActivityOrigin; phase: ActivityPhase | ActivityEnd; sequence: number; id?: string; observedAt?: number };
 export type ActivityItem = { id: string; turnId: string; origin: ActivityOrigin; phase: ActivityPhase | ActivityEnd; sequence: number; observedAt: number; stale: boolean };
 type Invoke = (command: string, request: Record<string, unknown>) => Promise<unknown>;
 const uuid = (s: unknown): s is string => typeof s === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(s);
@@ -14,6 +14,8 @@ const native: Invoke = (command, request) => invoke(`plugin:device-bridge|live_a
 function validRequest(value: ActivityUpdate, end: boolean, hasID: boolean): boolean {
   return object(value) && uuid(value.turnId) && origins.has(value.origin) && (end ? ended : active).has(value.phase)
     && Number.isSafeInteger(value.sequence) && value.sequence >= 0 && value.sequence <= 1_000_000_000
+    && (value.observedAt === undefined || (Number.isSafeInteger(value.observedAt) && value.observedAt >= 0))
+    && (end || value.origin !== 'laptop' || value.observedAt !== undefined)
     && (hasID ? identifier(value.id) : value.id === undefined);
 }
 function result(value: unknown): Record<string, unknown> {
@@ -71,18 +73,18 @@ export function createLiveActivityBridge(options: { call?: Invoke; installed?: b
     },
     async start(update: ActivityUpdate): Promise<ActivityItem> {
       if (!validRequest(update, false, false)) throw new Error('El turno o estado de la actividad no es válido.');
-      const { turnId, origin, phase, sequence } = update;
-      const value = await send('start', { turnId, origin, phase, sequence }, true);
+      const { turnId, origin, phase, sequence, observedAt } = update;
+      const value = await send('start', { turnId, origin, phase, sequence, ...(observedAt === undefined ? {} : { observedAt }) }, true);
       try {
         const items = parseItems(value.items);
-        if (items.length !== 1 || value.id !== items[0]!.id || items[0]!.turnId !== turnId || items[0]!.origin !== origin) throw new Error('La actividad iniciada no coincide con el turno.');
+        if (items.length !== 1 || value.id !== items[0]!.id || items[0]!.turnId !== turnId || items[0]!.origin !== origin || (origin === 'laptop' && (items[0]!.phase !== phase || items[0]!.sequence !== sequence || observedAt === undefined || Math.abs(items[0]!.observedAt - observedAt) >= 1))) throw new Error('La actividad iniciada no coincide con la observación.');
         return items[0]!;
       } catch (error) { inspected = false; throw error; }
     },
     async update(update: ActivityUpdate, ending = false): Promise<void> {
       if (!validRequest(update, ending, true)) throw new Error('El turno o estado de la actividad no es válido.');
-      const { turnId, origin, phase, sequence, id } = update;
-      const value = await send(ending ? 'end' : 'update', { turnId, origin, phase, sequence, id }, true);
+      const { turnId, origin, phase, sequence, id, observedAt } = update;
+      const value = await send(ending ? 'end' : 'update', { turnId, origin, phase, sequence, id, ...(observedAt === undefined ? {} : { observedAt }) }, true);
       if (value.id !== id) { inspected = false; throw new Error('La actualización no coincide con la actividad solicitada.'); }
     },
   };

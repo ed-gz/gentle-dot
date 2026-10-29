@@ -33,7 +33,7 @@ export function mountLiveActivitySettings(root: HTMLElement, coordinator: Coordi
     else if (canDismiss) message.textContent = 'Hay una actividad abierta; puedes ocultarla sin detener el trabajo.';
     else if (!state.enabled) message.textContent = 'Desactivado. Al ocultarla, el trabajo continúa.';
     else if (state.status === 'checking') message.textContent = 'Comprobando la pantalla bloqueada…';
-    else if (state.status === 'active') message.textContent = state.activity?.stale ? 'Sin señal reciente. Abre Capri para actualizar el estado.' : 'Mostrando el estado confirmado de esta respuesta local.';
+    else if (state.status === 'active') message.textContent = state.activity?.stale ? 'Sin señal reciente. Abre Capri para actualizar el estado.' : state.activity?.origin === 'laptop' ? 'Mostrando la última observación de la laptop.' : 'Mostrando el estado confirmado de esta respuesta local.';
     else if (state.status === 'ready') message.textContent = 'Se mostrará al iniciar una respuesta local. No incluye el contenido.';
     else message.textContent = state.message || 'No está disponible en esta instalación o en Ajustes del iPhone.';
   }

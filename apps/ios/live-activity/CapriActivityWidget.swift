@@ -13,7 +13,9 @@ struct CapriActivityWidget: Widget {
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
-                DynamicIslandExpandedRegion(.center) { Text("\(context.attributes.origin == "laptop" ? "GENTLE DOT · ESTADO GENERAL" : "CAPRI") · \(phaseLabel(context.state.phase, origin: context.attributes.origin))") }
+                DynamicIslandExpandedRegion(.center) {
+                    Text(context.isStale ? "Sin señal reciente · abre Capri" : context.attributes.origin == "laptop" ? "GENTLE DOT · último estado: \(phaseLabel(context.state.phase, origin: context.attributes.origin))" : "CAPRI · \(phaseLabel(context.state.phase, origin: context.attributes.origin))")
+                }
             } compactLeading: { Text("C").foregroundStyle(.pink) }
               compactTrailing: { Image(systemName: "sparkle") }
               minimal: { Text("C").foregroundStyle(.pink) }
@@ -74,7 +76,7 @@ private struct CapriLockScreen: View {
                 Text(context.attributes.origin == "iphone" ? "CAPRI · iPhone" : "GENTLE DOT · estado general")
                     .font(.system(.caption, design: .monospaced, weight: .bold))
                     .foregroundStyle(Color(red: 0.73, green: 0.92, blue: 0.46))
-                Text(context.isStale ? "Sin señal reciente · abre Capri" : phaseLabel(context.state.phase, origin: context.attributes.origin))
+                Text(context.isStale ? "Sin señal reciente · abre Capri" : context.attributes.origin == "laptop" ? "Último estado: \(phaseLabel(context.state.phase, origin: context.attributes.origin))" : phaseLabel(context.state.phase, origin: context.attributes.origin))
                     .font(.headline).foregroundStyle(.white)
                 Text(context.state.observedAt, style: .relative)
                     .font(.caption).foregroundStyle(.secondary)

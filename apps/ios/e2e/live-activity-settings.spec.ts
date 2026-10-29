@@ -8,18 +8,20 @@ async function nativeActivity(page: Page, fixture: Fixture = {}) {
     state.currentActivity = JSON.parse(sessionStorage.getItem("fixture-live-activity") || "null") ?? undefined;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       const name = command.split('|').at(-1);
+      if (name === 'secret_get') { const request=args.request, value=sessionStorage.getItem(`fixture-keychain:${request.scope}:${request.account}`); return value===null?{ok:true}:{ok:true,value}; }
+      if (name === 'secret_set') { const request=args.request;sessionStorage.setItem(`fixture-keychain:${request.scope}:${request.account}`,request.value);return {ok:true}; }
       if (name?.startsWith('live_activity_')) {
         const action = name.slice('live_activity_'.length), request = args?.request ?? {};
         state.activityCalls.push({ action, request: structuredClone(request), ...(action === 'end' ? { journalAcked: sessionStorage.getItem('fixture-journal-acked') === '1' } : {}) });
         if (action === 'available') return { ok: true, enabled: !initial.unavailable };
         if (action === 'list') return { ok: true, items: state.currentActivity ? [structuredClone(state.currentActivity)] : [] };
         if (action === 'start') {
-          state.currentActivity = { ...request, id: 'activity-1', observedAt: Date.now(), stale: false };
+          state.currentActivity = { ...request, id: 'activity-1', observedAt: request.observedAt ?? Date.now(), stale: false };
           sessionStorage.setItem('fixture-live-activity', JSON.stringify(state.currentActivity));
           return { ok: true, id: 'activity-1', items: [structuredClone(state.currentActivity)] };
         }
         if (action === 'update') {
-          state.currentActivity = { ...request, observedAt: Date.now(), stale: false };
+          state.currentActivity = { ...request, observedAt: request.observedAt ?? Date.now(), stale: false };
           sessionStorage.setItem('fixture-live-activity', JSON.stringify(state.currentActivity));
           return { ok: true, id: request.id };
         }
@@ -223,4 +225,51 @@ test('browser preview cannot enable the native surface', async ({ page }) => {
   await expect(page.locator(toggle)).toBeDisabled();
   await expect(page.locator(status)).toContainText('app instalada en el iPhone');
   await expect(page.locator(toggle)).not.toBeChecked();
+});
+
+test('laptop activity starts only on a human tap and retains the authenticated observation time', async ({page})=>{
+  let emit:(value:object)=>void=()=>{},disconnect:()=>void=()=>{};let lastObserved=0;
+  await page.routeWebSocket('wss://activity.example/ws',ws=>{let seq=0;emit=value=>ws.send(JSON.stringify({seq:seq++,...value}));disconnect=()=>ws.close();ws.onMessage(raw=>{const value=JSON.parse(String(raw));if(value.type==='hello')emit({type:'ready',agentState:'idle',conversationId:'main'});if(value.type==='get_history')emit({type:'history',conversationId:'main',messages:[]});});});
+  await nativeActivity(page);
+  await page.locator('[data-panel="settings"]').click();if(!await page.locator('#url').isVisible())await page.getByText('Conexión manual',{exact:true}).click();
+  await page.locator('#url').fill('wss://activity.example/ws');await page.locator('#token').fill('t'.repeat(48));await page.locator('#connection button[type="submit"]').click();await expect(page.locator('#status')).toContainText('Vinculado');
+  await openSettings(page);await page.getByLabel('Mostrar progreso en pantalla bloqueada').check();
+  const button=page.getByRole('button',{name:'Mostrar estado de la laptop'}), info=page.locator('#laptop-live-activity [role="status"]');
+  await expect(button).toBeDisabled();
+  lastObserved=Date.now();emit({type:'agent_state',state:'working'});await expect(button).toBeEnabled();
+  expect((await page.evaluate(()=>(globalThis as any).activityCalls)).some((item:any)=>item.action==='start')).toBe(false);
+  await button.click();await expect.poll(()=>page.evaluate(()=>(globalThis as any).activityCalls.filter((item:any)=>item.action==='start').length)).toBe(1);
+  const start=await page.evaluate(()=>(globalThis as any).activityCalls.find((item:any)=>item.action==='start').request);
+  expect(start.origin).toBe('laptop');expect(start.phase).toBe('working');expect(start.observedAt).toBeGreaterThanOrEqual(lastObserved);expect(Object.keys(start).sort()).toEqual(['observedAt','origin','phase','sequence','turnId']);
+  await expect(info).toContainText('Última observación');
+  disconnect();await expect(info).toContainText('Sin señal');
+  await expect.poll(()=>page.evaluate(()=>(globalThis as any).activityCalls.filter((item:any)=>item.action==='start').length)).toBe(1);
+  expect((await page.evaluate(()=>(globalThis as any).activityCalls)).some((item:any)=>item.action==='end')).toBe(false);
+  await expect(page.locator('#status')).toContainText('Vinculado');emit({type:'agent_state',state:'needs_you'});
+  await expect(info).toContainText('seguimiento se interrumpió');
+  const after=await page.evaluate(()=>({calls:(globalThis as any).activityCalls,activity:(globalThis as any).currentActivity}));
+  expect(after.calls.filter((item:any)=>item.action==='start')).toHaveLength(1);expect(after.calls.filter((item:any)=>item.action==='update')).toHaveLength(0);
+  expect(after.activity).toMatchObject({origin:'laptop',phase:'working',observedAt:start.observedAt});
+  await page.getByRole('button',{name:'Ocultar estado de la laptop'}).click();
+  await expect.poll(()=>page.evaluate(()=>(globalThis as any).activityCalls.filter((item:any)=>item.action==='end').length)).toBe(1);
+  expect(await page.evaluate(()=>(globalThis as any).cancelCalls)).toBe(0);
+});
+
+test('backgrounding freezes the last laptop observation until the user chooses again', async ({page})=>{
+  let emit:(value:object)=>void=()=>{};
+  await page.routeWebSocket('wss://activity.example/ws',ws=>{let seq=0;emit=value=>ws.send(JSON.stringify({seq:seq++,...value}));ws.onMessage(raw=>{const value=JSON.parse(String(raw));if(value.type==='hello')emit({type:'ready',agentState:'idle',conversationId:'main'});if(value.type==='get_history')emit({type:'history',conversationId:'main',messages:[]});});});
+  await nativeActivity(page);
+  await page.locator('[data-panel="settings"]').click();if(!await page.locator('#url').isVisible())await page.getByText('Conexión manual',{exact:true}).click();
+  await page.locator('#url').fill('wss://activity.example/ws');await page.locator('#token').fill('t'.repeat(48));await page.locator('#connection button[type="submit"]').click();await expect(page.locator('#status')).toContainText('Vinculado');
+  await openSettings(page);await page.getByLabel('Mostrar progreso en pantalla bloqueada').check();
+  emit({type:'agent_state',state:'working'});const button=page.getByRole('button',{name:'Mostrar estado de la laptop'});await expect(button).toBeEnabled();await button.click();
+  await expect.poll(()=>page.evaluate(()=>(globalThis as any).activityCalls.filter((item:any)=>item.action==='start').length)).toBe(1);
+  const before=await page.evaluate(()=>(globalThis as any).currentActivity);
+  await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});document.dispatchEvent(new Event('visibilitychange'));});
+  await expect(page.locator('#laptop-live-activity [role="status"]')).toContainText('Sin señal');
+  await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});document.dispatchEvent(new Event('visibilitychange'));});
+  await expect(page.locator('#status')).toContainText('Vinculado');emit({type:'agent_state',state:'needs_you'});
+  await expect(page.locator('#laptop-live-activity [role="status"]')).toContainText('seguimiento se interrumpió');
+  const after=await page.evaluate(()=>({calls:(globalThis as any).activityCalls,activity:(globalThis as any).currentActivity}));
+  expect(after.activity).toEqual(before);expect(after.calls.filter((item:any)=>item.action==='start')).toHaveLength(1);expect(after.calls.filter((item:any)=>item.action==='update'||item.action==='end')).toHaveLength(0);
 });

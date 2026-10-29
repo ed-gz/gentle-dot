@@ -8,6 +8,10 @@ struct LiveActivityRequest: Decodable {
     let phase: String
     let sequence: Int
     let id: String?
+    let observedAt: Double?
+    init(turnId: String, origin: String, phase: String, sequence: Int, id: String?, observedAt: Double? = nil) {
+        self.turnId = turnId; self.origin = origin; self.phase = phase; self.sequence = sequence; self.id = id; self.observedAt = observedAt
+    }
 }
 
 enum LiveActivityPolicy {
@@ -22,7 +26,16 @@ enum LiveActivityPolicy {
         validID(request.turnId) && origins.contains(request.origin)
             && (ending ? endPhases : activePhases).contains(request.phase)
             && request.sequence >= 0 && request.sequence <= 1_000_000_000
+            && (request.observedAt == nil || (request.observedAt!.isFinite && request.observedAt! >= 0 && request.observedAt! <= 8_640_000_000_000_000))
+            && (ending || request.origin != "laptop" || request.observedAt != nil)
             && (requireActivityID ? request.id.map(validActivityID) == true : request.id == nil)
     }
     static func canUpdate(previous: Int, next: Int) -> Bool { next > previous && next <= 1_000_000_000 }
+    static func observedDate(_ request: LiveActivityRequest, now: Date) -> Date? {
+        guard request.origin == "laptop" else { return now }
+        guard let milliseconds = request.observedAt, milliseconds.isFinite else { return nil }
+        let date = Date(timeIntervalSince1970: milliseconds / 1000)
+        guard date <= now.addingTimeInterval(2), now.timeIntervalSince(date) <= 90 else { return nil }
+        return date
+    }
 }

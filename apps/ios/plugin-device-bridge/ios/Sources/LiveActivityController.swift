@@ -63,10 +63,11 @@ final class LiveActivityController {
         }
         guard current.isEmpty else { return unavailable("Ya hay una actividad de Capri. Termínala antes de iniciar otra.") }
         let now = Date()
-        let state = CapriActivityAttributes.ContentState(phase: request.phase, sequence: request.sequence, observedAt: now)
+        guard let observed = LiveActivityPolicy.observedDate(request, now: now) else { return unavailable("La observación ya no es reciente. Vuelve a consultar la laptop.") }
+        let state = CapriActivityAttributes.ContentState(phase: request.phase, sequence: request.sequence, observedAt: observed)
         do {
             let activity = try Activity.request(attributes: CapriActivityAttributes(turnId: request.turnId, origin: request.origin),
-                content: ActivityContent(state: state, staleDate: now.addingTimeInterval(90)), pushType: nil)
+                content: ActivityContent(state: state, staleDate: observed.addingTimeInterval(90)), pushType: nil)
             return LiveActivityReply(id: activity.id, items: [item(activity)])
         } catch { return unavailable("iOS no pudo iniciar la actividad. La conversación sigue disponible.") }
     }
@@ -85,8 +86,10 @@ final class LiveActivityController {
         }
         busy.insert(id); defer { busy.remove(id) }
         let now = Date()
+        let observed = ending ? now : LiveActivityPolicy.observedDate(request, now: now)
+        guard let observed = observed else { return unavailable("La observación ya no es reciente. Vuelve a consultar la laptop.") }
         let content = ActivityContent(state: CapriActivityAttributes.ContentState(phase: request.phase,
-            sequence: request.sequence, observedAt: now), staleDate: ending ? nil : now.addingTimeInterval(90))
+            sequence: request.sequence, observedAt: observed), staleDate: ending ? nil : observed.addingTimeInterval(90))
         if ending { await activity.end(content, dismissalPolicy: request.phase == "dismissed" ? .immediate : .after(now.addingTimeInterval(60))) }
         else { await activity.update(content) }
         return LiveActivityReply(id: id)
