@@ -112,6 +112,13 @@ export function OrchestrationPanel({
 		const priority = { blocked: 0, working: 1, idle: 2, done: 3, unknown: 4 };
 		return priority[a.state] - priority[b.state];
 	});
+	// Match the actual mobile group order; the ordinal is a position in this
+	// listing, never a persistent session identity.
+	const mobileSessionOrder = mobile && capriMobile ? [
+		...activeSessions.filter(item => item.connected && (item.state === "working" || item.state === "blocked")),
+		...activeSessions.filter(item => item.connected && item.state !== "working" && item.state !== "blocked"),
+		...activeSessions.filter(item => !item.connected),
+	] : activeSessions;
 	const creationProviders = snapshot?.providers?.filter((entry) => entry.available && entry.canCreate);
 	const creationProvider =
 		creationProviders?.find((entry) => entry.id === provider)?.id ?? creationProviders?.[0]?.id;
@@ -689,14 +696,20 @@ export function OrchestrationPanel({
 					</p>
 				) : null}
 				<SessionGroups sessions={activeSessions} enabled={mobile && capriMobile}>
-					{(entry) => (
+					{(entry) => {
+						const matches = mobile && capriMobile ? mobileSessionOrder.filter(item => (item.label || "Sesión sin nombre") === (entry.label || "Sesión sin nombre")) : [];
+						const duplicate = matches.length > 1 ? `${matches.indexOf(entry) + 1} de ${matches.length} en la lista con este nombre` : undefined;
+						const project = entry.cwd?.split("/").filter(Boolean).at(-1);
+						const preview = typeof entry.lastMessage === "string" ? Array.from(entry.lastMessage.trim()).slice(0, 160).join("") : "";
+						const baseLabel = `${entry.label || "Sesión sin nombre"} · ${entry.connected ? STATES[entry.state] : "Sin conexión"}`;
+						return (
 						<div className="agent-session-row" key={`${entry.paneId}:${entry.sessionId}`}>
 						<button
 							type="button"
 							className="agent-session"
 							data-pane-id={entry.paneId}
 							data-session-id={entry.sessionId}
-							aria-label={`${entry.label || "Sesión sin nombre"} · ${entry.connected ? STATES[entry.state] : "Sin conexión"}`}
+							aria-label={duplicate ? [baseLabel, duplicate, project, preview].filter(Boolean).join(" · ") : baseLabel}
 							aria-pressed={selected === entry.paneId}
 							onClick={() => setSelected(selected === entry.paneId ? undefined : entry.paneId)}
 						>
@@ -705,14 +718,15 @@ export function OrchestrationPanel({
 								<strong>{entry.label || "Sesión sin nombre"}</strong>
 								<span className="agent-session-state">{entry.connected && entry.state === "working" && !(mobile && capriMobile) ? <span className="session-working-dot" aria-hidden="true" /> : null}<SessionStatus session={entry} /><span aria-hidden="true">{entry.connected ? STATES[entry.state] : "Sin conexión"}</span></span>
 							</span>
-							{mobile && capriMobile && entry.cwd ? <span className="capri-session-project">{entry.provider ? PROVIDERS[entry.provider] : "TI"} · {entry.cwd.split("/").filter(Boolean).at(-1)}</span> : null}
+							{mobile && capriMobile && (entry.cwd || duplicate) ? <span className="capri-session-project">{[entry.cwd ? `${entry.provider ? PROVIDERS[entry.provider] : "TI"} · ${project}` : "", duplicate].filter(Boolean).join(" · ")}</span> : null}
 							{entry.lastMessage || !(mobile && capriMobile) ? <span className="agent-preview">
 								{entry.lastMessage || ((entry.capabilities?.prompt ?? entry.managed) ? "Abre la conversación" : "Sólo lectura")}
 							</span> : null}
 						</button>
 						<SessionMenu session={entry} controls={controls} connected={connected} active={active} onClosed={() => setSelected(undefined)} />
 						</div>
-					)}
+						);
+					}}
 				</SessionGroups>
 			</section>
 		</section>
