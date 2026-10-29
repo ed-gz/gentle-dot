@@ -44,11 +44,14 @@ function storage(saved) {
 }
 
 test('finishing a streamed entry preserves its place and never mutates the prior snapshot', () => {
-  const original = [entry('1'), entry('2', { role: 'assistant', text: 'Partial', state: 'pending' }), entry('3')];
-  const changed = updateEntry(original, entry('2', { role: 'assistant', text: 'Final' }));
+  const activity = { id: 't', title: 'Consulta', kind: 'read', status: 'done' };
+  const original = [entry('1'), entry('2', { role: 'assistant', text: 'Partial', state: 'pending', at: 100, activities: [activity] }), entry('3')];
+  const changed = updateEntry(original, entry('2', { role: 'assistant', text: 'Final', at: 200, activities: [activity] }));
   assert.deepEqual(changed.map(item => item.id), ['1', '2', '3']);
   assert.equal(changed[1].text, 'Final');
   assert.equal(changed[1].state, 'complete');
+  assert.equal(changed[1].at, 100);
+  assert.deepEqual(changed[1].activities, [activity]);
   assert.equal(original[1].text, 'Partial');
   assert.equal(original[1].state, 'pending');
 });

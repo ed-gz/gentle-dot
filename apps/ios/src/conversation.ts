@@ -30,6 +30,9 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
   const index = entries.findIndex(item => item.id === safe.id);
   const next = [...entries];
   const prior = index < 0 ? undefined : entries[index];
+  // A streaming update changes content and state, not the time of the
+  // original conversation event. Archivo uses the same stable timestamp.
+  if (prior) safe.at = prior.at;
   if (prior?.replyTo) {
     if (safe.engine !== 'iphone' || safe.role !== 'assistant' || (safe.replyTo && safe.replyTo !== prior.replyTo)) return entries;
     safe.replyTo = prior.replyTo;

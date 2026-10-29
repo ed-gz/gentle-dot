@@ -78,6 +78,42 @@ test('host transport alias survives restart privately without leaking through me
   expect(result.exportText).not.toContain('CONTEXTO PRIVADO');
 });
 
+test('a streamed host reply keeps one timestamp and activity in the visible and archived copies', async ({ page }) => {
+  let deliver: ((data: object) => void) | undefined;
+  await page.routeWebSocket('wss://stream-timestamp.example/ws', ws => {
+    let sequence = 0;
+    const send = (data: object) => ws.send(JSON.stringify({ seq: sequence++, ...data }));
+    deliver = send;
+    ws.onMessage(raw => {
+      const message = JSON.parse(String(raw));
+      if (message.type === 'hello') send({ type: 'ready', agentState: 'idle', conversationId: 'main' });
+      if (message.type === 'get_history') send({ type: 'history', conversationId: 'main', messages: [] });
+    });
+  });
+  await page.goto('/'); await page.locator('[data-panel="settings"]').click();
+  await page.getByText('Conexión manual', { exact: true }).click();
+  await page.locator('#url').fill('wss://stream-timestamp.example/ws');
+  await page.locator('#token').fill('fixture-only');
+  await page.locator('#connection button[type="submit"]').click();
+  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+  deliver!({ type: 'message_delta', messageId: 'stream', delta: 'Primera parte' });
+  deliver!({ type: 'activity', messageId: 'stream', activity: { id: 'tool', title: 'Consultar', kind: 'read', status: 'done' } });
+  const key = JSON.stringify(['gentle', 'host:wss://stream-timestamp.example/ws|main', 'host:wss://stream-timestamp.example/ws|main|stream']);
+  await expect.poll(() => page.evaluate(async key => (await (await import('/src/conversation-archive.ts')).conversationArchive.load(key))?.text, key)).toBe('Primera parte');
+  const initial = await page.evaluate(async key => (await (await import('/src/conversation-archive.ts')).conversationArchive.load(key))!.at, key);
+  deliver!({ type: 'message_done', messageId: 'stream', text: 'Respuesta completa' });
+  await expect.poll(() => page.evaluate(async key => (await (await import('/src/conversation-archive.ts')).conversationArchive.load(key))?.text, key)).toBe('Respuesta completa');
+  const copies = await page.evaluate(async key => {
+    const archived = await (await import('/src/conversation-archive.ts')).conversationArchive.load(key);
+    const visible = (await (await import('/src/conversation.ts')).loadConversation()).entries.find(item => item.id === 'host:wss://stream-timestamp.example/ws|main|stream');
+    return { archived, visible };
+  }, key);
+  expect(copies.archived?.at).toBe(initial);
+  expect(copies.visible?.at).toBe(initial);
+  expect(copies.visible?.activities?.[0]).toMatchObject({ id: 'tool', status: 'done' });
+  expect(copies.archived?.activities?.[0]).toMatchObject({ id: 'tool', status: 'done' });
+});
+
 test('archive retains more than the visible window, reloads, and idempotently completes streamed messages', async ({ page }) => {
   await page.goto('/');
   const created = await page.evaluate(async () => {

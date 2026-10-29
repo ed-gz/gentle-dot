@@ -515,7 +515,13 @@ function renderChat() {
   measuredAt = -Infinity; redraw();
 }
 
-function add(entry: ChatEntry) { if (!entry.activities) entry.activities = entries.find(prior => prior.id === entry.id)?.activities; persistence.enqueue(entries); persistence.enqueue([entry]); entries = updateEntry(entries, entry); renderChat(); scheduleSave(); }
+function add(entry: ChatEntry) {
+  const prior = entries.find(item => item.id === entry.id);
+  // Queue the normalized update before pruning too; otherwise a rapidly
+  // completed stream could archive a later timestamp than its visible card.
+  const next = prior ? { ...entry, at: prior.at, activities: entry.activities ?? prior.activities } : entry;
+  persistence.enqueue(entries); persistence.enqueue([next]); entries = updateEntry(entries, next); renderChat(); scheduleSave();
+}
 function notice(text: string, target: Engine = selected, id: string = localIdentifier()) { add({ id, role: 'notice', text, engine: target, state: 'complete', at: Date.now() }); }
 function remoteId(id: string) { return `host:${host}|${remoteConversation}|${id}`; }
 function interruptRemoteEntries() {

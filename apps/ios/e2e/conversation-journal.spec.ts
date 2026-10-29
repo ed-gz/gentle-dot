@@ -256,6 +256,33 @@ test('an archive timestamp mismatch retains the journal and the original window'
   expect(result.archived.at).toBe(1000);
 });
 
+test('finishing a streamed message keeps the archive timestamp and permits journal commit', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createConversationJournal } = await import('/src/conversation-journal.ts');
+    const { createConversationArchive } = await import('/src/conversation-archive.ts');
+    const { updateEntry } = await import('/src/conversation.ts');
+    const suffix = crypto.randomUUID();
+    const archive = createConversationArchive({ databaseName: `stream-archive-${suffix}` });
+    const journal = createConversationJournal({ databaseName: `stream-journal-${suffix}`, archive });
+    const entry = { id: crypto.randomUUID(), role: 'assistant', engine: 'iphone', state: 'pending', text: 'Parcial', at: 1000 };
+    const base = { entries: [entry], draft: '', revision: 1 };
+    const first = crypto.randomUUID();
+    await journal.begin({ id: first, baseRevision: 0, snapshot: base, pending: [entry] });
+    await journal.resume(first);
+    const completed = updateEntry(base.entries, { ...entry, state: 'complete', text: 'Resultado', at: 2000 })[0];
+    const id = crypto.randomUUID();
+    await journal.begin({ id, baseRevision: 1, base, snapshot: { entries: [completed], draft: '', revision: 2 }, pending: [completed] });
+    const committed = await journal.resume(id);
+    const stored = await archive.load(JSON.stringify(['iphone', 'iphone:main', entry.id]));
+    return { completed, committed, stored, pending: await journal.pending() };
+  });
+  expect(result.completed.at).toBe(1000);
+  expect(result.stored).toMatchObject({ at: 1000, state: 'complete', text: 'Resultado' });
+  expect(result.committed).toMatchObject({ revision: 2, alreadyCommitted: false });
+  expect(result.pending).toBeUndefined();
+});
+
 test('a pruned host transport alias is preserved privately by the archive before the journal is released', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {
