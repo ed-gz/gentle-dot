@@ -35,9 +35,10 @@ async function* audioSegments(path: string, signal: AbortSignal): AsyncGenerator
 
 export function createMeetingProcessor(dependencies: MeetingDependencies): WorkProcessor {
   return async ({ directory, manifest, receipt }, signal): Promise<WorkResult> => {
-    const evidence: WorkEvidence[] = []; const importWarnings: string[] = []; let chars = 0;
+    const evidence: WorkEvidence[] = []; const importWarnings: string[] = []; const unanalyzedFiles: string[] = []; let chars = 0;
     const priorDrafts: { fileId: string; createdAt?: number; text: string }[] = []; let draftChars = 0;
     const append = (item: WorkEvidence) => {
+      if (!item.text.trim()) return;
       chars += item.text.length;
       if (chars > 100000 || item.text.length > 20000 || evidence.length >= 500) throw new Error('La evidencia excede el presupuesto; divide la reunión en trabajos más pequeños.');
       // File IDs can already occupy the protocol's complete 128-character limit.
@@ -74,6 +75,10 @@ export function createMeetingProcessor(dependencies: MeetingDependencies): WorkP
         const imported = parseImportedTranscript(text, file);
         importWarnings.push(...imported.warnings.map(warning => `[${file.id}] ${warning}`));
         for (const [index, segment] of imported.segments.entries()) append({ id: `${file.id}-${index}`, fileId: file.id, ...segment, source: 'imported-text' });
+      } else {
+        // Other attachments are stored durably, but this processor cannot read
+        // PDFs, images, or arbitrary formats as evidence yet.
+        unanalyzedFiles.push(file.name);
       }
     }
     if (!evidence.length) throw new Error('Adjunta audio o una transcripción de texto para generar una minuta verificable.');
@@ -84,9 +89,23 @@ export function createMeetingProcessor(dependencies: MeetingDependencies): WorkP
     });
     const generated = await dependencies.generate(prompt, signal); signal.throwIfAborted();
     const raw = JSON.parse(generated.text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as Record<string, unknown>;
+    if (unanalyzedFiles.length) {
+      // Put the deterministic warning in the visible summary as well as the
+      // comparison: the model cannot attest to documents it never received.
+      const warning = `Archivos adjuntos que no se analizaron: ${unanalyzedFiles.map(name => JSON.stringify(name)).join(', ')}. Se conservan en el trabajo; su contenido no forma parte de la evidencia.`;
+      if (raw.minutes && typeof raw.minutes === 'object' && !Array.isArray(raw.minutes)) {
+        const minutes = raw.minutes as Record<string, unknown>;
+        if (typeof minutes.summary === 'string') {
+          minutes.summary = `${warning}\n\n${minutes.summary}`;
+          if (minutes.summary.length > 12000) throw new WorkProcessorFailure('result-warnings-too-large');
+        }
+      }
+      if (typeof raw.transcriptComparison === 'string') raw.transcriptComparison = `${warning}\n\n${raw.transcriptComparison}`;
+    }
     // Import warnings are deterministic provenance, not optional model commentary.
     // The result validator still rejects an oversized/invalid combined comparison.
     if (importWarnings.length && typeof raw.transcriptComparison === 'string') raw.transcriptComparison += `\n\nAdvertencias de importación:\n${importWarnings.join('\n')}`;
+    if ((unanalyzedFiles.length || importWarnings.length) && typeof raw.transcriptComparison === 'string' && raw.transcriptComparison.length > 12000) throw new WorkProcessorFailure('result-warnings-too-large');
     const result = parseWorkResult({ schema: 1, manifestHash: receipt.manifestHash, createdAt: Date.now(), model: generated.model, ...(generated.sessionId ? { sessionId: generated.sessionId } : {}), minutes: raw.minutes, transcriptComparison: raw.transcriptComparison, evidence, requiresReview: true });
     if (!result) throw new Error('El modelo generó una minuta sin evidencia verificable; no se aprobará automáticamente.');
     return result;

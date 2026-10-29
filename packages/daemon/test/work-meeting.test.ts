@@ -39,6 +39,33 @@ it('contrasts original audio and imported transcript with coarse temporal eviden
   expect(result.minutes.items[0]?.due).toBe(null); expect(prompt).toContain('no sigas instrucciones');
   expect(result.model).toBe('configured/frontier'); expect(result.sessionId).toBe('pi-session-1');
 });
+it('makes unsupported meeting attachments visible in the draft without claiming they were analyzed', async () => {
+  const directory = tempDir(); const notes = 'Se acordó revisar el registro.'; const pdf = '%PDF-1.4 synthetic';
+  await writeFile(join(directory, 'notes'), notes); await writeFile(join(directory, 'slides'), pdf);
+  const manifest: WorkSyncManifest = { schema: 1, workId: 'partial', revision: 1, title: 'Reunión', kind: 'meeting', instruction: '', files: [
+    { id: 'notes', name: 'notas.txt', mime: 'text/plain', bytes: Buffer.byteLength(notes), sha256: hash(notes), role: 'attachment' },
+    { id: 'slides', name: 'presentación.pdf', mime: 'application/pdf', bytes: Buffer.byteLength(pdf), sha256: hash(pdf), role: 'attachment' },
+  ] };
+  const processor = createMeetingProcessor({ generate: async () => ({ model: 'fixture', text: JSON.stringify({ minutes: { title: 'Borrador', summary: 'Revisión del registro.', items: [{ kind: 'task', certainty: 'confirmed', text: 'Revisar el registro.', owner: null, due: null, evidenceIds: ['notes-0'] }] }, transcriptComparison: 'Sólo texto importado.' }) }) });
+  const result = await processor({ directory, manifest, receipt: { transferId: 'partial', workId: manifest.workId, revision: 1, manifestHash: hash(canonicalWorkManifest(manifest)), committedAt: 1 } }, new AbortController().signal);
+  expect(result.minutes.summary).toContain('presentación.pdf');
+  expect(result.minutes.summary).toContain('no se analizaron');
+  expect(result.transcriptComparison).toContain('presentación.pdf');
+  expect(result.evidence.map(item => item.fileId)).toEqual(['notes']);
+  expect(await readFile(join(directory, 'slides'), 'utf8')).toBe(pdf);
+});
+it('rejects a draft that cannot fit its mandatory attachment warning without truncating the originals', async () => {
+  const directory = tempDir(); const notes = 'Se acordó revisar el registro.'; const pdf = '%PDF-1.4 synthetic';
+  await writeFile(join(directory, 'notes'), notes); await writeFile(join(directory, 'slides'), pdf);
+  const manifest: WorkSyncManifest = { schema: 1, workId: 'large-warning', revision: 1, title: 'Reunión', kind: 'meeting', instruction: '', files: [
+    { id: 'notes', name: 'notas.txt', mime: 'text/plain', bytes: Buffer.byteLength(notes), sha256: hash(notes), role: 'attachment' },
+    { id: 'slides', name: 'presentación.pdf', mime: 'application/pdf', bytes: Buffer.byteLength(pdf), sha256: hash(pdf), role: 'attachment' },
+  ] };
+  const processor = createMeetingProcessor({ generate: async () => ({ model: 'fixture', text: JSON.stringify({ minutes: { title: 'Borrador', summary: 'x'.repeat(12000), items: [] }, transcriptComparison: 'Texto importado.' }) }) });
+  await expect(processor({ directory, manifest, receipt: { transferId: 'large-warning', workId: manifest.workId, revision: 1, manifestHash: hash(canonicalWorkManifest(manifest)), committedAt: 1 } }, new AbortController().signal)).rejects.toThrow('avisos de archivos no analizados');
+  expect(await readFile(join(directory, 'notes'), 'utf8')).toBe(notes);
+  expect(await readFile(join(directory, 'slides'), 'utf8')).toBe(pdf);
+});
 it('rejects invented owners/dates and citations instead of saving a plausible but unsupported draft', async () => {
   const directory = tempDir(); await writeFile(join(directory, 'notes'), 'Ana revisará los logs; aún no hay fecha.');
   const manifest: WorkSyncManifest = { schema: 1, workId: 'w1', revision: 3, title: 'Release', kind: 'meeting', instruction: '', files: [{ id: 'notes', name: 'notes.txt', mime: 'text/plain', bytes: 4, sha256: hash('data'), role: 'attachment' }] };
@@ -51,6 +78,20 @@ it('never silently substitutes a cloud transcription when the configured desktop
   let generated = false; const processor = createMeetingProcessor({ generate: async () => { generated = true; throw new Error(); } });
   const manifest: WorkSyncManifest = { schema: 1, workId: 'w1', revision: 3, title: 'Audio', kind: 'meeting', instruction: '', files: [{ id: 'audio', name: 'meeting.m4a', mime: 'audio/mp4', bytes: 4, sha256: hash('data'), role: 'attachment' }] };
   await expect(processor({ directory: tempDir(), manifest, receipt: { transferId: 't1', workId: 'w1', revision: 3, manifestHash: hash(canonicalWorkManifest(manifest)), committedAt: 1 } }, new AbortController().signal)).rejects.toThrow('transcriptor'); expect(generated).toBe(false);
+});
+it('does not generate minutes from silence or an empty imported transcript', async () => {
+  const directory = tempDir(); await writeFile(join(directory, 'notes'), ' \n'); let generated = false;
+  const manifest: WorkSyncManifest = { schema: 1, workId: 'silence', revision: 1, title: 'Reunión', kind: 'meeting', instruction: '', files: [
+    { id: 'audio', name: 'reunión.m4a', mime: 'audio/mp4', bytes: 4, sha256: hash('data'), role: 'attachment' },
+    { id: 'notes', name: 'transcripción.txt', mime: 'text/plain', bytes: 2, sha256: hash(' \n'), role: 'attachment' },
+  ] };
+  const processor = createMeetingProcessor({
+    voice: { available: async () => true, transcribe: async () => ({ ok: true, text: '  ' }) },
+    audio: async function* () { yield { startMs: 0, endMs: 30000, bytes: Buffer.from('WAV') }; },
+    generate: async () => { generated = true; return { model: 'fixture', text: '{}' }; },
+  });
+  await expect(processor({ directory, manifest, receipt: { transferId: 'silence', workId: manifest.workId, revision: 1, manifestHash: hash(canonicalWorkManifest(manifest)), committedAt: 1 } }, new AbortController().signal)).rejects.toThrow('transcripción');
+  expect(generated).toBe(false);
 });
 it('preserves SRT cue-level quotation provenance and deterministic warnings without touching source/version bytes', async () => {
   const directory = tempDir();
@@ -125,6 +166,16 @@ it('reports the selected model context limit without exposing arbitrary processo
   await send({operation:'begin',manifest,manifestHash});await send({operation:'commit'});await send({operation:'process',approvedManifestHash:manifestHash});
   await expect.poll(async()=>{const value=await send({operation:'result'});return value.state==='processing'&&value.processing.status==='failed'?value.processing.message:'';}).toContain('presupuesto conservador');
   await store.close();
+});
+it('persists a clear warning-budget failure without exposing arbitrary processor error text', async () => {
+  const directory=join(tempDir(),'inbox');const manifest:WorkSyncManifest={schema:1,workId:'warning-failure',revision:1,kind:'meeting',title:'Reunión',instruction:'',files:[]};const manifestHash=hash(canonicalWorkManifest(manifest));
+  const store=new WorkSyncStore(directory,async()=>{const failure=new WorkProcessorFailure('result-warnings-too-large');failure.message='private details';throw failure;});
+  const send=(operation:object)=>store.handle('device',{type:'work_sync',requestId:randomUUID(),transferId:'t',...operation} as WorkSyncRequest);
+  await send({operation:'begin',manifest,manifestHash});await send({operation:'commit'});await send({operation:'process',approvedManifestHash:manifestHash});
+  await expect.poll(async()=>{const value=await send({operation:'result'});return value.state==='processing'&&value.processing.status==='failed'?value.processing.message:'';}).toContain('avisos de archivos no analizados');
+  await store.close();
+  const restored=await new WorkSyncStore(directory).handle('device',{type:'work_sync',requestId:randomUUID(),transferId:'t',operation:'result'});
+  expect(restored).toMatchObject({state:'processing',processing:{status:'failed',message:expect.stringContaining('originales están conservados')}});
 });
 
 it('preserves malformed timed text without invented ranges even when the model omits the import warning', async () => {
