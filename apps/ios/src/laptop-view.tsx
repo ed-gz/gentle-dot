@@ -22,10 +22,10 @@ export function mountLaptopView(container: HTMLElement, onConnect: () => void, o
     const client = useMemo(() => connection ? createLaptopClient(connection, { current: () => current }) : undefined,
       [connection?.url, connection?.token, connection?.deviceId]);
     const controls = useOrchestration(client, active);
-    const voice = useAppleVoice(active && Boolean(client));
     const attachmentDrafts = useMemo(() => connection ? (paneId: string, sessionId: string) => sessionAttachmentDraft(connection.url, paneId, sessionId) : undefined, [connection?.url]);
     const [visiblePane, setVisiblePane] = useState<string>();
     const session = controls.snapshot?.sessions.find(item => item.paneId === visiblePane);
+    const voice = useAppleVoice(active && Boolean(client) && Boolean(session), session && connection ? JSON.stringify([connection.url, session.paneId, session.sessionId]) : undefined);
     useEffect(() => { if (active) onPresence(controls.error ? 'unknown' : session?.state ?? 'idle'); }, [active, controls.error, session?.state]);
     const [linkError, setLinkError] = useState('');
     if (!client) return <section className="laptop-empty"><p className="eyebrow">TU LAPTOP</p><h2>Tus sesiones, aquí.</h2><p>Vincula Gentle Dot para abrir las conversaciones de Herdr, seguir su trabajo y responder cuando te necesiten.</p><button type="button" onClick={onConnect}>Vincular laptop</button></section>;

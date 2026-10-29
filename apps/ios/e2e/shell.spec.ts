@@ -252,6 +252,62 @@ test('voice fixture prepares assets on microphone tap and appends dictation with
   expect(await page.evaluate(() => (globalThis as any).voiceActions)).toEqual(['prepare', 'start', 'stop']);
 });
 
+test('a preserved voice command returns to its original chat after navigation', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '01234567-89ab-cdef-0123-456789abcdef';
+    let owner = '', pending = false, stops = 0;
+    state.voiceRecoveryCancels = 0;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
+        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id } : {}) };
+      if (command.endsWith('start_voice')) { owner = args.ownerId; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('cancel_voice')) { state.voiceRecoveryCancels++; pending = false; return { ok: true }; }
+      if (command.endsWith('stop_voice')) {
+        if (++stops === 1) { pending = true; return { ok: false, error: 'preview_pending', sessionId: id, message: 'Audio guardado.' }; }
+        pending = false; return { ok: true, sessionId: id, text: 'Transcripción recuperada.', locale: 'es-MX', durationSeconds: 2,
+          source: 'apple-speech-analyzer', segments: [{ text: 'Transcripción recuperada.', startSeconds: 0, endSeconds: 2 }] };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.locator('#dictate').click();
+  await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
+  await page.locator('[data-panel="settings"]').click();
+  expect(await page.evaluate(() => (globalThis as any).voiceRecoveryCancels)).toBe(0);
+  await page.locator('[data-panel="chat"]').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
+  await page.locator('#dictate').click();
+  await expect(page.locator('#prompt')).toHaveValue('Transcripción recuperada.');
+  await expect(page.locator('#discard-voice')).toBeHidden();
+});
+
+test('an unattributed pending recording can be explicitly discarded without inserting its contents', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '01234567-89ab-cdef-0123-456789abcdef', owner = '11111111-1111-4111-8111-111111111111';
+    let pending = true;
+    state.discardedOwner = '';
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
+        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id } : {}) };
+      if (command.endsWith('cancel_voice')) { state.discardedOwner = args.ownerId; pending = false; return { ok: true }; }
+      return previous(command, args);
+    };
+  });
+  await page.goto('/');
+  await expect(page.locator('#voice-status')).toContainText('otra sesión');
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#discard-voice').click();
+  await expect(page.locator('#discard-voice')).toBeHidden();
+  await expect(page.locator('#prompt')).toHaveValue('');
+  expect(await page.evaluate(() => (globalThis as any).discardedOwner)).toBe('11111111-1111-4111-8111-111111111111');
+});
+
 test('provisional live dictation stays separate from the draft until one final result', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {

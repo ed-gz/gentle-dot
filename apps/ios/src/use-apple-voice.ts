@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceControls, VoicePhase } from '@gentle-dot/ui/src/useVoice.ts';
-import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, type VoiceAvailability } from './perception.ts';
+import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, VoiceRetryPending, type VoiceAvailability } from './perception.ts';
 import { localIdentifier } from './local-identifiers.ts';
+import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, sessionVoiceOrigin } from './voice-origin.ts';
 
 function availabilityNote(value: VoiceAvailability): string | undefined {
   if (value.microphonePermission === 'denied') return 'Activa el micrófono para Capri en Ajustes del iPhone.';
@@ -12,45 +13,89 @@ function availabilityNote(value: VoiceAvailability): string | undefined {
   return 'No pude preparar el dictado local. Cierra y vuelve a abrir esta sesión para intentarlo.';
 }
 
+// A final result arriving after navigation remains scoped to its original
+// session. It is never applied to the newly visible conversation.
+const deferredTranscripts = new Map<string, string>();
+
 /** Session dictation is an Apple transcript left in the composer for review. */
-export function useAppleVoice(enabled: boolean): VoiceControls {
+export function useAppleVoice(enabled: boolean, destination?: string): VoiceControls {
   const [availability, setAvailability] = useState<VoiceAvailability>();
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [partial, setPartial] = useState('');
   const [note, setNote] = useState<string>();
   const [draft, setDraft] = useState<VoiceControls['draft']>();
-  const owner = useRef({ epoch: 0, session: '', ownerId: '', pending: false, enabled });
+  const owner = useRef({ epoch: 0, session: '', ownerId: '', pending: false, retry: false, enabled, destination });
   owner.current.enabled = enabled;
-  const cancel = useCallback(() => {
+  owner.current.destination = destination;
+  const release = useCallback((discardRetry: boolean) => {
     const state = owner.current;
     const ownerId = state.ownerId;
-    state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false;
+    const retainAudio = state.retry && !discardRetry;
+    state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false; state.retry = false;
     setPhase('idle'); setElapsed(0); setPartial(''); setDraft(undefined); setNote(undefined);
-    if (ownerId) void cancelVoice(ownerId).catch(() => {});
+    if (ownerId && !retainAudio) { forgetVoiceOrigin(ownerId); void cancelVoice(ownerId).catch(() => {}); }
   }, []);
+  // Shared session components call cancel on unmount; preserve a completed
+  // recording awaiting recovery through that cleanup.
+  const cancel = useCallback(() => release(false), [release]);
   useEffect(() => {
     let live = true;
-    if (enabled) void checkVoice().then(value => { if (live) { setAvailability(value); setNote(availabilityNote(value)); } }).catch(error => { if (live) setNote(String(error.message)); });
-    else cancel();
-    return () => { live = false; cancel(); };
-  }, [enabled, cancel]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (enabled && destination) {
+      const deferred = deferredTranscripts.get(destination);
+      if (deferred) { deferredTranscripts.delete(destination); setDraft({ id: ++owner.current.epoch, text: deferred }); }
+    }
+    const refresh = async () => {
+      const value = await checkVoice();
+      if (!live) return;
+      if (value.recoveryPending && value.busy) {
+        setAvailability({ ...value, available: false, status: 'voice_finishing' });
+        setNote('Terminando el audio guardado…');
+        timer = setTimeout(() => void refresh().catch(error => { if (live) setNote(String(error.message)); }), 500);
+        return;
+      }
+      if (value.recoveryPending && value.ownerId && value.sessionId) {
+        const expected = destination ? await sessionVoiceOrigin(destination) : undefined;
+        if (!live) return;
+        if (expected && voiceOrigin(value.ownerId) === expected) {
+          owner.current.session = value.sessionId; owner.current.ownerId = value.ownerId; owner.current.retry = true;
+          setAvailability(value); setNote('El audio está guardado. Toca Dictar para reintentar la transcripción sin volver a grabar.');
+        } else {
+          setAvailability({ ...value, available: false, status: 'recovery_elsewhere' });
+          setNote('Hay un audio pendiente en otra conversación. Vuelve a su destino original para reintentar.');
+        }
+        return;
+      }
+      setAvailability(value); setNote(availabilityNote(value));
+    };
+    if (enabled) void refresh().catch(error => { if (live) setNote(String(error.message)); });
+    else release(false);
+    return () => { live = false; clearTimeout(timer); release(false); };
+  }, [enabled, destination, release]);
   useEffect(() => {
     // A native permission dialog may obscure the web view before a capture is
     // established. The native controller handles real background transitions.
-    const hidden = () => { if (document.hidden && owner.current.session) cancel(); };
+    const hidden = () => { if (document.hidden && owner.current.session && !owner.current.retry) cancel(); };
     document.addEventListener('visibilitychange', hidden);
     return () => document.removeEventListener('visibilitychange', hidden);
   }, [cancel]);
   const stop = useCallback(() => {
     const state = owner.current;
     if (!state.session || state.pending) return;
-    const id = state.session, epoch = state.epoch;
-    state.pending = true; setPartial(''); setPhase('transcribing');
+    const id = state.session, epoch = state.epoch, originalDestination = state.destination, originalOwner = state.ownerId;
+    state.pending = true; state.retry = true; setPartial(''); setPhase('transcribing');
     void stopVoice(id).then(value => {
-      if (state.epoch === epoch && state.enabled) { setNote(undefined); setDraft({ id: epoch, text: value.text }); }
-    }).catch(error => { if (state.epoch === epoch) setNote(error.message); }).finally(() => {
-      if (state.epoch === epoch) { state.pending = false; state.session = ''; state.ownerId = ''; setPhase('idle'); }
+      if (originalOwner) forgetVoiceOrigin(originalOwner);
+      if (state.epoch === epoch && state.enabled) { state.retry = false; setNote(undefined); setDraft({ id: epoch, text: value.text }); }
+      else if (originalDestination) {
+        if (state.enabled && state.destination === originalDestination) setDraft({ id: ++state.epoch, text: value.text });
+        else deferredTranscripts.set(originalDestination, value.text);
+      }
+    }).catch(error => {
+      if (state.epoch === epoch) { state.retry = error instanceof VoiceRetryPending; if (!state.retry && state.ownerId) forgetVoiceOrigin(state.ownerId); setNote(error.message); }
+    }).finally(() => {
+      if (state.epoch === epoch) { state.pending = false; if (!state.retry) { state.session = ''; state.ownerId = ''; } setPhase('idle'); }
     });
   }, []);
   useEffect(() => {
@@ -86,9 +131,14 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
   }, [phase, stop]);
   const start = useCallback(() => {
     const state = owner.current;
+    if (state.enabled && state.retry && state.session && !state.pending) { stop(); return; }
     if (!state.enabled || state.pending || state.session || !(availability?.available || availability?.status === 'assets_required')) return;
     const epoch = ++state.epoch, ownerId = localIdentifier(); state.ownerId = ownerId; state.pending = true; setNote(undefined); setDraft(undefined);
     void (async () => {
+      if (!destination) throw new Error('Abre una sesión antes de dictar.');
+      const origin = await sessionVoiceOrigin(destination);
+      if (state.epoch !== epoch || !state.enabled) return;
+      rememberVoiceOrigin(ownerId, origin);
       if (availability.status === 'assets_required') {
         setNote('Descargando la voz en español de Apple. Necesitas internet para esta primera preparación…');
         const prepared = await prepareVoice(ownerId);
@@ -103,8 +153,8 @@ export function useAppleVoice(enabled: boolean): VoiceControls {
       if (state.epoch !== epoch || !state.enabled) return;
       state.session = value.sessionId; setElapsed(0); setPhase('recording');
       setNote('Grabando. Toca el micrófono otra vez para revisar la transcripción.');
-    })().catch(error => { if (state.epoch === epoch) { state.ownerId = ''; setNote(error.message); } }).finally(() => { if (state.epoch === epoch) state.pending = false; });
-  }, [availability]);
+    })().catch(error => { if (state.epoch === epoch) { forgetVoiceOrigin(ownerId); state.ownerId = ''; setNote(error.message); } }).finally(() => { if (state.epoch === epoch) state.pending = false; });
+  }, [availability, destination, stop]);
   return { mic: availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
     phase, elapsed, level: 0, partial, note, draft, start, stop, cancel,
     draftTaken: id => setDraft(value => value?.id === id ? undefined : value),

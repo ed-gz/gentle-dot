@@ -25,7 +25,7 @@ final class PerceptionPlugin: Plugin {
         observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
             object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in
-                    if #available(iOS 26.0, *) { (self?.voice as? VoiceController)?.cancel() }
+                    if #available(iOS 26.0, *) { (self?.voice as? VoiceController)?.enterBackground() }
                     self?.document?.cancel()
                     self?.pairingCode?.cancel()
                 }
@@ -34,7 +34,7 @@ final class PerceptionPlugin: Plugin {
             object: nil, queue: .main) { [weak self] notification in
                 guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                       raw == AVAudioSession.InterruptionType.began.rawValue else { return }
-                Task { @MainActor in if #available(iOS 26.0, *) { (self?.voice as? VoiceController)?.cancel() } }
+                Task { @MainActor in if #available(iOS 26.0, *) { (self?.voice as? VoiceController)?.audioInterrupted() } }
             })
     }
 

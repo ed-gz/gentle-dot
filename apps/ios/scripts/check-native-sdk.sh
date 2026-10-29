@@ -82,6 +82,16 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 "$verification/live-voice-drain-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/PreviewDrain.swift \
+  test/native/PreviewDrainTests.swift -o "$verification/preview-drain-tests"
+"$verification/preview-drain-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/VoiceDeadline.swift \
+  test/native/VoiceDeadlineTests.swift -o "$verification/voice-deadline-tests"
+"$verification/voice-deadline-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/LiveCaptureLifecycle.swift \
   test/native/LiveCaptureLifecycleTests.swift -o "$verification/live-capture-lifecycle-tests"
 "$verification/live-capture-lifecycle-tests"
@@ -97,6 +107,8 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/LiveAudioBuffer.swift \
   plugin-perception/ios/Sources/LiveTranscript.swift \
   plugin-perception/ios/Sources/LiveVoiceDrain.swift \
+  plugin-perception/ios/Sources/PreviewDrain.swift \
+  plugin-perception/ios/Sources/VoiceDeadline.swift \
   plugin-perception/ios/Sources/LiveCaptureLifecycle.swift \
   plugin-perception/ios/Sources/LiveVoiceCapture.swift \
   plugin-perception/ios/Sources/Voice.swift \

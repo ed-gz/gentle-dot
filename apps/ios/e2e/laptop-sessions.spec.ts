@@ -239,7 +239,7 @@ test('late permission result after leaving one session never cancels a newer cap
 });
 
 
-test('leaving a session discards its late dictation instead of inserting it into the next session', async ({ page }) => {
+test('leaving a session retains its late dictation only for the original session', async ({ page }) => {
   await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   await page.evaluate(() => (globalThis as any).holdTranscript = true);
@@ -249,7 +249,87 @@ test('leaving a session discards its late dictation instead of inserting it into
   await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
   await page.evaluate(() => (globalThis as any).finishTranscript());
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('');
-  expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.command.endsWith('cancel_voice')))).toBe(true);
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.command.endsWith('cancel_voice')))).toBe(false);
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
+});
+
+test('a preserved session recording cannot migrate to another session or chat', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '12345678-1234-1234-1234-123456789012';
+    let owner = '', pending = false, stops = 0;
+    state.voiceRecoveryCancels = 0;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
+        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id } : {}) };
+      if (command.endsWith('start_voice')) { owner = args.ownerId; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('cancel_voice')) { state.voiceRecoveryCancels++; pending = false; return { ok: true }; }
+      if (command.endsWith('stop_voice')) {
+        if (++stops === 1) { pending = true; return { ok: false, error: 'preview_pending', sessionId: id, message: 'Audio guardado.' }; }
+        pending = false; return { ok: true, sessionId: id, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2,
+          text: 'Sólo en operaciones.', segments: [{ text: 'Sólo en operaciones.', startSeconds: 0, endSeconds: 2 }] };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(page.getByText('Audio guardado.')).toBeVisible();
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('');
+  await expect(page.getByText(/audio pendiente en otra conversación/i)).toBeVisible();
+  await page.locator('[data-panel="chat"]').click();
+  await expect(page.locator('#prompt')).toHaveValue('');
+  await expect(page.locator('#voice-status')).toContainText('otra sesión');
+  expect(await page.evaluate(() => (globalThis as any).voiceRecoveryCancels)).toBe(0);
+  await page.locator('[data-panel="agents"]').click();
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.getByText(/audio está guardado/i)).toBeVisible();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Sólo en operaciones.');
+});
+
+test('returning to the original session while stopping reveals its eventual retry', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = '12345678-1234-1234-1234-123456789012';
+    let owner = '', pending = false, busy = false, stops = 0;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
+        ...(pending ? { recoveryPending: true, busy, ownerId: owner, sessionId: id } : {}) };
+      if (command.endsWith('start_voice')) { owner = args.ownerId; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('stop_voice')) {
+        if (++stops === 1) {
+          pending = true; busy = true;
+          await new Promise<void>(resolve => state.finishPendingStop = resolve);
+          busy = false;
+          return { ok: false, error: 'preview_pending', sessionId: id, message: 'Audio guardado.' };
+        }
+        pending = false; return { ok: true, sessionId: id, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2,
+          text: 'Recuperado al volver.', segments: [{ text: 'Recuperado al volver.', startSeconds: 0, endSeconds: 2 }] };
+      }
+      return previous(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.getByText('Terminando el audio guardado…')).toBeVisible();
+  await page.evaluate(() => (globalThis as any).finishPendingStop());
+  await expect(page.getByText(/audio está guardado/i)).toBeVisible();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Recuperado al volver.');
 });
 
 

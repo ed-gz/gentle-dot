@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MAX_DOCUMENT_BYTES, hashSourceBytes, parseVoiceAvailability, parseVoiceSession, parseVoiceTranscript,
+import { MAX_DOCUMENT_BYTES, hashSourceBytes, parseVoiceAvailability, parseVoiceSession, parseVoiceTranscript, VoiceRetryPending,
   validateDocument, parseRecognizedDocument } from '../src/perception.ts';
 
 const id = '01234567-89ab-cdef-0123-456789abcdef';
@@ -11,6 +11,13 @@ const document = () => ({ ok: true, engine: 'apple-vision', coordinateSystem: 'n
   source: { name: expected.name, mimeType: expected.type, size: expected.size, sha256: expected.sha256 },
   text: 'E-503', warnings: ['Contrasta el OCR.'], pages: [{ page: 1, pixelWidth: 200, pixelHeight: 100,
     text: 'E-503', observations: [{ kind: 'text', text: 'E-503', confidence: 0.8, bounds: { x: 0.1, y: 0.2, width: 0.5, height: 0.2 } }] }] });
+
+test('retry is limited to the original native voice session', () => {
+  const reply = { ok: false, error: 'preview_pending', message: 'Audio guardado', sessionId: id };
+  assert.throws(() => parseVoiceTranscript(reply, id), error => error instanceof VoiceRetryPending && error.sessionId === id);
+  assert.throws(() => parseVoiceTranscript(reply, '11111111-1111-4111-8111-111111111111'), /no corresponde/);
+  assert.throws(() => parseVoiceAvailability({ status: 'available', ownerId: 'invalid' }));
+});
 
 test('source hashing uses exact subarray bytes and the native fallback without WebCrypto', async () => {
   const bytes = new Uint8Array([0, 120, 0]).subarray(1, 2);

@@ -26,6 +26,8 @@ export interface VoiceAvailability {
   readyToTranscribe: boolean;
   busy: boolean;
   sessionId?: string;
+  ownerId?: string;
+  recoveryPending?: boolean;
   /** Provisional text is display-only and must never be sent as a final transcript. */
   partial?: string;
   previewIssue?: string;
@@ -110,6 +112,8 @@ export function parseVoiceAvailability(value: unknown): VoiceAvailability {
     microphonePermission: permission === 'granted' || permission === 'denied' ? permission : 'undetermined',
     recording: reply.recording === true, readyToTranscribe: reply.readyToTranscribe === true, busy: reply.busy === true,
     ...(reply.sessionId !== undefined ? { sessionId: sessionId(reply.sessionId) } : {}),
+    ...(reply.ownerId !== undefined ? { ownerId: sessionId(reply.ownerId) } : {}),
+    ...(reply.recoveryPending === true ? { recoveryPending: true } : {}),
     ...(reply.partial !== undefined ? { partial: string(reply.partial, 4_800, true) } : {}),
     ...(reply.previewIssue !== undefined ? { previewIssue: string(reply.previewIssue, 500) } : {}),
   };
@@ -118,7 +122,18 @@ export function parseVoiceSession(value: unknown): VoiceSession {
   const reply = successful(value);
   return { sessionId: sessionId(reply.sessionId), maxDurationSeconds: integer(reply.maxDurationSeconds, 1, VOICE_MAX_SECONDS) };
 }
+export class VoiceRetryPending extends Error {
+  readonly sessionId: string;
+  constructor(sessionId: string, message: string) { super(message); this.sessionId = sessionId; this.name = 'VoiceRetryPending'; }
+}
 export function parseVoiceTranscript(value: unknown, expectedSession: string): VoiceTranscript {
+  const pending = object(value);
+  if (pending.ok === false && pending.error === 'preview_pending') {
+    const id = sessionId(pending.sessionId);
+    if (id.toLowerCase() !== sessionId(expectedSession).toLowerCase()) throw new Error('La recuperación de voz no corresponde al comando actual.');
+    const message = typeof pending.message === 'string' && pending.message.length <= 500 ? pending.message : 'El audio está guardado. Reintenta la transcripción.';
+    throw new VoiceRetryPending(id, message);
+  }
   const reply = successful(value);
   const id = sessionId(reply.sessionId);
   if (id !== sessionId(expectedSession) || reply.source !== 'apple-speech-analyzer') throw new Error('La transcripción no corresponde al comando actual.');
