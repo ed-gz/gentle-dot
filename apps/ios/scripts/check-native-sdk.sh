@@ -28,6 +28,7 @@ class Plugin: NSObject { @objc func load(webview: WKWebView) {} }
 '''
 Path(sys.argv[1]).write_text(source.replace('import Tauri\n', stub))
 PY
+printf 'Perception plugin uses Tauri typecheck stubs; a full Tauri build is still required.\n'
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-local-intelligence/ios/Sources/CompletionNotifications.swift \
