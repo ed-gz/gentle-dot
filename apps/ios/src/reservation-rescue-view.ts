@@ -7,7 +7,7 @@ import type { ChatEntry } from './conversation.ts';
  * This never modifies the reservation or claims an archive/host ACK. */
 export function reservationRescueBlob(journal: ConversationJournal): Blob {
   const clean = (entry: ChatEntry) => ({ id: entry.id, engine: entry.engine, role: entry.role, state: entry.state, text: entry.text, at: entry.at,
-    ...(entry.replyTo ? { replyTo: entry.replyTo } : {}), ...(entry.localCancelled ? { localCancelled: true } : {}),
+    ...(entry.replyTo ? { replyTo: entry.replyTo } : {}), ...(entry.localCancelled ? { localCancelled: true } : {}), ...(entry.branchUnverified ? { branchUnverified: true } : {}),
     ...(entry.activities ? { activities: entry.activities.map(({ id, title, kind, status, detail }) => ({ id, title, kind, status, ...(detail === undefined ? {} : { detail }) })) } : {}) });
   const lines = [JSON.stringify({ schema: 'capri-conversation-reservation-rescue/v1', committed: false,
     baseRevision: journal.baseRevision, revision: journal.revision, visibleEntries: journal.snapshot.entries.length, pendingEntries: journal.pending.length }),

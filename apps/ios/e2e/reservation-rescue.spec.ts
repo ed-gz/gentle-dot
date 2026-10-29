@@ -8,7 +8,7 @@ test('blocked reservation export preserves draft and messages without private tr
     const { mountReservationRescue } = await import('/src/reservation-rescue-view.ts');
     const suffix = crypto.randomUUID(), journal = createConversationJournal({ databaseName: `rescue-window-${suffix}`,
       archive: createConversationArchive({ databaseName: `rescue-archive-${suffix}` }) });
-    const id = crypto.randomUUID(), entry = { id: 'host:wss://fixture.example/ws|main|turn-1', engine: 'gentle', role: 'user', state: 'complete', text: 'Solicitud visible', transportText: 'ALIAS PRIVADO TOKEN_SECRETO_DE_PRUEBA', at: 1000 };
+    const id = crypto.randomUUID(), entry = { id: 'host:wss://fixture.example/ws|main|turn-1', engine: 'gentle', role: 'user', state: 'complete', text: 'Solicitud visible', transportText: 'ALIAS PRIVADO TOKEN_SECRETO_DE_PRUEBA', branchUnverified: true, at: 1000 };
     const reservation = await journal.begin({ id, baseRevision: 0, snapshot: { entries: [entry], draft: 'Borrador pendiente', attachedWork: 'work_a', revision: 1 }, pending: [entry] });
     const root = document.createElement('section'); root.id = 'reservation-rescue-fixture'; document.body.append(root);
     const state = globalThis as any; state.reservationRescue = mountReservationRescue(root, { pending: journal.pending,
@@ -23,6 +23,7 @@ test('blocked reservation export preserves draft and messages without private tr
   expect(rows[0]).toMatchObject({ schema: 'capri-conversation-reservation-rescue/v1', committed: false, visibleEntries: 1, pendingEntries: 1 });
   expect(rows[1]).toMatchObject({ text: 'Borrador pendiente', attachedWork: 'work_a', submitted: false });
   expect(rows.filter((row: any) => row.text === 'Solicitud visible')).toHaveLength(2);
+  expect(rows.filter((row: any) => row.text === 'Solicitud visible').every((row: any) => row.branchUnverified === true)).toBe(true);
   expect(result.text).not.toContain('ALIAS PRIVADO');
   expect(result.text).not.toContain('TOKEN_SECRETO_DE_PRUEBA');
   expect(result.text).not.toContain('transportText');
