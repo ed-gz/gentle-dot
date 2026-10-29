@@ -44,3 +44,12 @@
   :root[data-large-text="true"] #composer { display: block; }
   #composer #attachment-context:not(:empty) { max-height: 18dvh; overflow-y: auto; }
 }
+#composer-attachment { display: flex; align-items: center; gap: 4px; }
+#composer-attachment button { min-width: 44px; min-height: 44px; }
+#composer-attachment .attachment-thumbnail { width: 56px; height: 56px; padding: 0; border-radius: 12px; overflow: hidden; background: var(--panel); }
+.attachment-thumbnail img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.attachment-dialog { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 16px; border: 0; background: #111; color: white; }
+.attachment-dialog[open] { display: flex; flex-wrap: wrap; justify-content: center; align-content: center; gap: 12px; }
+.attachment-dialog::backdrop { background: #000; }
+.attachment-dialog img { width: 100%; height: calc(100% - 72px); object-fit: contain; }
+.attachment-dialog button { min-height: 44px; }

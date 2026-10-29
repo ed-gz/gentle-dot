@@ -53,7 +53,8 @@ import { listSharedImportReport, importSharedItemStreamed, recoverImportBatch, r
 import { parseInvitation, pairDevice, PairingRejected } from './device-pairing.ts';
 import { ConnectionSelectionAmbiguous, ConnectionSelectionPending, createConnectionSelectionStore, type SelectedConnection } from './connection-selection.ts';
 import { mountPairingSaveRecovery } from './pairing-save-recovery.ts';
-import { createWork, createStreamedImportedWork, cancelStreamedImport, resumeStreamedImport } from './work-inbox.ts';
+import { createWork, createStreamedImportedWork, cancelStreamedImport, resumeStreamedImport, readWork, readWorkFile, type WorkItem } from './work-inbox.ts';
+import { mountComposerAttachment } from './composer-attachment.ts';
 import { companionBounds, constrainCompanion, mountPhoneViewport } from './companion-layout.ts';
 import { connectionHealth, healthActionLabel, type HealthAction } from './connection-health.ts';
 import { createConversationView } from './conversation-view.ts';
@@ -484,8 +485,14 @@ element('view-material').after(retryAttachment);
 const retryMaterial = document.createElement('button');
 retryMaterial.type = 'button'; retryMaterial.textContent = 'Reintentar material'; retryMaterial.hidden = true;
 retryAttachment.after(retryMaterial);
-function showAttachedWork(id: string | undefined, label?: string) {
+const composerAttachment = mountComposerAttachment(element('composer-attachment'), { read: readWorkFile });
+composerAttachment.onRemove(() => { draftEdited = true; showAttachedWork(undefined); void persist(); });
+window.addEventListener('pagehide', () => composerAttachment.show(undefined));
+window.addEventListener('pageshow', event => { if (event.persisted && attachedWork) void readWork(attachedWork).then(item => { if (attachedWork === item.id) composerAttachment.show(item); }).catch(() => {}); });
+function showAttachedWork(id: string | undefined, label?: string, item?: WorkItem) {
   attachedWork = id;
+  composerAttachment.show(item);
+  if (id && !item) void readWork(id).then(work => { if (attachedWork === id) composerAttachment.show(work); }).catch(() => {});
   const button = element<HTMLButtonElement>('view-material');
   button.hidden = !id;
   // Do not let a fast navigation/reload outrun the durable conversation
@@ -1984,7 +1991,7 @@ async function saveComposerSelection(files: File[], control: HTMLInputElement) {
   status.setAttribute('role', 'status'); status.textContent = 'Guardando material…';
   try {
     const item = await createWork({ title: files[0]!.name.slice(0, 120), kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: prompt.value.trim() || 'Material adjunto a la conversación de Capri.', files });
-    showAttachedWork(item.id, item.title);
+    showAttachedWork(item.id, item.title, item);
     element('attachment-context').title = 'Guardado en este iPhone';
     await persist(); await releaseAttachedWork(item.id);
     retryComposerSelection = undefined; control.value = '';
@@ -2202,7 +2209,7 @@ function importSharedFiles(): Promise<void> {
           const files = item.files.map(file => ({ id: file.id, name: file.name, type: file.mime, size: file.size, sha256: file.sha256 }));
           const work = await createStreamedImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: item.notes || 'Material compartido con Capri. Pendiente de instrucciones.', files },
             (file, offset, length) => read(item.files.find(candidate => candidate.id === file.id)!, offset, length));
-          showAttachedWork(work.id, work.title);
+          showAttachedWork(work.id, work.title, work);
           notice(`Recibí ${work.title}. Material guardado localmente como trabajo ${work.id}; dime qué hacemos con él.`, 'iphone', `shared:${item.id}`);
           await persist(); await releaseAttachedWork(work.id);
         });
@@ -2228,7 +2235,7 @@ function importDocumentFiles(fresh = false): Promise<void> {
             // and the user edits their message before the next recovery attempt.
             instruction: 'Material adjunto a la conversación de Capri.', files },
             (file, offset, length) => read(item.files.find(candidate => candidate.id === file.id)!, offset, length));
-          showAttachedWork(work.id, `${files.length} archivo${files.length === 1 ? '' : 's'} · ${work.title}`);
+          showAttachedWork(work.id, `${files.length} archivo${files.length === 1 ? '' : 's'} · ${work.title}`, work);
           notice(`Conservé ${work.title} en este iPhone. Dime qué hacemos con el material.`, 'iphone', `document:${item.id}`);
           await persist(); await releaseAttachedWork(work.id);
         });

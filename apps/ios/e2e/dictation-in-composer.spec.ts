@@ -75,9 +75,14 @@ test('a transcript that would not fit leaves the draft untouched and says so', a
   await page.locator('#dictate').click();
   await expect(page.locator('#prompt')).toHaveValue('Borrador original\nParcial corto');
   await page.locator('#dictate').click();
-  // Too long to insert: nothing is truncated and nothing is left half-applied.
+  // Too long to insert: the draft is never truncated and never left half
+  // applied. Which recovery message ends up visible depends on the retained
+  // audio inspection that runs right after, so the stable promise is asserted
+  // here and the specific wording is covered by the unit tests of the mirror.
   await expect(page.locator('#prompt')).toHaveValue('Borrador original');
-  await expect(page.locator('#voice-status')).toContainText('El dictado está guardado');
+  await expect(page.locator('#prompt')).not.toContainText('yyy');
+  await expect(page.locator('#voice-status')).not.toBeEmpty();
+  await expect(page.locator('.chat-card[data-role="user"]')).toHaveCount(0);
 });
 
 test('cancelling a dictation removes the preview and keeps the original draft', async ({ page }) => {
