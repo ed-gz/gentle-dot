@@ -39,7 +39,7 @@ test('the local conversation discovers and stores a proposal without invoking a 
   expect(facts.proposals).toMatchObject([{current:true,actionApproved:false,executed:false,description:'Propuesta de seguimiento'}]);
 });
 
-test('conversation requires human review before a real MCP client dispatches a minute proposal', async ({ page }) => {
+for (const approved of [false, true]) test(`conversation ${approved ? 'dispatches after approval' : 'does not dispatch after rejection'} using the MCP client`, async ({ page }) => {
   await page.setViewportSize({width:320,height:568}); await page.emulateMedia({reducedMotion:'reduce'});
   await page.addInitScript(() => {
     const state=globalThis as any; state.isTauri=true; state.steps=0; state.rpc=[];
@@ -74,9 +74,11 @@ test('conversation requires human review before a real MCP client dispatches a m
   await page.locator('#prompt').fill('Revisa la propuesta del acuerdo.'); await page.locator('#send').click();
   const review=page.locator('#requests .review-card'); await expect(review).toContainText('Reunión revisada'); await expect(review).toContainText('Seguimiento exacto');
   expect(await page.evaluate(()=>(globalThis as any).rpc.includes('tools/call'))).toBe(false);
-  const approve=review.getByRole('button',{name:'Aprobar esta operación'}); await approve.focus(); await expect(approve).toBeFocused(); await page.keyboard.press('Enter');
+  const action=review.getByRole('button',{name:approved ? 'Aprobar esta operación' : 'Rechazar'}); await action.focus(); await expect(action).toBeFocused(); await page.keyboard.press('Enter');
   await expect(page.locator('.chat-card[data-role="assistant"]')).toContainText('Revisé el resultado de la propuesta.');
   const outcome=await page.evaluate(async ({id,proposalId})=>{const proposals=await import('/src/minute-proposals.ts');return {calls:(globalThis as any).rpc.filter((name:string)=>name==='tools/call').length,proposal:(await proposals.listMinuteProposals(id)).find(item=>item.id===proposalId)};},fixture);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)).toBe(false);
-  expect(outcome.calls).toBe(1); expect(outcome.proposal).toMatchObject({state:'responded',responseReceived:true,executed:null});
+  expect(outcome.calls).toBe(approved ? 1 : 0);
+  if (approved) expect(outcome.proposal).toMatchObject({state:'responded',responseReceived:true,executed:null});
+  else expect(outcome.proposal).toMatchObject({responseReceived:false,executed:false,actionApproved:false});
 });
