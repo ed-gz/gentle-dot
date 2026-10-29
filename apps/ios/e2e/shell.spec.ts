@@ -1185,3 +1185,53 @@ test('background during retained language preparation keeps the exact audio and 
   expect(await page.evaluate(()=>(globalThis as any).assetActions.filter((x:any)=>x==='attach').length)).toBe(1);
   expect(await page.evaluate(()=>(globalThis as any).assetActions)).not.toContain('discard');
 });
+
+test('model availability ignores older replies and is rechecked after suspension', async ({ page }) => {
+  await nativeFixture(page);
+  await page.goto('/');
+  await chooseEngine(page, 'iphone');
+  await expect(page.locator('#engine-status')).toContainText('Lista para conversar');
+  await expect(page.locator('#send')).toBeEnabled();
+  await page.evaluate(() => {
+    const state = globalThis as any;
+    const previous = state.__TAURI_INTERNALS__.invoke;
+    state.availabilityReplies = [];
+    state.__TAURI_INTERNALS__.invoke = (command: string, args: unknown) => command.endsWith('check_availability')
+      ? new Promise(resolve => state.availabilityReplies.push(resolve)) : previous(command, args);
+  });
+  await page.locator('[data-panel="settings"]').click();
+  await page.evaluate(() => { const button = document.querySelector<HTMLButtonElement>('#check-local')!; button.click(); button.click(); });
+  await expect.poll(() => page.evaluate(() => (globalThis as any).availabilityReplies.length)).toBe(2);
+  await page.evaluate(() => (globalThis as any).availabilityReplies[1]({ available:false, status:'apple_intelligence_disabled', supportsSpanish:false }));
+  await expect(page.locator('#local-status')).toContainText('Activa Apple Intelligence');
+  await page.evaluate(() => (globalThis as any).availabilityReplies[0]({ available:true, status:'available', supportsSpanish:true }));
+  await page.locator('[data-panel="chat"]').click();
+  await expect(page.locator('#engine-status')).toContainText('Activa Apple Intelligence');
+  await expect(page.locator('#send')).toBeDisabled();
+  await page.evaluate(() => document.querySelector<HTMLButtonElement>('#check-local')!.click());
+  await expect.poll(() => page.evaluate(() => (globalThis as any).availabilityReplies.length)).toBe(3);
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable:true, value:true }); document.dispatchEvent(new Event('visibilitychange')); });
+  await page.evaluate(() => (globalThis as any).availabilityReplies[2]({ available:true, status:'available', supportsSpanish:true }));
+  await expect(page.locator('#engine-status')).toContainText('Comprobando');
+  await expect(page.locator('#send')).toBeDisabled();
+  await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable:true, value:false }); document.dispatchEvent(new Event('visibilitychange')); });
+  await expect.poll(() => page.evaluate(() => (globalThis as any).availabilityReplies.length)).toBe(4);
+  await expect(page.locator('#engine-status')).toContainText('Comprobando');
+  await expect(page.locator('#send')).toBeDisabled();
+  await chooseEngine(page, 'gentle');
+  await page.evaluate(() => (globalThis as any).availabilityReplies[3]({ available:true, status:'available', supportsSpanish:true }));
+  await expect(page.locator('#engine-summary')).toHaveText('Laptop');
+  await chooseEngine(page, 'iphone');
+  await expect(page.locator('#engine-status')).toContainText('Lista para conversar');
+  await expect(page.locator('#send')).toBeEnabled();
+  await page.evaluate(() => document.querySelector<HTMLButtonElement>('#check-local')!.click());
+  await expect.poll(() => page.evaluate(() => (globalThis as any).availabilityReplies.length)).toBe(5);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted:true })));
+  await page.evaluate(() => (globalThis as any).availabilityReplies[4]({ available:true, status:'available', supportsSpanish:true }));
+  await expect(page.locator('#engine-status')).toContainText('Comprobando');
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted:true })));
+  await expect.poll(() => page.evaluate(() => (globalThis as any).availabilityReplies.length)).toBe(6);
+  await page.evaluate(() => (globalThis as any).availabilityReplies[5]({ available:false, status:'model_not_ready', supportsSpanish:false }));
+  await expect(page.locator('#engine-status')).toContainText('preparando el modelo');
+  await expect(page.locator('#send')).toBeDisabled();
+});

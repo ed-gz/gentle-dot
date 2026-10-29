@@ -902,8 +902,22 @@ function unconfirmedRemote() {
   entries = entries.map(entry => entry.id === id ? { ...entry, state: 'interrupted' } : entry);
   pendingRemote = undefined; clearTimeout(pendingTimer); renderChat(); scheduleSave(); updateControls();
 }
+let availabilityGeneration = 0;
+function invalidateModelAvailability() {
+  availabilityGeneration++;
+  availability = { available: false, status: 'checking', supportsSpanish: false };
+  element('local-status').textContent = availabilityMessage(availability);
+  element('local-summary').textContent = 'Comprobando disponibilidad…';
+  updateControls();
+}
 async function checkModel() {
-  availability = await checkLocalIntelligence();
+  invalidateModelAvailability();
+  const generation = availabilityGeneration;
+  const result = await checkLocalIntelligence();
+  // A foreground check can finish after a later check or after suspension.
+  // Neither result describes the most recent observable device state.
+  if (generation !== availabilityGeneration || document.hidden) return;
+  availability = result;
   element('local-status').textContent = availabilityMessage(availability);
   element('local-summary').textContent = availability.available ? 'Disponible sin internet' : availability.status === 'browser_preview' ? 'Requiere la app instalada' : 'Revisa su disponibilidad';
   updateControls();
@@ -1389,6 +1403,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) { release(); settlePresence(); pauseRigPreparation(); }
   cancelAnimationFrame(frame); fx?.clear(); persist();
   if (document.hidden) {
+    invalidateModelAvailability();
     // The native permission sheet can temporarily hide WKWebView while the
     // microphone request is still pending. Native iOS lifecycle handling
     // cancels an actual background transition; do not invalidate that prompt.
@@ -1398,8 +1413,8 @@ document.addEventListener('visibilitychange', () => {
   }
   else { if (rigNeedsPreparation && image && !preparingRig) void startRig(); lastFrame = -1; redraw(); linked.resume(); void checkModel(); void importSharedFiles(); void recoverLocalInference(); void recoverPendingVoice(); if (isTauri()) void voiceRecovery.refresh(); void completionNotifications.refresh(); void lockScreenSettings?.refresh(); }
 });
-window.addEventListener('pagehide', () => { settlePresence(); pauseRigPreparation(); connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
-window.addEventListener('pageshow', event => { if (event.persisted) { if (!document.hidden && rigNeedsPreparation && image && !preparingRig) void startRig(); redraw(); linked.resume(); void recoverLocalInference(); } });
+window.addEventListener('pagehide', () => { invalidateModelAvailability(); settlePresence(); pauseRigPreparation(); connectionSettings.cancel(); cancelAnimationFrame(frame); linked.suspend(); persist(); });
+window.addEventListener('pageshow', event => { if (event.persisted) { if (!document.hidden && rigNeedsPreparation && image && !preparingRig) void startRig(); redraw(); linked.resume(); if (!document.hidden) void checkModel(); void recoverLocalInference(); } });
 let conversationLoading = false;
 const recoveryMessage = 'No se pudo recuperar la conversación local. Tu borrador sigue aquí; reintenta antes de enviar para proteger el historial guardado.';
 async function restoreConversation() {
