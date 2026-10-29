@@ -1,7 +1,7 @@
 /* Capri inhabits the app viewport; only her hit target intercepts touches. */
 #stage[data-companion-layer] { position: fixed; z-index: 2; overflow: hidden; pointer-events: none; }
 #stage[data-companion-layer] .rig { pointer-events: auto; width: 86px; height: 122px; left: 50%; top: 50%; }
-:root[data-companion-size="rail"] #stage[data-companion-layer] .rig { width: 60px; height: 86px; }
+:root[data-companion-size="rail"] #stage[data-companion-layer] .rig { width: min(120px, 30dvw); height: min(170px, 20dvh); }
 /* Loading/error copy belongs in Settings, never over a session's touch target. */
 #stage[data-companion-layer] .rig:not([data-ready="true"]) { visibility: hidden; pointer-events: none; }
 #stage[data-companion-layer] .stage-orbit, #stage[data-companion-layer] .stage-coordinate { display: none; }
@@ -47,10 +47,10 @@
 #panel-agents .agent-conversation { padding-right: 0; }
 @media (max-height: 560px) {
   #panel-chat .companion-presence { position: relative; flex: none; height: 80px; }
-  :root[data-companion-size] #stage[data-companion-layer] .rig { width: 44px; height: 62px; }
+  :root[data-companion-size] #stage[data-companion-layer] .rig { width: 72px; height: 102px; }
 }
 :root[data-large-text="true"] #stage[data-companion-layer] .rig,
-:root[data-keyboard="true"] #stage[data-companion-layer] .rig { width: 44px; height: 62px; }
+:root[data-keyboard="true"] #stage[data-companion-layer] .rig { width: 72px; height: 102px; }
 :root[data-large-text="true"] #panel-chat .companion-presence { min-height: 36px; height: auto; }
 
 /* A dense view can have no free full-size perch. Keep Capri visible in the

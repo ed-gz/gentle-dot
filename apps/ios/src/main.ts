@@ -296,6 +296,7 @@ function companionTheaterSafe() {
     && !(focused instanceof HTMLElement && focused.matches('input, textarea, select, [contenteditable="true"]')));
 }
 function companionTheaterAllowed() {
+  // With history, full choreography is opt-in through an explicit reappearance.
   return companionTheaterSafe() && (theaterExplicit || element('panel-chat').dataset.empty === 'true');
 }
 function maybeStartCompanionIntro() {
@@ -386,12 +387,13 @@ element('greet').addEventListener('click', () => { gesture('saludar'); element('
 element('chill').addEventListener('click', () => { roaming = false; element('roam').setAttribute('aria-pressed', 'false'); setIntent({ resting: 'sit' }); element('scene-status').textContent = 'Chilleando contigo.'; });
 element('roam').addEventListener('click', () => { roaming = !roaming; nextRoam = 0; element('roam').setAttribute('aria-pressed', String(roaming)); setIntent({}); element('scene-status').textContent = roaming ? 'Explorando mi espacio.' : 'Aquí contigo.'; });
 element('appear').addEventListener('click', () => {
-  absent = !absent; travel = undefined; theater?.stop(); introReplayPending = false;
+  absent = !absent; travel = undefined; theater?.stop(); introReplayPending = !absent;
   element('appear').textContent = absent ? 'Aparecer' : 'Desaparecer';
   element('scene-status').textContent = absent ? 'Vuelvo cuando me llames.' : 'De vuelta.';
   fx?.clear();
   const now = performance.now();
   applyPresenceSample(presenceTransition.request(!absent, now, Boolean(engine && conversationRestored && !document.hidden && !foregroundPage.isSuspended() && !isReduced())), now);
+  if (!absent) maybeStartCompanionIntro();
   redraw();
 });
 let drag: { id: number; x: number; y: number; start: typeof position; moved: boolean } | undefined;
