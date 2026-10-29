@@ -81,6 +81,19 @@ test('a session prompt whose connection changes in flight remains uncertain and 
   assert.equal(result.status, 'uncertain');
   assert.equal(sends, 1);
 });
+test('a late stop acknowledgement after switching laptops stays unconfirmed', async () => {
+  let current = conn;
+  let stops = 0;
+  const client = createDesktopSessionClient({ getConnection: () => current, request: async request => {
+    const payload = JSON.parse(request.body);
+    if (payload.action === 'inspect') return { status: 200, headers: {}, body: JSON.stringify(page()) };
+    stops++;
+    current = { ...conn, deviceId: 'other-device' };
+    return { status: 200, headers: {}, body: JSON.stringify({ accepted: true, sessionId: target.sessionId, instanceId: 'instance-1' }) };
+  } });
+  await assert.rejects(client.abort(target, context(async () => true)), /No se confirmó si la sesión recibió/);
+  assert.equal(stops, 1);
+});
 test('abort approval identifies shared session, and schema guards reject forged or oversized host data', async () => {
   const f = fixture(); let approval;
   assert.equal((await f.client.abort(target, context(async input => { approval = input; return true; }))).accepted, true);

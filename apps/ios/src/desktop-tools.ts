@@ -145,7 +145,9 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       await authorize(context, conn, 'Detener el trabajo de esta sesión compartida', payload);
       const fresh = await inspect(conn, target, 1); if (fresh.instanceId !== before.instanceId) throw new Error('Pi cambió desde la revisión. No se detuvo otra instancia.');
       context.signal.throwIfAborted();
-      const ack = await rpc(conn, payload);
+      let ack: unknown;
+      try { ack = await rpc(conn, payload); }
+      catch { throw new Error('No se confirmó si la sesión recibió la solicitud de detener. Consulta su estado antes de repetir.'); }
       if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== before.instanceId) throw new Error('El host no confirmó la cancelación de esta sesión.');
       return { accepted: true, ...target, completed: false };
     },
@@ -161,7 +163,9 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       const fresh = await inspect(conn, target, 1);
       if (fresh.instanceId !== page.instanceId || JSON.stringify(fresh.question) !== JSON.stringify(question)) throw new Error('El permiso cambió después de revisarlo.');
       context.signal.throwIfAborted();
-      const ack = await rpc(conn, payload);
+      let ack: unknown;
+      try { ack = await rpc(conn, payload); }
+      catch { throw new Error('No se confirmó si la sesión recibió la respuesta. Consulta su estado antes de repetir.'); }
       if (!object(ack) || ack.accepted !== true || ack.sessionId !== target.sessionId || ack.instanceId !== page.instanceId) throw new Error('El host no confirmó la respuesta humana.');
       return { accepted: true, ...target, requestId: question.id };
     },
