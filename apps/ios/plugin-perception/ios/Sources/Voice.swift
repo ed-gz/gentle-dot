@@ -967,7 +967,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             try await Task.detached { try VoiceRecoveryJournal(root: root).discardDurably(expected) }.value
             return VoiceReply(ok: true)
         } catch {
-            return .failure("retention_unconfirmed", "No pude confirmar que se descartó el audio. Se conserva para revisión.")
+            return .failure("retention_unconfirmed", "No pude confirmar el descarte. Revisa el estado antes de volver a intentarlo.")
         }
     }
 
