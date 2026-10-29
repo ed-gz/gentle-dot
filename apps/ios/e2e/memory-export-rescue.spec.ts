@@ -70,3 +70,29 @@ test('export captures distinct visible and pending copies before reading the arc
   expect(rows.find((row: any) => row.schema === 'capri-conversation-pending/v1')).toMatchObject({ committed: false, entries: 2 });
   await expect(root.locator('#memory-status')).toContainText('sin confirmar');
 });
+
+test('storage status changes cannot replace export progress while the export is pending', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const state = globalThis as any;
+    const { mountMemoryView } = await import('/src/memory-view.ts');
+    const { conversationArchive } = await import('/src/conversation-archive.ts');
+    document.querySelector<HTMLElement>('#panel-chat')!.hidden = true;
+    document.querySelector<HTMLElement>('#panel-inbox')!.hidden = false;
+    conversationArchive.export = async () => await new Promise(resolve => { state.releaseArchive = () => resolve({ blob: new Blob(['{"schema":"fixture"}\n']), count: 0 }); });
+    state.auditMemory = mountMemoryView({ status: () => ({ pending: 0, blocked: false }), pending: () => [], visible: () => [], draft: () => '', retry: async () => {} });
+  });
+  const root = page.locator('#conversation-memory').last(), status = root.locator('#memory-status');
+  const download = page.waitForEvent('download');
+  await root.getByRole('button', { name: 'Exportar historial' }).click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).releaseArchive)).toBe('function');
+  await expect(status).toContainText('Preparando copia');
+  await page.evaluate(() => (globalThis as any).auditMemory.updateStatus('Estado del archivo actualizado'));
+  await expect(status).toContainText('Preparando copia');
+  await expect(status).not.toContainText('guardada');
+  await page.evaluate(() => (globalThis as any).releaseArchive());
+  await download;
+  await expect(status).toContainText('Exportación preparada');
+  await page.evaluate(() => (globalThis as any).auditMemory.updateStatus());
+  await expect(status).toContainText('Exportación preparada');
+});

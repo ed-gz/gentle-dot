@@ -12,11 +12,16 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
   root.innerHTML = `<h2>Historial de conversación</h2><p class="hint">Busca o exporta los mensajes que Capri guardó en este iPhone, incluidos los que ya no aparecen en la conversación. Esto no confirma que el historial de la laptop esté sincronizado.</p><p id="memory-status" class="hint" role="status" aria-live="polite"></p><div class="actions"><button id="memory-retry" type="button" hidden>Reintentar guardado</button><button id="memory-export" type="button">Exportar historial</button></div><details><summary>Consultar mensajes anteriores</summary><p class="hint">Los registros parecidos pueden ser eventos distintos o copias. Capri los conserva por separado.</p><form id="memory-search"><label>Buscar texto<input id="memory-query" maxlength="200" placeholder="Palabras del mensaje" /></label><button type="submit">Buscar</button></form><div id="memory-entries"></div><button id="memory-older" type="button" hidden>Ver anteriores</button></details>`;
   parent.append(root);
   const element = <T extends HTMLElement>(id: string) => root.querySelector<T>('#' + id)!;
-  const statusElement = element('memory-status'); let cursor: string | undefined, query = '', busy = false, pendingReset = false, renderEpoch = 0;
+  const statusElement = element('memory-status'); let cursor: string | undefined, query = '', busy = false, pendingReset = false, renderEpoch = 0, exporting = false, exportResult = '';
   const describe = (error: unknown) => error instanceof Error ? error.message : 'No se pudo consultar el archivo.';
-  function updateStatus(message?: string) {
+  function updateStatus(message?: string, exportUpdate = false) {
     const state = options.status();
     element('memory-retry').hidden = !state.blocked && !state.pending;
+    if (exporting && !exportUpdate) return;
+    if (exportResult && !exportUpdate) {
+      statusElement.textContent = exportResult + (state.blocked ? ' El guardado local sigue sin confirmarse.' : '');
+      return;
+    }
     statusElement.textContent = message ?? (state.blocked ? `No se confirmó el guardado. ${state.archiveError ?? state.conversationError} ${state.pending} mensajes pendientes en memoria. Reintenta o exporta antes de cerrar Capri. Los envíos están detenidos.` : state.pending ? `${state.pending} mensajes pendientes de guardar en el archivo local.` : 'Archivo local disponible. Exportar no borra los mensajes.');
   }
   async function refresh() {
@@ -48,12 +53,13 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
     } catch (error) { updateStatus(describe(error)); }
     finally { busy = false; if (pendingReset) { pendingReset = false; void page(true); } }
   }
-  element('memory-retry').addEventListener('click', async () => { await options.retry(); await refresh(); });
-  element('memory-search').addEventListener('submit', event => { event.preventDefault(); void page(true); });
-  element('memory-older').addEventListener('click', () => void page(false));
+  element('memory-retry').addEventListener('click', async () => { exportResult = ''; await options.retry(); await refresh(); });
+  element('memory-search').addEventListener('submit', event => { event.preventDefault(); exportResult = ''; void page(true); });
+  element('memory-older').addEventListener('click', () => { exportResult = ''; void page(false); });
   root.querySelector('details')!.addEventListener('toggle', event => { if ((event.target as HTMLDetailsElement).open && !element('memory-entries').children.length) void page(true); });
   element('memory-export').addEventListener('click', async () => {
-    const button = element<HTMLButtonElement>('memory-export'); button.disabled = true;
+    const button = element<HTMLButtonElement>('memory-export'); button.disabled = true; exporting = true; exportResult = '';
+    updateStatus('Preparando copia del historial…', true);
     try {
       // Capture before any asynchronous storage operation. Export must remain
       // available even when a prior write or its callback is stuck.
@@ -87,12 +93,12 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
       const blob = new Blob(chunks, { type: 'application/x-ndjson' });
       const name = exportFileName(`capri-conversacion-${new Date().toISOString().slice(0,10)}.ndjson`);
       if (isTauri()) {
-        updateStatus('Preparando copia del historial para Archivos…');
+        updateStatus('Preparando copia del historial para Archivos…', true);
         const result = await exportNativeFile(blob, name);
         updateStatus(result.status === 'cancelled' ? 'Exportación cancelada. No se borró contenido de Capri.' : archiveFailed
           ? 'Copia parcial guardada en Archivos con el contenido visible y pendiente. El archivo guardado no pudo incluirse; no se borró contenido de Capri.'
           : unique.size ? 'Copia guardada en Archivos con el historial y las copias visibles o pendientes sin confirmar. No se borró contenido de Capri.'
-          : 'Copia del historial guardada en Archivos. El historial y el borrador originales se conservan en Capri.');
+          : 'Copia del historial guardada en Archivos. El historial y el borrador originales se conservan en Capri.', true);
         return;
       }
       const url = URL.createObjectURL(blob);
@@ -100,9 +106,9 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
       setTimeout(() => URL.revokeObjectURL(url), 60000);
       updateStatus(archiveFailed ? 'Exportación parcial preparada con el contenido visible y pendiente; el archivo guardado no pudo incluirse. Comprueba el archivo descargado.'
         : unique.size ? 'Exportación preparada con el historial y las copias visibles o pendientes sin confirmar. Comprueba el archivo descargado.'
-        : 'Exportación preparada. Comprueba el archivo descargado; el historial local se conserva.');
-    } catch (error) { updateStatus(`No se confirmó la exportación: ${describe(error)} No se borró contenido de Capri.`); }
-    finally { button.disabled = false; }
+        : 'Exportación preparada. Comprueba el archivo descargado; el historial local se conserva.', true);
+    } catch (error) { updateStatus(`No se confirmó la exportación: ${describe(error)} No se borró contenido de Capri.`, true); }
+    finally { exporting = false; exportResult = statusElement.textContent ?? ''; button.disabled = false; }
   });
   return { refresh, updateStatus };
 }
