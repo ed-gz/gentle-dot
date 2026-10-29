@@ -26,10 +26,15 @@ function fixture() {
     async remove(expected) { if (JSON.stringify(anchors.get(expected.id)) !== JSON.stringify(expected)) throw new Error('stale anchor'); anchors.delete(expected.id); calls.push('anchor-remove'); },
   };
   const turns = {
-    async read(key) { return clone(timeline.get(key)); },
-    async commitAnswer(expected, text) {
+    async readPair(requestId, turnId) {
+      if (requestId !== userId || turnId !== id) return undefined;
+      const user = timeline.get(requestId), turn = timeline.get(turnId);
+      return user && turn ? { user: clone(user), turn: clone(turn) } : undefined;
+    },
+    async commitAnswer(expectedUser, expected, text) {
       calls.push('chat-commit');
       if (failCommit) return false;
+      if (JSON.stringify(timeline.get(expectedUser.id)) !== JSON.stringify(expectedUser)) return false;
       if (JSON.stringify(timeline.get(expected.id)) !== JSON.stringify(expected)) return false;
       timeline.set(expected.id, { ...clone(expected), role: 'assistant', state: 'complete', text }); return true;
     },
@@ -162,6 +167,13 @@ test('missing original turn or failed anchor persistence prevents native creatio
   await assert.rejects(f.controller.start(input), /Guarda primero/); assert.deepEqual(f.calls, []);
   const g = fixture(); g.anchors.set(id, { id });
   await assert.rejects(g.controller.start(input), /duplicate/); assert.equal(g.calls.includes('native-create'), false);
+});
+
+test('a request and turn that are not a bound pair cannot start native planning', async () => {
+  const f = fixture(); const unrelated = 'ec58b974-b902-4621-a026-f049cbf392cf';
+  f.timeline.set(unrelated, { ...f.timeline.get(userId), id: unrelated });
+  await assert.rejects(f.controller.start({ ...input, userId: unrelated }), /Guarda primero/);
+  assert.equal(f.calls.includes('native-create'), false);
 });
 
 test('a durable pending turn projected as interrupted remains usable, while explicit cancellation fences it', async () => {

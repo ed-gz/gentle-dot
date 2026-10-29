@@ -5,26 +5,27 @@ import { checkpointAnchorStore, type CheckpointAnchor, type CheckpointAnchorStor
 import { hashSourceBytes } from './perception.ts';
 
 type Client = ReturnType<typeof createCheckpointClient>;
-type TurnStore = {
-  /** Returns a durable turn from the same iPhone main conversation or its
-   * archive; it must not search Herdr or another conversation by ID. */
-  read(id: string): Promise<ChatEntry | undefined>;
-  /** Must compare the exact expected turn and commit atomically; true means durable. */
-  commitAnswer(expected: ChatEntry, text: string): Promise<boolean>;
+export type CheckpointTurnStore = {
+  /** Reads one durable, explicitly related pair from a single conversation.
+   * A request and response merely having matching IDs is not sufficient. */
+  readPair(userId: string, turnId: string): Promise<{ user: ChatEntry; turn: ChatEntry } | undefined>;
+  /** Atomically compares both exact entries and their relation; true means durable. */
+  commitAnswer(user: ChatEntry, turn: ChatEntry, text: string): Promise<boolean>;
 };
 export type CheckpointView = { kind: 'ready' | 'active' | 'interrupted' | 'starting_unconfirmed' | 'create_unconfirmed' | 'proposal' | 'uncertain' | 'budget' | 'cancelled' | 'answer'; record?: CheckpointSummary };
 const fingerprintText = (text: string) => hashSourceBytes(new TextEncoder().encode(text));
 
 /** Coordinates a native planning checkpoint with one durable chat turn. This
  * controller has no tool executor, approval callback or network dispatch. */
-export function createCheckpointConversation(options: { turns: TurnStore; anchors?: CheckpointAnchorStore; client?: Client }) {
+export function createCheckpointConversation(options: { turns: CheckpointTurnStore; anchors?: CheckpointAnchorStore; client?: Client }) {
   const anchors = options.anchors ?? checkpointAnchorStore;
   const client = options.client ?? createCheckpointClient();
-  async function original(anchor: CheckpointAnchor, allowComplete = false): Promise<ChatEntry> {
-    const [request, turn] = await Promise.all([options.turns.read(anchor.userId), options.turns.read(anchor.id)]);
+  async function original(anchor: CheckpointAnchor, allowComplete = false): Promise<{ user: ChatEntry; turn: ChatEntry }> {
+    const pair = await options.turns.readPair(anchor.userId, anchor.id);
+    const request = pair?.user, turn = pair?.turn;
     if (!request || request.id !== anchor.userId || request.role !== 'user' || request.engine !== 'iphone' || request.state !== 'complete' || await fingerprintText(request.text) !== anchor.requestFingerprint) throw new Error('No coincide la solicitud original. El análisis se conserva sin ejecutar.');
     if (!turn || turn.id !== anchor.id || turn.engine !== 'iphone' || turn.role === 'user' || turn.localCancelled || (!allowComplete && turn.state === 'complete')) throw new Error('El turno original cambió o fue cancelado. El análisis se conserva sin modificarlo.');
-    return turn;
+    return { user: request, turn };
   }
   async function bound(anchor: CheckpointAnchor): Promise<{ record?: CheckpointSummary; activeId?: string }> {
     const snapshot = await client.list();
@@ -39,12 +40,12 @@ export function createCheckpointConversation(options: { turns: TurnStore; anchor
   async function finishAnswer(anchor: CheckpointAnchor, record: CheckpointSummary): Promise<CheckpointView> {
     const text = record.decision?.kind === 'answer' ? record.decision.text : undefined;
     if (!text) throw new Error('La respuesta guardada no es válida. El original se conserva.');
-    let turn = await original(anchor, true);
+    let { user, turn } = await original(anchor, true);
     if (turn.state === 'complete') {
       if (turn.role !== 'assistant' || turn.text !== text) throw new Error('La respuesta difiere del turno guardado. Ambas copias se conservan.');
     } else {
-      if (!await options.turns.commitAnswer(turn, text)) throw new Error('La conversación no confirmó el guardado. La copia nativa se conserva.');
-      turn = await original(anchor, true);
+      if (!await options.turns.commitAnswer(user, turn, text)) throw new Error('La conversación no confirmó el guardado. La copia nativa se conserva.');
+      ({ user, turn } = await original(anchor, true));
       if (turn.state !== 'complete' || turn.role !== 'assistant' || turn.text !== text) throw new Error('La conversación no confirmó la respuesta exacta. La copia nativa se conserva.');
     }
     const digest = await fingerprintText(text);
@@ -58,7 +59,7 @@ export function createCheckpointConversation(options: { turns: TurnStore; anchor
   async function recover(id: string): Promise<CheckpointView> {
     let anchor = await anchors.get(id);
     if (!anchor) throw new Error('No encontré el ancla del turno. No se ejecutó ninguna herramienta.');
-    const turn = await original(anchor, true);
+    const { turn } = await original(anchor, true);
     const { record, activeId } = await bound(anchor);
     if (!record) {
       if (anchor.state === 'answerCommitted' && turn.state === 'complete' && turn.role === 'assistant' && await fingerprintText(turn.text) === anchor.answerFingerprint) {
@@ -125,7 +126,8 @@ export function createCheckpointConversation(options: { turns: TurnStore; anchor
   }
   return {
     async start(input: { id: string; userId: string; instruction: string; context: string; tools: ToolDefinition[]; allowBackground?: boolean }): Promise<CheckpointView> {
-      const [user, turn] = await Promise.all([options.turns.read(input.userId), options.turns.read(input.id)]);
+      const pair = await options.turns.readPair(input.userId, input.id);
+      const user = pair?.user, turn = pair?.turn;
       // Reading a durable window after reload projects pending as interrupted.
       // Both represent an unanswered original turn; local cancellation and a
       // completed answer remain hard fences.
