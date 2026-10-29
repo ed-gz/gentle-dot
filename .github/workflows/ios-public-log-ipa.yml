@@ -1,0 +1,97 @@
+name: Capri personal IPA via encrypted log
+
+# Public source, standard public runner; private art and encryption key are
+# injected as short-lived Actions secrets. No plaintext IPA or art is uploaded.
+on:
+  push:
+    branches:
+      - fix/android-capri-motion-mobile
+    paths:
+      - .github/workflows/ios-public-log-ipa.yml
+
+permissions: {}
+
+jobs:
+  ipa:
+    if: github.repository == 'ed-gz/gentle-dot' && github.event.repository.private == false
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: '4'
+      CAPRI_LIVE_ACTIVITY: '1'
+      CI: 'true'
+    steps:
+      - name: Fetch the exact public source without credentials
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init .
+          git -c credential.helper= fetch --depth=1 https://github.com/ed-gz/gentle-dot.git "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          printf 'Source SHA: %s\n' "$SOURCE_SHA"
+          test ! -e apps/ios/public/personal-art
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          token: ''
+      - name: Install iOS workspace dependencies
+        run: |
+          npm install --global pnpm@11.5.0
+          pnpm install --frozen-lockfile --ignore-scripts --filter @gentle-dot/ios...
+      - name: Select Xcode 26 or newer
+        run: |
+          xcode_path=$(node --input-type=module <<'NODE'
+          import { readdirSync } from 'node:fs';
+          const candidates = readdirSync('/Applications')
+            .filter(name => /^Xcode_\d+(?:\.\d+)*\.app$/.test(name))
+            .filter(name => Number(name.match(/\d+/)[0]) >= 26)
+            .sort((a, b) => b.localeCompare(a, 'en', { numeric: true }));
+          if (!candidates.length) throw new Error('Xcode 26+ is required');
+          console.log(`/Applications/${candidates[0]}`);
+          NODE
+          )
+          export DEVELOPER_DIR="$xcode_path/Contents/Developer"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Install XcodeGen, Rust target and Tauri CLI
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          rustup target add aarch64-apple-ios
+          cargo install tauri-cli --version 2.12.1 --locked --jobs 4 --root "$RUNNER_TEMP/capri-tauri-cli"
+          echo "$RUNNER_TEMP/capri-tauri-cli/bin" >> "$GITHUB_PATH"
+      - name: Run iOS Node checks and native preflight
+        run: |
+          node --test apps/ios/test/*.test.mjs
+          bash apps/ios/scripts/check-native-sdk.sh
+      - name: Stage verified personal art
+        env:
+          CAPRI_TEMP_ART_1: ${{ secrets.CAPRI_TEMP_ART_1 }}
+          CAPRI_TEMP_ART_2: ${{ secrets.CAPRI_TEMP_ART_2 }}
+          CAPRI_TEMP_ART_3: ${{ secrets.CAPRI_TEMP_ART_3 }}
+          CAPRI_TEMP_ART_SHA256: ${{ secrets.CAPRI_TEMP_ART_SHA256 }}
+          CAPRI_SOURCE_SHA: ${{ github.sha }}
+        run: node apps/ios/scripts/stage-ephemeral-personal-art.mjs
+      - name: Build and inspect personal IPA
+        run: |
+          # A tool may print an embedded base64 SVG on failure. Keep all
+          # post-staging build output on the ephemeral runner, never in logs.
+          if ! bash apps/ios/scripts/build-unsigned.sh >"$RUNNER_TEMP/capri-private-build.log" 2>&1; then
+            echo 'Personal build or inspection failed; private output withheld.'
+            exit 1
+          fi
+          rm -f "$RUNNER_TEMP/capri-private-build.log"
+      - name: Encrypt verified IPA and emit ciphertext in log parts
+        env:
+          CAPRI_TEMP_IPA_KEY: ${{ secrets.CAPRI_TEMP_IPA_KEY }}
+        run: |
+          if ! python3 apps/ios/scripts/verify-ipa.py apps/ios/out/Capri-unsigned.ipa --sealed --live-activity --continued-inference --personal-art-sha256 "$CAPRI_PERSONAL_ART_SHA256" >"$RUNNER_TEMP/capri-private-verify.log" 2>&1; then
+            echo 'Personal IPA verification failed; private output withheld.'
+            exit 1
+          fi
+          rm -f "$RUNNER_TEMP/capri-private-verify.log"
+          node apps/ios/scripts/secure-ipa-log.mjs emit apps/ios/out/Capri-unsigned.ipa
