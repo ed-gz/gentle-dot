@@ -77,9 +77,14 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
     let reply: HTTPSResponse;
     try { reply = await request({ url: endpoint(conn), method: payload ? 'POST' : 'GET', headers: { Authorization: `Bearer ${conn.token}`, 'Content-Type': 'application/json' }, ...(payload ? { body: JSON.stringify(payload) } : {}) }); }
     catch (error) {
+      unchanged(conn);
       if (error instanceof DeviceBridgeError && error.code === 'size_limit') throw new DesktopPageTooLarge('Respuesta del host demasiado grande.');
       throw new Error('El host no confirmó la operación. Consulta su estado antes de repetirla.');
     }
+    // A response belongs to the captured host even when the selected laptop
+    // changes while the native request is in flight. Never present it as data
+    // from the new connection or use it to authorize a later operation.
+    unchanged(conn);
     if (reply.status < 200 || reply.status >= 300) throw new Error(reply.status === 401 || reply.status === 403 ? 'El host rechazó el acceso o la aprobación. Revisa la vinculación.' : reply.status === 409 ? 'La sesión cambió; vuelve a consultarla.' : 'El host no pudo completar la operación.');
     if (reply.body.length > 1_000_000) throw new DesktopPageTooLarge('Respuesta del host demasiado grande.');
     try { return JSON.parse(reply.body); } catch { throw new Error('El host devolvió una respuesta inválida.'); }

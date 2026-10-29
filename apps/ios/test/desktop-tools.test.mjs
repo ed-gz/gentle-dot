@@ -31,6 +31,15 @@ test('session tools reuse existing sessions and expose no create/answer/permissi
   const history = await f.client.read(target); assert.equal(history.messages[0].text, 'Waiting for instruction');
   assert.equal(f.calls[0].url, 'https://computer.example.ts.net/orchestration'); assert.equal(f.calls[0].headers.Authorization, `Bearer ${conn.token}`);
 });
+test('a late session inventory cannot be attributed to a newly selected laptop', async () => {
+  let current = conn;
+  let resolveRequest;
+  const client = createDesktopSessionClient({ getConnection: () => current, request: () => new Promise(resolve => { resolveRequest = resolve; }) });
+  const listing = client.list();
+  current = { ...conn, url: 'wss://other.example.ts.net/ws', deviceId: 'other-device' };
+  resolveRequest({ status: 200, body: JSON.stringify({ available: true, sessions: [session] }), headers: {} });
+  await assert.rejects(listing, /conexión cambió/);
+});
 test('send displays exact target and text before one mutation, then correlates a receipt without claiming completion', async () => {
   const f = fixture(); let reviewed;
   const result = await f.client.send({ ...target, text: 'Analyze deploy risks', deliverAs: 'followUp' }, context(async approval => {
@@ -56,6 +65,21 @@ test('lost or mismatched acknowledgement is uncertain and never retried automati
     assert.equal(result.status, 'uncertain'); assert.match(result.clientMessageId, /^[a-f0-9-]{36}$/);
     assert.equal(f.calls.filter(call => call.body && JSON.parse(call.body).action === 'prompt').length, 1);
   }
+});
+test('a session prompt whose connection changes in flight remains uncertain and is not retried', async () => {
+  let current = conn;
+  let sends = 0;
+  const client = createDesktopSessionClient({ getConnection: () => current, request: async request => {
+    const payload = request.body ? JSON.parse(request.body) : undefined;
+    if (!payload) return { status: 200, headers: {}, body: JSON.stringify({ available: true, sessions: [session] }) };
+    if (payload.action === 'inspect') return { status: 200, headers: {}, body: JSON.stringify(page()) };
+    sends++;
+    current = { ...conn, url: 'wss://other.example.ts.net/ws', deviceId: 'other-device' };
+    return { status: 200, headers: {}, body: JSON.stringify({ accepted: true, sessionId: target.sessionId, instanceId: 'instance-1' }) };
+  } });
+  const result = await client.send({ ...target, text: 'Revisar trabajo' }, context(async () => true));
+  assert.equal(result.status, 'uncertain');
+  assert.equal(sends, 1);
 });
 test('abort approval identifies shared session, and schema guards reject forged or oversized host data', async () => {
   const f = fixture(); let approval;
