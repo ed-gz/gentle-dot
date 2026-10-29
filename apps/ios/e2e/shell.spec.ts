@@ -135,7 +135,7 @@ test('automatic routing names its current destination and settings show connecti
   await page.goto('/');
   await expect(page.locator('#engine-summary')).toHaveText('Auto · iPhone');
   await page.locator('.engine-details summary').click();
-  await expect(page.locator('#engine-explanation')).toContainText('primero la IA del iPhone');
+  await expect(page.locator('#engine-explanation')).toContainText('usa la laptop cuando está lista');
   await page.locator('#engine').selectOption('gentle');
   await expect(page.locator('#engine-summary')).toHaveText('Laptop');
   await expect(page.locator('#engine-explanation')).toContainText('Gentle Dot');

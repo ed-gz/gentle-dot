@@ -38,6 +38,26 @@ test('availability validation rejects malformed truthy flags and error responses
   }
   assert.deepEqual(parseAvailability({ ...available, ignored: 'never retained' }), available);
 });
+test('auto prefers a ready laptop and falls back to the ready iPhone', () => {
+  const ready = { ...base, linkedStatus: 'ready', agentState: 'idle', preference: 'auto' };
+  for (const [input, engine, canConverse] of [
+    [ready, 'gentle', true],
+    [{ ...base, preference: 'auto' }, 'iphone', true],
+    [{ ...base, linkedStatus: 'connecting', preference: 'auto' }, 'iphone', true],
+    [{ ...base, linkedStatus: 'rejected', preference: 'auto' }, 'iphone', true],
+    [{ ...ready, preference: 'iphone' }, 'iphone', true],
+    [{ ...base, preference: 'gentle' }, 'gentle', false],
+    [{ ...ready, local: unavailable('model_not_ready') }, 'gentle', true],
+  ]) {
+    const health = connectionHealth(input);
+    assert.equal(health.selectedEngine, engine);
+    assert.equal(health.canConverse, canConverse);
+  }
+  const rejected = connectionHealth({ ...base, linkedStatus: 'rejected', preference: 'auto' });
+  assert.equal(rejected.primaryAction, undefined);
+  assert.equal(rejected.host.action, 'show-pairing');
+});
+
 test('automatic fallback uses ready Pi, while a manual engine choice remains explicit', () => {
   const input = { ...base, local: unavailable('model_not_ready'), linkedStatus: 'ready', agentState: 'idle' };
   const automatic = connectionHealth(input); assert.equal(automatic.canConverse, true); assert.equal(automatic.selectedEngine, 'gentle');

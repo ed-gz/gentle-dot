@@ -63,7 +63,8 @@ function hostHealth(input: ConnectionHealthInput): HealthItem {
 export function connectionHealth(input: ConnectionHealthInput): ConnectionHealth {
   const local = localHealth(input.local), host = hostHealth(input);
   const preference = input.preference ?? 'auto';
-  const selectedEngine = preference === 'auto' ? local.state === 'ready' ? 'iphone' : host.state === 'ready' ? 'gentle' : 'iphone' : preference;
+  // La laptop ofrece más permisos, herramientas y contexto; el iPhone funciona sin conectividad.
+  const selectedEngine = preference === 'auto' ? host.state === 'ready' ? 'gentle' : 'iphone' : preference;
   const chosen = selectedEngine === 'iphone' ? local : host;
   const canConverse = chosen.state === 'ready';
   let primaryAction = canConverse ? undefined : chosen.action;

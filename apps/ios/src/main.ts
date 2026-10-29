@@ -881,7 +881,7 @@ function interruptRemoteEntries() {
 }
 function updateControls() {
   const health = connectionHealth({ local: availability, linkedStatus, agentState: hostAgentState, hostConfigured: Boolean(settings.url), preference, capabilities: { workSync: linked.supportsWorkSync(), meetingDrafts: linked.supportsMeetingDrafts() } });
-  if (!localBusy && !recoveringNativeId && !pendingRemote) selected = preference === 'auto' && !localRecoveryReady && health.host.state === 'ready' ? 'gentle' : health.selectedEngine;
+  if (!localBusy && !recoveringNativeId && !pendingRemote) selected = health.selectedEngine;
   const ready = selected === 'iphone' ? health.local.state === 'ready' && localRecoveryReady : health.host.state === 'ready';
   const busy = localBusy || !!recoveringNativeId || !!pendingRemote;
   element('settings-connection-state').textContent = linkedStatus === 'ready' ? 'Conectada' : linkedStatus === 'connecting' ? 'Conectando' : linkedStatus === 'rejected' ? 'Revisar acceso' : 'Sin conexión';
@@ -890,7 +890,7 @@ function updateControls() {
   element('engine-status').dataset.ready = String(ready);
   element('engine-summary').textContent = preference === 'auto' ? `Auto · ${selected === 'iphone' ? 'iPhone' : 'laptop'}` : selected === 'iphone' ? 'Este iPhone' : 'Laptop';
   element('engine-explanation').textContent = preference === 'auto'
-    ? `Automático usa primero la IA del iPhone y, si no está disponible, la laptop conectada. Ahora: ${selected === 'iphone' ? 'iPhone' : 'laptop'}.`
+    ? `Automático usa la laptop cuando está lista y, si no, la IA del iPhone. Ahora: ${selected === 'iphone' ? 'iPhone' : 'laptop'}.`
     : selected === 'iphone' ? 'La conversación usa la IA local del iPhone.' : 'La conversación usa Gentle Dot en tu laptop conectada.';
   element<HTMLButtonElement>('send').disabled = !conversationReady || persistence.status().blocked || !ready || busy || voiceInProgress() || importingComposer;
   element<HTMLButtonElement>('camera').disabled = importingComposer;
