@@ -13,16 +13,20 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
   parent.append(root);
   const element = <T extends HTMLElement>(id: string) => root.querySelector<T>('#' + id)!;
   const statusElement = element('memory-status'); let cursor: string | undefined, query = '', busy = false, pendingReset = false, renderEpoch = 0, exporting = false, exportResult = '';
+  let archiveObservation: { kind: 'count' | 'error'; text: string } | undefined;
   const describe = (error: unknown) => error instanceof Error ? error.message : 'No se pudo consultar el archivo.';
   function updateStatus(message?: string, exportUpdate = false) {
     const state = options.status();
     element('memory-retry').hidden = !state.blocked && !state.pending;
+    // A new pending write may change the archive count. Never retain an old
+    // count after it starts; retain read errors until a successful refresh.
+    if ((state.blocked || state.pending) && archiveObservation?.kind === 'count') archiveObservation = undefined;
     if (exporting && !exportUpdate) return;
     if (exportResult && !exportUpdate) {
-      statusElement.textContent = exportResult + (state.blocked ? ' El guardado local sigue sin confirmarse.' : '');
+      statusElement.textContent = exportResult + (state.blocked ? ' El guardado local sigue sin confirmarse.' : '') + (archiveObservation?.kind === 'error' ? ` ${archiveObservation.text}` : '');
       return;
     }
-    statusElement.textContent = message ?? (state.blocked ? `No se confirmó el guardado. ${state.archiveError ?? state.conversationError} ${state.pending} mensajes pendientes en memoria. Reintenta o exporta antes de cerrar Capri. Los envíos están detenidos.` : state.pending ? `${state.pending} mensajes pendientes de guardar en el archivo local.` : 'Archivo local disponible. Exportar no borra los mensajes.');
+    statusElement.textContent = message ?? (state.blocked ? `No se confirmó el guardado. ${state.archiveError ?? state.conversationError} ${state.pending} mensajes pendientes en memoria. Reintenta o exporta antes de cerrar Capri. Los envíos están detenidos.` : state.pending ? `${state.pending} mensajes pendientes de guardar en el archivo local.` : archiveObservation?.text ?? 'Archivo local disponible. Exportar no borra los mensajes.');
   }
   async function refresh() {
     const epoch = ++renderEpoch;
@@ -30,8 +34,11 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
       const stats = await conversationArchive.stats();
       if (epoch !== renderEpoch) return;
       if (options.status().blocked || options.status().pending) updateStatus();
-      else updateStatus(`${stats.entries} mensajes · ${(stats.bytes / 1024 / 1024).toFixed(2)} MiB locales. Límite: ${stats.maximumEntries} mensajes / ${stats.maximumBytes / 1024 / 1024} MiB. No se borran automáticamente.`);
-    } catch (error) { if (epoch === renderEpoch) updateStatus(describe(error)); }
+      else {
+        const text = `${stats.entries} mensajes · ${(stats.bytes / 1024 / 1024).toFixed(2)} MiB locales. Límite: ${stats.maximumEntries} mensajes / ${stats.maximumBytes / 1024 / 1024} MiB. No se borran automáticamente.`;
+        archiveObservation = { kind: 'count', text }; updateStatus(text);
+      }
+    } catch (error) { if (epoch === renderEpoch) { const text = describe(error); archiveObservation = { kind: 'error', text }; updateStatus(text); } }
   }
   async function page(reset: boolean) {
     if (busy) { if (reset) pendingReset = true; return; } busy = true;
