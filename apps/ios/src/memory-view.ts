@@ -9,7 +9,7 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
   const parent = document.getElementById('panel-inbox');
   if (!parent) throw new Error('Falta la sección Archivo.');
   const root = document.createElement('section'); root.className = 'settings-section'; root.id = 'conversation-memory';
-  root.innerHTML = `<h2>Historial de conversación</h2><p class="hint">Busca o exporta los mensajes que Capri guardó en este iPhone, incluidos los que ya no aparecen en la conversación. Esto no confirma que el historial de la laptop esté sincronizado.</p><p id="memory-status" class="hint" role="status" aria-live="polite"></p><div class="actions"><button id="memory-retry" type="button" hidden>Reintentar guardado</button><button id="memory-export" type="button">Exportar historial</button></div><details><summary>Consultar mensajes anteriores</summary><form id="memory-search"><label>Buscar texto<input id="memory-query" maxlength="200" placeholder="Palabras del mensaje" /></label><button type="submit">Buscar</button></form><div id="memory-entries"></div><button id="memory-older" type="button" hidden>Ver anteriores</button></details>`;
+  root.innerHTML = `<h2>Historial de conversación</h2><p class="hint">Busca o exporta los mensajes que Capri guardó en este iPhone, incluidos los que ya no aparecen en la conversación. Esto no confirma que el historial de la laptop esté sincronizado.</p><p id="memory-status" class="hint" role="status" aria-live="polite"></p><div class="actions"><button id="memory-retry" type="button" hidden>Reintentar guardado</button><button id="memory-export" type="button">Exportar historial</button></div><details><summary>Consultar mensajes anteriores</summary><p class="hint">Los registros parecidos pueden ser eventos distintos o copias. Capri los conserva por separado.</p><form id="memory-search"><label>Buscar texto<input id="memory-query" maxlength="200" placeholder="Palabras del mensaje" /></label><button type="submit">Buscar</button></form><div id="memory-entries"></div><button id="memory-older" type="button" hidden>Ver anteriores</button></details>`;
   parent.append(root);
   const element = <T extends HTMLElement>(id: string) => root.querySelector<T>('#' + id)!;
   const statusElement = element('memory-status'); let cursor: string | undefined, query = '', busy = false, pendingReset = false, renderEpoch = 0;
@@ -37,8 +37,10 @@ export function mountMemoryView(options: { status(): PersistenceStatus; pending(
         const article = document.createElement('article'); article.className = 'chat-card';
         const label = document.createElement('p'); label.className = 'hint'; label.textContent = `${new Date(entry.at).toLocaleString('es-MX')} · ${entry.engine === 'iphone' ? 'iPhone' : 'Gentle Dot'} · ${entry.role} · ${entry.state}`;
         const body = document.createElement('p'); body.textContent = entry.text;
-        const source = document.createElement('small'); source.textContent = entry.scope;
-        article.append(label, body, source); return article;
+        const details = document.createElement('details');
+        const summary = document.createElement('summary'); summary.textContent = 'Detalles de origen';
+        const source = document.createElement('small'); source.textContent = `Origen: ${entry.scope}\nIdentificador: ${entry.id}`; source.style.whiteSpace = 'pre-wrap';
+        details.append(summary, source); article.append(label, body, details); return article;
       });
       element('memory-entries').prepend(...nodes); cursor = result.cursor;
       element('memory-older').hidden = !result.hasMore;
