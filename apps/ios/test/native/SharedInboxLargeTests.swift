@@ -28,6 +28,23 @@ enum AppGroupResolver {
         guard try SharedInbox.list(root: root).count == 1,
               try SharedInbox.read(manifest.id, audio.id, 0, 10, root: root) == Data(repeating: 73, count: 10),
               try SharedInbox.read(manifest.id, audio.id, audio.size - 3, 3, root: root) == Data([1, 2, 3]) else { fatalError("published audio") }
+        let brokenID = UUID().uuidString.lowercased()
+        let broken = root.appendingPathComponent(brokenID, isDirectory: true)
+        try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: false)
+        // A missing/unreadable manifest cannot prevent a separate valid item from being listed.
+        let partial = try SharedInbox.listReport(root: root)
+        guard partial.items.map({ $0.id }) == [manifest.id], partial.invalidIDs == [brokenID],
+              FileManager.default.fileExists(atPath: broken.path) else { fatalError("partial recovery") }
+        do { _ = try SharedInbox.list(root: root); fatalError("strict list ignored failure") } catch ShareFailure.invalid { }
+        // Once the same native item is repaired it reappears; no failed list deletes it.
+        let repaired = SharedManifest(schemaVersion: 1, id: brokenID, createdAt: manifest.createdAt,
+                                      title: manifest.title, notes: manifest.notes, files: manifest.files)
+        try JSONEncoder().encode(repaired).write(to: broken.appendingPathComponent("manifest.json"))
+        try FileManager.default.copyItem(at: root.appendingPathComponent(manifest.id).appendingPathComponent("\(audio.id).blob"), to: broken.appendingPathComponent("\(audio.id).blob"))
+        let recovered = try SharedInbox.listReport(root: root)
+        guard recovered.items.count == 2, recovered.invalidIDs.isEmpty,
+              try SharedInbox.read(brokenID, audio.id, 0, 10, root: root) == Data(repeating: 73, count: 10) else { fatalError("repaired item") }
+        try SharedInbox.acknowledge(brokenID, root: root)
         try SharedInbox.acknowledge(manifest.id, root: root)
         guard FileManager.default.fileExists(atPath: source.path) else { fatalError("source deleted") }
         let badNameStaging = try SharedInbox.makeStaging(root: root)

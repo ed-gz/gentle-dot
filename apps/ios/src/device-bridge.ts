@@ -140,9 +140,23 @@ export function validSharedImport(value: unknown): value is SharedImport {
   return total <= 256 * 1024 * 1024;
 }
 export async function listSharedImports(call: DeviceInvoker = deviceInvoke): Promise<SharedImport[]> {
-  const reply = requireNative(await call<NativeReply & { items?: unknown }>('share_list', {}));
-  if (!Array.isArray(reply.items) || reply.items.length > 100 || !reply.items.every(validSharedImport)) throw new Error('La bandeja compartida contiene un manifiesto inválido.');
-  return reply.items;
+  const report = await listSharedImportReport(call);
+  if (report.invalidIds.length) throw new Error('La bandeja compartida contiene un manifiesto inválido.');
+  return report.items;
+}
+/** A failed native manifest is retained and reported separately; healthy items remain recoverable. */
+export async function listSharedImportReport(call: DeviceInvoker = deviceInvoke): Promise<{items: SharedImport[]; invalidIds: string[]}> {
+  const reply = requireNative(await call<NativeReply & { items?: unknown; invalidIds?: unknown }>('share_list', {}));
+  if (!Array.isArray(reply.items) || reply.items.length > 100) throw new Error('La bandeja compartida contiene un manifiesto inválido.');
+  const reported = reply.invalidIds ?? [];
+  if (!Array.isArray(reported) || reported.length > 100 || reported.some(id => typeof id !== 'string' || !uuid.test(id)) || new Set(reported).size !== reported.length || reply.items.length + reported.length > 100) throw new Error('La bandeja compartida no pudo verificarse. Los originales se conservan.');
+  const invalidIds: string[] = [...reported], items: SharedImport[] = [], seen = new Set(invalidIds);
+  for (const item of reply.items) {
+    if (!object(item) || typeof item.id !== 'string' || !uuid.test(item.id) || seen.has(item.id)) throw new Error('La bandeja compartida contiene un manifiesto inválido.');
+    seen.add(item.id);
+    if (validSharedImport(item)) items.push(item); else invalidIds.push(item.id);
+  }
+  return {items, invalidIds};
 }
 export async function readSharedFileChunk(item: SharedImport, file: SharedFile, offset: number, length: number, call: DeviceInvoker = deviceInvoke): Promise<Uint8Array<ArrayBuffer>> {
   if (!validSharedImport(item) || !item.files.some(candidate => candidate.id === file.id && candidate.sha256 === file.sha256 && candidate.size === file.size)

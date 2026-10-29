@@ -1,4 +1,4 @@
-import { deviceInvoke, requireNative, validSharedImport, listSharedImports, readSharedFile, readSharedFileChunk, acknowledgeSharedImport,
+import { deviceInvoke, requireNative, validSharedImport, listSharedImports, listSharedImportReport, readSharedFile, readSharedFileChunk, acknowledgeSharedImport,
   type DeviceInvoker, type NativeReply, type SharedImport } from './device-bridge.ts';
 
 function documentInvoker(call: DeviceInvoker): DeviceInvoker {
@@ -13,6 +13,7 @@ export async function pickDocuments(call: DeviceInvoker = deviceInvoke): Promise
   return result.items[0];
 }
 export function listDocumentImports(call: DeviceInvoker = deviceInvoke) { return listSharedImports(documentInvoker(call)); }
+export function listDocumentImportReport(call: DeviceInvoker = deviceInvoke) { return listSharedImportReport(documentInvoker(call)); }
 export async function importDocumentItem(item: SharedImport,
   save: (input: { sourceId: string; item: SharedImport; files: File[] }) => Promise<void>, call: DeviceInvoker = deviceInvoke): Promise<void> {
   if (!validSharedImport(item)) throw new Error('Importación de documentos inválida.');

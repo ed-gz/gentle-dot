@@ -27,6 +27,7 @@ private struct BridgeReply: Encodable {
     var id: String? = nil
     var connection: PairedConnection? = nil
     var items: [SharedManifest]? = nil
+    var invalidIds: [String]? = nil
     var schemes: [String]? = nil
     var written: Int? = nil
     var exported: Bool? = nil
@@ -267,7 +268,10 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
             return BridgeReply(hex: SHA256.hash(data: Data(args.data.utf8)).map { String(format: "%02x", $0) }.joined())
         }
     }
-    @objc func shareList(_ invoke: Invoke) { work(invoke) { BridgeReply(items: try SharedInbox.list()) } }
+    @objc func shareList(_ invoke: Invoke) { work(invoke) {
+        let listing = try SharedInbox.listReport()
+        return BridgeReply(items: listing.items, invalidIds: listing.invalidIDs)
+    } }
     @objc func cryptoHashBegin(_ invoke: Invoke) { work(invoke) { BridgeReply(id: try self.hashes.begin()) } }
     @objc func cryptoHashUpdate(_ invoke: Invoke) {
         work(invoke) { let args = try invoke.parseArgs(HashUpdateInput.self); try self.hashes.update(args.id, args.data); return BridgeReply() }
@@ -385,7 +389,10 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
         }
     }
     @objc func documentsList(_ invoke: Invoke) {
-        work(invoke) { BridgeReply(items: try SharedInbox.list(root: DocumentImportStore.root())) }
+        work(invoke) {
+            let listing = try SharedInbox.listReport(root: DocumentImportStore.root())
+            return BridgeReply(items: listing.items, invalidIds: listing.invalidIDs)
+        }
     }
     @objc func documentsRead(_ invoke: Invoke) {
         work(invoke) {

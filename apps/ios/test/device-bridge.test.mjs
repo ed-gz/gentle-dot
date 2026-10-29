@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { validSharedImport, listSharedImports, readSharedFile, importSharedItem, recoverImportBatch, nativeSHA256Bytes } from '../src/device-bridge.ts';
+import { validSharedImport, listSharedImports, listSharedImportReport, readSharedFile, importSharedItem, recoverImportBatch, nativeSHA256Bytes } from '../src/device-bridge.ts';
 import { privateOrigin, parseInvitation, validConnection, pairingMessage } from '../src/device-pairing.ts';
 
 const origin = 'https://workstation.tail1234.ts.net';
@@ -40,6 +40,16 @@ test('shared manifests enforce UUIDs, size limits, hashes, and unique files', as
   for (const bad of [{ ...item, id: '../../escape' }, { ...item, files: [...item.files, ...item.files] }, { ...item, files: [] },
     { ...item, files: [{ ...item.files[0], size: 26 * 1024 * 1024 }] }, { ...item, files: [{ ...item.files[0], sha256: 'bad' }] }, { ...item, notes: 'a'.repeat(8001) }]) assert.equal(validSharedImport(bad), false);
   await assert.rejects(listSharedImports(async () => ({ ok: true, items: [{ ...item, id: '../bad' }] })), /inválido/);
+});
+
+test('partial native listings preserve damaged IDs and permit healthy imports', async () => {
+  const item = manifest(), broken = 'b2a6e456-7a93-4bcc-b006-4493c78b5b66', incompatible = 'c2a6e456-7a93-4bcc-b006-4493c78b5b66';
+  const call = async () => ({ ok: true, items: [item, { ...item, id: incompatible, title: ' ' }], invalidIds: [broken] });
+  assert.deepEqual(await listSharedImportReport(call), { items: [item], invalidIds: [broken, incompatible] });
+  await assert.rejects(listSharedImports(call), /inválido/);
+  await assert.rejects(listSharedImportReport(async () => ({ ok:true, items:[item], invalidIds:[id] })), /inválido/);
+  await assert.rejects(listSharedImportReport(async () => ({ ok:true, items:[item], invalidIds:['../bad'] })), /verificarse/);
+  assert.deepEqual(await listSharedImportReport(async () => ({ ok:true, items:[item] })), { items:[item], invalidIds:[] });
 });
 
 test('shared file chunks preserve bytes and reject corruption before any acknowledgement', async () => {

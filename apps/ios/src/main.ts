@@ -1,6 +1,6 @@
 import { localIdentifier } from './local-identifiers.ts';
 import { waitForForeground } from './foreground.ts';
-import { pickDocuments, listDocumentImports, importDocumentItemStreamed } from './document-import.ts';
+import { pickDocuments, listDocumentImportReport, importDocumentItemStreamed } from './document-import.ts';
 import { createEngineAsync, frameAt } from '@gentle-dot/ui/src/capri2d/engine.ts';
 import { RoamDirector, type RoamPosition } from '@gentle-dot/ui/src/capri2d/roam.ts';
 import { occupiedPhoneSpace, phonePerches, phonePositionFree } from './companion-space.ts';
@@ -47,7 +47,7 @@ import { createConversationRequests } from './conversation-requests.ts';
 import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCancelWithDeadline, voiceAvailabilityNote, VoiceCancelUnconfirmed, VoiceRetryPending } from './perception.ts';
 import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, markVoiceCancellation, clearVoiceCancellation, pendingVoiceCancellation } from './voice-origin.ts';
 import { isTauri } from '@tauri-apps/api/core';
-import { listSharedImports, importSharedItemStreamed, recoverImportBatch } from './device-bridge.ts';
+import { listSharedImportReport, importSharedItemStreamed, recoverImportBatch } from './device-bridge.ts';
 import { parseInvitation, pairDevice } from './device-pairing.ts';
 import { ConnectionSelectionAmbiguous, ConnectionSelectionPending, createConnectionSelectionStore, type SelectedConnection } from './connection-selection.ts';
 import { mountPairingSaveRecovery } from './pairing-save-recovery.ts';
@@ -2031,19 +2031,19 @@ element('chat-notice').after(importRecovery);
 const importRecoveryPanels = { share: document.createElement('div'), document: document.createElement('div') };
 importRecovery.hidden = true; importRecoveryPanels.share.hidden = true; importRecoveryPanels.document.hidden = true;
 importRecovery.append(importRecoveryPanels.share, importRecoveryPanels.document);
-function showImportRecovery(kind: 'share' | 'document', failures: { id: string; title: string; message: string }[]): void {
+function showImportRecovery(kind: 'share' | 'document', failures: { id: string; title: string; message: string; nativeManifest?: boolean }[]): void {
   const root = importRecoveryPanels[kind]; root.replaceChildren();
-  const first = failures[0]; root.hidden = !first;
+  root.hidden = failures.length === 0;
   importRecovery.hidden = importRecoveryPanels.share.hidden && importRecoveryPanels.document.hidden;
-  if (!first) return;
+  for (const first of failures) {
   const message = document.createElement('p'); message.setAttribute('role', 'status');
-  message.textContent = `No se pudo guardar ${first.title}${failures.length > 1 ? ` y ${failures.length - 1} archivo(s) más` : ''}. El original se conserva. ${first.message}`;
+  message.textContent = `No se pudo guardar ${first.title}. ${first.nativeManifest ? '' : 'La copia original se conserva. '}${first.message}`;
   const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Reintentar';
   const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = 'Liberar copia incompleta';
   const source = `${kind}:${first.id}`;
   retry.addEventListener('click', () => {
     retry.disabled = cancel.disabled = true;
-    void resumeStreamedImport(source).then(() => kind === 'share' ? importSharedFiles() : importDocumentFiles(true))
+    void (first.nativeManifest ? Promise.resolve() : resumeStreamedImport(source)).then(() => kind === 'share' ? importSharedFiles() : importDocumentFiles(true))
       .catch(error => { message.textContent = errorText(error); }).finally(() => { retry.disabled = cancel.disabled = false; });
   });
   cancel.addEventListener('click', () => {
@@ -2051,7 +2051,9 @@ function showImportRecovery(kind: 'share' | 'document', failures: { id: string; 
     void cancelStreamedImport(source).then(() => { message.textContent = 'Copia incompleta liberada. El original sigue guardado y puedes reintentar.'; cancel.hidden = true; })
       .catch(error => { message.textContent = errorText(error); }).finally(() => { retry.disabled = cancel.disabled = false; });
   });
-  root.append(message, retry, cancel);
+  root.append(message, retry);
+  if (!first.nativeManifest) root.append(cancel);
+  }
 }
 function importSharedFiles(): Promise<void> {
   if (!isTauri()) return Promise.resolve();
@@ -2059,7 +2061,8 @@ function importSharedFiles(): Promise<void> {
   void importDocumentFiles();
   sharedImports = (async () => {
     try {
-      const result = await recoverImportBatch(await listSharedImports(), async item => {
+      const listing = await listSharedImportReport();
+      const result = await recoverImportBatch(listing.items, async item => {
         await importSharedItemStreamed(item, async ({ sourceId, read }) => {
           const files = item.files.map(file => ({ id: file.id, name: file.name, type: file.mime, size: file.size, sha256: file.sha256 }));
           const work = await createStreamedImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task', instruction: item.notes || 'Material compartido con Capri. Pendiente de instrucciones.', files },
@@ -2070,7 +2073,7 @@ function importSharedFiles(): Promise<void> {
         });
       });
       await inbox.refresh();
-      showImportRecovery('share', result.failures);
+      showImportRecovery('share', [...listing.invalidIds.map(id => ({ id, title: `material ${id}`, message: 'No se pudo leer su manifiesto. La copia compartida se conserva; vuelve a compartir el original si está disponible.', nativeManifest: true })), ...result.failures]);
     } catch (error) { element('chat-notice').textContent = errorText(error); }
   })().finally(() => { sharedImports = undefined; });
   return sharedImports;
@@ -2081,7 +2084,8 @@ function importDocumentFiles(fresh = false): Promise<void> {
   if (documentImports) return fresh ? documentImports.then(() => importDocumentFiles()) : documentImports;
   documentImports = (async () => {
     try {
-      const result = await recoverImportBatch(await listDocumentImports(), async item => {
+      const listing = await listDocumentImportReport();
+      const result = await recoverImportBatch(listing.items, async item => {
         await importDocumentItemStreamed(item, async ({ sourceId, read }) => {
           const files = item.files.map(file => ({ id: file.id, name: file.name, type: file.mime, size: file.size, sha256: file.sha256 }));
           const work = await createStreamedImportedWork(sourceId, { title: item.title, kind: files.some(file => file.type.startsWith('audio/')) ? 'meeting' : 'task',
@@ -2095,7 +2099,7 @@ function importDocumentFiles(fresh = false): Promise<void> {
         });
       });
       await inbox.refresh();
-      showImportRecovery('document', result.failures);
+      showImportRecovery('document', [...listing.invalidIds.map(id => ({ id, title: `material ${id}`, message: 'No se pudo leer su manifiesto. La copia importada se conserva; vuelve a seleccionar el original si está disponible.', nativeManifest: true })), ...result.failures]);
     } catch (error) { element('chat-notice').textContent = errorText(error); }
   })().finally(() => { documentImports = undefined; });
   return documentImports;

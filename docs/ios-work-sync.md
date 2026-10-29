@@ -10,6 +10,8 @@ Capri puede conservar trabajos y adjuntos offline, transferir una revisión apro
 4. Solicitar la minuta. `work_process` requiere una aprobación separada de esa revisión confirmada. El resultado siempre tiene `requiresReview: true`.
 5. Recuperar el resultado con `work_result`. Queda en `WorkItem.result`, disponible offline. `work_correct` conserva evidencia y adjuntos en un trabajo nuevo y editable, inicialmente sin aprobación.
 
+El listado nativo separa manifiestos ilegibles por identificador y permite recuperar los demás. La interfaz muestra cada identificador afectado y conserva la copia nativa, sin confirmarla ni eliminarla; puede intentarse de nuevo si vuelve a ser legible o volver a compartir el original cuando esté disponible. Un error de lectura o cuota tampoco confirma el elemento. Esta recuperación está probada con navegador simulado y fixture Swift; falta validar la extensión y firma en el iPhone.
+
 ## Qué confirma cada respuesta
 
 | Respuesta | Significado |

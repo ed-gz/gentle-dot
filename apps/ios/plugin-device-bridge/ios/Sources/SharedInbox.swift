@@ -30,6 +30,10 @@ struct SharedManifest: Codable {
     let notes: String
     let files: [SharedFile]
 }
+struct SharedListing {
+    let items: [SharedManifest]
+    let invalidIDs: [String]
+}
 
 // Compiled into both app and extension. Only an atomically published directory is visible
 // to the app. The acknowledgement removes it after the app's IndexedDB commit.
@@ -76,13 +80,24 @@ enum SharedInbox {
         guard value.files.reduce(0, { $0 + $1.size }) <= maxTotal else { throw ShareFailure.invalid }
         return value
     }
-    static func list(root suppliedRoot: URL? = nil) throws -> [SharedManifest] {
+    static func listReport(root suppliedRoot: URL? = nil) throws -> SharedListing {
         let root = try suppliedRoot ?? root()
         return try locked(root) {
             let directories = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
-            // A damaged published item is reported instead of silently disappearing.
-            return try directories.filter { validID($0.lastPathComponent) }.map(readManifest).sorted { $0.createdAt < $1.createdAt }
+            var items: [SharedManifest] = []
+            var invalidIDs: [String] = []
+            for directory in directories where validID(directory.lastPathComponent) {
+                do { items.append(try readManifest(directory)) }
+                catch { invalidIDs.append(directory.lastPathComponent) }
+            }
+            return SharedListing(items: items.sorted { $0.createdAt < $1.createdAt }, invalidIDs: invalidIDs.sorted())
         }
+    }
+    // Strict API retained for callers that cannot surface partial failures.
+    static func list(root suppliedRoot: URL? = nil) throws -> [SharedManifest] {
+        let result = try listReport(root: suppliedRoot)
+        guard result.invalidIDs.isEmpty else { throw ShareFailure.invalid }
+        return result.items
     }
     static func read(_ id: String, _ fileID: String, _ offset: Int, _ length: Int, root suppliedRoot: URL? = nil) throws -> Data {
         guard validID(id), validID(fileID), offset >= 0, length > 0, length <= 256 * 1024 else { throw ShareFailure.invalid }
