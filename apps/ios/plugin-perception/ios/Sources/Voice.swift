@@ -4,12 +4,6 @@ import Foundation
 import Speech
 import UIKit
 
-struct VoiceSegment: Encodable {
-    let text: String
-    let startSeconds: Double
-    let endSeconds: Double
-}
-
 struct VoiceReply: Encodable {
     var ok = false
     var available: Bool? = nil
@@ -45,6 +39,16 @@ struct VoiceReply: Encodable {
 }
 
 enum VoiceCancellationResult { case confirmed, closing, cleanupFailed }
+
+struct VoiceReceiptReply: Encodable {
+    var ok = false
+    var error: String? = nil
+    var message: String? = nil
+    var receipt: VoiceNativeReceiptEnvelope? = nil
+    var receipts: [VoiceNativeReceiptEnvelope]? = nil
+    var releaseState: String? = nil
+    static func failure() -> VoiceReceiptReply { VoiceReceiptReply(error: "receipt_unavailable", message: "No pude verificar el dictado guardado. Se conserva para revisión.") }
+}
 
 @available(iOS 26.0, *)
 private enum VoiceTranscriberKind { case speech, dictation }
@@ -728,7 +732,19 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             // or a future exact, verified acknowledgement is implemented.
             guard let lease = retainedLease else { preserve = true; return pending(id, reason: "retention_failed") }
             retentionLatch.begin()
-            let verify = Task.detached(priority: .userInitiated) { try lease.verify() }
+            let receiptRoot = VoiceNativeReceiptStore.defaultRoot()
+            let transcript = result
+            let verify = Task.detached(priority: .userInitiated) {
+                try lease.verify()
+                guard let root = receiptRoot, let text = transcript.text, let segments = transcript.segments,
+                      let duration = transcript.durationSeconds, let locale = transcript.locale,
+                      let source = transcript.source, let session = transcript.sessionId else { throw VoiceNativeReceiptError.invalid }
+                let evidence = VoiceNativeTranscript(sessionId: session, text: text, segments: segments,
+                    durationSeconds: duration, locale: locale, source: source)
+                let receipt = VoiceNativeReceipt(schema: "capri-native-voice-receipt/v1", audio: retainedRecord, transcript: evidence)
+                try lease.verify()
+                try VoiceNativeReceiptStore(root: root).put(receipt)
+            }
             let verification = await verify.result
             retentionLatch.end()
             guard epoch == generation, sessionID == id, !Task.isCancelled else { return .failure("cancelled", "Dictado cancelado.") }
@@ -951,6 +967,36 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         } catch {
             return .failure("retention_unconfirmed", "No pude confirmar que se descartó el audio. Se conserva para revisión.")
         }
+    }
+
+    func listVoiceReceipts() async -> VoiceReceiptReply {
+        guard let root = VoiceNativeReceiptStore.defaultRoot() else { return .failure() }
+        do { let values = try await Task.detached { try VoiceNativeReceiptStore(root: root).list() }.value; return VoiceReceiptReply(ok: true, receipts: values) }
+        catch { return .failure() }
+    }
+
+    func getVoiceReceipt(_ id: String) async -> VoiceReceiptReply {
+        guard let root = VoiceNativeReceiptStore.defaultRoot() else { return .failure() }
+        do { let value = try await Task.detached { try VoiceNativeReceiptStore(root: root).get(id) }.value; return VoiceReceiptReply(ok: true, receipt: value) }
+        catch { return .failure() }
+    }
+
+    func discardVoiceReceipt(_ receipt: VoiceNativeReceipt) async -> VoiceReceiptReply {
+        guard let root = VoiceNativeReceiptStore.defaultRoot() else { return .failure() }
+        do { try await Task.detached { try VoiceNativeReceiptStore(root: root).discard(receipt) }.value; return VoiceReceiptReply(ok: true) }
+        catch { return .failure() }
+    }
+
+    func releaseRetainedVoice(_ receipt: VoiceNativeReceipt) async -> VoiceReceiptReply {
+        guard sessionID == nil, !busy, !startLatch.active, !retentionLatch.active,
+              !cancellationBarrier.active, pendingCancellation == nil,
+              let receiptRoot = VoiceNativeReceiptStore.defaultRoot(), let audioRoot = VoiceRetentionBinding.defaultRoot() else { return .failure() }
+        busy = true; startLatch.begin()
+        defer { startLatch.end(); busy = false }
+        do {
+            try await Task.detached { try VoiceNativeReceiptStore(root: receiptRoot).release(receipt, audioJournal: VoiceRecoveryJournal(root: audioRoot)) }.value
+            return VoiceReceiptReply(ok: true, releaseState: "released")
+        } catch { return .failure() }
     }
 
     private func clearCapture() {

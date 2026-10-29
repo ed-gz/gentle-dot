@@ -232,6 +232,44 @@ async fn attach_retained_voice<R: Runtime>(
     }
     native_call(app, "attachRetainedVoice", json!({"record": record})).await
 }
+
+#[tauri::command]
+async fn list_voice_receipts<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
+    native_call(app, "listVoiceReceipts", json!({})).await
+}
+
+#[tauri::command]
+async fn get_voice_receipt<R: Runtime>(
+    app: AppHandle<R>,
+    session_id: String,
+) -> Result<Value, String> {
+    if !valid_session_id(&session_id) {
+        return Err("invalid_voice_session".into());
+    }
+    native_call(app, "getVoiceReceipt", json!({"sessionId": session_id})).await
+}
+
+#[tauri::command]
+async fn discard_voice_receipt<R: Runtime>(
+    app: AppHandle<R>,
+    receipt: Value,
+) -> Result<Value, String> {
+    if !receipt.is_object() || receipt.to_string().len() > 1_500_000 {
+        return Err("invalid_voice_receipt".into());
+    }
+    native_call(app, "discardVoiceReceipt", json!({"receipt": receipt})).await
+}
+
+#[tauri::command]
+async fn release_retained_voice<R: Runtime>(
+    app: AppHandle<R>,
+    receipt: Value,
+) -> Result<Value, String> {
+    if !receipt.is_object() || receipt.to_string().len() > 1_500_000 {
+        return Err("invalid_voice_receipt".into());
+    }
+    native_call(app, "releaseRetainedVoice", json!({"receipt": receipt})).await
+}
 #[tauri::command]
 async fn cancel_document<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
     native_call(app, "cancelDocument", json!({})).await
@@ -274,6 +312,10 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             inspect_retained_voice,
             discard_retained_voice,
             attach_retained_voice,
+            list_voice_receipts,
+            get_voice_receipt,
+            discard_voice_receipt,
+            release_retained_voice,
             recognize_document,
             cancel_document,
             scan_pairing_code,

@@ -88,6 +88,14 @@ xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
 "$verification/voice-recovery-journal-tests"
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
   -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+  plugin-perception/ios/Sources/VoiceRecoveryJournal.swift \
+  plugin-perception/ios/Sources/VoiceRetentionBinding.swift \
+  plugin-perception/ios/Sources/VoiceTranscriptBounds.swift \
+  plugin-perception/ios/Sources/VoiceNativeReceipt.swift \
+  test/native/VoiceNativeReceiptTests.swift -o "$verification/voice-native-receipt-tests"
+"$verification/voice-native-receipt-tests"
+xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library \
+  -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
   plugin-perception/ios/Sources/VoiceTranscriptBounds.swift \
   test/native/VoiceTranscriptBoundsTests.swift -o "$verification/voice-transcript-bounds-tests"
 "$verification/voice-transcript-bounds-tests"
@@ -160,6 +168,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-perception/ios/Sources/VoiceRecoveryJournal.swift \
   plugin-perception/ios/Sources/VoiceRetentionBinding.swift \
   plugin-perception/ios/Sources/VoiceTranscriptBounds.swift \
+  plugin-perception/ios/Sources/VoiceNativeReceipt.swift \
   plugin-perception/ios/Sources/VoiceOwners.swift \
   plugin-perception/ios/Sources/VoiceLocaleSelection.swift \
   plugin-perception/ios/Sources/LiveAudioBuffer.swift \

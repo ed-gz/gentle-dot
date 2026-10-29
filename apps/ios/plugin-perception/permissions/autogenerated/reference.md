@@ -10,6 +10,10 @@ Use local Apple speech transcription and Vision document recognition in Capri. M
 - `allow-inspect-retained-voice`
 - `allow-discard-retained-voice`
 - `allow-attach-retained-voice`
+- `allow-list-voice-receipts`
+- `allow-get-voice-receipt`
+- `allow-discard-voice-receipt`
+- `allow-release-retained-voice`
 - `allow-recognize-document`
 - `allow-cancel-document`
 - `allow-scan-pairing-code`
@@ -183,6 +187,58 @@ Denies the discard_retained_voice command without any pre-configured scope.
 <tr>
 <td>
 
+`perception:allow-discard-voice-receipt`
+
+</td>
+<td>
+
+Enables the discard_voice_receipt command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:deny-discard-voice-receipt`
+
+</td>
+<td>
+
+Denies the discard_voice_receipt command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:allow-get-voice-receipt`
+
+</td>
+<td>
+
+Enables the get_voice_receipt command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:deny-get-voice-receipt`
+
+</td>
+<td>
+
+Denies the get_voice_receipt command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `perception:allow-inspect-retained-voice`
 
 </td>
@@ -202,6 +258,32 @@ Enables the inspect_retained_voice command without any pre-configured scope.
 <td>
 
 Denies the inspect_retained_voice command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:allow-list-voice-receipts`
+
+</td>
+<td>
+
+Enables the list_voice_receipts command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:deny-list-voice-receipts`
+
+</td>
+<td>
+
+Denies the list_voice_receipts command without any pre-configured scope.
 
 </td>
 </tr>
@@ -254,6 +336,32 @@ Enables the recognize_document command without any pre-configured scope.
 <td>
 
 Denies the recognize_document command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:allow-release-retained-voice`
+
+</td>
+<td>
+
+Enables the release_retained_voice command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:deny-release-retained-voice`
+
+</td>
+<td>
+
+Denies the release_retained_voice command without any pre-configured scope.
 
 </td>
 </tr>

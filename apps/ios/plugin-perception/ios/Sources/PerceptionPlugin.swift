@@ -7,6 +7,8 @@ import WebKit
 private struct SessionArgs: Decodable { let sessionId: String; let ownerId: String?; let retainDestination: String? }
 private struct VoiceOwnerArgs: Decodable { let ownerId: String?; let retainDestination: String? }
 private struct RetainedVoiceArgs: Decodable { let record: VoiceRecoveryRecord }
+private struct VoiceReceiptArgs: Decodable { let receipt: VoiceNativeReceipt }
+private struct VoiceReceiptSessionArgs: Decodable { let sessionId: String }
 
 final class PerceptionPlugin: Plugin {
     private var voice: AnyObject?
@@ -133,6 +135,33 @@ final class PerceptionPlugin: Plugin {
         Task { @MainActor in
             if #available(iOS 26.0, *) { invoke.resolve(await controller().attachRetained(args.record)) }
             else { invoke.resolve(VoiceReply.failure("os_unsupported", "SpeechAnalyzer requiere iOS 26 o posterior.")) }
+        }
+    }
+    @objc func listVoiceReceipts(_ invoke: Invoke) {
+        Task { @MainActor in
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().listVoiceReceipts()) }
+            else { invoke.resolve(VoiceReceiptReply.failure()) }
+        }
+    }
+    @objc func getVoiceReceipt(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(VoiceReceiptSessionArgs.self), UUID(uuidString: args.sessionId) != nil else { invoke.resolve(VoiceReceiptReply.failure()); return }
+        Task { @MainActor in
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().getVoiceReceipt(args.sessionId)) }
+            else { invoke.resolve(VoiceReceiptReply.failure()) }
+        }
+    }
+    @objc func discardVoiceReceipt(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(VoiceReceiptArgs.self) else { invoke.resolve(VoiceReceiptReply.failure()); return }
+        Task { @MainActor in
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().discardVoiceReceipt(args.receipt)) }
+            else { invoke.resolve(VoiceReceiptReply.failure()) }
+        }
+    }
+    @objc func releaseRetainedVoice(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(VoiceReceiptArgs.self) else { invoke.resolve(VoiceReceiptReply.failure()); return }
+        Task { @MainActor in
+            if #available(iOS 26.0, *) { invoke.resolve(await controller().releaseRetainedVoice(args.receipt)) }
+            else { invoke.resolve(VoiceReceiptReply.failure()) }
         }
     }
     @objc func recognizeDocument(_ invoke: Invoke) {

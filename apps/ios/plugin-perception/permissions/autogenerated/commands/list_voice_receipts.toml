@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-list-voice-receipts"
+description = "Enables the list_voice_receipts command without any pre-configured scope."
+commands.allow = ["list_voice_receipts"]
+
+[[permission]]
+identifier = "deny-list-voice-receipts"
+description = "Denies the list_voice_receipts command without any pre-configured scope."
+commands.deny = ["list_voice_receipts"]

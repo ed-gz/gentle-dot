@@ -288,4 +288,32 @@ final class VoiceRecoveryJournal {
           }
         }
     }
+
+    /// Idempotent removal only for a fully identified ready capture. A
+    /// missing manifest is acceptable only if its audio is also absent.
+    func releaseExact(_ expected: VoiceRecoveryRecord) throws {
+        try locked {
+          try withFileLock(shared: false) {
+            guard valid(expected), expected.state == .ready else { throw VoiceRecoveryJournalError.invalid }
+            let existing = try read()
+            if existing == nil {
+                guard !(try exists(audio(expected))) else { throw VoiceRecoveryJournalError.changed }
+                return
+            }
+            if existing != expected {
+                // A newer capture can occupy the journal after the old audio
+                // was released. Never touch it when retrying the old receipt.
+                guard !(try exists(audio(expected))) else { throw VoiceRecoveryJournalError.changed }
+                return
+            }
+            let file = audio(expected)
+            if try exists(file) {
+                let (_, identity) = try audioIdentity(expected)
+                guard identity.byteCount == expected.byteCount, identity.sha256 == expected.sha256 else { throw VoiceRecoveryJournalError.changed }
+                try manager.removeItem(at: file)
+            }
+            try manager.removeItem(at: manifest)
+          }
+        }
+    }
 }

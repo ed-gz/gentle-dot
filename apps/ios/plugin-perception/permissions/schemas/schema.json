@@ -355,6 +355,26 @@
           "const": "deny-discard-retained-voice"
         },
         {
+          "description": "Enables the discard_voice_receipt command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-discard-voice-receipt"
+        },
+        {
+          "description": "Denies the discard_voice_receipt command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-discard-voice-receipt"
+        },
+        {
+          "description": "Enables the get_voice_receipt command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-voice-receipt"
+        },
+        {
+          "description": "Denies the get_voice_receipt command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-voice-receipt"
+        },
+        {
           "description": "Enables the inspect_retained_voice command without any pre-configured scope.",
           "type": "string",
           "const": "allow-inspect-retained-voice"
@@ -363,6 +383,16 @@
           "description": "Denies the inspect_retained_voice command without any pre-configured scope.",
           "type": "string",
           "const": "deny-inspect-retained-voice"
+        },
+        {
+          "description": "Enables the list_voice_receipts command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-voice-receipts"
+        },
+        {
+          "description": "Denies the list_voice_receipts command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-voice-receipts"
         },
         {
           "description": "Enables the prepare_voice command without any pre-configured scope.",
@@ -383,6 +413,16 @@
           "description": "Denies the recognize_document command without any pre-configured scope.",
           "type": "string",
           "const": "deny-recognize-document"
+        },
+        {
+          "description": "Enables the release_retained_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-release-retained-voice"
+        },
+        {
+          "description": "Denies the release_retained_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-release-retained-voice"
         },
         {
           "description": "Enables the scan_pairing_code command without any pre-configured scope.",
