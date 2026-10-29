@@ -65,6 +65,7 @@ dependencies << { 'target' => 'CapriShare', 'embed' => true, 'codeSign' => false
 
 predicate = 'SUBQUERY(extensionItems, $item, SUBQUERY($item.attachments, $attachment, ' \
   'ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.audio" OR ' \
+  'ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.mpeg-4" OR ' \
   'ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.image" OR ' \
   'ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.plain-text" OR ' \
   'ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "com.adobe.pdf" OR ' \
@@ -74,6 +75,7 @@ spec['targets']['CapriShare'] = {
   'type' => 'app-extension', 'platform' => 'iOS', 'deploymentTarget' => '15.0',
   'sources' => [
     { 'path' => relative.call('share-extension/ShareViewController.swift') },
+    { 'path' => relative.call('share-extension/SharedMediaInspection.swift') },
     { 'path' => relative.call('plugin-device-bridge/ios/Sources/AppGroupResolver.swift') },
     { 'path' => relative.call('plugin-device-bridge/ios/Sources/SharedInbox.swift') }
   ],

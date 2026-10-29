@@ -1,6 +1,6 @@
 name: Capri shared import recovery fixture
 
-# Synthetic files, interrupted-copy preservation and partial reads; no signing, IPA, personal art or credentials.
+# Synthetic files, interrupted-copy preservation, media classification and partial reads; no signing, IPA, personal art or credentials.
 on:
   push:
     branches:
@@ -26,4 +26,6 @@ jobs:
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - name: Compile and run native fixtures and typecheck the iOS bridge
-        run: bash apps/ios/scripts/check-native-sdk.sh
+        run: |
+          bash apps/ios/scripts/check-share-media.sh
+          bash apps/ios/scripts/check-native-sdk.sh

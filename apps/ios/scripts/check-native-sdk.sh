@@ -243,6 +243,7 @@ xcrun --sdk iphoneos swiftc -typecheck -swift-version 5 -parse-as-library \
   plugin-device-bridge/ios/Sources/SelectionCAS.swift \
   plugin-device-bridge/ios/Sources/AppGroupResolver.swift \
   plugin-device-bridge/ios/Sources/SharedInbox.swift \
+  share-extension/SharedMediaInspection.swift \
   share-extension/ShareViewController.swift \
   plugin-device-bridge/ios/Sources/StreamingHash.swift \
   plugin-device-bridge/ios/Sources/SessionUpload.swift \

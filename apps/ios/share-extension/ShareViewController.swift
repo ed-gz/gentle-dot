@@ -98,7 +98,12 @@ final class ShareViewController: UIViewController {
                     self.extensionContext?.completeRequest(returningItems: nil)
                 }
             } catch {
-                let message = "No se completó la importación. La copia parcial se conserva; vuelve a compartir el original si está disponible."
+                let message: String
+                if let failure = error as? ShareFailure, case .unsupportedMedia = failure {
+                    message = failure.localizedDescription
+                } else {
+                    message = "No se completó la importación. La copia parcial se conserva; vuelve a compartir el original si está disponible."
+                }
                 await MainActor.run {
                     self.statusLabel.text = message; self.saving = false
                     self.saveButton.isEnabled = true; self.cancelButton.isEnabled = true
@@ -170,27 +175,48 @@ final class ShareViewController: UIViewController {
                 }
             }
         }
+        // Some providers advertise only an MPEG-4 movie/container UTI for audio.
+        // Copy while the provider URL is valid, then inspect tracks before
+        // publishing; an extension or a MIME label alone cannot prove audio.
+        if let identifier = provider.registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: .mpeg4Movie) == true }) {
+            let file: SharedFile = try await withCheckedThrowingContinuation { continuation in
+                provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, error in
+                    do {
+                        guard error == nil, let url = url else { throw ShareFailure.invalid }
+                        let name = suggestedName ?? url.lastPathComponent
+                        continuation.resume(returning: try SharedInbox.stageFile(url, name: name, mime: "audio/mp4", in: staging))
+                    } catch { continuation.resume(throwing: error) }
+                }
+            }
+            try await SharedMediaInspection.requireAudioOnly(file: file, in: staging)
+            return file
+        }
         if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-            return try await withCheckedThrowingContinuation { continuation in
+            let (file, needsInspection): (SharedFile, Bool) = try await withCheckedThrowingContinuation { continuation in
                 provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { value, error in
                     do {
                         guard error == nil, let url = value as? URL, url.isFileURL else { throw ShareFailure.invalid }
                         let type = UTType(filenameExtension: url.pathExtension)
                         let suggested = suggestedName ?? ""
                         let m4a = url.pathExtension.lowercased() == "m4a" || (suggested as NSString).pathExtension.lowercased() == "m4a"
-                        guard m4a || (type != nil && types.contains(where: { type!.conforms(to: $0) })) else { throw ShareFailure.invalid }
-                        let mime = m4a ? "audio/mp4" : (type?.preferredMIMEType ?? "application/octet-stream")
-                        continuation.resume(returning: try SharedInbox.stageFile(url, name: m4a && !suggested.isEmpty ? suggested : url.lastPathComponent,
-                            mime: mime, in: staging))
+                        let needsInspection = m4a || type?.conforms(to: .mpeg4Movie) == true
+                        guard needsInspection || (type != nil && types.contains(where: { type!.conforms(to: $0) })) else { throw ShareFailure.invalid }
+                        let mime = needsInspection ? "audio/mp4" : (type?.preferredMIMEType ?? "application/octet-stream")
+                        let file = try SharedInbox.stageFile(url, name: !suggested.isEmpty ? suggested : url.lastPathComponent,
+                            mime: mime, in: staging)
+                        continuation.resume(returning: (file, needsInspection))
                     } catch { continuation.resume(throwing: error) }
                 }
             }
+            if needsInspection { try await SharedMediaInspection.requireAudioOnly(file: file, in: staging) }
+            return file
         }
-        // Some providers advertise an MPEG-4 container instead of an audio UTI
-        // for an .m4a. The suffix classifies metadata only; ffprobe still checks bytes.
-        if let name = provider.suggestedName, (name as NSString).pathExtension.lowercased() == "m4a",
-           let identifier = provider.registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: .data) == true }) {
-            return try await withCheckedThrowingContinuation { continuation in
+        // Some providers expose generic data with an .m4a suggested name.
+        // Keep that legacy route, but inspect the copied media just like the
+        // MPEG-4 route instead of treating the name as proof of audio.
+        if let name = suggestedName, (name as NSString).pathExtension.lowercased() == "m4a",
+           let identifier = registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: .data) == true }) {
+            let file: SharedFile = try await withCheckedThrowingContinuation { continuation in
                 provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, error in
                     do {
                         guard error == nil, let url = url else { throw ShareFailure.invalid }
@@ -198,6 +224,8 @@ final class ShareViewController: UIViewController {
                     } catch { continuation.resume(throwing: error) }
                 }
             }
+            try await SharedMediaInspection.requireAudioOnly(file: file, in: staging)
+            return file
         }
         throw ShareFailure.invalid
     }

@@ -163,6 +163,8 @@ test('XcodeGen configurator adds and embeds extension idempotently without losin
     assert.equal(targets.CapriShare.info.properties.CFBundleVersion, '42');
     assert.deepEqual(targets.CapriShare.entitlements.properties['com.apple.security.application-groups'], targets.capri_iOS.entitlements.properties['com.apple.security.application-groups']);
     assert.match(targets.CapriShare.info.properties.NSExtension.NSExtensionAttributes.NSExtensionActivationRule, /public.audio/);
+    assert.match(targets.CapriShare.info.properties.NSExtension.NSExtensionAttributes.NSExtensionActivationRule, /public\.mpeg-4/);
+    assert.ok(targets.CapriShare.sources.some(item => item.path.endsWith('share-extension/SharedMediaInspection.swift')));
     assert.doesNotMatch(readFileSync(path, 'utf8'), /TRUEPREDICATE/);
     targets.capri_iOS.info.properties.NSCameraUsageDescription = 'Propósito de cámara personalizado';
     writeFileSync(path, JSON.stringify({ name: 'capri', targets }));

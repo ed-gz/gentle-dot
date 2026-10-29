@@ -3,7 +3,7 @@ import CryptoKit
 import Darwin
 
 enum ShareFailure: Error, LocalizedError {
-    case unavailable, invalid, limit, integrity, metadataLimit, nameLimit
+    case unavailable, invalid, limit, integrity, metadataLimit, nameLimit, unsupportedMedia
     var errorDescription: String? {
         switch self {
         case .unavailable: return "El grupo compartido no está disponible con esta firma. Puedes importar desde Archivos en Capri."
@@ -12,6 +12,7 @@ enum ShareFailure: Error, LocalizedError {
         case .integrity: return "No se pudo verificar el archivo. El original compartido se conserva."
         case .metadataLimit: return "El título y las notas ocupan demasiado espacio. Acórtalos y vuelve a intentarlo; el archivo original se conserva."
         case .nameLimit: return "El nombre del archivo es demasiado largo para Capri. Renómbralo y vuelve a intentarlo; el original se conserva."
+        case .unsupportedMedia: return "El archivo contiene vídeo o no tiene una pista de audio verificable. Capri no lo importó; la copia temporal se conserva."
         }
     }
 }
