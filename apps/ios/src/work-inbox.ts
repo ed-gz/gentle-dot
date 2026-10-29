@@ -16,6 +16,8 @@ export type WorkItem = {
   error?: string;
   transfer?: WorkTransfer;
   result?: WorkResult;
+  /** Previous host drafts, oldest first. Each remains a draft requiring review. */
+  resultHistory?: WorkResult[];
   source?: { id: string; hash: string };
 };
 export type WorkInput = {
@@ -32,7 +34,7 @@ const TIMEOUT_MS = 8000;
 const MIB = 1024 * 1024;
 export const WORK_LIMITS = Object.freeze({
   items: 100, files: 10, fileBytes: 25 * MIB, totalFileBytes: 50 * MIB,
-  title: 120, instruction: 8000, versions: 100, versionText: 200_000,
+  title: 120, instruction: 8000, versions: 100, versionText: 200_000, resultHistory: 20,
 });
 
 const transitions: Record<WorkStatus, readonly WorkStatus[]> = {
@@ -99,6 +101,7 @@ function nextRevision(item: WorkItem, now: number): WorkItem {
     versions: item.versions.map(version => ({ id: version.id, text: version.text, createdAt: version.createdAt })),
     ...(item.transfer ? { transfer: structuredClone(item.transfer) } : {}),
     ...(item.result ? { result: structuredClone(item.result) } : {}),
+    ...(item.resultHistory ? { resultHistory: structuredClone(item.resultHistory) } : {}),
     ...(item.source ? { source: { id: item.source.id, hash: item.source.hash } } : {}),
   };
 }
@@ -296,7 +299,14 @@ export async function saveWorkResult(id: string, transferId: string, value: Work
       }
     }
     if (item.result && JSON.stringify(item.result) === JSON.stringify(result)) return item;
-    const next = nextRevision(item, Date.now()); next.result = result; return next;
+    // Older installations have no resultHistory. Retain the prior draft before
+    // replacing it; if the bounded history is full, preserve every existing copy.
+    const history = item.resultHistory ?? [];
+    if (!Array.isArray(history) || history.length > WORK_LIMITS.resultHistory || history.some(value => !parseWorkResult(value)) || (item.result && !parseWorkResult(item.result))) throw new Error('No se pudo verificar el historial de minutas. Se conservan los datos originales.');
+    if (item.result && history.length >= WORK_LIMITS.resultHistory) throw new Error('Este trabajo alcanzó el límite de borradores. Conserva las versiones antes de generar otra.');
+    const next = nextRevision(item, Date.now());
+    if (item.result) next.resultHistory = [...history, structuredClone(item.result)];
+    next.result = result; return next;
   });
 }
 

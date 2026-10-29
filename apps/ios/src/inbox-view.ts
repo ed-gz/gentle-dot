@@ -4,6 +4,7 @@ import {
 } from './work-inbox.ts';
 import { isTauri } from '@tauri-apps/api/core';
 import { exportFileName, exportNativeFile } from './file-export.ts';
+import { parseWorkResult, type WorkResult } from '@gentle-dot/protocol';
 
 const statusLabels: Record<WorkStatus, string> = {
   local: 'Solo en este iPhone',
@@ -60,6 +61,44 @@ function dateLabel(timestamp: number): string {
 
 function sizeLabel(bytes: number): string {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.ceil(bytes / 1024))} KiB` : `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function timeLabel(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), remainder = seconds % 60;
+  return `${hours ? `${hours}:` : ''}${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+}
+
+/** The host result is untrusted text. Cite its stored source without implying
+ * that the user has approved the draft or that imported timecodes were verified. */
+function renderMinute(result: WorkResult, item: WorkItem): HTMLElement {
+  const content = node('div');
+  content.append(node('p', result.minutes.title), node('p', result.minutes.summary));
+  if (result.minutes.items.length) {
+    const list = node('ul');
+    const kinds = { agreement: 'Acuerdo', task: 'Pendiente', risk: 'Riesgo', question: 'Pregunta' } as const;
+    const certainty = { confirmed: 'confirmado', proposal: 'propuesta', inference: 'inferencia' } as const;
+    for (const entry of result.minutes.items) {
+      const row = node('li');
+      row.append(node('strong', `${kinds[entry.kind]} · ${certainty[entry.certainty]}`), node('p', entry.text));
+      if (entry.owner !== null || entry.due !== null) row.append(node('p', [entry.owner !== null ? `Responsable: ${entry.owner}` : '', entry.due !== null ? `Fecha: ${entry.due}` : ''].filter(Boolean).join(' · '), 'hint'));
+      const citations = node('details'); citations.append(node('summary', 'Ver evidencia'));
+      for (const id of entry.evidenceIds) {
+        const evidence = result.evidence.find(candidate => candidate.id === id);
+        if (!evidence) continue;
+        const file = item.files.find(candidate => candidate.id === evidence.fileId);
+        const source = evidence.source === 'desktop-transcriber' ? 'Transcripción de la computadora' : 'Texto importado';
+        const time = evidence.startMs !== undefined && evidence.endMs !== undefined ? ` · ${timeLabel(evidence.startMs)}–${timeLabel(evidence.endMs)}${evidence.source === 'imported-text' ? ' (tiempos declarados)' : ''}` : '';
+        citations.append(node('p', `${source} · ${file?.name ?? 'archivo no disponible'}${time}`, 'hint'), node('p', evidence.text));
+      }
+      row.append(citations); list.append(row);
+    }
+    content.append(list);
+  }
+  if (result.transcriptComparison) {
+    const comparison = node('details'); comparison.append(node('summary', 'Comparación de transcripciones'), node('p', result.transcriptComparison)); content.append(comparison);
+  }
+  return content;
 }
 
 export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<void>; saveDraft(text: string): Promise<void> } {
@@ -188,6 +227,31 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
       article.append(attachments);
     }
 
+    if (item.result) {
+      const current = parseWorkResult(item.result);
+      const history = item.resultHistory === undefined ? [] : Array.isArray(item.resultHistory) && item.resultHistory.length <= WORK_LIMITS.resultHistory ? item.resultHistory.map(parseWorkResult) : undefined;
+      if (current && history && history.every(Boolean)) {
+        const drafts = [...history as WorkResult[], current];
+        const minutes = node('details');
+        minutes.append(node('summary', drafts.length === 1 ? 'Minuta · pendiente de revisión' : `Minutas (${drafts.length}) · pendientes de revisión`));
+        let rendered = false;
+        minutes.addEventListener('toggle', () => {
+          if (!minutes.open || rendered) return;
+          rendered = true;
+          for (const [index, draft] of drafts.entries()) {
+            const version = node('details');
+            let when = 'fecha no disponible';
+            try { when = dateLabel(draft.createdAt); } catch { /* Keep malformed dates from hiding the stored draft. */ }
+            version.append(node('summary', `Borrador ${index + 1} · ${when}`));
+            let built = false;
+            version.addEventListener('toggle', () => { if (version.open && !built) { built = true; version.append(renderMinute(draft, item)); } });
+            minutes.append(version);
+          }
+        });
+        article.append(minutes);
+      } else article.append(node('p', 'No se pudo leer la minuta guardada. Los datos originales se conservan.', 'hint'));
+    }
+
     if (item.versions.length) {
       const versions = node('details');
       versions.append(node('summary', `Versiones guardadas (${item.versions.length})`));
@@ -246,7 +310,8 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
       const remove = button('Eliminar');
       const confirmation = node('div', undefined, 'surface');
       confirmation.hidden = true;
-      const warning = node('p', `Eliminar “${item.title}” de este iPhone también borrará sus ${item.files.length} archivos y ${item.versions.length} versiones. Esta acción no se puede deshacer.`);
+      const draftCount = item.result ? 1 + (Array.isArray(item.resultHistory) ? item.resultHistory.length : 0) : 0;
+      const warning = node('p', `Eliminar “${item.title}” de este iPhone también borrará sus ${item.files.length} archivos, ${item.versions.length} versiones de texto y ${draftCount} minutas. Esta acción no se puede deshacer.`);
       const confirmActions = node('div', undefined, 'actions');
       const confirm = button('Confirmar eliminación');
       confirm.setAttribute('aria-label', `Confirmar eliminación de ${item.title}`);
