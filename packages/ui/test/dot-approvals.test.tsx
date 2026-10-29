@@ -66,6 +66,23 @@ describe("Dot permissions on a trusted phone", () => {
 		expect(api.answerDotApproval).toHaveBeenCalledExactlyOnceWith("exact-id", true);
 	});
 
+	it("passes the full reviewed card to a client that requires exact approval binding", async () => {
+		const api = client();
+		api.requiresReviewedApproval = true;
+		render(<DotApprovalCards client={api} />);
+		await userEvent.click(await screen.findByRole("button", { name: "Aprobar permiso de Dot" }));
+		expect(api.answerDotApproval).toHaveBeenCalledExactlyOnceWith("exact-id", true, permission);
+	});
+
+	it("offers only refusal and points to the laptop when approval completeness is not guaranteed", async () => {
+		const api = client(); api.requiresReviewedApproval = true; api.dotApprovalDeclineOnly = true;
+		render(<DotApprovalCards client={api} />);
+		expect(await screen.findByRole("button", {name:"Aprobar permiso de Dot"})).toBeDisabled();
+		expect(screen.getByText(/revisa y responde en la laptop/)).toBeVisible();
+		await userEvent.click(screen.getByRole("button", {name:"Rechazar permiso de Dot"}));
+		expect(api.answerDotApproval).toHaveBeenCalledExactlyOnceWith("exact-id", false, permission);
+	});
+
 	it("allows rejection and blocks expired requests", async () => {
 		const api = client();
 		vi.mocked(api.dotApprovals).mockResolvedValue({

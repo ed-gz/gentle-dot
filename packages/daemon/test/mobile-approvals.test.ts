@@ -23,6 +23,22 @@ afterEach(() => {
 });
 
 describe("mobile per-action approvals", () => {
+	it("binds the decision to every displayed field and to a unique generation even if an ID is reused", async () => {
+		const b = broker({ now: () => 1000, waitMs: 2000 });
+		const first = b.begin("reused", request);
+		const original = b.list()[0]!;
+		for (const changed of [{...original, title: "different"}, {...original, message: "different"}, {...original, expiresAt: new Date(2000).toISOString()}, {...original, revision: crypto.randomUUID()}])
+			expect(b.answerExact(changed, true)).toBe(false);
+		expect(b.list()).toHaveLength(1);
+		expect(b.answerExact(original, false)).toBe(true);
+		expect(await first.answer).toBe(false);
+		const second = b.begin("reused", request);
+		const next = b.list()[0]!;
+		expect(next.revision).not.toBe(original.revision);
+		expect(b.answerExact(original, true)).toBe(false);
+		expect(b.answerExact(next, true)).toBe(true);
+		expect(await second.answer).toBe(true);
+	});
 	it("shows the complete preview and immutable expiry before granting exactly one action", async () => {
 		const b = broker({ now: () => 1000, waitMs: 2000 });
 		const pending = b.begin("request-a", request);

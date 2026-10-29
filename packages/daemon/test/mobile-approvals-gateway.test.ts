@@ -61,19 +61,25 @@ it("requires native trust at pairing and accepts only the trusted device's exact
 	});
 	expect(app.asked).toHaveLength(2); // Mobile delivery does not leave an unanswered native dialog.
 	const pending = (await (await request("/api/mobile/approvals", device.token)).json()) as {
-		approvals: { id: string; message: string }[];
+		approvals: { id: string; title: string; message: string; expiresAt: string; revision: string }[];
 	};
 	expect(pending.approvals).toHaveLength(1);
 	const approval = pending.approvals[0];
 	if (!approval) throw new Error("Missing mobile approval");
 	expect(approval.message).toContain("repo#1");
+	expect((await request("/api/mobile/answer-v1", daemon.token, {requestId:approval.id,approved:true,review:approval})).status).toBe(403);
+	expect((await request("/api/mobile/answer-v1", device.token, {requestId:approval.id,approved:true})).status).toBe(400);
+	expect((await request("/api/mobile/answer-v1", device.token, {requestId:approval.id,approved:true,review:approval})).status).toBe(403);
+	expect((await request("/api/mobile/answer-v1", device.token, {requestId:approval.id,approved:false,review:{...approval,message:"changed"}})).status).toBe(409);
+	expect((await request("/api/mobile/answer-v1", device.token, {requestId:approval.id,approved:false,review:{...approval,revision:"wrong"}})).status).toBe(409);
+	expect((await (await request("/api/mobile/approvals", device.token)).json()).approvals).toHaveLength(1);
 	expect(
 		(await request("/api/mobile/answer", daemon.token, { requestId: approval.id, approved: true })).status,
 	).toBe(403);
 	expect(
-		(await request("/api/mobile/answer", device.token, { requestId: approval.id, approved: true })).status,
+		(await request("/api/mobile/answer-v1", device.token, { requestId: approval.id, approved: false, review: approval })).status,
 	).toBe(200);
-	expect(await allowed).toBe(true);
+	expect(await allowed).toBe(false);
 	expect(
 		(await request("/api/mobile/answer", device.token, { requestId: approval.id, approved: true })).status,
 	).toBe(409);

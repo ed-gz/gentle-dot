@@ -50,6 +50,7 @@ export function createLaptopClient(connection: DesktopConnection, options: {
   };
   const client = createOrchestrationClient(captured, { fetch: transport, terminalMood: false });
   client.requiresReviewedApproval = true;
+  client.dotApprovalDeclineOnly = true;
   const snapshot = client.snapshot;
   client.snapshot = async signal => {
     const value = await snapshot(signal);
@@ -168,6 +169,25 @@ export function createLaptopClient(connection: DesktopConnection, options: {
         if(!('created' in ack)||ack.created!==true||!('sourceSessionId' in ack)||ack.sourceSessionId!==action.sessionId||!('sessionId' in ack)||typeof ack.sessionId!=='string'||ack.sessionId===action.sessionId) throw new Error('Confirmación de copia no verificable.');
       } else if(!('accepted' in ack)||ack.accepted!==true||!('sessionId' in ack)||ack.sessionId!==action.sessionId||!('instanceId' in ack)||ack.instanceId!==instanceId||(action.action==='close'&&(!('closing' in ack)||ack.closing!==true))) throw new Error('Confirmación no correlacionada.');
     },options.receiptState ?? httpsReceiptState,undefined,options.controlTimeoutMs ?? 35000,action.action === 'prompt');
+  };
+  // These answers are always human actions; bind the complete card to an
+  // atomic versioned endpoint and retain uncertainty across app restarts.
+  client.answerDotApproval = async (requestId, approved, reviewed) => {
+    current();
+    if(approved) throw new Error('Para permitir esta solicitud, revísala y responde en la laptop.');
+    if(!reviewed || reviewed.id!==requestId || typeof approved!=='boolean' || typeof reviewed.title!=='string' || typeof reviewed.message!=='string' || typeof reviewed.expiresAt!=='string' || !Number.isFinite(Date.parse(reviewed.expiresAt)) || Date.parse(reviewed.expiresAt)<=Date.now() || JSON.stringify(reviewed).length>100000) throw new Error('Vuelve a abrir y revisar el permiso de Dot.');
+    if(typeof reviewed.revision!=='string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(reviewed.revision)) throw new Error('La laptop necesita actualizarse para responder permisos de Dot desde el iPhone.');
+    const card=structuredClone(reviewed);
+    const approvals=await client.dotApprovals!();current();
+    const fresh=approvals.approvals.find(item=>item.id===requestId);
+    if(!approvals.allowed || !fresh || fresh.title!==card.title || fresh.message!==card.message || fresh.expiresAt!==card.expiresAt || fresh.revision!==card.revision) throw new Error('El permiso de Dot cambió o venció; vuelve a revisarlo.');
+    const payload={requestId,approved,review:{id:card.id,title:card.title,message:card.message,expiresAt:card.expiresAt,revision:card.revision}};
+    await runSessionControl(controlJournal,{kind:'dotAnswer',host:`${origin}/orchestration`,paneId:'@dot-approval',sessionId:requestId,instanceId:'global',payload,...(captured.deviceId?{deviceId:captured.deviceId}:{})},
+      ()=>{current();if(Date.parse(card.expiresAt)<=Date.now())throw new Error('El permiso venció.');},async receipt=>{
+        const reply=await request({...receipt,url:`${origin}/api/mobile/answer-v1`,method:'POST',headers:{Authorization:`Bearer ${captured.token}`,'Content-Type':'application/json'},body:JSON.stringify(payload)});current();
+        let ack:unknown;try{ack=JSON.parse(reply.body);}catch{throw new Error('Respuesta inválida.');}
+        if(reply.status<200||reply.status>=300||!ack||typeof ack!=='object'||!('ok' in ack)||ack.ok!==true||!('requestId' in ack)||ack.requestId!==requestId||!('revision' in ack)||ack.revision!==card.revision) throw new Error('Confirmación de permiso no verificable.');
+      },options.receiptState ?? httpsReceiptState,undefined,options.controlTimeoutMs ?? 35000);
   };
   client.uploadAttachment = (paneId, sessionId, file, uploadId, signal) => {
     current();

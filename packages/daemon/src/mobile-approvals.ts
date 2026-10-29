@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { APPROVAL_WAIT_MS, type AppApproval } from "./app-channel.ts";
 
 export interface MobileApproval {
@@ -5,6 +6,7 @@ export interface MobileApproval {
 	title: string;
 	message: string;
 	expiresAt: string;
+	revision: string;
 }
 interface Pending {
 	view: MobileApproval;
@@ -58,8 +60,11 @@ function approvalView(id: string, request: AppApproval, expires: number): Mobile
 			...fields,
 		].join("\n\n"),
 		expiresAt: new Date(expires).toISOString(),
+		revision: randomUUID(),
 	};
-	if (Buffer.byteLength(JSON.stringify(view), "utf8") > MAX_PREVIEW_BYTES)
+	// The full review is sent back in a 64 KiB request body. Include the
+	// envelope and the longer boolean so a displayed card is answerable.
+	if (Buffer.byteLength(JSON.stringify({ requestId: id, approved: false, review: view }), "utf8") > MAX_PREVIEW_BYTES)
 		throw new Error("Mobile approval preview exceeds 64 KiB; no truncated approval was created");
 	return view;
 }
@@ -120,6 +125,15 @@ export class MobileApprovals {
 		this.expire();
 		if (typeof approved !== "boolean") return false;
 		return this.settle(id, approved);
+	}
+
+	/** Atomically match the complete human-visible request before settling it. */
+	answerExact(expected: MobileApproval, approved: boolean): boolean {
+		this.expire();
+		if (!expected || typeof expected.id !== "string" || typeof approved !== "boolean") return false;
+		const entry = this.pending.get(expected.id);
+		if (!entry || entry.view.id !== expected.id || entry.view.title !== expected.title || entry.view.message !== expected.message || entry.view.expiresAt !== expected.expiresAt || entry.view.revision !== expected.revision) return false;
+		return this.settle(expected.id, approved);
 	}
 
 	close(): void {

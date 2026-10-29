@@ -95,6 +95,7 @@ export function DotApprovalCards({ client, presentation = false, extraIds = [], 
 			verified.current !== client ||
 			connectionError ||
 			requestExpired(request.expiresAt)
+			|| (approved && client.dotApprovalDeclineOnly)
 		)
 			return;
 		mutation.current = true;
@@ -102,7 +103,7 @@ export function DotApprovalCards({ client, presentation = false, extraIds = [], 
 		setBusyId(request.id);
 		setActionError(undefined);
 		try {
-			await client.answerDotApproval(request.id, approved);
+			await client.answerDotApproval(request.id, approved, ...(client.requiresReviewedApproval ? [request] : []));
 			if (activeClient.current === client)
 				setRequests((items) => items.filter((item) => item.id !== request.id));
 		} catch (error) {
@@ -148,6 +149,7 @@ export function DotApprovalCards({ client, presentation = false, extraIds = [], 
 					request={request}
 					locked={!connected || busy || !allowed || Boolean(connectionError)}
 					sending={busyId === request.id}
+					declineOnly={client.dotApprovalDeclineOnly === true}
 					answer={answer}
 				/>
 			))}
@@ -160,11 +162,13 @@ function DotApprovalCard({
 	request,
 	locked,
 	sending,
+	declineOnly,
 	answer,
 }: {
 	request: DotApproval;
 	locked: boolean;
 	sending: boolean;
+	declineOnly: boolean;
 	answer: (request: DotApproval, approved: boolean) => Promise<void>;
 }) {
 	const expired = useRequestExpiry(request.expiresAt);
@@ -182,12 +186,13 @@ function DotApprovalCard({
 						? "Este permiso ya venció."
 						: `Vence ${new Date(request.expiresAt).toLocaleString("es")}`}
 			</p>
+			{declineOnly ? <p className="muted">Para permitir esta solicitud, revisa y responde en la laptop. Desde aquí puedes rechazarla.</p> : null}
 			<div className="agent-actions">
 				<button
 					type="button"
 					className="primary"
 					aria-label="Aprobar permiso de Dot"
-					disabled={locked || expired}
+					disabled={locked || expired || declineOnly}
 					onClick={() => void answer(request, true)}
 				>
 					Permitir

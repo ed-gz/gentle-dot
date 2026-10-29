@@ -1056,7 +1056,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 					if (!acceptsToken(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
 					return jsonResponse(res, 200, computerSnapshot(result));
 				}
-				if (pathname === "/api/mobile/approvals" || pathname === "/api/mobile/answer") {
+				if (pathname === "/api/mobile/approvals" || pathname === "/api/mobile/answer" || pathname === "/api/mobile/answer-v1") {
 					if (!mobile.canApprove(key) || vps)
 						return jsonResponse(res, 403, {
 							error:
@@ -1068,6 +1068,19 @@ export async function startDaemon(options: DaemonOptions): Promise<DotDaemon> {
 								.list()
 								.filter((approval) => app?.connected || approval.id.startsWith("browser-")),
 						});
+					if (pathname === "/api/mobile/answer-v1" && req.method === "POST") {
+						const body = await readJson(req);
+						if (!mobile.canApprove(key)) return jsonResponse(res, 401, { error: "Unauthorized" });
+						const view = body.review;
+						if (typeof body.requestId !== "string" || typeof body.approved !== "boolean" || !view || typeof view !== "object" || Array.isArray(view) || view.id !== body.requestId || typeof view.title !== "string" || typeof view.message !== "string" || typeof view.expiresAt !== "string" || typeof view.revision !== "string")
+							return jsonResponse(res, 400, { error: "Exact reviewed approval required" });
+						// Some producers supply summaries rather than all material arguments.
+						if (body.approved) return jsonResponse(res, 403, { error: "Revisa y aprueba esta solicitud en la laptop." });
+						if (!app?.connected && !body.requestId.startsWith("browser-")) return jsonResponse(res, 403, { error: "Esta solicitud requiere la app de escritorio." });
+						if (!mobileApprovals.answerExact({ id: view.id, title: view.title, message: view.message, expiresAt: view.expiresAt, revision: view.revision }, body.approved))
+							return jsonResponse(res, 409, { error: "La solicitud cambió, terminó o venció." });
+						return jsonResponse(res, 200, { ok: true, requestId: body.requestId, revision: view.revision });
+					}
 					if (pathname === "/api/mobile/answer" && req.method === "POST") {
 						const body = await readJson(req);
 						if (!mobile.canApprove(key)) return jsonResponse(res, 401, { error: "Unauthorized" });

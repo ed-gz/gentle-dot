@@ -135,7 +135,9 @@ export interface OrchestrationClient {
 		signal?: AbortSignal,
 	): Promise<BrowserStatus | BrowserPage | BrowserInstallation>;
 	dotApprovals?(signal?: AbortSignal): Promise<{ allowed: boolean; approvals: DotApproval[] }>;
-	answerDotApproval?(requestId: string, approved: boolean): Promise<void>;
+	answerDotApproval?(requestId: string, approved: boolean, reviewed?: DotApproval): Promise<void>;
+	/** Some clients can decline but must defer approvals to the desktop. */
+	dotApprovalDeclineOnly?: boolean;
 	followedWork?(signal?: AbortSignal): Promise<FollowedWorkSnapshot>;
 	controlFollowedWork?(action: FollowedWorkAction): Promise<void>;
 }
@@ -145,6 +147,8 @@ export interface DotApproval {
 	title: string;
 	message: string;
 	expiresAt: string;
+	/** Unique generation of this card, absent on older hosts. */
+	revision?: string;
 }
 
 export interface ComputerSnapshot {
