@@ -51,9 +51,11 @@ export interface VoiceControls {
 	sendOnStop: boolean;
 	setSendOnStop(send: boolean): void;
 	/** A dictation waiting in the input for review; `id` changes with each one. */
-	draft?: { id: number; text: string };
+	draft?: { id: number; text: string; receipt?: unknown };
 	/** The input took the draft. */
 	draftTaken(id: number): void;
+	/** Leave a platform-retained dictation for later review without acknowledging it. */
+	deferDraft?(id: number): void;
 	/** The user sent the input: its reply is read aloud when it included a dictation. */
 	sent(): void;
 }

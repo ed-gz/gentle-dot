@@ -6,6 +6,8 @@ for (const supported of [false, true]) test(`${supported ? 'capable host confirm
     const state = globalThis as any; state.isTauri = true; state.nativePrompts = []; let step = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('results_list')) return { ok: true, items: [] };
+      if (command.endsWith('secret_set')) { const request = args.request; sessionStorage.setItem(`fixture-keychain:${request.scope}:${request.account}`, request.value); return { ok: true }; }
+      if (command.endsWith('secret_get')) { const request = args.request, value = sessionStorage.getItem(`fixture-keychain:${request.scope}:${request.account}`); return value === null ? { ok: true } : { ok: true, value }; }
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('agent_step')) {
@@ -49,7 +51,7 @@ for (const supported of [false, true]) test(`${supported ? 'capable host confirm
   });
   await page.locator('[data-panel="settings"]').click(); await page.getByText('Conexión manual', { exact: true }).click();
   await page.locator('#url').fill('wss://capability.example/ws'); await page.locator('#token').fill('fixture-only'); await page.locator('#connection button[type="submit"]').click();
-  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot. Acceso guardado en Keychain.');
   await page.locator('[data-panel="chat"]').click(); await page.locator('#prompt').fill('Transfiere mi trabajo a Gentle Dot.'); await page.locator('#send').click();
   if (supported) {
     const approval = page.locator('#requests .review-card'); await expect(approval).toContainText('Material local');

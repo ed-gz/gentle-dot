@@ -21,9 +21,36 @@ async function linkedPhone(page: Page) {
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_voice')) return { available: !state.voiceNeedsAssets, status: state.voiceNeedsAssets ? 'assets_required' : 'available', assetsInstalled: !state.voiceNeedsAssets, microphonePermission: 'granted', recording: false };
       if (command.endsWith('prepare_voice')) { state.voiceNeedsAssets = false; return { ok: true, available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' }; }
-      if (command.endsWith('start_voice')) return { ok: true, sessionId: '12345678-1234-1234-1234-123456789012', maxDurationSeconds: 90 };
+      const retained = () => JSON.parse(sessionStorage.getItem('session-voice-fixture') || '{"record":null,"receipt":null}');
+      const keep = (value: any) => sessionStorage.setItem('session-voice-fixture', JSON.stringify(value));
+      const canonical = (value: any): any => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+      const same = (a: any, b: any) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+      if (command.endsWith('inspect_retained_voice')) return { ok: true, retainedAudio: retained().record };
+      if (command.endsWith('list_voice_receipts')) return { ok: true, receipts: retained().receipt ? [retained().receipt] : [] };
+      if (command.endsWith('get_voice_receipt')) { const entry = retained().receipt; return { ok: true, receipt: entry?.receipt.audio.id.toLowerCase() === args.sessionId.toLowerCase() ? entry : null }; }
+      if (command.endsWith('release_retained_voice')) { const current = retained(); if (!same(args.receipt, current.receipt?.receipt)) throw new Error('receipt mismatch');
+        if (args.receipt.audio.destination.startsWith('session:')) { const { createSessionVoiceDrafts } = await import('/src/session-voice-drafts.ts'); state.sessionReleaseConfirmed = await createSessionVoiceDrafts().delivered(args.receipt.audio.destination, args.receipt); if (!state.sessionReleaseConfirmed) throw new Error('draft not durable'); }
+        current.receipt.releaseState = 'released'; current.record = null; keep(current); return { ok: true, releaseState: 'released' }; }
+      if (command.endsWith('discard_voice_receipt')) { const current = retained(); if (!same(args.receipt, current.receipt?.receipt) || current.receipt.releaseState !== 'released') throw new Error('receipt mismatch'); current.receipt = null; keep(current); return { ok: true }; }
+      if (command.endsWith('discard_retained_voice')) { const current = retained(); if (!same(args.record, current.record)) throw new Error('audio mismatch'); current.record = null; keep(current); return { ok: true }; }
+      if (command.endsWith('attach_retained_voice')) { const current = retained(); if (!same(args.record, current.record)) throw new Error('audio mismatch'); return { ok: true, retainedAudio: current.record, sessionId: current.record.id, ownerId: current.record.owner }; }
+      if (command.endsWith('start_voice')) {
+        const id = '12345678-1234-1234-1234-123456789012';
+        if (!args.retainDestination) return { ok: true, sessionId: id, maxDurationSeconds: 90 };
+        const current = retained(); if (current.record) throw new Error('occupied');
+        current.record = { id, owner: args.ownerId, destination: args.retainDestination, locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'capturing' }; keep(current);
+        return { ok: true, sessionId: id, maxDurationSeconds: 90, retainedAudio: current.record };
+      }
       if (command.endsWith('stop_voice') && state.holdTranscript) await new Promise(resolve => state.finishTranscript = resolve);
-      if (command.endsWith('stop_voice')) return { ok: true, sessionId: args.sessionId, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2, text: 'Revisa la evidencia.', segments: [{ text: 'Revisa la evidencia.', startSeconds: 0, endSeconds: 2 }] };
+      if (command.endsWith('stop_voice')) {
+        const text = state.sessionTranscript ?? 'Revisa la evidencia.';
+        const transcript = { sessionId: args.sessionId, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2, text, segments: [{ text, startSeconds: 0, endSeconds: 2 }] };
+        const current = retained(); if (!current.record) return { ok: true, ...transcript };
+        if (args.ownerId !== current.record.owner || args.retainDestination !== current.record.destination) throw new Error('owner mismatch');
+        current.record = { ...current.record, state:'ready', byteCount:10, sha256:'a'.repeat(64) };
+        current.receipt = { receipt: { schema:'capri-native-voice-receipt/v1', audio:current.record, transcript }, releaseState:'retained' }; keep(current);
+        return { ok: true, ...transcript, retainedAudio: current.record };
+      }
       if (command.endsWith('crypto_hash_begin')) { state.hashBytes = []; return { ok: true, id: '11111111-1111-4111-8111-111111111111' }; }
       if (command.endsWith('crypto_hash_update')) { state.hashBytes.push(...Uint8Array.from(atob(args.data), c => c.charCodeAt(0))); return { ok: true }; }
       if (command.endsWith('crypto_hash_finish')) return { ok: true, hex: [...new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(state.hashBytes)))].map(n => n.toString(16).padStart(2, '0')).join('') };
@@ -347,7 +374,7 @@ test('session dictation exits recording on native interruption and preserves its
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice') && state.voiceInterrupted) return { available: true, status: 'available', assetsInstalled: true,
         microphonePermission: 'granted', recording: false, readyToTranscribe: true, sessionId: id, previewIssue: 'Audio interrumpido.' };
-      if (command.endsWith('start_voice')) { state.voiceInterrupted = true; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('start_voice')) { state.voiceInterrupted = true; return previous(command, args); }
       if (command.endsWith('stop_voice')) { state.voiceStops++; return { ok: false, message: 'Audio interrumpido.' }; }
       return previous(command, args);
     };
@@ -433,10 +460,10 @@ test('a session cannot send its partial instruction while its own dictation is p
   await page.locator('.agent-reply form').evaluate((form: HTMLFormElement) => form.requestSubmit());
   expect(await page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toHaveLength(0);
   await page.evaluate(() => (globalThis as any).finishTranscript());
-  await expect(text).toHaveValue('Revisa también Revisa la evidencia.');
+  await expect(text).toHaveValue('Revisa también\nRevisa la evidencia.');
   await expect(send).toBeEnabled();
   await send.click();
-  await expect.poll(() => page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt').map((c: any) => JSON.parse(c.body).text))).toEqual(['Revisa también Revisa la evidencia.']);
+  await expect.poll(() => page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt').map((c: any) => JSON.parse(c.body).text))).toEqual(['Revisa también\nRevisa la evidencia.']);
 });
 
 test('a refused session microphone leaves the typed instruction available to send', async ({ page }) => {
@@ -506,7 +533,7 @@ test('session dictation displays provisional text without adding it to the draft
   await page.evaluate(() => (globalThis as any).voicePreview = 'Hipótesis nueva');
   await expect(page.locator('.agent-reply .voice-partial')).toHaveText('Hipótesis nueva');
   await page.getByRole('button', { name: 'Terminar y revisar' }).click();
-  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Anterior Revisa la evidencia.');
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Anterior\nRevisa la evidencia.');
   expect(await page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toEqual([]);
 });
 
@@ -554,9 +581,9 @@ test('a microphone permission dialog does not cancel a pending session capture',
   await linkedPhone(page);
   await page.evaluate(() => {
     const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
-    state.permissionActions = [];
+    state.permissionActions = []; state.permissionStartOwners = []; state.permissionCancelOwners = [];
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
-      if (command.endsWith('start_voice')) { state.permissionActions.push('start'); return await new Promise(resolve => { state.finishSessionPermission = resolve; }); }
+      if (command.endsWith('start_voice')) { state.permissionActions.push('start'); await new Promise<void>(resolve => { state.finishSessionPermission = resolve; }); return original(command, args); }
       if (command.endsWith('cancel_voice')) state.permissionActions.push('cancel');
       return original(command, args);
     };
@@ -567,7 +594,7 @@ test('a microphone permission dialog does not cancel a pending session capture',
   await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishSessionPermission)).toBe('function');
   await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange')); });
   await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
-  await page.evaluate(() => (globalThis as any).finishSessionPermission({ ok: true, sessionId: '12345678-1234-1234-1234-123456789012', maxDurationSeconds: 90 }));
+  await page.evaluate(() => (globalThis as any).finishSessionPermission());
   await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
   expect(await page.evaluate(() => (globalThis as any).permissionActions)).toEqual(['start']);
   await page.getByRole('button', { name: 'Terminar y revisar' }).click();
@@ -613,13 +640,14 @@ test('late permission result after leaving one session never cancels a newer cap
   await linkedPhone(page);
   await page.evaluate(() => {
     const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke; let starts = 0;
-    state.permissionActions = [];
+    state.permissionActions = []; state.permissionStartOwners = []; state.permissionCancelOwners = [];
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('start_voice')) {
         state.permissionActions.push('start');
+        state.permissionStartOwners.push(args.ownerId);
         if (++starts === 1) return await new Promise(resolve => { state.finishOldPermission = resolve; });
       }
-      if (command.endsWith('cancel_voice')) state.permissionActions.push('cancel');
+      if (command.endsWith('cancel_voice')) { state.permissionActions.push('cancel'); state.permissionCancelOwners.push(args.ownerId); }
       return original(command, args);
     };
   });
@@ -631,8 +659,11 @@ test('late permission result after leaving one session never cancels a newer cap
   await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
-  await page.evaluate(() => (globalThis as any).finishOldPermission({ ok: true, sessionId: '12345678-1234-1234-1234-123456789012', maxDurationSeconds: 90 }));
-  await expect.poll(() => page.evaluate(() => (globalThis as any).permissionActions)).toEqual(['start', 'cancel', 'start']);
+  await page.evaluate(() => (globalThis as any).finishOldPermission({ ok: false, error: 'cancelled', message: 'Cancelado.' }));
+  await expect.poll(() => page.evaluate(() => (globalThis as any).permissionActions)).toEqual(['start', 'cancel', 'start', 'cancel']);
+  const owners = await page.evaluate(() => ({ starts: (globalThis as any).permissionStartOwners, cancels: (globalThis as any).permissionCancelOwners }));
+  expect(owners.cancels).toEqual([owners.starts[0], owners.starts[0]]);
+  expect(owners.starts[1]).not.toBe(owners.starts[0]);
   await page.getByRole('button', { name: 'Terminar y revisar' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
 });
@@ -651,6 +682,8 @@ test('leaving a session retains its late dictation only for the original session
   expect(await page.evaluate(() => (globalThis as any).sessionCalls.some((c: any) => c.command.endsWith('cancel_voice')))).toBe(false);
   await page.getByRole('button', { name: 'Todos los agentes' }).click();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.getByText(/Hay audio guardado/)).toBeVisible();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
 });
 
@@ -664,12 +697,11 @@ test('a preserved session recording cannot migrate to another session or chat', 
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
         ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id, recoveryIssue: 'No detecté palabras. Descarta este audio y vuelve a dictar.' } : {}) };
-      if (command.endsWith('start_voice')) { owner = args.ownerId; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('start_voice')) { owner = args.ownerId; return previous(command, args); }
       if (command.endsWith('cancel_voice')) { state.voiceRecoveryCancels++; pending = false; return { ok: true }; }
       if (command.endsWith('stop_voice')) {
         if (++stops === 1) { pending = true; return { ok: false, error: 'preview_pending', sessionId: id, message: 'Audio guardado.' }; }
-        pending = false; return { ok: true, sessionId: id, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2,
-          text: 'Sólo en operaciones.', segments: [{ text: 'Sólo en operaciones.', startSeconds: 0, endSeconds: 2 }] };
+        pending = false; state.sessionTranscript = 'Sólo en operaciones.'; return previous(command, args);
       }
       return previous(command, args);
     };
@@ -685,12 +717,12 @@ test('a preserved session recording cannot migrate to another session or chat', 
   await expect(page.getByText(/audio pendiente en otra conversación/i)).toBeVisible();
   await page.locator('[data-panel="chat"]').click();
   await expect(page.locator('#prompt')).toHaveValue('');
-  await expect(page.locator('#voice-status')).toContainText('otra sesión');
+  await expect(page.locator('#voice-status')).toContainText('otra conversación');
   expect(await page.evaluate(() => (globalThis as any).voiceRecoveryCancels)).toBe(0);
   await page.locator('[data-panel="agents"]').click();
   await page.getByRole('button', { name: 'Todos los agentes' }).click();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
-  await expect(page.getByText(/No detecté palabras/i)).toBeVisible();
+  await expect(page.getByText(/Hay audio guardado/i)).toBeVisible();
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Sólo en operaciones.');
 });
@@ -704,7 +736,7 @@ test('returning to the original session while stopping reveals its eventual retr
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
         ...(pending ? { recoveryPending: true, busy, ownerId: owner, sessionId: id } : {}) };
-      if (command.endsWith('start_voice')) { owner = args.ownerId; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('start_voice')) { owner = args.ownerId; return previous(command, args); }
       if (command.endsWith('stop_voice')) {
         if (++stops === 1) {
           pending = true; busy = true;
@@ -712,8 +744,7 @@ test('returning to the original session while stopping reveals its eventual retr
           busy = false;
           return { ok: false, error: 'preview_pending', sessionId: id, message: 'Audio guardado.' };
         }
-        pending = false; return { ok: true, sessionId: id, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2,
-          text: 'Recuperado al volver.', segments: [{ text: 'Recuperado al volver.', startSeconds: 0, endSeconds: 2 }] };
+        pending = false; state.sessionTranscript = 'Recuperado al volver.'; return previous(command, args);
       }
       return previous(command, args);
     };
@@ -726,7 +757,7 @@ test('returning to the original session while stopping reveals its eventual retr
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   await expect(page.getByText('Terminando el audio guardado…')).toBeVisible();
   await page.evaluate(() => (globalThis as any).finishPendingStop());
-  await expect(page.getByText(/audio puede perderse si iOS cierra Capri/i)).toBeVisible();
+  await expect(page.getByText(/Hay audio guardado/i)).toBeVisible();
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Recuperado al volver.');
 });
@@ -741,7 +772,7 @@ test('a session can discard a silent recording explicitly, and a failed discard 
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
         ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id, recoveryIssue: 'No detecté palabras. Descarta este audio y vuelve a dictar.' } : {}) };
-      if (command.endsWith('start_voice')) { owner = args.ownerId; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('start_voice')) { owner = args.ownerId; return previous(command, args); }
       if (command.endsWith('stop_voice')) { pending = true; return { ok: false, error: 'preview_pending', sessionId: id, message: 'No detecté palabras. Descarta este audio y vuelve a dictar.' }; }
       if (command.endsWith('cancel_voice')) {
         state.voiceDiscardCalls++;
@@ -781,7 +812,7 @@ test('an unconfirmed session cancellation can be retried safely from the main ch
     state.cancelOwners = []; state.startOwners = [];
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
-      if (command.endsWith('start_voice')) { state.startOwners.push(args.ownerId); return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('start_voice')) { state.startOwners.push(args.ownerId); return previous(command, args); }
       if (command.endsWith('cancel_voice')) {
         state.cancelOwners.push(args.ownerId);
         if (state.cancelOwners.length === 1) throw new Error('bridge unavailable');
@@ -803,7 +834,15 @@ test('an unconfirmed session cancellation can be retried safely from the main ch
   ]);
   expect(await page.evaluate(() => (globalThis as any).startOwners.length)).toBe(1);
   await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
-  await page.locator('#dictate').click();
+  await expect(page.locator('#voice-status')).toContainText('otra conversación');
+  await page.locator('[data-panel="agents"]').click();
+  const operations = page.locator('.agent-session').filter({ hasText: 'Operaciones' });
+  if (await operations.isVisible()) await operations.click();
+  const discard = page.getByRole('button', { name: 'Descartar audio pendiente' });
+  await expect(discard).toBeVisible();
+  page.once('dialog', dialog => dialog.accept()); await discard.click();
+  await expect(discard).toBeHidden();
+  await page.locator('[data-panel="chat"]').click(); await page.locator('#dictate').click();
   await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
   expect(await page.evaluate(() => (globalThis as any).startOwners.length)).toBe(2);
 });
@@ -816,7 +855,7 @@ test('a session shows an unconfirmed cancellation and retries its original owner
     state.cancelOwners = []; state.startOwners = [];
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
-      if (command.endsWith('start_voice')) { state.startOwners.push(args.ownerId); return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
+      if (command.endsWith('start_voice')) { state.startOwners.push(args.ownerId); return previous(command, args); }
       if (command.endsWith('cancel_voice')) {
         state.cancelOwners.push(args.ownerId);
         if (state.cancelOwners.length === 1) throw new Error('bridge unavailable');
@@ -953,4 +992,269 @@ test('attachments restore only into their owning session after restart, and acce
     const { sessionAttachmentDraft } = await import(path);
     return (await sessionAttachmentDraft('wss://sessions.fixture.example/ws', 'pane-0', 'session-0').load()).length;
   })).toBe(0);
+});
+
+test('a session draft persists through reload and remains isolated from another session', async ({ page }) => {
+  await linkedPhone(page);
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const input = page.getByRole('textbox', { name: 'Continuar esta sesión' });
+  await input.fill('Borrador privado en operaciones');
+  await expect.poll(async () => page.evaluate(async () => {
+    const { sessionVoiceOrigin } = await import('/src/voice-origin.ts');
+    const { createSessionVoiceDrafts } = await import('/src/session-voice-drafts.ts');
+    return (await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0'])))).text;
+  })).toBe('Borrador privado en operaciones');
+  await page.reload(); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  await expect(input).toHaveValue('');
+  await page.getByRole('button', { name: 'Todos los agentes' }).click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(input).toHaveValue('Borrador privado en operaciones');
+});
+
+test('two windows cannot overwrite a newer session draft', async ({ page, context }) => {
+  const other = await context.newPage();
+  await linkedPhone(page); await linkedPhone(other);
+  for (const tab of [page, other]) { await tab.locator('[data-panel="agents"]').click(); await tab.locator('.agent-session').filter({ hasText: 'Operaciones' }).click(); }
+  const one = page.getByRole('textbox', { name: 'Continuar esta sesión' }); const two = other.getByRole('textbox', { name: 'Continuar esta sesión' });
+  await one.fill('Primera ventana');
+  await expect.poll(async () => page.evaluate(async () => { const {sessionVoiceOrigin}=await import('/src/voice-origin.ts'); const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts'); return (await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0'])))).text; })).toBe('Primera ventana');
+  await two.fill('Otra ventana');
+  await expect(other.getByRole('alert')).toContainText('No se confirmó el borrador');
+  await expect(two).toHaveValue('Otra ventana');
+  await expect(other.getByRole('textbox', { name: 'Borrador sin confirmar' })).toHaveValue('Otra ventana');
+  await expect(one).toHaveValue('Primera ventana');
+});
+
+test('retained session dictation commits its draft before audio release and survives reload', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const input = page.getByRole('textbox', { name: 'Continuar esta sesión' });
+  await input.fill('Texto anterior');
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(input).toHaveValue('Texto anterior\nRevisa la evidencia.');
+  await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture') || '{}').record)).toBeNull();
+  expect(await page.evaluate(() => (globalThis as any).sessionReleaseConfirmed)).toBe(true);
+  await page.reload(); await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(input).toHaveValue('Texto anterior\nRevisa la evidencia.');
+  expect(await page.evaluate(() => (globalThis as any).sessionCalls.filter((call: any) => call.body && JSON.parse(call.body).action === 'prompt'))).toEqual([]);
+});
+
+test('an oversized session dictation remains selectable and retained across restart', async ({ page }) => {
+  await linkedPhone(page); await page.evaluate(() => { (globalThis as any).sessionTranscript = 'L'.repeat(12000); });
+  await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  const input = page.getByRole('textbox', { name: 'Continuar esta sesión' }); await input.fill('Antes');
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click(); await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'No se confirmó el dictado' })).toBeVisible();
+  await page.getByText('Ver dictado').click();
+  await expect(page.getByText('L'.repeat(12000), { exact: true })).toBeVisible();
+  await expect(input).toHaveValue('Antes');
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).receipt.releaseState)).toBe('retained');
+  await page.getByRole('button', { name: 'Revisar después' }).click();
+  await page.reload(); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.getByText(/Hay audio guardado/)).toBeVisible();
+  await expect(input).toHaveValue('Antes');
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).receipt.receipt.transcript.text.length)).toBe(12000);
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'No se confirmó el dictado' })).toBeVisible();
+  await page.getByText('Ver dictado').click();
+  await expect(page.getByText('L'.repeat(12000), { exact: true })).toBeVisible();
+});
+
+test('a late session transcript cannot enter another session and remains recoverable by its owner', async ({ page }) => {
+  await linkedPhone(page); await page.evaluate(() => { (globalThis as any).holdTranscript = true; });
+  await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click(); await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishTranscript)).toBe('function');
+  await page.getByRole('button', { name: 'Todos los agentes' }).click(); await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  await page.evaluate(() => { (globalThis as any).holdTranscript = false; (globalThis as any).finishTranscript(); });
+  const input = page.getByRole('textbox', { name: 'Continuar esta sesión' }); await expect(input).toHaveValue('');
+  await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture') || '{}').receipt?.receipt?.transcript?.text)).toBe('Revisa la evidencia.');
+  await page.getByRole('button', { name: 'Todos los agentes' }).click(); await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.getByText(/Hay audio guardado/)).toBeVisible();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click(); await expect(input).toHaveValue('Revisa la evidencia.');
+});
+
+test('changing session during a durable voice commit never writes into the new session', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.evaluate(() => {
+    const g = globalThis as any, original = crypto.subtle.digest.bind(crypto.subtle);
+    crypto.subtle.digest = async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+      const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      if (new TextDecoder().decode(bytes).includes('capri-native-voice-receipt/v1') && !g.delayedVoiceDigest) {
+        g.delayedVoiceDigest = true; await new Promise<void>(resolve => { g.releaseVoiceDigest = resolve; });
+      }
+      return original(algorithm, data);
+    };
+  });
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).releaseVoiceDigest)).toBe('function');
+  await page.getByRole('button', { name: 'Todos los agentes' }).click(); await page.locator('.agent-session').filter({ hasText: 'Capri iOS' }).click();
+  const input = page.getByRole('textbox', { name: 'Continuar esta sesión' }); await expect(input).toHaveValue('');
+  await page.evaluate(() => (globalThis as any).releaseVoiceDigest());
+  await expect.poll(async () => page.evaluate(async () => { const {sessionVoiceOrigin}=await import('/src/voice-origin.ts'); const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts'); return (await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0'])))).text; })).toBe('Revisa la evidencia.');
+  await expect(input).toHaveValue('');
+  await page.getByRole('button', { name: 'Todos los agentes' }).click(); await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(input).toHaveValue('Revisa la evidencia.');
+  await expect(page.getByText(/Hay audio guardado/)).toBeVisible();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(input).toHaveValue('Revisa la evidencia.');
+  await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture') || '{}').record)).toBeNull();
+});
+
+test('switching laptop hosts keeps their session drafts separate after reload', async ({ page }) => {
+  await linkedPhone(page);
+  await page.routeWebSocket('wss://other.fixture.example/ws', ws => { let seq = 0; ws.onMessage(raw => { const m = JSON.parse(String(raw)); if (m.type === 'hello') ws.send(JSON.stringify({ type:'ready', seq:++seq, agentState:'idle', conversationId:'main' })); if (m.type === 'get_history') ws.send(JSON.stringify({ type:'history',seq:++seq,conversationId:'main',messages:[] })); }); });
+  await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({ hasText:'Operaciones' }).click();
+  const input = page.getByRole('textbox', { name:'Continuar esta sesión' }); await input.fill('Sólo la primera laptop');
+  await expect.poll(async () => page.evaluate(async () => { const {sessionVoiceOrigin}=await import('/src/voice-origin.ts'); const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts'); return (await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0'])))).text; })).toBe('Sólo la primera laptop');
+  await page.locator('[data-panel="settings"]').click();
+  if (!await page.locator('#url').isVisible()) await page.getByText('Conexión manual', {exact:true}).click();
+  await page.locator('#url').fill('wss://other.fixture.example/ws'); await page.locator('#token').fill('fixture-other'); await page.locator('#connection button[type="submit"]').click();
+  await expect(page.locator('#status')).toContainText('Acceso guardado');
+  await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({ hasText:'Operaciones' }).click(); await expect(input).toHaveValue('');
+  await input.fill('Sólo la segunda laptop');
+  await expect.poll(async () => page.evaluate(async () => { const {sessionVoiceOrigin}=await import('/src/voice-origin.ts'); const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts'); return (await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://other.fixture.example/ws','pane-0','session-0'])))).text; })).toBe('Sólo la segunda laptop');
+  await page.reload(); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({ hasText:'Operaciones' }).click(); await expect(input).toHaveValue('Sólo la segunda laptop');
+});
+
+test('a late session draft read cannot overwrite the newly selected session', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(async () => {
+    const {sessionVoiceOrigin}=await import('/src/voice-origin.ts'); const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts');
+    const dest=await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0'])); const store=createSessionVoiceDrafts(); await store.save(dest,await store.read(dest),'Borrador de operaciones');
+    const g=globalThis as any, original=crypto.subtle.digest.bind(crypto.subtle);
+    crypto.subtle.digest=async (algorithm: AlgorithmIdentifier,data: BufferSource) => {
+      const bytes=data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer,data.byteOffset,data.byteLength);
+      if (new TextDecoder().decode(bytes).includes('pane-0') && !g.delayedSessionHash) { g.delayedSessionHash=true; await new Promise<void>(resolve=>{g.releaseSessionHash=resolve;}); }
+      return original(algorithm,data);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).releaseSessionHash)).toBe('function');
+  await page.getByRole('button',{name:'Todos los agentes'}).click(); await page.locator('.agent-session').filter({hasText:'Capri iOS'}).click();
+  const input=page.getByRole('textbox',{name:'Continuar esta sesión'}); await expect(input).toHaveValue('');
+  await page.evaluate(() => (globalThis as any).releaseSessionHash()); await expect(input).toHaveValue('');
+  await page.getByRole('button',{name:'Todos los agentes'}).click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  await expect(input).toHaveValue('Borrador de operaciones');
+});
+
+test('a session voice commit failure retains audio and retries without duplicating the draft', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  const input = page.getByRole('textbox', {name:'Continuar esta sesión'}); await input.fill('Base');
+  await page.getByRole('button', {name:'Dictar mensaje'}).click();
+  await page.evaluate(() => { const g=globalThis as any, original=IDBObjectStore.prototype.put; g.restoreVoicePut=()=>{IDBObjectStore.prototype.put=original;}; IDBObjectStore.prototype.put=function(value:any,key?:IDBValidKey) { if(typeof key==='string'&&key.startsWith('delivery:')) throw new DOMException('Cuota simulada','QuotaExceededError'); return Reflect.apply(original,this,key===undefined?[value]:[value,key]); }; });
+  await page.getByRole('button', {name:'Terminar y revisar'}).click();
+  await expect(page.getByRole('alert').filter({hasText:'No se confirmó el dictado'})).toBeVisible(); await expect(input).toHaveValue('Base');
+  expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).receipt.releaseState)).toBe('retained');
+  await page.evaluate(() => (globalThis as any).restoreVoicePut()); await page.getByRole('button', {name:'Reintentar',exact:true}).click();
+  await expect(input).toHaveValue('Base\nRevisa la evidencia.');
+  await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record)).toBeNull();
+  await page.reload(); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  await expect(input).toHaveValue('Base\nRevisa la evidencia.');
+});
+
+test('session edits made while transcription is pending are saved before the dictation', async ({ page }) => {
+  await linkedPhone(page); await page.evaluate(() => { (globalThis as any).holdTranscript = true; });
+  await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  const input=page.getByRole('textbox',{name:'Continuar esta sesión'}); await input.fill('Antes');
+  await page.getByRole('button',{name:'Dictar mensaje'}).click(); await page.getByRole('button',{name:'Terminar y revisar'}).click();
+  await expect.poll(()=>page.evaluate(()=>typeof (globalThis as any).finishTranscript)).toBe('function');
+  await input.fill('Editado durante transcripción  ');
+  await page.evaluate(()=>{ (globalThis as any).holdTranscript=false; (globalThis as any).finishTranscript(); });
+  await expect(input).toHaveValue('Editado durante transcripción  \nRevisa la evidencia.');
+  await expect.poll(()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record)).toBeNull();
+  await page.reload(); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  await expect(input).toHaveValue('Editado durante transcripción  \nRevisa la evidencia.');
+});
+
+test('a queued second edit remains available when leaving and reopening a session', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  const input=page.getByRole('textbox',{name:'Continuar esta sesión'}); await expect(input).toBeEnabled();
+  await page.evaluate(() => {
+    const g=globalThis as any, original=IDBDatabase.prototype.transaction; let held=false;
+    IDBDatabase.prototype.transaction=function(names: string|string[], mode?: IDBTransactionMode, options?: IDBTransactionOptions) {
+      const tx=Reflect.apply(original,this,options?[names,mode,options]:mode?[names,mode]:[names]);
+      if(this.name==='capri-ios-session-voice-drafts' && mode==='readwrite' && !held) {
+        held=true; Object.defineProperty(tx,'oncomplete',{configurable:true,set(callback) { tx.addEventListener('complete', event => { g.releaseFirstDraftSave=()=>callback.call(tx,event); }); }});
+      }
+      return tx;
+    };
+  });
+  await input.fill('Primera edición');
+  await expect.poll(()=>page.evaluate(()=>typeof (globalThis as any).releaseFirstDraftSave)).toBe('function');
+  await input.fill('Segunda edición');
+  await page.getByRole('button',{name:'Todos los agentes'}).click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  await page.evaluate(()=>(globalThis as any).releaseFirstDraftSave());
+  await expect(input).toHaveValue('Segunda edición');
+  await expect(page.getByRole('alert').filter({hasText:'borrador'})).toHaveCount(0);
+  await expect.poll(async () => page.evaluate(async () => { const {sessionVoiceOrigin}=await import('/src/voice-origin.ts'); const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts'); return (await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0'])))).text; })).toBe('Segunda edición');
+  await page.reload(); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  await expect(input).toHaveValue('Segunda edición');
+});
+
+test('an oversized draft remains editable, can be shortened and recovered after reload', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  const input=page.getByRole('textbox',{name:'Continuar esta sesión'}), send=page.getByRole('button',{name:'Enviar instrucción',exact:true});
+  await input.fill('X'.repeat(8001)); await expect(page.getByRole('alert').filter({hasText:'borrador'})).toBeVisible();
+  await expect(input).toBeEnabled(); await expect(send).toBeDisabled(); await input.fill('X'.repeat(8000));
+  await page.getByRole('button',{name:'Reintentar guardado'}).click(); await expect(page.getByRole('alert').filter({hasText:'borrador'})).toBeHidden();
+  await expect(send).toBeEnabled();
+  await expect.poll(async ()=>page.evaluate(async()=>{const {sessionVoiceOrigin}=await import('/src/voice-origin.ts'); const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts'); return (await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0'])))).text.length;})).toBe(8000);
+  await page.reload(); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  await expect(input).toHaveValue('X'.repeat(8000));
+});
+
+test('a failed session draft write remains editable and can be retried after storage recovers', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  const input=page.getByRole('textbox',{name:'Continuar esta sesión'}); await input.fill('Base');
+  await expect.poll(async ()=>page.evaluate(async()=>{const {sessionVoiceOrigin}=await import('/src/voice-origin.ts');const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts');return (await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0'])))).text;})).toBe('Base');
+  await page.evaluate(()=>{const g=globalThis as any, original=IDBObjectStore.prototype.put;g.restoreDraftPut=()=>{IDBObjectStore.prototype.put=original;};IDBObjectStore.prototype.put=function(value:any,key?:IDBValidKey){if(typeof key==='string'&&key.startsWith('draft:'))throw new DOMException('Cuota simulada','QuotaExceededError');return Reflect.apply(original,this,key===undefined?[value]:[value,key]);};});
+  await input.fill('Edición sin confirmar'); await expect(page.getByRole('alert').filter({hasText:'borrador'})).toBeVisible();
+  await expect(input).toBeEnabled(); await input.fill('Edición corregida');
+  await page.evaluate(()=>(globalThis as any).restoreDraftPut()); await page.getByRole('button',{name:'Reintentar guardado'}).click();
+  await expect(page.getByRole('alert').filter({hasText:'borrador'})).toBeHidden();
+  await expect.poll(async ()=>page.evaluate(async()=>{const {sessionVoiceOrigin}=await import('/src/voice-origin.ts');const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts');return (await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0'])))).text;})).toBe('Edición corregida');
+  await page.reload(); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click(); await expect(input).toHaveValue('Edición corregida');
+});
+
+test('a delayed draft write does not block a different session', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  const input=page.getByRole('textbox',{name:'Continuar esta sesión'}); await expect(input).toBeEnabled();
+  await page.evaluate(()=>{const g=globalThis as any, original=IDBDatabase.prototype.transaction; let held=false; IDBDatabase.prototype.transaction=function(names:string|string[],mode?:IDBTransactionMode,options?:IDBTransactionOptions){const tx=Reflect.apply(original,this,options?[names,mode,options]:mode?[names,mode]:[names]);if(this.name==='capri-ios-session-voice-drafts'&&mode==='readwrite'&&!held){held=true;Object.defineProperty(tx,'oncomplete',{configurable:true,set(callback){tx.addEventListener('complete',event=>{g.releaseDelayedDraft=()=>callback.call(tx,event);});}});}return tx;};});
+  await input.fill('Edición demorada'); await expect.poll(()=>page.evaluate(()=>typeof (globalThis as any).releaseDelayedDraft)).toBe('function');
+  await page.getByRole('button',{name:'Todos los agentes'}).click(); await page.locator('.agent-session').filter({hasText:'Capri iOS'}).click();
+  await expect(input).toBeEnabled(); await input.fill('Otra sesión libre');
+  await expect.poll(async()=>page.evaluate(async()=>{const {sessionVoiceOrigin}=await import('/src/voice-origin.ts');const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts');return(await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-1','session-1'])))).text;})).toBe('Otra sesión libre');
+  await page.evaluate(()=>(globalThis as any).releaseDelayedDraft()); await expect(input).toHaveValue('Otra sesión libre');
+});
+
+test('a lost write callback cannot hold a reopened session indefinitely', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  const input=page.getByRole('textbox',{name:'Continuar esta sesión'}); await expect(input).toBeEnabled(); await page.clock.install();
+  await page.evaluate(()=>{const g=globalThis as any,original=IDBDatabase.prototype.transaction;let held=false;IDBDatabase.prototype.transaction=function(names:string|string[],mode?:IDBTransactionMode,options?:IDBTransactionOptions){const tx=Reflect.apply(original,this,options?[names,mode,options]:mode?[names,mode]:[names]);if(this.name==='capri-ios-session-voice-drafts'&&mode==='readwrite'&&!held){held=true;Object.defineProperty(tx,'oncomplete',{configurable:true,set(callback){tx.addEventListener('complete',event=>{g.releaseLostDraft=()=>callback.call(tx,event);});}});}return tx;};});
+  await input.fill('Texto que conservar'); await expect.poll(()=>page.evaluate(()=>typeof (globalThis as any).releaseLostDraft)).toBe('function');
+  await page.getByRole('button',{name:'Todos los agentes'}).click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  await page.clock.fastForward(11000);
+  await expect(input).toBeEnabled(); await expect(input).toHaveValue('Texto que conservar');
+  await page.reload(); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click(); await expect(input).toHaveValue('Texto que conservar');
+});
+
+test('a timed-out draft read exposes retry without discarding the visible draft', async ({ page }) => {
+  await linkedPhone(page); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();
+  const input=page.getByRole('textbox',{name:'Continuar esta sesión'}); await input.fill('Texto para rescatar');
+  await expect.poll(async()=>page.evaluate(async()=>{const {sessionVoiceOrigin}=await import('/src/voice-origin.ts');const {createSessionVoiceDrafts}=await import('/src/session-voice-drafts.ts');return(await createSessionVoiceDrafts().read(await sessionVoiceOrigin(JSON.stringify(['wss://sessions.fixture.example/ws','pane-0','session-0'])))).text;})).toBe('Texto para rescatar');
+  await page.getByRole('button',{name:'Todos los agentes'}).click(); await page.clock.install();
+  await page.evaluate(()=>{const g=globalThis as any,original=crypto.subtle.digest.bind(crypto.subtle);g.releaseDraftHashes=[];g.restoreDraftHash=()=>{crypto.subtle.digest=original;};crypto.subtle.digest=async(algorithm:AlgorithmIdentifier,data:BufferSource)=>{const bytes=data instanceof ArrayBuffer?new Uint8Array(data):new Uint8Array(data.buffer,data.byteOffset,data.byteLength);if(new TextDecoder().decode(bytes).includes('pane-0'))await new Promise<void>(resolve=>g.releaseDraftHashes.push(resolve));return original(algorithm,data);};});
+  await page.locator('.agent-session').filter({hasText:'Operaciones'}).click(); await expect.poll(()=>page.evaluate(()=>(globalThis as any).releaseDraftHashes.length)).toBeGreaterThan(0);
+  await page.clock.fastForward(11000); await expect(page.getByRole('alert').filter({hasText:'borrador'})).toBeVisible();
+  await expect(input).toHaveValue('Texto para rescatar'); await expect(input).toBeEnabled();
+  await page.evaluate(()=>{(globalThis as any).restoreDraftHash();for(const release of (globalThis as any).releaseDraftHashes)release();});
+  await page.getByRole('button',{name:'Reintentar guardado'}).click(); await expect(page.getByRole('alert').filter({hasText:'borrador'})).toBeHidden();
+  await expect(input).toHaveValue('Texto para rescatar');
+  await page.reload(); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click(); await expect(input).toHaveValue('Texto para rescatar');
 });

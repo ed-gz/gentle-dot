@@ -3,10 +3,11 @@ import { loadConversationBase, type ChatEntry, type Conversation } from './conve
 import { localIdentifier } from './local-identifiers.ts';
 import type { PersistenceStatus } from './conversation-persistence.ts';
 import type { createConversationDraftRescue, DraftRescue } from './conversation-draft-rescue.ts';
+import type { NativeVoiceDeliveryIntent } from './native-voice-delivery.ts';
 
 type Journal = Pick<ReturnType<typeof createConversationJournal>, 'pending' | 'begin' | 'resume'>;
-type JournalOperation = { id: string; baseRevision: number; base?: Conversation; nextRevision: number; snapshot: Conversation; pending: ChatEntry[] };
-type Capture = { snapshot: Conversation; pending: [string, ChatEntry][] };
+type JournalOperation = { id: string; baseRevision: number; base?: Conversation; nextRevision: number; snapshot: Conversation; pending: ChatEntry[]; voiceDelivery?: NativeVoiceDeliveryIntent };
+type Capture = { sequence: number; snapshot: Conversation; pending: [string, ChatEntry][]; voiceDelivery?: NativeVoiceDeliveryIntent };
 const describe = (error: unknown) => error instanceof Error ? error.message : 'No se confirmó la reserva de conversación.';
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 function same(a: unknown, b: unknown): boolean {
@@ -52,8 +53,10 @@ export function createJournalConversationPersistence(options: {
   const identifier = options.identifier ?? localIdentifier;
   const rescueOwner = options.draftRescue ? (options.rescueOwner ?? identifier()) : undefined;
   let rescueSequence = 0;
+  let captureSequence = 0;
   const pending = new Map<string, ChatEntry>(), seen = new WeakSet<ChatEntry>();
   let base: Conversation | undefined, bound = false, archiveFloor = 0, owned: JournalOperation | undefined;
+  let deferredVoice: Capture | undefined;
   let ownedRejected = false;
   let chain = Promise.resolve(), issue: string | undefined;
   const status = (): PersistenceStatus => ({ pending: pending.size, ...(issue ? { conversationError: issue } : {}), blocked: !!issue });
@@ -71,13 +74,23 @@ export function createJournalConversationPersistence(options: {
     const actual = await readBase();
     if (!same(actual, operation.snapshot)) throw new Error('La conversación cambió después del guardado. Conserva las copias para revisión.');
     base = structuredClone(operation.snapshot); archiveFloor = operation.nextRevision;
+    if (operation.voiceDelivery && deferredVoice?.voiceDelivery?.sessionId === operation.voiceDelivery.sessionId
+      && deferredVoice.voiceDelivery.receiptSHA256 === operation.voiceDelivery.receiptSHA256) deferredVoice = undefined;
     for (const [key, entry] of captured) if (pending.get(key) === entry) pending.delete(key);
     owned = undefined; ownedRejected = false;
   }
-  function persist(value: Conversation): Promise<void> {
+  function persist(value: Conversation, voiceDelivery?: NativeVoiceDeliveryIntent): Promise<void> {
     if (!bound) return Promise.reject(new Error('Recupera y vincula la base antes de guardar.'));
     enqueue(value.entries);
-    const capture: Capture = { snapshot: structuredClone(value), pending: [...pending.entries()] };
+    const capture: Capture = { sequence: ++captureSequence, snapshot: structuredClone(value), pending: [...pending.entries()], ...(voiceDelivery ? { voiceDelivery: structuredClone(voiceDelivery) } : {}) };
+    if (voiceDelivery) {
+      if (deferredVoice && !same(deferredVoice.voiceDelivery, voiceDelivery)) return Promise.reject(new Error('Otro dictado sigue pendiente de guardarse.'));
+      // Repeated requests for the same pending identity must not replace the
+      // first capture or cause a second insertion. The later snapshot remains
+      // an ordinary queued write after the first action commits.
+      if (deferredVoice) delete capture.voiceDelivery;
+      else deferredVoice = capture;
+    }
     let rescue: DraftRescue | undefined;
     let rescueSaved: Promise<Error | undefined> | undefined;
     if (options.draftRescue && rescueOwner) {
@@ -104,18 +117,23 @@ export function createJournalConversationPersistence(options: {
             await finish(owned, []);
           }
         }
+        // A capture may only retry an older deferred dictation. An earlier
+        // queued draft must never overtake a dictation enqueued after it.
+        for (const selected of deferredVoice && deferredVoice.sequence < capture.sequence ? [deferredVoice, capture] : [capture]) {
+        // A prior retry may already have committed this action through owned.
+        if (selected.voiceDelivery && !deferredVoice) continue;
         const reserved = await journal.pending();
         if (reserved) throw new Error('Hay una reserva anterior. Recupérala antes de guardar otra.');
         const baseRevision = base?.revision ?? 0;
         const nextRevision = Math.max(baseRevision, archiveFloor) + 1;
         if (!Number.isSafeInteger(nextRevision)) throw new Error('La revisión de conversación alcanzó su límite.');
-        const snapshot = { ...capture.snapshot, revision: nextRevision };
+        const snapshot = { ...selected.snapshot, revision: nextRevision };
         // The real composer explicitly passes `attachedWork: undefined`.
         // Remove that optional absence only; unknown fields remain for the
         // journal to reject rather than being silently discarded.
         if (snapshot.attachedWork === undefined) delete snapshot.attachedWork;
         const operation: JournalOperation = { id: identifier(), baseRevision, ...(base ? { base: structuredClone(base) } : {}), nextRevision,
-          snapshot, pending: capture.pending.map(([, entry]) => structuredClone(entry)) };
+          snapshot, pending: selected.pending.map(([, entry]) => structuredClone(entry)), ...(selected.voiceDelivery ? { voiceDelivery: selected.voiceDelivery } : {}) };
         // Save this identity before begin so a lost response can only retry
         // the same reservation, never create a competing copy.
         owned = operation;
@@ -132,7 +150,8 @@ export function createJournalConversationPersistence(options: {
           }
           throw error;
         }
-        await finish(operation, capture.pending);
+        await finish(operation, selected.pending);
+        }
         if (rescue && options.draftRescue?.retireIfCurrent && options.retireConfirmedDraftRescue) {
           try { await options.draftRescue.retireIfCurrent(rescue); } catch { /* The extra copy remains. */ }
         }

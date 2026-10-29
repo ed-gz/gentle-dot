@@ -1,0 +1,52 @@
+import { expect, test } from './fixtures.ts';
+import { readFile } from 'node:fs/promises';
+
+test('archive status refreshes after a blocked save without loops or disrupting export', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
+  let publish: (() => void) | undefined;
+  await page.routeWebSocket('wss://memory-transition.example/ws', ws => {
+    let seq=0; const send=(value:object)=>ws.send(JSON.stringify({seq:seq++,...value}));
+    publish=()=>send({type:'message_done',messageId:'one',text:'Mensaje guardado para revisión.'});
+    ws.onMessage(raw=>{ const m=JSON.parse(String(raw)); if(m.type==='hello')send({type:'ready',agentState:'idle',conversationId:'main'}); if(m.type==='get_history')send({type:'history',conversationId:'main',messages:[]}); });
+  });
+  await page.goto('/'); await expect(page.locator('#history-loading')).toBeHidden();
+  await page.evaluate(async () => {
+    const state=globalThis as any, {conversationArchive}=await import('/src/conversation-archive.ts');
+    const stats=conversationArchive.stats, upsert=conversationArchive.upsert, saveExport=conversationArchive.export;
+    state.statsCalls=0; state.failArchive=true;
+    conversationArchive.stats=async()=>{state.statsCalls++;return stats();};
+    conversationArchive.upsert=async(...args:any[])=>{if(state.failArchive)throw new Error('Cuota simulada');return Reflect.apply(upsert,conversationArchive,args);};
+    conversationArchive.export=async()=>{if(state.holdExport)await new Promise<void>(resolve=>{state.releaseExport=resolve;});return saveExport();};
+  });
+  await page.locator('[data-panel="settings"]').click(); await page.getByText('Conexión manual',{exact:true}).click();
+  await page.locator('#url').fill('wss://memory-transition.example/ws'); await page.locator('#token').fill('fixture-only');
+  await page.locator('#connection button[type="submit"]').click(); await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+  await page.locator('[data-panel="chat"]').click();
+  publish!(); await expect(page.locator('#storage-warning')).toBeVisible();
+  await page.getByRole('button',{name:'Abrir rescate de guardado'}).click();
+  const status=page.locator('#memory-status'); await expect(status).toContainText('No se confirmó el guardado');
+  await page.evaluate(() => { (globalThis as any).failArchive=false; const p=document.querySelector<HTMLTextAreaElement>('#prompt')!; p.value='Reintento automático del borrador'; p.dispatchEvent(new Event('input',{bubbles:true})); });
+  await expect.poll(async()=>page.evaluate(async()=>(await (await import('/src/conversation.ts')).loadConversation()).draft)).toBe('Reintento automático del borrador');
+  await expect(status).toContainText('1 mensajes');
+  await expect.poll(()=>page.evaluate(()=>(globalThis as any).statsCalls)).toBeLessThan(8);
+  const settledCalls = await page.evaluate(()=>(globalThis as any).statsCalls);
+  await page.waitForTimeout(200);
+  expect(await page.evaluate(()=>(globalThis as any).statsCalls)).toBe(settledCalls);
+  await page.evaluate(() => { (globalThis as any).holdExport=true; });
+  const download=page.waitForEvent('download'); await page.getByRole('button',{name:'Exportar historial'}).click();
+  await expect.poll(()=>page.evaluate(()=>typeof (globalThis as any).releaseExport)).toBe('function');
+  await expect(status).toContainText('Preparando copia');
+  await page.evaluate(() => { const p=document.querySelector<HTMLTextAreaElement>('#prompt')!; p.value='Borrador durante la exportación'; p.dispatchEvent(new Event('input',{bubbles:true})); });
+  await expect.poll(async()=>page.evaluate(async()=>(await (await import('/src/conversation.ts')).loadConversation()).draft)).toBe('Borrador durante la exportación');
+  await expect(status).toContainText('Preparando copia');
+  await page.evaluate(()=>(globalThis as any).releaseExport());
+  const file = await download, path = await file.path(); expect(path).not.toBeNull();
+  const contents = await readFile(path!, 'utf8');
+  expect(contents).toContain('Mensaje guardado para revisión.');
+  expect(contents).toContain('Reintento automático del borrador');
+  expect(contents).not.toContain('Borrador durante la exportación');
+  expect(contents).not.toContain('fixture-only');
+  await expect(status).toContainText('Exportación preparada');
+  await expect.poll(()=>page.evaluate(()=>(globalThis as any).statsCalls)).toBeLessThan(8);
+  expect(errors).toEqual([]);
+});

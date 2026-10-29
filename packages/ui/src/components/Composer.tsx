@@ -28,6 +28,10 @@ interface ComposerProps {
 	text?: string;
 	onText?(text: string): void;
 	onSubmitText?(text: string, refs?: AttachmentRef[]): Promise<boolean>;
+	/** Optional durable platform commit before a voice result enters the draft. */
+	onVoiceDraft?(draft: NonNullable<VoiceControls['draft']>, current: string): Promise<string>;
+	/** A platform can keep a failed local draft editable while Send is blocked. */
+	editableWhenDisabled?: boolean;
 	inputOnly?: boolean;
 	labels?: { text: string; send: string; files: string; remove: string };
 }
@@ -46,6 +50,8 @@ export function Composer({
 	text: controlledText,
 	onText,
 	onSubmitText,
+	onVoiceDraft,
+	editableWhenDisabled = false,
 	inputOnly = false,
 	labels,
 }: ComposerProps) {
@@ -63,6 +69,8 @@ export function Composer({
 	onTextNow.current = onText;
 	const submitting = useRef(false);
 	const [pending, setPending] = useState(false);
+	const [voiceCommitError, setVoiceCommitError] = useState(false);
+	const [voiceCommitAttempt, setVoiceCommitAttempt] = useState(0);
 	const mounted = useRef(true);
 	useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 	/** The last message could not go out; its text and files stay for another try (#21). */
@@ -78,20 +86,24 @@ export function Composer({
 	// A dictation to review joins what was already typed, and the cursor waits at its end.
 	const draft = voice?.draft;
 	const draftTaken = voice?.draftTaken;
+	const commitVoiceNow = useRef(onVoiceDraft); commitVoiceNow.current = onVoiceDraft;
+	const draftTakenNow = useRef(draftTaken); draftTakenNow.current = draftTaken;
 	useEffect(() => {
 		if (!draft || !draftTaken) return;
 		const current = textNow.current;
-		const next = current.trim() ? `${current.trimEnd()} ${draft.text}` : draft.text;
-		setLocalText(next);
-		onTextNow.current?.(next);
-		draftTaken(draft.id);
-		requestAnimationFrame(() => {
-			const input = box.current;
-			if (!input) return;
-			input.focus();
-			input.setSelectionRange(input.value.length, input.value.length);
-		});
-	}, [draft, draftTaken]);
+		let cancelled = false;
+		void (async () => {
+			try {
+				const commit = commitVoiceNow.current;
+				const next = commit ? await commit(draft, current) : current.trim() ? `${current.trimEnd()} ${draft.text}` : draft.text;
+				if (cancelled || !mounted.current) return;
+				if (textNow.current !== current) { setVoiceCommitError(true); return; }
+				setVoiceCommitError(false); setLocalText(next); onTextNow.current?.(next); draftTakenNow.current?.(draft.id);
+				requestAnimationFrame(() => { const input = box.current; if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); } });
+			} catch { if (!cancelled && mounted.current) setVoiceCommitError(true); }
+		})();
+		return () => { cancelled = true; };
+	}, [draft?.id, voiceCommitAttempt]);
 
 	useEffect(() => {
 		if (focusKey !== undefined) box.current?.focus();
@@ -158,6 +170,7 @@ export function Composer({
 
 	return (
 		<>
+			{voiceCommitError && draft ? <div className="voice-status" role="alert"><p>No se confirmó el dictado. Revisa el texto antes de continuar.</p><details><summary>Ver dictado</summary><p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{draft.text}</p></details><button type="button" onClick={() => { setVoiceCommitError(false); setVoiceCommitAttempt(value => value + 1); }}>Reintentar</button>{voice?.deferDraft ? <button type="button" onClick={() => { voice.deferDraft?.(draft.id); setVoiceCommitError(false); }}>Revisar después</button> : null}</div> : null}
 			{refused ? (
 				<p className="voice-status" role="alert" aria-label={copy("Not sent", "No enviado")}>
 					{inputOnly ? "No se confirmó el envío." : copy(
@@ -250,6 +263,7 @@ export function Composer({
 				) : (
 					<textarea
 						ref={box}
+						readOnly={Boolean(onVoiceDraft && voice?.draft)}
 						aria-label={labels?.text ?? copy("Message", "Mensaje")}
 						placeholder={
 							busy
@@ -259,7 +273,7 @@ export function Composer({
 						enterKeyHint={newlineOnEnter ? "enter" : "send"}
 						rows={1}
 						value={text}
-						disabled={disabled || pending}
+						disabled={(disabled && !editableWhenDisabled) || pending}
 						onChange={(event) => {
 							if (text === "" && event.target.value !== "") onStartTyping?.();
 							setText(event.target.value);

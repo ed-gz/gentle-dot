@@ -28,6 +28,41 @@ async function nativeFixture(page: import('@playwright/test').Page, delayed = fa
       }
       return { ok: true };
     } };
+    // Adapt legacy per-test voice replies to the retained native protocol.
+    // Cancellation keeps the journal; only an exact release/discard clears it.
+    let record: any = null, receipt: any = null, captureEpoch = 0;
+    state.wrapRetainedVoice = (invoke: (command: string, args: any) => Promise<any>) => async (command: string, args: any = {}) => {
+      if (command.endsWith('inspect_retained_voice')) return { ok: true, retainedAudio: record };
+      if (command.endsWith('list_voice_receipts')) return { ok: true, receipts: receipt ? [receipt] : [] };
+      if (command.endsWith('get_voice_receipt')) return { ok: true, receipt: receipt?.receipt.audio.id.toLowerCase() === args.sessionId.toLowerCase() ? receipt : null };
+      if (command.endsWith('release_retained_voice')) {
+        if (!receipt || JSON.stringify(args.receipt) !== JSON.stringify(receipt.receipt)) throw new Error('Unmatched receipt');
+        receipt.releaseState = 'released'; record = null; return { ok: true, releaseState: 'released' };
+      }
+      if (command.endsWith('discard_retained_voice')) {
+        if (JSON.stringify(args.record) !== JSON.stringify(record)) throw new Error('Unmatched audio');
+        record = null; return { ok: true };
+      }
+      if (command.endsWith('attach_retained_voice')) {
+        if (JSON.stringify(args.record) !== JSON.stringify(record) || record?.state !== 'ready') throw new Error('Unmatched audio');
+        return { ok: true, sessionId: record.id, ownerId: record.owner, retainedAudio: record };
+      }
+      const startedAt = captureEpoch;
+      const result = await invoke(command, args);
+      if (command.endsWith('cancel_voice') && result?.ok) captureEpoch++;
+      if (command.endsWith('start_voice') && result?.ok && result.sessionId) {
+        const started = { id: result.sessionId, owner: args.ownerId, destination: args.retainDestination, locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'capturing' };
+        if (startedAt === captureEpoch) record = started;
+        return { ...result, retainedAudio: started };
+      }
+      if (command.endsWith('stop_voice') && result?.ok && record && result.sessionId === record.id) {
+        record = { ...record, state: 'ready', byteCount: 10, sha256: 'a'.repeat(64) };
+        const { sessionId, text, segments, durationSeconds, locale, source } = result;
+        receipt = { receipt: { schema: 'capri-native-voice-receipt/v1', audio: record, transcript: { sessionId, text, segments, durationSeconds, locale, source } }, releaseState: 'retained' };
+        return { ...result, retainedAudio: record };
+      }
+      return result;
+    };
   }, { delayed, decisions });
 }
 
@@ -276,12 +311,12 @@ for (const [status, message] of [
     await page.addInitScript((resultStatus: string) => {
       const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
       state.voicePreparationCalls = [];
-      state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
         if (command.endsWith('check_voice')) return { ok: true, available: false, status: 'assets_required', assetsInstalled: false, microphonePermission: 'granted' };
         if (command.endsWith('prepare_voice')) { state.voicePreparationCalls.push('prepare'); return { ok: true, available: false, status: resultStatus, assetsInstalled: false, microphonePermission: 'granted' }; }
         if (command.endsWith('start_voice')) state.voicePreparationCalls.push('start');
         return previous(command, args);
-      };
+      });
     }, status);
     await page.goto('/');
     await page.locator('#dictate').click();
@@ -299,7 +334,7 @@ test('voice fixture prepares assets on microphone tap and appends dictation with
     let prepared = false;
     state.voiceActions = [];
     const availability = () => ({ ok: true, available: prepared, status: prepared ? 'available' : 'assets_required', assetsInstalled: prepared, locale: 'es-MX', microphonePermission: 'granted' });
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return availability();
       if (command.endsWith('prepare_voice')) { state.voiceActions.push('prepare'); prepared = true; return availability(); }
       if (command.endsWith('start_voice')) { state.voiceActions.push('start'); return { ok: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', maxDurationSeconds: 90 }; }
@@ -309,7 +344,7 @@ test('voice fixture prepares assets on microphone tap and appends dictation with
           source: 'apple-speech-analyzer', segments: [{ text: 'Añade evidencia del error.', startSeconds: 0.1, endSeconds: 1.8 }] };
       }
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#prompt').fill('Borrador existente.');
@@ -330,13 +365,13 @@ test('sending waits for dictation to finish and ignores programmatic submission 
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
     const id = '01234567-89ab-cdef-0123-456789abcdef';
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) return { ok: true, sessionId: id, maxDurationSeconds: 90 };
       if (command.endsWith('stop_voice')) return await new Promise(resolve => { state.finishVoice = () => resolve({ ok: true, sessionId: args.sessionId, text: 'parte dictada', locale: 'es-MX', durationSeconds: 2,
         source: 'apple-speech-analyzer', segments: [{ text: 'parte dictada', startSeconds: 0.1, endSeconds: 1.8 }] }); });
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#prompt').fill('parte escrita');
@@ -363,12 +398,12 @@ test('a failed transcription releases send while retaining the typed draft', asy
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
     const id = '01234567-89ab-cdef-0123-456789abcdef';
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) return { ok: true, sessionId: id, maxDurationSeconds: 90 };
       if (command.endsWith('stop_voice')) return { ok: false, error: 'preview_pending', sessionId: id, message: 'Audio pendiente.' };
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#prompt').fill('texto que sí escribí');
@@ -385,14 +420,14 @@ test('a stuck transcription can be cancelled and its late result cannot change t
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
     const id = '01234567-89ab-cdef-0123-456789abcdef';
     state.voiceCancels = 0;
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) return { ok: true, sessionId: id, maxDurationSeconds: 90 };
       if (command.endsWith('cancel_voice')) { state.voiceCancels++; return { ok: true }; }
       if (command.endsWith('stop_voice')) return await new Promise(resolve => { state.finishVoice = () => resolve({ ok: true, sessionId: args.sessionId, text: 'resultado tardío', locale: 'es-MX', durationSeconds: 2,
         source: 'apple-speech-analyzer', segments: [{ text: 'resultado tardío', startSeconds: 0, endSeconds: 2 }] }); });
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#prompt').fill('texto preservado');
@@ -411,12 +446,12 @@ test('a denied microphone permission releases sending and preserves typed text',
   await nativeFixture(page);
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'denied' };
       if (command.endsWith('start_voice')) return { ok: false, error: 'microphone_denied', message: 'Activa el micrófono para Capri en Ajustes del iPhone.' };
       if (command.endsWith('cancel_voice')) return { ok: true };
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#prompt').fill('Borrador escrito');
@@ -431,12 +466,12 @@ test('returning from settings waits only for the original microphone cancellatio
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
     const id = '01234567-89ab-cdef-0123-456789abcdef';
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) return { ok: true, sessionId: id, maxDurationSeconds: 90 };
       if (command.endsWith('cancel_voice')) return await new Promise(resolve => { state.finishCancellation = () => resolve({ ok: true }); });
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#prompt').fill('Borrador escrito');
@@ -458,7 +493,7 @@ test('a preserved voice command returns to its original chat after navigation', 
     const id = '01234567-89ab-cdef-0123-456789abcdef';
     let owner = '', pending = false, stops = 0;
     state.voiceRecoveryCancels = 0;
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
         ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id, recoveryIssue: 'No detecté palabras. Descarta este audio y vuelve a dictar.' } : {}) };
       if (command.endsWith('start_voice')) { owner = args.ownerId; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
@@ -469,10 +504,11 @@ test('a preserved voice command returns to its original chat after navigation', 
           source: 'apple-speech-analyzer', segments: [{ text: 'Transcripción recuperada.', startSeconds: 0, endSeconds: 2 }] };
       }
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
   await page.locator('#dictate').click();
   await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
   await page.locator('[data-panel="settings"]').click();
@@ -492,7 +528,7 @@ test('an unconfirmed microphone cancellation retains its owner and retries befor
     const id = '01234567-89ab-cdef-0123-456789abcdef';
     let owner = '', attempts = 0;
     state.voiceCancelAttempts = [];
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) { owner = args.ownerId; state.voiceOwner = owner; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
       if (command.endsWith('cancel_voice')) {
@@ -501,7 +537,7 @@ test('an unconfirmed microphone cancellation retains its owner and retries befor
         return { ok: true };
       }
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#dictate').click();
@@ -513,7 +549,8 @@ test('an unconfirmed microphone cancellation retains its owner and retries befor
   expect(await page.evaluate(() => sessionStorage.getItem(`capri.voice.origin.${(globalThis as any).voiceOwner}`))).toBe('chat');
   await page.locator('#dictate').click();
   await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
-  await expect(page.locator('#voice-status')).toContainText('Dictado cancelado');
+  await expect(page.locator('#voice-status')).toContainText('La grabación quedó incompleta');
+  await expect(page.locator('#discard-voice')).toBeVisible();
   expect(await page.evaluate(() => sessionStorage.getItem(`capri.voice.origin.${(globalThis as any).voiceOwner}`))).toBeNull();
   expect(await page.evaluate(() => (globalThis as any).voiceCancelAttempts)).toEqual([
     await page.evaluate(() => (globalThis as any).voiceOwner), await page.evaluate(() => (globalThis as any).voiceOwner),
@@ -526,7 +563,7 @@ test('failed audio cleanup is shown distinctly and the same owner can retry', as
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
     const id = '01234567-89ab-cdef-0123-456789abcdef';
     state.cleanupOwners = [];
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) return { ok: true, sessionId: id, maxDurationSeconds: 90 };
       if (command.endsWith('cancel_voice')) {
@@ -535,7 +572,7 @@ test('failed audio cleanup is shown distinctly and the same owner can retry', as
         return { ok: true };
       }
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#dictate').click();
@@ -556,12 +593,12 @@ test('an unattributed pending recording can be explicitly discarded without inse
     const id = '01234567-89ab-cdef-0123-456789abcdef', owner = '11111111-1111-4111-8111-111111111111';
     let pending = true;
     state.discardedOwner = '';
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
         ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id } : {}) };
       if (command.endsWith('cancel_voice')) { state.discardedOwner = args.ownerId; pending = false; return { ok: true }; }
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await expect(page.locator('#voice-status')).toContainText('otra sesión');
@@ -579,14 +616,14 @@ test('provisional live dictation stays separate from the draft until one final r
     let recording = false;
     const id = '01234567-89ab-cdef-0123-456789abcdef';
     state.voicePartial = 'Primera hipótesis';
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true,
         microphonePermission: 'granted', ...(recording ? { recording: true, sessionId: id, partial: state.voicePartial } : {}) };
       if (command.endsWith('start_voice')) { recording = true; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
       if (command.endsWith('stop_voice')) { recording = false; return { ok: true, sessionId: args.sessionId, text: 'Texto final.', locale: 'es-MX', durationSeconds: 2,
         source: 'apple-speech-analyzer', segments: [{ text: 'Texto final.', startSeconds: 0.1, endSeconds: 1.8 }] }; }
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#prompt').fill('Borrador original');
@@ -601,23 +638,23 @@ test('provisional live dictation stays separate from the draft until one final r
   expect(await page.evaluate(() => (globalThis as any).nativePrompts)).toEqual([]);
 });
 
-test('interrupted native capture exits recording and reports the loss without a draft', async ({ page }) => {
+test('interrupted native capture exits recording and preserves its draft and retained audio', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
     const id = '01234567-89ab-cdef-0123-456789abcdef';
     state.interruptedVoice = false; state.voiceStops = 0;
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true,
         microphonePermission: 'granted', ...(state.interruptedVoice ? { recording: false, readyToTranscribe: true, sessionId: id, previewIssue: 'Audio interrumpido.' } : {}) };
       if (command.endsWith('start_voice')) { state.interruptedVoice = true; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
       if (command.endsWith('stop_voice')) { state.voiceStops++; return { ok: false, message: 'Audio interrumpido.' }; }
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/'); await page.locator('#prompt').fill('Conservado'); await page.locator('#dictate').click();
   await expect(page.locator('#voice-status')).toContainText('Audio interrumpido');
-  await expect(page.locator('#dictate')).toHaveAccessibleName('Dictar');
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
   await expect(page.locator('#prompt')).toHaveValue('Conservado');
   expect(await page.evaluate(() => (globalThis as any).voiceStops)).toBe(1);
 });
@@ -628,14 +665,14 @@ test('a late provisional result cannot overwrite a completed dictation', async (
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
     let recording = false;
     const id = '01234567-89ab-cdef-0123-456789abcdef';
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice') && recording) return await new Promise(resolve => { state.finishOldPreview = resolve; });
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) { recording = true; return { ok: true, sessionId: id, maxDurationSeconds: 90 }; }
       if (command.endsWith('stop_voice')) { recording = false; return { ok: true, sessionId: args.sessionId, text: 'Final correcto.', locale: 'es-MX', durationSeconds: 2,
         source: 'apple-speech-analyzer', segments: [{ text: 'Final correcto.', startSeconds: 0.1, endSeconds: 1.8 }] }; }
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/'); await page.locator('#dictate').click();
   await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishOldPreview)).toBe('function');
@@ -652,14 +689,14 @@ test('a temporary hidden web view during the microphone permission does not canc
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
     state.voiceActions = [];
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'undetermined' };
       if (command.endsWith('start_voice')) { state.voiceActions.push('start'); return await new Promise(resolve => { state.finishPermission = resolve; }); }
       if (command.endsWith('cancel_voice')) state.voiceActions.push('cancel');
       if (command.endsWith('stop_voice')) return { ok: true, sessionId: args.sessionId, text: 'Transcripción de prueba.', locale: 'es-MX', durationSeconds: 2,
         source: 'apple-speech-analyzer', segments: [{ text: 'Transcripción de prueba.', startSeconds: 0.1, endSeconds: 1.8 }] };
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/'); await page.locator('#dictate').click();
   await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishPermission)).toBe('function');
@@ -677,7 +714,7 @@ test('a stuck microphone start can be cancelled and its late result does not can
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke; let starts = 0;
     state.voiceActions = [];
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) {
         state.voiceActions.push('start');
@@ -688,7 +725,7 @@ test('a stuck microphone start can be cancelled and its late result does not can
       if (command.endsWith('stop_voice')) return { ok: true, sessionId: args.sessionId, text: 'Nuevo dictado.', locale: 'es-MX', durationSeconds: 2,
         source: 'apple-speech-analyzer', segments: [{ text: 'Nuevo dictado.', startSeconds: 0, endSeconds: 1.8 }] };
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/'); await page.locator('#dictate').click();
   await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishOldVoice)).toBe('function');
@@ -708,14 +745,14 @@ test('native cancellation of a pending microphone request remains visible and ca
   await nativeFixture(page);
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke; let starts = 0;
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'undetermined' };
       if (command.endsWith('start_voice')) {
         if (++starts === 1) return await new Promise(resolve => { state.finishBackgroundedVoice = resolve; });
         return { ok: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', maxDurationSeconds: 90 };
       }
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/'); await page.locator('#dictate').click();
   await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishBackgroundedVoice)).toBe('function');
@@ -733,7 +770,7 @@ test('a delayed cancellation is confirmed before a newer dictation starts', asyn
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
     state.voiceOwners = []; state.cancelledOwners = [];
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) {
         state.activeVoiceOwner = args.ownerId; state.voiceOwners.push(args.ownerId);
@@ -746,7 +783,7 @@ test('a delayed cancellation is confirmed before a newer dictation starts', asyn
         return { ok: true };
       }
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/'); await page.locator('#dictate').click();
   await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
@@ -757,22 +794,31 @@ test('a delayed cancellation is confirmed before a newer dictation starts', asyn
   expect(await page.evaluate(() => (globalThis as any).voiceOwners)).toHaveLength(1);
   await page.evaluate(() => (globalThis as any).releaseOldCancel());
   await expect(page.locator('#dictate')).toBeEnabled();
+  await expect(page.locator('#discard-voice')).toBeVisible();
+  page.once('dialog', dialog => dialog.accept());
+  await page.evaluate(() => { (globalThis as any).previousCancel = (globalThis as any).releaseOldCancel; });
+  await page.locator('#discard-voice').click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).releaseOldCancel !== (globalThis as any).previousCancel)).toBe(true);
+  await page.evaluate(() => (globalThis as any).releaseOldCancel());
+  await expect(page.locator('#discard-voice')).toBeHidden();
   await page.locator('#dictate').click();
   await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
   const ids = await page.evaluate(() => (globalThis as any).voiceOwners);
   expect(ids).toHaveLength(2); expect(ids[0]).toMatch(/^[a-f0-9-]{36}$/i); expect(ids[1]).not.toBe(ids[0]);
-  expect(await page.evaluate(() => (globalThis as any).cancelledOwners)).toEqual([ids[0]]);
+  // Explicitly discarding the retained audio fences the same old owner once
+  // more; neither cancellation may target the newer recording.
+  expect(await page.evaluate(() => (globalThis as any).cancelledOwners)).toEqual([ids[0], ids[0]]);
 });
 
 test('an interrupted recording does not leave a false recording indicator', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {
     const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
-    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+    state.__TAURI_INTERNALS__.invoke = state.wrapRetainedVoice(async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
       if (command.endsWith('start_voice')) return { ok: true, sessionId: '01234567-89ab-cdef-0123-456789abcdef', maxDurationSeconds: 90 };
       return previous(command, args);
-    };
+    });
   });
   await page.goto('/');
   await page.locator('#dictate').click();

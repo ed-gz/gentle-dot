@@ -6,12 +6,13 @@ export type RetainedVoiceRecord = {
   id: string; owner: string; destination: string; locale: string; kind: 'speech' | 'dictation'; createdAt: number;
 } & ({ state: 'capturing' } | { state: 'ready'; byteCount: number; sha256: string });
 export type RetainedVoiceResult = { record: Extract<RetainedVoiceRecord, { state: 'ready' }>; transcript: VoiceTranscript };
+export type RetainedVoiceInspection = { state: 'none' } | { state: 'retained' | 'discard-pending'; record: RetainedVoiceRecord };
 const MAX_BYTES = 128 * 1024 * 1024;
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value);
 const destinationOK = (value: unknown): value is string => value === 'chat' || (typeof value === 'string' && /^session:[a-f0-9]{64}$/.test(value));
 const localeOK = (value: unknown): value is string => typeof value === 'string' && value.length <= 40 && /^es(?:-[a-z0-9]{1,8})*$/i.test(value);
-const recordError = () => new Error('No pude verificar el audio guardado. Se conserva para revisión.');
+const recordError = () => new Error('No pude verificar el audio. Revisa su estado antes de continuar.');
 
 export function parseRetainedVoiceRecord(input: unknown): RetainedVoiceRecord {
   const value: unknown = structuredClone(input);
@@ -46,13 +47,21 @@ function native(command: string, args?: Record<string, unknown>): Promise<unknow
   return invoke(`plugin:perception|${command}`, args).catch(() => { throw recordError(); });
 }
 
-/** Deliberately has no ACK/delete operation. Callers must first implement
- * destination-bound durable storage, recovery and an explicit retention policy. */
+/** Explicit discard is separate from a receipt-backed release. */
 export function createRetainedVoiceBridge(call: typeof native = native, deadlines: { start?: number; cancel?: number } = {}) {
+  async function inspectState(): Promise<RetainedVoiceInspection> {
+    const value = reply(await call('inspect_retained_voice'));
+    if (value.retainedAudio != null && value.discardPending != null) throw recordError();
+    if (value.discardPending != null) return { state: 'discard-pending', record: parseRetainedVoiceRecord(value.discardPending) };
+    if (value.retainedAudio != null) return { state: 'retained', record: parseRetainedVoiceRecord(value.retainedAudio) };
+    return { state: 'none' };
+  }
   return {
+    inspectState,
     async inspect(): Promise<RetainedVoiceRecord | undefined> {
-      const value = reply(await call('inspect_retained_voice'));
-      return value.retainedAudio == null ? undefined : parseRetainedVoiceRecord(value.retainedAudio);
+      const state = await inspectState();
+      if (state.state === 'discard-pending') throw new Error('Un audio espera confirmación de eliminación. Vuelve a intentarlo.');
+      return state.state === 'none' ? undefined : state.record;
     },
     async start(owner: string, destination: string): Promise<{ session: VoiceSession; record: RetainedVoiceRecord }> {
       if (!uuid(owner) || !destinationOK(destination)) throw recordError();
@@ -78,6 +87,17 @@ export function createRetainedVoiceBridge(call: typeof native = native, deadline
       if (!sameRecord(record, actual) || typeof value.sessionId !== 'string' || value.sessionId.toLowerCase() !== record.id.toLowerCase()
         || typeof value.ownerId !== 'string' || value.ownerId.toLowerCase() !== record.owner.toLowerCase()) throw recordError();
       return actual;
+    },
+    async discard(input: unknown): Promise<void> {
+      const expected = parseRetainedVoiceRecord(input);
+      // Stop the exact owner and drain any reader or writer first. Neither a
+      // lost cancellation nor an altered journal can authorize deletion.
+      await voiceCancelWithDeadline(async () => { reply(await call('cancel_voice', { ownerId: expected.owner })); }, deadlines.cancel);
+      const inspected = await inspectState();
+      if (inspected.state !== 'none' && !sameRecord(inspected.record, expected)) throw recordError();
+      // Native rechecks even absence under its lock; a completed deletion may
+      // have lost the reply, so absence alone is not treated as success here.
+      reply(await call('discard_retained_voice', { record: inspected.state === 'none' ? expected : inspected.record }));
     },
     async stop(input: unknown): Promise<RetainedVoiceResult> {
       const expected = parseRetainedVoiceRecord(input);

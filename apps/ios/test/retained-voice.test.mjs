@@ -133,3 +133,43 @@ test('inspection and attachment reject changed identity and never delete audio',
   await assert.rejects(altered.attach(record));
   assert.deepEqual(calls, ['inspect_retained_voice', 'attach_retained_voice']);
 });
+
+test('explicit discard drains the exact owner and refuses a changed or uncertain record', async () => {
+  const calls = [];
+  const bridge = createRetainedVoiceBridge(async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'cancel_voice') return { ok: true };
+    if (command === 'inspect_retained_voice') return { ok: true, retainedAudio: capturing() };
+    if (command === 'discard_retained_voice') return { ok: true };
+    throw new Error('Unexpected operation');
+  });
+  await bridge.discard(capturing());
+  assert.deepEqual(calls.map(call => call.command), ['cancel_voice', 'inspect_retained_voice', 'discard_retained_voice']);
+  assert.deepEqual(calls[2].args.record, capturing());
+  calls.length = 0;
+  const changed = createRetainedVoiceBridge(async (command) => { calls.push({ command }); return command === 'cancel_voice' ? { ok: true } : { ok: true, retainedAudio: { ...capturing(), destination: `session:${'b'.repeat(64)}` } }; });
+  await assert.rejects(changed.discard(capturing()));
+  assert.deepEqual(calls.map(call => call.command), ['cancel_voice', 'inspect_retained_voice']);
+  calls.length = 0;
+  const uncertain = createRetainedVoiceBridge(async command => { calls.push({ command }); throw new Error('lost callback'); });
+  await assert.rejects(uncertain.discard(capturing()));
+  assert.deepEqual(calls.map(call => call.command), ['cancel_voice']);
+});
+
+test('pending native discard is retried by identity and never attached as audio', async () => {
+  const calls = [];
+  const bridge = createRetainedVoiceBridge(async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'cancel_voice') return { ok: true };
+    if (command === 'inspect_retained_voice') return { ok: true, discardPending: capturing() };
+    if (command === 'discard_retained_voice') return { ok: true };
+    throw new Error('Unexpected operation');
+  });
+  assert.deepEqual(await bridge.inspectState(), { state: 'discard-pending', record: capturing() });
+  await assert.rejects(bridge.inspect(), /espera confirmación/);
+  await bridge.discard(capturing());
+  assert.deepEqual(calls.map(call => call.command), ['inspect_retained_voice', 'inspect_retained_voice', 'cancel_voice', 'inspect_retained_voice', 'discard_retained_voice']);
+  assert.deepEqual(calls.at(-1).args.record, capturing());
+  const ambiguous = createRetainedVoiceBridge(async () => ({ ok: true, retainedAudio: capturing(), discardPending: capturing() }));
+  await assert.rejects(ambiguous.inspectState());
+});

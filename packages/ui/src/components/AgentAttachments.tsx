@@ -6,11 +6,13 @@ import { AgentVoiceContext, useAgentVoice } from "../useAgentVoice.ts";
 import { Composer } from "./Composer.tsx";
 import "../agent-attachments.css";
 import type { VoiceControls } from "../useVoice.ts";
+import { useAgentTextDraft, type AgentTextDraftStore } from "../useAgentTextDraft.ts";
 
 /** Platforms can supply their own transcriber without initializing desktop capture. */
 export const AgentVoiceOverrideContext = createContext<VoiceControls | undefined>(undefined);
 /** Optional platform storage; never includes credentials or uploaded host references. */
 export const AgentAttachmentDraftContext = createContext<((paneId: string, sessionId: string) => AttachmentDraftStore) | undefined>(undefined);
+export const AgentTextDraftContext = createContext<((paneId: string, sessionId: string) => AgentTextDraftStore) | undefined>(undefined);
 
 /** Files belong to client + pane + session; availability only cancels capture/pre-dispatch work. */
 interface AgentAttachmentsProps {
@@ -47,6 +49,9 @@ function AgentAttachmentsBody(props: AgentAttachmentsProps & { voice: VoiceContr
   ? (file: File, options: { uploadId?: string }) => client.uploadAttachment!(paneId, sessionId, file, options.uploadId, controller.current.signal)
   : undefined, [client, paneId, sessionId, filesEnabled]);
  const draftFactory = useContext(AgentAttachmentDraftContext);
+ const textDraftFactory = useContext(AgentTextDraftContext);
+ const textDraftStore = useMemo(() => textDraftFactory?.(paneId, sessionId), [textDraftFactory, paneId, sessionId]);
+ const textDraft = useAgentTextDraft(textDraftStore, text, onText);
  const draftStore = useMemo(() => filesEnabled ? draftFactory?.(paneId, sessionId) : undefined, [draftFactory, paneId, sessionId, filesEnabled]);
  const attachments = useAttachments(uploader, draftStore);
  const voice = props.voice;
@@ -64,8 +69,9 @@ function AgentAttachmentsBody(props: AgentAttachmentsProps & { voice: VoiceContr
  }, [client, paneId, sessionId]);
  useEffect(() => { if (disconnected) controller.current.abort(); }, [disconnected]);
  return <div className="agent-reply agent-attachments">
-  <Composer mobile inputOnly capriMobile={props.capriMobile} busy={false} disabled={disconnected || busy || Boolean(attachments?.storageError)} send={() => false}
-   text={text} onText={onText} attachments={guardedAttachments} voice={voice}
+  <Composer mobile inputOnly capriMobile={props.capriMobile} busy={false} disabled={disconnected || busy || Boolean(attachments?.storageError) || !textDraft.ready || Boolean(textDraft.error)} send={() => false}
+   editableWhenDisabled={Boolean(textDraft.error) && !disconnected && !busy && textDraft.ready}
+   text={text} onText={textDraftStore ? textDraft.save : onText} onVoiceDraft={textDraftStore ? textDraft.commit : undefined} attachments={guardedAttachments} voice={voice}
    labels={{ text: "Continuar esta sesión", send: "Enviar instrucción", files: "Archivos para esta sesión", remove: "Quitar" }}
    onSubmitText={async (value, refs) => {
     if (!mounted.current || unavailable.current || busy) return false;
@@ -85,6 +91,7 @@ function AgentAttachmentsBody(props: AgentAttachmentsProps & { voice: VoiceContr
     } finally { if (mounted.current) setPending(false); }
    }} />
   {attachments?.storageNote ? <p className="voice-status" role="status">{attachments.storageNote}</p> : null}
+  {textDraft.error ? <><p className="voice-status" role="alert">{textDraft.error} Conserva una copia antes de cerrar esta vista. <button type="button" onClick={textDraft.retry}>Reintentar guardado</button></p><textarea aria-label="Borrador sin confirmar" readOnly value={text} /></> : null}
   {attachments?.storageError ? <p className="voice-status" role="alert">{attachments.storageError} <button type="button" disabled={attachments.saving} onClick={attachments.retrySave}>Reintentar guardado</button></p> : null}
   {attachments?.uploading && !pending ? <button type="button" aria-label="Cancelar subida" onClick={() => {
    controller.current.abort(); if (!draftStore) attachments.clear();

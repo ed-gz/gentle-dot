@@ -419,3 +419,32 @@ test('a newer archived window preserves unarchived legacy IDs before pruning mig
   });
   expect(result).toEqual({ visible: 120, preserved: 239, count: 239, old: 'legacy-0', existing: 'archived-0', blocked: false, error: undefined });
 });
+
+test('archive statistics refresh after a pending write completes while the archive is open', async ({ page }) => {
+  let sendHost: ((message: object) => void) | undefined;
+  await page.routeWebSocket('wss://memory-transition.example/ws', ws => {
+    let sequence = 0; sendHost = data => ws.send(JSON.stringify({ seq: sequence++, ...data }));
+    ws.onMessage(raw => { const request = JSON.parse(String(raw));
+      if (request.type === 'hello') sendHost!({ type: 'ready', agentState: 'idle', conversationId: 'main' });
+      if (request.type === 'get_history') sendHost!({ type: 'history', conversationId: 'main', messages: [] });
+    });
+  });
+  await page.goto('/'); await page.locator('[data-panel="settings"]').click();
+  await page.getByText('Conexión manual', { exact: true }).click();
+  await page.locator('#url').fill('wss://memory-transition.example/ws'); await page.locator('#token').fill('fixture-only');
+  await page.locator('#connection button[type="submit"]').click(); await expect(page.locator('#status')).toContainText('Vinculado');
+  await page.evaluate(async () => {
+    const archive = (await import('/src/conversation-archive.ts')).conversationArchive, original = archive.upsert;
+    const g = globalThis as any;
+    archive.upsert = async (...args) => {
+      if (args[0].some(item => item.text === 'Mensaje pendiente controlado')) await new Promise<void>(resolve => { g.releasePendingArchive = resolve; });
+      return original(...args);
+    };
+  });
+  sendHost!({ type: 'message_done', messageId: 'transition', text: 'Mensaje pendiente controlado' });
+  await expect.poll(() => page.evaluate(() => typeof (globalThis as any).releasePendingArchive)).toBe('function');
+  await openRecoveryHarness(page);
+  await expect(page.locator('#memory-status')).toContainText('pendientes');
+  await page.evaluate(() => (globalThis as any).releasePendingArchive());
+  await expect(page.locator('#memory-status')).toContainText('1 mensajes');
+});

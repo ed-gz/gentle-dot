@@ -1,16 +1,15 @@
 import { archiveEntry, conversationArchive, type ArchiveWrite } from './conversation-archive.ts';
 import { CONVERSATION_JOURNAL_KEY, canonicalConversationSnapshot, type ChatEntry, type Conversation } from './conversation.ts';
+import { NATIVE_VOICE_DELIVERY_PREFIX, nativeVoiceMarker, nativeVoiceSnapshotSHA256, validateNativeVoiceDelivery, verifyNativeVoiceDelivery, type NativeVoiceDeliveryIntent } from './native-voice-delivery.ts';
 
-/** Experimental coordinator for the existing conversation and archive schemas.
- * It must not be enabled until every writer (including voice and every WebView)
- * participates and the UI can recover a pending journal without discarding
- * live state. The caller must bind each in-memory snapshot to the exact base
+/** Coordinator for the existing conversation and archive schemas.
+ * The caller must bind each in-memory snapshot to the exact base
  * from which it was captured; reading a new base just before saving does not
  * prove that an older snapshot includes its changes. Concurrent writers which
  * bypass this journal can still alter the archive between verification and
  * window commit. It never executes tools or acknowledges native work. */
 type Archive = { upsert(entries: readonly ChatEntry[], scope?: string, visible?: readonly ChatEntry[], revision?: number): Promise<ArchiveWrite>; verifyExactBatch(entries: readonly ChatEntry[], revision: number): Promise<boolean> };
-export type ConversationJournal = { schema: 'capri-conversation-journal/v1'; id: string; baseRevision: number; base?: Conversation; revision: number; snapshot: Conversation; pending: ChatEntry[] };
+export type ConversationJournal = { schema: 'capri-conversation-journal/v1'; id: string; baseRevision: number; base?: Conversation; revision: number; snapshot: Conversation; pending: ChatEntry[]; voiceDelivery?: NativeVoiceDeliveryIntent; voiceSnapshotSHA256?: string };
 /** A receipt is evidence of a past commit, not proof that its contents are
  * still current. Only the most recent receipt is retained. It must not be used
  * to acknowledge native results or delete audio. */
@@ -80,7 +79,7 @@ function includeBase(pending: ChatEntry[], base: Conversation | undefined, visib
   return cleanPending(result);
 }
 function validate(value: unknown): ConversationJournal {
-  if (!object(value) || Object.keys(value).some(key => !['schema', 'id', 'baseRevision', 'base', 'revision', 'snapshot', 'pending'].includes(key))
+  if (!object(value) || Object.keys(value).some(key => !['schema', 'id', 'baseRevision', 'base', 'revision', 'snapshot', 'pending', 'voiceDelivery', 'voiceSnapshotSHA256'].includes(key))
     || value.schema !== 'capri-conversation-journal/v1' || !uuid(value.id) || !natural(value.baseRevision) || value.baseRevision >= Number.MAX_SAFE_INTEGER
     || !natural(value.revision) || value.revision <= value.baseRevision) throw new Error('La reserva de conversación es inválida; no se eliminó.');
   const base = value.base === undefined ? undefined : cleanConversation(value.base);
@@ -89,7 +88,9 @@ function validate(value: unknown): ConversationJournal {
   if (snapshot.revision !== value.revision) throw new Error('La revisión reservada no coincide; no se eliminó.');
   if (includeVisible(pending, snapshot.entries).length !== pending.length) throw new Error('La reserva perdió mensajes visibles; no se eliminó.');
   if (includeBase(pending, base, snapshot.entries).length !== pending.length) throw new Error('La reserva perdió mensajes anteriores; no se eliminó.');
-  const result: ConversationJournal = { schema: value.schema, id: value.id, baseRevision: value.baseRevision, ...(base ? { base } : {}), revision: value.revision, snapshot, pending };
+  const voiceDelivery = value.voiceDelivery === undefined ? undefined : validateNativeVoiceDelivery(value.voiceDelivery, snapshot.draft);
+  if (voiceDelivery ? typeof value.voiceSnapshotSHA256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.voiceSnapshotSHA256) : value.voiceSnapshotSHA256 !== undefined) throw new Error('La huella del borrador no es válida.');
+  const result: ConversationJournal = { schema: value.schema, id: value.id, baseRevision: value.baseRevision, ...(base ? { base } : {}), revision: value.revision, snapshot, pending, ...(voiceDelivery ? { voiceDelivery, voiceSnapshotSHA256: value.voiceSnapshotSHA256 as string } : {}) };
   if (new TextEncoder().encode(JSON.stringify(result)).byteLength > MAX_BYTES) throw new Error('La reserva supera el límite; conserva y exporta la conversación.');
   return result;
 }
@@ -149,7 +150,7 @@ export function createConversationJournal(options: { databaseName?: string; arch
   return {
     /** Reserve the exact base and persist the entire snapshot plus every
      * pending message before performing any archive write. */
-    async begin(input: { id: string; baseRevision: number; base?: Conversation; snapshot: Conversation; pending: ChatEntry[]; nextRevision?: number }): Promise<ConversationJournal> {
+    async begin(input: { id: string; baseRevision: number; base?: Conversation; snapshot: Conversation; pending: ChatEntry[]; nextRevision?: number; voiceDelivery?: NativeVoiceDeliveryIntent }): Promise<ConversationJournal> {
       let safe: ConversationJournal;
       try {
         const original = structuredClone(input), snapshot = cleanConversation(original.snapshot);
@@ -159,8 +160,10 @@ export function createConversationJournal(options: { databaseName?: string; arch
         // window remained older. The caller may advance past that recovered
         // revision, but only while binding the complete, unchanged window base.
         const revision = original.nextRevision ?? original.baseRevision + 1;
+        const voiceSnapshotSHA256 = original.voiceDelivery ? await nativeVoiceSnapshotSHA256(snapshot) : undefined;
         safe = validate({ schema: 'capri-conversation-journal/v1', id: original.id, baseRevision: original.baseRevision,
-          ...(base ? { base } : {}), snapshot, pending, revision });
+          ...(base ? { base } : {}), snapshot, pending, revision, ...(original.voiceDelivery ? { voiceDelivery: original.voiceDelivery, voiceSnapshotSHA256 } : {}) });
+        if (safe.voiceDelivery) await verifyNativeVoiceDelivery(safe.voiceDelivery);
       } catch (error) {
         throw new JournalReservationRejected(error instanceof Error ? error.message : 'La reserva no es válida; se conservan las copias.');
       }
@@ -185,6 +188,13 @@ export function createConversationJournal(options: { databaseName?: string; arch
             marker.onsuccess = () => safely(fail, () => {
               if (marker.result !== undefined && (!object(marker.result) || Object.keys(marker.result).some(key => !['id', 'revision'].includes(key)) || !uuid(marker.result.id) || !natural(marker.result.revision))) throw new Error('La confirmación anterior no es válida; se conserva para revisión.');
               if (object(marker.result) && marker.result.id === safe.id) throw new Error('Esta identidad ya se confirmó; no se reutilizó.');
+              if (safe.voiceDelivery) {
+                const delivered = store.get(NATIVE_VOICE_DELIVERY_PREFIX + safe.voiceDelivery.sessionId);
+                delivered.onsuccess = () => safely(fail, () => {
+                  if (delivered.result !== undefined) throw new JournalReservationConflict('Este dictado ya tiene una entrega registrada.');
+                  store.put(safe, JOURNAL); done(safe);
+                }); return;
+              }
               store.put(safe, JOURNAL); done(safe);
             });
           });
@@ -207,6 +217,10 @@ export function createConversationJournal(options: { databaseName?: string; arch
         });
       }
       if (journal.id !== id) throw new Error('La reserva pertenece a otra operación.');
+      if (journal.voiceDelivery) {
+        await verifyNativeVoiceDelivery(journal.voiceDelivery);
+        if (await nativeVoiceSnapshotSHA256(journal.snapshot) !== journal.voiceSnapshotSHA256) throw new Error('La huella del borrador reservado no coincide.');
+      }
       for (let offset = 0; offset < Math.max(1, journal.pending.length); offset += 500) {
         await archive.upsert(journal.pending.slice(offset, offset + 500), undefined, offset + 500 >= journal.pending.length ? journal.snapshot.entries : undefined, journal.revision);
       }
@@ -230,8 +244,16 @@ export function createConversationJournal(options: { databaseName?: string; arch
           const current = store.get('current');
           current.onsuccess = () => safely(fail, () => {
             if (!matchesBase(current.result, journal.base)) throw new Error('La conversación cambió durante el archivo; la reserva se conserva.');
-            store.put(journal.snapshot, 'current'); store.put({ id, revision: journal.revision }, COMMITTED); store.delete(JOURNAL);
-            done({ id, revision: journal.revision, alreadyCommitted: false });
+            const commit = () => {
+              store.put(journal.snapshot, 'current');
+              if (journal.voiceDelivery && journal.voiceSnapshotSHA256) store.put(nativeVoiceMarker(journal.voiceDelivery, journal.revision, journal.voiceSnapshotSHA256), NATIVE_VOICE_DELIVERY_PREFIX + journal.voiceDelivery.sessionId);
+              store.put({ id, revision: journal.revision }, COMMITTED); store.delete(JOURNAL);
+              done({ id, revision: journal.revision, alreadyCommitted: false });
+            };
+            if (journal.voiceDelivery) {
+              const previous = store.get(NATIVE_VOICE_DELIVERY_PREFIX + journal.voiceDelivery.sessionId);
+              previous.onsuccess = () => safely(fail, () => { if (previous.result !== undefined) throw new Error('La entrega del dictado ya existe; la reserva se conserva.'); commit(); });
+            } else commit();
           });
         });
       });
