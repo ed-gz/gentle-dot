@@ -4,7 +4,7 @@ test('navigation remains visible and inert until its handlers are installed', as
   let release!: () => void;
   const waitForMain = new Promise<void>(resolve => { release = resolve; });
   let requested = false;
-  await page.route('**/src/main.ts', async route => {
+  await page.route(url => url.pathname === '/src/main.ts', async route => {
     requested = true;
     await waitForMain;
     await route.continue();

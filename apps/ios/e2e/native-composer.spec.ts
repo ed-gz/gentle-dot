@@ -52,7 +52,9 @@ test('a document already imported by iOS is saved locally before acknowledgement
   expect(saved.calls).toContain('documents_ack');
   expect(saved.text).toBe('Contenido importado');
   await page.reload();
-  await expect(page.locator('#attachment-context')).toContainText('Material local adjunto');
+  await expect(page.locator('#attachment-context')).toHaveText('Material guardado en este iPhone');
+  await page.locator('#view-material').click();
+  await expect(page.locator('#work-list')).toContainText('Reunión.txt');
 });
 test('background visibility no longer aborts an in-flight native answer; explicit Stop still exists', async ({ page }) => {
   await fixture(page); await page.goto('/');
