@@ -26,6 +26,7 @@ import {
 	questionAnswer,
 	humanOnlyQuestion,
 	questionDetails,
+	questionRevision,
 } from "../orchestration/questions.ts";
 import type { Manifest } from "../orchestration/registry.ts";
 import { connectReviewConsent, isNativeReviewSource, type LiveReviewConsent, reviewConsentDetails } from "../orchestration/review-consent.ts";
@@ -451,6 +452,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				stopReason: latestAssistant?.role === "assistant" ? latestAssistant.stopReason : undefined,
 				status: question || terminalQuestion ? "waiting" : ctx.isIdle() ? "idle" : "working",
 				question: question ?? terminalQuestion ?? null,
+				...(question && questionDetails(question) ? {questionRevision:questionRevision(question)} : {}),
 				metadata: metadata?.(),
 				capabilities: {
 					companionActivity: true,
@@ -464,6 +466,7 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 					} : {}),
 					abort: true,
 					questions: true,
+					questionBinding: 1,
 					close: typeof ctx.shutdown === "function",
 					duplicate:
 						Boolean(env.GENTLE_DOT_SESSION_DIR) &&
@@ -564,8 +567,11 @@ export function createDotSession(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 				throw new OrchestrationError("HUMAN_ACTIVE", "La persona volvió a trabajar en esta sesión; la autonomía debe pausarse.");
 			if (!question || params.questionId !== question.id || Date.parse(question.expiresAt) <= Date.now())
 				throw new OrchestrationError("QUESTION_CHANGED", "El permiso ya fue respondido o venció.");
+			if (params.expectedQuestionRevision !== undefined &&
+				(typeof params.expectedQuestionRevision !== "string" || !/^[a-f0-9]{64}$/.test(params.expectedQuestionRevision) || params.expectedQuestionRevision !== questionRevision(question)))
+				throw new OrchestrationError("QUESTION_CHANGED", "El contenido de la solicitud cambió; vuelve a revisarlo.");
 			if (reviewConsent && Object.keys(params).some(key =>
-				!["expectedInstanceId", "expectedSessionId", "questionId", "optionId", "cancelled", "expectedHumanActivityAt"].includes(key)))
+				!["expectedInstanceId", "expectedSessionId", "questionId", "optionId", "cancelled", "expectedHumanActivityAt", "expectedQuestionRevision"].includes(key)))
 				throw new OrchestrationError("INVALID_ANSWER", "La respuesta no corresponde a esta solicitud.");
 			if ("expectedHumanActivityAt" in params && (humanOnlyQuestion(question) ||
 				(record(question.workflowPermission) && question.workflowPermission.category === "workspace-tool" && trustedWorkspaceDialogs.get(question)?.() !== true)))

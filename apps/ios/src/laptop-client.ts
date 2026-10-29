@@ -118,14 +118,18 @@ export function createLaptopClient(connection: DesktopConnection, options: {
     let wireAction = action;
     let review:AgentApproval | undefined;
     if (action.action==='answer') {
-      const {reviewedApproval,...wire}=action;wireAction=wire;
+      const {reviewedApproval,expectedQuestionRevision:_untrustedRevision,...wire}=action;wireAction=wire;
       if(!reviewedApproval || reviewedApproval.id!==action.requestId || reviewedApproval.paneId!==action.paneId || reviewedApproval.sessionId!==action.sessionId) throw new Error('Vuelve a abrir y revisar la solicitud humana.');
       const snapshot=await client.snapshot(); current();
       const supplied=snapshot.approvals.find(item=>item.id===action.requestId && item.paneId===action.paneId && item.sessionId===action.sessionId);
       const q=page.question;
       const fresh:AgentApproval | undefined=supplied ?? (q?.id===action.requestId ? {...q,kind:q.kind as AgentApproval['kind'],paneId:action.paneId,sessionId:action.sessionId,message:q.message??'',action:q.title,createdAt:'',expiresAt:'expiresAt' in q && typeof q.expiresAt==='string'?q.expiresAt:''} : undefined);
-      const reviewedFields=(a:AgentApproval)=>JSON.stringify([a.id,a.paneId,a.sessionId,a.title,a.message,a.action,a.expiresAt,a.answerable,a.kind,a.requiresConfirmation,a.options,a.placeholder,a.questions]);
+      const reviewedFields=(a:AgentApproval)=>JSON.stringify([a.id,a.paneId,a.sessionId,a.title,a.message,a.action,a.expiresAt,a.answerable,a.kind,a.requiresConfirmation,a.options,a.placeholder,a.questions,a.questionRevision]);
       if(!fresh || reviewedFields(fresh)!==reviewedFields(reviewedApproval) || (fresh.expiresAt && Date.parse(fresh.expiresAt)<=Date.now())) throw new Error('La solicitud humana cambió o venció; vuelve a revisarla.');
+      if(reviewedApproval.questionRevision !== undefined) {
+        if (!/^[a-f0-9]{64}$/.test(reviewedApproval.questionRevision)) throw new Error('La revisión de la solicitud no es válida.');
+        wireAction={...wire,expectedQuestionRevision:reviewedApproval.questionRevision};
+      }
       review=structuredClone(reviewedApproval);
     }
     const payload={...structuredClone(wireAction),...(review?{reviewedApproval:review}:{})} as unknown as Record<string,unknown>;

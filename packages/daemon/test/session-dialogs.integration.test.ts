@@ -122,9 +122,13 @@ it("loads the real Pi adapter and resolves its shared native UI context through 
 		const ui = runner.createToolContext("actual-tool", undefined).ui;
 		expect(ui).toBe(runner.createContext().ui);
 		const confirm = ui.confirm("Push", "git push origin feature");
-		let question = (await call("snapshot")).question as Record<string, unknown>;
+		const reviewedSnapshot = await call("snapshot");
+		let question = reviewedSnapshot.question as Record<string, unknown>;
 		expect(question).toMatchObject({ kind: "confirm", answerable: true, message: "git push origin feature" });
-		await call("answer", { questionId: question.id, confirmed: true });
+		expect(reviewedSnapshot.questionRevision).toMatch(/^[a-f0-9]{64}$/);
+		await expect(call("answer", { questionId: question.id, confirmed: true, expectedQuestionRevision: "0".repeat(64) })).rejects.toMatchObject({ code: "QUESTION_CHANGED" });
+		expect((await call("snapshot")).question).toMatchObject({ id: question.id });
+		await call("answer", { questionId: question.id, confirmed: true, expectedQuestionRevision: reviewedSnapshot.questionRevision });
 		await expect(confirm).resolves.toBe(true);
 		const select = ui.select("Pick", ["Inspect only", "Make changes"]);
 		question = (await call("snapshot")).question as Record<string, unknown>;

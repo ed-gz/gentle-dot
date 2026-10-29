@@ -13,6 +13,7 @@ import { createDotSession } from "../src/extensions/dot-session.ts";
 import { localRequest, record } from "../src/orchestration/herdr.ts";
 import { Orchestrator, type OrchestratorOptions } from "../src/orchestration/index.ts";
 import type { Manifest } from "../src/orchestration/registry.ts";
+import { questionRevision } from "../src/orchestration/questions.ts";
 import { sessionNotice } from "../src/session-notifications.ts";
 import {
 	type WorkflowApprovalRequest,
@@ -34,6 +35,7 @@ function harness(extra: Partial<OrchestratorOptions> = {}) {
 	let unavailable = false;
 	let messages: Array<Record<string, unknown>> = [];
 	let capabilities: Record<string, unknown> = {};
+	let beforeAnswer: (() => void) | undefined;
 	const manifest: Manifest = {
 		version: 1,
 		socketPath: "/pi.sock",
@@ -57,8 +59,10 @@ function harness(extra: Partial<OrchestratorOptions> = {}) {
 		if (method === "pane.get") return { pane: { pane_id: "w1:p1", terminal_id: "t1" } };
 		if (method === "pane.process_info") return { process_info: { foreground_processes: [{ pid }] } };
 		if (method === "snapshot")
-			return { sessionId, instanceId:manifest.instanceId, status: reportedStatus ?? (question ? "waiting" : state), messages, question, capabilities };
+			return { sessionId, instanceId:manifest.instanceId, status: reportedStatus ?? (question ? "waiting" : state), messages, question, capabilities, ...(question && capabilities.questionBinding===1 ? {questionRevision:questionRevision(question)} : {}) };
 		if (method === "answer") {
+			beforeAnswer?.();
+			if (params.expectedQuestionRevision && (!question || params.expectedQuestionRevision !== questionRevision(question))) throw new Error("Question changed in adapter");
 			if (params.questionId !== question?.id) throw new Error("Stale question");
 			question = null;
 		}
@@ -98,6 +102,7 @@ function harness(extra: Partial<OrchestratorOptions> = {}) {
 		setRawQuestion: (value: Record<string, unknown>) => {
 			question = value;
 		},
+		setBeforeAnswer: (value: () => void) => { beforeAnswer=value; },
 		setCapabilities: (value: Record<string, unknown>) => {
 			capabilities = value;
 		},
@@ -561,6 +566,24 @@ describe("HERDR orchestration authority", () => {
 		await expect(h.orchestrator.dispatch(input, "human")).rejects.toMatchObject({ code: "QUESTION_CHANGED" });
 		expect(h.calls.filter((call) => call.method === "answer")).toHaveLength(1);
 	});
+
+	it("binds reviewed content through the adapter and rejects replacement after daemon snapshot", async () => {
+        const h=harness();h.setCapabilities({questionBinding:1});
+        const question={id:'q1',kind:'confirm',answerable:true,title:'Publicar',message:'Contenido revisado',expiresAt:new Date(Date.now()+60000).toISOString()};
+        h.setRawQuestion(question);const revision=questionRevision(question);const snapshot=await h.orchestrator.snapshot();
+        expect(snapshot.approvals[0].questionRevision).toBe(revision);
+        h.setBeforeAnswer(()=>h.setRawQuestion({...question,message:'Contenido cambiado'}));
+        await expect(h.orchestrator.dispatch({action:'answer',paneId:'w1:p1',sessionId:'s1',requestId:'q1',approved:true,expectedQuestionRevision:revision},'human')).rejects.toThrow('Question changed in adapter');
+        expect(h.calls.filter(call=>call.method==='answer').at(-1)?.params.expectedQuestionRevision).toBe(revision);
+    });
+
+	it("never silently downgrades a reviewed revision on an older adapter", async () => {
+        const h=harness();h.setQuestion();
+        const input={action:'answer',paneId:'w1:p1',sessionId:'s1',requestId:'q1',approved:true};
+        await expect(h.orchestrator.dispatch({...input,expectedQuestionRevision:'a'.repeat(64)},'human')).rejects.toMatchObject({code:'QUESTION_CHANGED'});
+        expect(h.calls.filter(call=>call.method==='answer')).toHaveLength(0);
+        await expect(h.orchestrator.dispatch(input,'human')).resolves.toMatchObject({accepted:true});
+    });
 
 	it("matches night grants by exact request/session and consumes a bounded number of uses", async () => {
 		const h = harness();

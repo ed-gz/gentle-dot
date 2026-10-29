@@ -26,7 +26,7 @@ import {
 	type RunCli,
 } from "./displays.ts";
 import { defaultHerdrSocket, localRequest, OrchestrationError, record } from "./herdr.ts";
-import { canAnswerQuestion, humanOnlyQuestion, questionAnswer, questionDetails, type RemoteQuestion } from "./questions.ts";
+import { canAnswerQuestion, humanOnlyQuestion, questionAnswer, questionDetails, questionRevision, type RemoteQuestion } from "./questions.ts";
 import { type DisplayProvider, type Manifest, readManifests } from "./registry.ts";
 import { isSessionCopy } from "./session-copy.ts";
 import { historySessionMetadata, publicSessionMetadata, type SessionMetadata } from "./session-info.ts";
@@ -85,6 +85,7 @@ export interface Approval extends Partial<RemoteQuestion> {
 	expiresAt: string;
 	answerable: boolean;
 	policyEligible?: boolean;
+	questionRevision?: string;
 	unavailableReason?: "legacy_connection" | "terminal_only";
 }
 export interface Policy {
@@ -644,7 +645,10 @@ export class Orchestrator {
 							if (record(page.question) && typeof page.question.id === "string") {
 								const question = page.question;
 								const details = questionDetails(question);
-								const answerable = canAnswerQuestion(session.managed, question, caps);
+								const potentiallyAnswerable = canAnswerQuestion(session.managed, question, caps);
+								const validRevision = caps.questionBinding === 1 && potentiallyAnswerable && typeof page.questionRevision === "string" && page.questionRevision === questionRevision(question);
+								// An adapter advertising binding must not silently downgrade on a missing or mismatched revision.
+								const answerable = potentiallyAnswerable && (caps.questionBinding !== 1 || validRevision);
 								const policyEligible =
 									answerable &&
 									session.managed &&
@@ -663,6 +667,7 @@ export class Orchestrator {
 									...details,
 									answerable,
 									policyEligible,
+									...(validRevision ? {questionRevision:page.questionRevision as string} : {}),
 									...(!answerable
 										? {
 												unavailableReason: session.managed
@@ -1189,11 +1194,15 @@ export class Orchestrator {
 							? "Este formulario no ofrece una respuesta remota compatible; resuélvelo en la terminal del equipo. Las confirmaciones y preguntas compatibles siguen disponibles desde la app."
 							: "La conexión de esta sesión no permite responder este formulario desde el teléfono. Carga el adaptador de Gentle Dot en la sesión o responde en la terminal del equipo.",
 				);
+			if (action === "answer" && input.expectedQuestionRevision !== undefined) {
+				if (typeof input.expectedQuestionRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.expectedQuestionRevision) || !record(page.capabilities) || page.capabilities.questionBinding !== 1 || page.questionRevision !== input.expectedQuestionRevision || questionRevision(question) !== input.expectedQuestionRevision)
+					throw new OrchestrationError("QUESTION_CHANGED", "El contenido de la solicitud cambió o el adaptador no puede verificarlo.");
+			}
 			if (action === "answer") {
 				return await this.call(
 					bound,
 					"answer",
-					{ questionId: requestId, ...questionAnswer(question, input) },
+					{ questionId: requestId, ...questionAnswer(question, input), ...(typeof input.expectedQuestionRevision === "string" ? {expectedQuestionRevision:input.expectedQuestionRevision} : {}) },
 					authorize,
 				);
 			}

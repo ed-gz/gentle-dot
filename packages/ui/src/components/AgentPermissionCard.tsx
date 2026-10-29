@@ -27,6 +27,7 @@ export function AgentPermissionCard({
 		approval.kind,
 		approval.options,
 		approval.questions,
+		approval.questionRevision,
 		needsExplicitSubmission(approval),
 	]);
 	const current = useRef({ key, action: controls.act });
@@ -77,6 +78,7 @@ export function AgentPermissionCard({
 			<section className="agent-permission-detail" tabIndex={0} aria-label="Detalle de la solicitud">
 				<pre>{approval.message}</pre>
 			</section>
+			{controls.requiresReviewedApproval && !approval.questionRevision ? <p className="muted">La laptop usa un contrato anterior y no puede verificar el contenido al momento de responder.</p> : null}
 			<p className="muted" role="status">
 				{answered === key
 					? "Respuesta enviada"

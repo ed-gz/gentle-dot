@@ -767,3 +767,14 @@ it("freezes cooperative question options and consumes an accepted response befor
 	).rejects.toMatchObject({ code: "QUESTION_CHANGED" });
 	expect(accepted).toHaveBeenCalledOnce();
 });
+
+it('rejects a reviewed question replaced with different content under the same ID', async () => {
+ const h=await session();
+ const emit=(label:string)=>h.events.emit('herdr-connect:question:request',{sessionId:'s1',id:'same',questions:[{id:'one',question:label,multiSelect:false,options:[{label:'A'},{label:'B'}]}]});
+ emit('Contenido original');const first=await h.call('snapshot');expect(first.capabilities.questionBinding).toBe(1);expect(first.questionRevision).toMatch(/^[a-f0-9]{64}$/);
+ h.events.emit('herdr-connect:question:closed',{sessionId:'s1',id:'same'});emit('Contenido cambiado');
+ const second=await h.call('snapshot');expect(second.questionRevision).not.toBe(first.questionRevision);
+ await expect(h.call('answer',{questionId:'same',answers:[{questionId:'one',optionIndices:[0]}],expectedQuestionRevision:first.questionRevision})).rejects.toMatchObject({code:'QUESTION_CHANGED'});
+ h.events.on('herdr-connect:question:answer',value=>{(value as {accepted?:boolean}).accepted=true;});
+ await expect(h.call('answer',{questionId:'same',answers:[{questionId:'one',optionIndices:[0]}],expectedQuestionRevision:second.questionRevision})).resolves.toMatchObject({accepted:true});
+});

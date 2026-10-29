@@ -332,3 +332,7 @@ test('an oversized response to a session mutation remains uncertain and is never
   const result = await client.send({ ...target, text: 'Revisa la sesión' }, context(async () => true));
   assert.equal(result.status, 'uncertain'); assert.equal(sends, 1);
 });
+
+test('a host advertising question binding cannot omit the revision', () => {
+  assert.throws(() => parseDesktopPage({...page(),capabilities:{questionBinding:1},question:{id:'q',kind:'confirm',title:'Revisar',message:'Contenido',expiresAt:new Date(Date.now()+60000).toISOString()}},target.sessionId), /no confirmó la revisión/);
+});

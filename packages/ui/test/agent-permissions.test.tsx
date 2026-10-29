@@ -295,3 +295,11 @@ it('passes the exact reviewed approval to clients that require a local guard', a
  await userEvent.click(screen.getByRole('button', {name:'Permitir'}));
  expect(act).toHaveBeenCalledExactlyOnceWith({...answer,approved:true,reviewedApproval:approval});
 });
+
+it('explains that older hosts cannot bind the reviewed content atomically', () => {
+ const act=vi.fn(async()=>true);const controls={act,busy:false,refresh:vi.fn(),requiresReviewedApproval:true};
+ const view=render(<AgentPermissionCard approval={{...base,kind:'confirm'}} controls={controls} disabled={false}/>);
+ expect(screen.getByText(/contrato anterior/)).toBeVisible();
+ view.rerender(<AgentPermissionCard approval={{...base,kind:'confirm',questionRevision:'a'.repeat(64)}} controls={controls} disabled={false}/>);
+ expect(screen.queryByText(/contrato anterior/)).toBeNull();
+});

@@ -59,6 +59,7 @@ export interface AgentApproval {
 	options?: { id: string; label: string; description?: string; effect?: string; consequence?: string }[];
 	placeholder?: string;
 	questions?: AgentQuestion[];
+	questionRevision?: string;
 	policyEligible?: boolean;
 	unavailableReason?: "legacy_connection" | "terminal_only";
 }
@@ -102,7 +103,7 @@ export type OrchestrationAction =
 	| { action: "abort"; paneId: string; sessionId: string }
 	| { action: "close" | "duplicate"; paneId: string; sessionId: string }
 	| { action: "prompt"; paneId: string; sessionId: string; text: string; attachments?: AttachmentRef[]; clientMessageId?: string; deliverAs?: "steer" | "followUp" }
-	| ({ action: "answer"; paneId: string; sessionId: string; requestId: string; reviewedApproval?: AgentApproval } & AgentAnswer)
+	| ({ action: "answer"; paneId: string; sessionId: string; requestId: string; reviewedApproval?: AgentApproval; expectedQuestionRevision?: string } & AgentAnswer)
 	| {
 			action: "grant";
 			paneId: string;

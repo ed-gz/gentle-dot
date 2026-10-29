@@ -3,6 +3,13 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { OrchestrationError, record } from "./herdr.ts";
 
+/** Opaque revision of the exact serialized dialog, checked again inside Pi. */
+export function questionRevision(question: Record<string, unknown>): string {
+	const serialized = JSON.stringify(question);
+	if (Buffer.byteLength(serialized) > 65_536) throw new OrchestrationError("QUESTION_CHANGED", "La solicitud no puede verificarse.");
+	return createHash("sha256").update(serialized).digest("hex");
+}
+
 /** Adapter-owned metadata only: generic UI titles/tool names never confer authority. */
 export function humanOnlyQuestion(question: unknown): boolean {
 	if (!record(question)) return true;

@@ -87,3 +87,14 @@ test('control pages and exact review avoid bulk reads of pending payloads',async
  });
  expect(result).toMatchObject({total:60,count:2});expect(result.id).toBeTruthy();
 });
+
+test('new host receives the reviewed revision, while the local approval remains private',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+   const {createLaptopClient}=await import('/src/laptop-client.ts'),conn={url:'wss://example.test/ws',token:'fixture'},revision='a'.repeat(64);
+   const approval={id:'q',paneId:'p',sessionId:'s',title:'Enviar',message:'Contenido revisado',action:'send',kind:'confirm' as const,createdAt:'',expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true,questionRevision:revision};let sent:any,changed=true;
+   const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,sessions:[],approvals:[{...approval,questionRevision:changed?'b'.repeat(64):revision}],policies:[],events:[]})};if(body.action==='answer'){sent=body;return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};}return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question:null,history:{hasEarlier:false}})};};
+   const client=createLaptopClient(conn,{current:()=>conn,request});let blocked=false;try{await client.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,reviewedApproval:approval});}catch{blocked=true;}changed=false;await client.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,reviewedApproval:approval});return {sent,blocked};
+ });
+ expect(result.blocked).toBe(true);expect(result.sent).toEqual({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,expectedQuestionRevision:'a'.repeat(64)});
+});

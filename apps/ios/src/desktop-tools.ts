@@ -7,7 +7,7 @@ import { createSessionJournal, sessionOperationKey, type SessionAttempt, type Se
 export type DesktopConnection = { url: string; token: string; deviceId?: string };
 export type DesktopSession = { paneId: string; sessionId: string; label: string; state: string; connected: boolean; capabilities: { inspect: boolean; prompt: boolean; abort: boolean; deliveryReceipts: boolean } };
 export type DesktopDelivery = { id: string; status: 'accepted' | 'queued' | 'delivered' | 'unconfirmed'; acceptedAt: string; deliveredAt?: string; evidence?: 'correlated-v1'; preview: string; deliverAs: 'steer' | 'followUp' };
-export type DesktopPage = { sessionId: string; instanceId: string; messages: { id: string; role: string; text: string }[]; deliveries: DesktopDelivery[]; question?: { id: string; kind: string; title: string; message: string; expiresAt: string; action?: string; fingerprint?: string; requiresConfirmation: boolean; options?: { id: string; label: string; description?: string; effect?: string; consequence?: string }[] }; history: { hasEarlier: boolean; before?: string } };
+export type DesktopPage = { sessionId: string; instanceId: string; questionRevision?: string; messages: { id: string; role: string; text: string }[]; deliveries: DesktopDelivery[]; question?: { id: string; kind: string; title: string; message: string; expiresAt: string; action?: string; fingerprint?: string; requiresConfirmation: boolean; options?: { id: string; label: string; description?: string; effect?: string; consequence?: string }[] }; history: { hasEarlier: boolean; before?: string } };
 export type DesktopDependencies = { getConnection: () => DesktopConnection | undefined; request?: (request: HTTPSRequest) => Promise<HTTPSResponse>; journal?: SessionJournal; controlJournal?: SessionJournal };
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 class DesktopPageTooLarge extends Error {}
@@ -52,6 +52,8 @@ export function parseDesktopPage(value: unknown, sessionId: string): DesktopPage
   }
   const history = object(value.history) ? value.history : {};
   const page: DesktopPage = { sessionId, instanceId: value.instanceId, messages, deliveries, history: { hasEarlier: history.hasEarlier === true, ...(string(history.before, 256) ? { before: history.before } : {}) } };
+  if (object(value.capabilities) && value.capabilities.questionBinding === 1 && object(value.question) && value.questionRevision === undefined) throw new Error('El adaptador no confirmó la revisión de la solicitud.');
+  if (value.questionRevision !== undefined) { if (typeof value.questionRevision !== 'string' || !/^[a-f0-9]{64}$/.test(value.questionRevision)) throw new Error('La revisión de solicitud no es válida.'); page.questionRevision=value.questionRevision; }
   if (object(value.question)) {
     const q = value.question;
     if (!string(q.id, 256) || !string(q.kind, 64) || !string(q.title, 1000, false) || !string(q.message ?? '', 32000, false) || !string(q.expiresAt, 80) || !Number.isFinite(Date.parse(q.expiresAt))) throw new Error('La solicitud humana de la sesión no es válida.');
@@ -234,10 +236,10 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       if (!['confirm','select','input'].includes(question.kind)) throw new Error('Este formulario requiere la interfaz humana de la laptop.');
       const answer = { ...(typeof args.confirmed === 'boolean' ? { confirmed: args.confirmed } : {}), ...(typeof args.cancelled === 'boolean' ? { cancelled: args.cancelled } : {}), ...(args.optionId !== undefined ? { optionId: field(args.optionId, 256, 'Opción') } : {}), ...(args.text !== undefined ? { text: field(args.text, 8000, 'Respuesta') } : {}) };
       if (!Object.keys(answer).length) throw new Error('Selecciona una respuesta humana explícita.');
-      const payload = { action: 'answer', ...target, requestId: question.id, ...answer };
-      await authorize(context, conn, question.title, { request: question, response: payload });
+      const payload = { action: 'answer', ...target, requestId: question.id, ...answer, ...(page.questionRevision ? {expectedQuestionRevision:page.questionRevision} : {}) };
+      await authorize(context, conn, question.title, { request: question, response: payload, ...(!page.questionRevision ? {warning:'La laptop usa un contrato anterior y no puede verificar atómicamente el contenido al responder.'} : {}) });
       const fresh = await inspect(conn, target, 1);
-      if (fresh.instanceId !== page.instanceId || JSON.stringify(fresh.question) !== JSON.stringify(question)) throw new Error('El permiso cambió después de revisarlo.');
+      if (fresh.instanceId !== page.instanceId || fresh.questionRevision !== page.questionRevision || JSON.stringify(fresh.question) !== JSON.stringify(question)) throw new Error('El permiso cambió después de revisarlo.');
       context.signal.throwIfAborted();
       return runSessionControl(controlJournal, {kind:'answer',host:endpoint(conn),...target,instanceId:page.instanceId,payload:{...payload,question},...(conn.deviceId?{deviceId:conn.deviceId}:{})},
         ()=>{context.signal.throwIfAborted();unchanged(conn);}, async()=>{
