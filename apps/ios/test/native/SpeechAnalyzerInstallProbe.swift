@@ -1,6 +1,26 @@
+import CryptoKit
 import Darwin
 import Foundation
 import Speech
+
+// The probe consumes only generated speech. Do not print descriptions, paths,
+// userInfo values or arbitrary strings from a system error.
+private func diagnosticIdentifier(_ value: String, allowed: Set<String>) -> String {
+    let safe = !value.isEmpty && value.utf8.count <= 100 && value.utf8.allSatisfy {
+        (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46 || $0 == 95
+    }
+    if safe && allowed.contains(value) { return value }
+    let digest = SHA256.hash(data: Data(value.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    return "other-sha256-\(digest)"
+}
+private func errorIdentity(_ error: Error) -> String {
+    let native = error as NSError
+    let domain = diagnosticIdentifier(native.domain, allowed: ["NSOSStatusErrorDomain", "NSCocoaErrorDomain", "AVFoundationErrorDomain", "SFSpeechErrorDomain", "kAFAssistantErrorDomain", "Swift.CancellationError"])
+    let type = diagnosticIdentifier(String(reflecting: Swift.type(of: error)), allowed: ["Swift.CancellationError", "Foundation.NSError", "Foundation._GenericObjCError", "Speech.SpeechError"])
+    let code = (-999_999...999_999).contains(native.code) ? String(native.code) : "out-of-range"
+    let cancelled = error is CancellationError
+    return "domain=\(domain) type=\(type) code=\(code) cancelled=\(cancelled)"
+}
 
 // Explicit, isolated macOS probe. It never requests a microphone and never
 // builds an IPA. A system download may continue after failure or termination.
@@ -49,12 +69,12 @@ private func probe() async -> Int32 {
     } catch {
         // Only fixed phase names, known domains and bounded codes leave the
         // probe. Never print NSError descriptions, paths or audio contents.
-        let native = error as NSError
-        let allowed = ["SFSpeechErrorDomain", "NSOSStatusErrorDomain", "NSCocoaErrorDomain", "AVFoundationErrorDomain"]
-        let domain = allowed.contains(native.domain) ? native.domain : "other"
-        let code = (-999_999...999_999).contains(native.code) ? String(native.code) : "out-of-range"
         let reason = (error as? ProbeError)?.rawValue ?? (error is InstallProbeError ? "assets-not-installed" : "system-error")
-        print("FAIL: stage=\(stage) domain=\(domain) code=\(code) reason=\(reason); no transcript confirmed.")
+        print("FAIL: stage=\(stage) \(errorIdentity(error)) reason=\(reason); no transcript confirmed.")
+        let native = error as NSError
+        if let underlying = native.userInfo[NSUnderlyingErrorKey] as? Error {
+            print("CAUSE: \(errorIdentity(underlying))")
+        }
     }
     let current = await AssetInventory.reservedLocales
     if reservationAdded == true {
@@ -75,6 +95,18 @@ private enum InstallProbeError: Error { case notInstalled }
 @main struct SpeechAnalyzerInstallProbe {
     static func main() async {
         setbuf(stdout, nil); setbuf(stderr, nil)
+        if CommandLine.arguments.dropFirst().elementsEqual(["--diagnostics-self-test"]) {
+            let unknown = "com.apple.private-token"
+            let output = diagnosticIdentifier(unknown, allowed: ["SFSpeechErrorDomain"])
+            let known = diagnosticIdentifier("SFSpeechErrorDomain", allowed: ["SFSpeechErrorDomain"])
+            let error = NSError(domain: unknown, code: 12, userInfo: [NSLocalizedDescriptionKey: "/private/sensitive-audio"])
+            let rendered = errorIdentity(error)
+            guard output.hasPrefix("other-sha256-"), !output.contains(unknown), known == "SFSpeechErrorDomain",
+                  !rendered.contains(unknown), !rendered.contains("/private/sensitive-audio"), rendered.contains("code=12") else {
+                print("FAIL: diagnostic redaction self-test failed; no assets requested."); exit(1)
+            }
+            print("PASS: diagnostic redaction self-test; no assets requested."); return
+        }
         if #available(macOS 26.0, *) { exit(await probe()) }
         print("SKIP: macOS 26 is required; no assets requested and no transcription run.")
     }

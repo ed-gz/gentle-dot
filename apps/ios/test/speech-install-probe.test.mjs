@@ -16,7 +16,7 @@ async function harness(t, probe) {
   await put('xcrun', `if [ "$3" = "--show-sdk-path" ]; then echo /tmp/sdk; exit 0; fi
 while [ "$#" -gt 0 ]; do if [ "$1" = "-o" ]; then shift; cp "$FAKE_PROBE" "$1"; chmod +x "$1"; exit 0; fi; shift; done
 exit 1`);
-  const fake = join(root, 'fake'); await writeFile(fake, `#!/bin/sh\n${probe}\n`, {mode:0o755});
+  const fake = join(root, 'fake'); await writeFile(fake, `#!/bin/sh\nif [ "$1" = "--diagnostics-self-test" ]; then echo SELF_TEST_ONLY; exit 0; fi\n${probe}\n`, {mode:0o755});
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_PROBE: fake, TMPDIR: root };
   delete env.CAPRI_EPHEMERAL_SPEECH_INSTALL; delete env.CAPRI_SPEECH_INSTALL_COMPILE_ONLY; delete env.CAPRI_SPEECH_INSTALL_TIMEOUT_SECONDS;
   return env;
