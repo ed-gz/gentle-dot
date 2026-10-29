@@ -20,6 +20,7 @@ const deferredTranscripts = new Map<string, string>();
 /** Session dictation is an Apple transcript left in the composer for review. */
 export function useAppleVoice(enabled: boolean, destination?: string): VoiceControls & { retryPending: boolean; discarding: boolean; discardPending(): void } {
   const [availability, setAvailability] = useState<VoiceAvailability>();
+  const [retryAvailability, setRetryAvailability] = useState(false);
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [level, setLevel] = useState(0);
@@ -64,6 +65,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     const refresh = async () => {
       const value = await checkVoice();
       if (!live) return;
+      setRetryAvailability(false);
       if (value.recoveryPending && value.busy) {
         setAvailability({ ...value, available: false, status: 'voice_finishing' });
         setNote('Terminando el audio guardado…');
@@ -85,7 +87,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       }
       setAvailability(value); setNote(availabilityNote(value));
     };
-    if (enabled) void refresh().catch(error => { if (live) setNote(String(error.message)); });
+    if (enabled) void refresh().catch(error => { if (live) { setAvailability(undefined); setRetryAvailability(true); setNote(`${String(error.message)} Toca el micrófono para reintentar.`); } });
     else release(false);
     return () => { live = false; clearTimeout(timer); release(false); };
   }, [enabled, destination, release]);
@@ -149,14 +151,23 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
   const start = useCallback(() => {
     const state = owner.current;
     if (state.enabled && state.retry && state.session && !state.pending) { stop(); return; }
-    if (!state.enabled || state.pending || state.session || !(availability?.available || availability?.status === 'assets_required')) return;
+    if (!state.enabled || state.pending || state.session || !(retryAvailability || availability?.available || availability?.status === 'assets_required')) return;
     const epoch = ++state.epoch, ownerId = localIdentifier(); state.ownerId = ownerId; state.pending = true; setNote(undefined); setDraft(undefined);
     void (async () => {
       if (!destination) throw new Error('Abre una sesión antes de dictar.');
       const origin = await sessionVoiceOrigin(destination);
       if (state.epoch !== epoch || !state.enabled) return;
       rememberVoiceOrigin(ownerId, origin);
-      if (availability.status === 'assets_required') {
+      // A failed status query is not proof that dictation is unsupported.
+      // Retry explicitly on tap instead of leaving the control disabled forever.
+      const current = retryAvailability ? await checkVoice() : availability;
+      if (state.epoch !== epoch || !state.enabled) return;
+      if (!current) throw new Error('No pude comprobar la voz. Vuelve a intentarlo.');
+      setAvailability(current); setRetryAvailability(false);
+      if (!current.available && current.status !== 'assets_required') {
+        throw new Error(availabilityNote(current) ?? 'La voz no está disponible en este iPhone.');
+      }
+      if (current.status === 'assets_required') {
         setNote('Descargando la voz en español de Apple. Necesitas internet para esta primera preparación…');
         const prepared = await prepareVoice(ownerId);
         if (state.epoch !== epoch || !state.enabled) return;
@@ -171,8 +182,8 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       state.session = value.sessionId; setElapsed(0); setPhase('recording');
       setNote('Grabando. Toca el micrófono otra vez para revisar la transcripción.');
     })().catch(error => { if (state.epoch === epoch) { forgetVoiceOrigin(ownerId); state.ownerId = ''; setNote(error.message); } }).finally(() => { if (state.epoch === epoch) state.pending = false; });
-  }, [availability, destination, stop]);
-  return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
+  }, [availability, destination, retryAvailability, stop]);
+  return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : retryAvailability || availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
     phase, elapsed, level, partial, note, draft, start, stop, cancel, retryPending, discarding, discardPending,
     draftTaken: id => setDraft(value => value?.id === id ? undefined : value),
     speaking: false, muted: true, stopSpeaking() {}, setMuted() {}, typed() {}, sent() {}, sendOnStop: false, setSendOnStop() {} };

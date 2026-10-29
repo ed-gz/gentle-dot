@@ -244,6 +244,27 @@ test('an unavailable session microphone explains the problem instead of silently
   await expect(page.locator('.agent-reply .voice-status')).toContainText('transcripción local en español no está disponible');
 });
 
+test('a transient voice status failure can be retried from the session microphone', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
+    let checks = 0;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('check_voice') && ++checks === 1) throw new Error('fixture transient bridge error');
+      return original(command, args);
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await expect(page.locator('.agent-reply .voice-status')).toContainText('Toca el micrófono para reintentar');
+  const mic = page.getByRole('button', { name: 'Dictar mensaje' });
+  await expect(mic).toBeEnabled();
+  await mic.click();
+  await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
+  await page.getByRole('button', { name: 'Terminar y revisar' }).click();
+  await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
+});
+
 test('late permission result after leaving one session never cancels a newer capture', async ({ page }) => {
   await linkedPhone(page);
   await page.evaluate(() => {
