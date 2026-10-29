@@ -2,7 +2,8 @@ import { httpsRequest, nativeSHA256, type HTTPSRequest, type HTTPSResponse } fro
 import { getConnection, connectionToken, beginRemoteExecution, finishRemoteExecution, type ExternalConnection, type RemoteExecution } from './external-connections.ts';
 import { localIdentifier } from './local-identifiers.ts';
 import { prepareMCPAccess } from './mcp-oauth-store.ts';
-import { classifyModernDiscovery, classifyModernResult, legacyHandshakeRejectedAsModern, modernMCPRequest, MODERN_MCP_VERSION } from './mcp-modern-protocol.ts';
+import { classifyModernDiscovery, classifyModernResult, legacyHandshakeRejectedAsModern, modernMCPRequest, validateModernHTTPHeaders, MODERN_MCP_VERSION } from './mcp-modern-protocol.ts';
+import { modernMCPParameterHeaders } from './mcp-modern-headers.ts';
 import type { Tool, ToolContext } from './agent-tools.ts';
 import { canonicalJSON, parseMCPResponse } from './mcp-json.ts';
 export { canonicalJSON, parseMCPResponse } from './mcp-json.ts';
@@ -11,13 +12,15 @@ const PREFERRED_VERSION = '2025-11-25';
 const SUPPORTED_VERSIONS = new Set([PREFERRED_VERSION, '2025-06-18', '2025-03-26']);
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 /** Fail closed for unsupported validation keywords. No remote refs or regular-expression execution. */
-export function validateMCPArguments(schema: Record<string, unknown>, value: unknown, maximumBytes = 16 * 1024): Record<string, unknown> {
+export function validateMCPArguments(schema: Record<string, unknown>, value: unknown, maximumBytes = 16 * 1024, modernHeaders = false): Record<string, unknown> {
   // A branch that does not match is different from a branch whose schema we
   // cannot evaluate. Treating both as false could make oneOf accept a value
   // even though another (unsupported) branch might match it as well.
   class UnsupportedSchema extends Error {}
   const keywords = new Set(['$schema', '$defs', 'definitions', '$ref', 'title', 'description', 'default', 'examples', 'deprecated', 'readOnly', 'writeOnly',
     'type', 'properties', 'required', 'additionalProperties', 'items', 'minItems', 'maxItems', 'uniqueItems', 'minLength', 'maxLength', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'enum', 'const', 'anyOf', 'oneOf', 'allOf', 'minProperties', 'maxProperties']);
+  if (!object(value) || new TextEncoder().encode(canonicalJSON(value)).length > maximumBytes) throw new Error('Argumentos MCP inválidos o demasiado grandes.');
+  if (modernHeaders) { keywords.add('x-mcp-header'); modernMCPParameterHeaders(schema, value); }
   // Validate the schema itself before inspecting arguments. Otherwise an
   // unvisited property or an ill-typed keyword can silently weaken approval.
   let nodes = 0;
@@ -101,7 +104,6 @@ export function validateMCPArguments(schema: Record<string, unknown>, value: unk
       }
     }
   }
-  if (!object(value) || new TextEncoder().encode(canonicalJSON(value)).length > maximumBytes) throw new Error('Argumentos MCP inválidos o demasiado grandes.');
   check(schema, value); return JSON.parse(canonicalJSON(value));
 }
 type RemoteTool = { name: string; description: string; inputSchema: Record<string, unknown>; outputSchema?: Record<string, unknown>; taskSupport: 'forbidden' | 'optional' | 'required' };
@@ -133,13 +135,14 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
     if (canonicalJSON(await service.getConnection(connectionId)) !== expected) throw new Error('La conexión cambió; vuelve a descubrir las herramientas.');
     if (await service.token(connection) !== token || canonicalJSON(await service.getConnection(connectionId)) !== expected) throw new Error('El acceso cambió; vuelve a descubrir las herramientas.');
   }
-  async function rpc(method: string, params: unknown, id = localIdentifier()): Promise<unknown> {
+  async function rpc(method: string, params: unknown, id = localIdentifier(), parameterHeaders: Record<string, string> = {}): Promise<unknown> {
     await current();
     if (method !== 'initialize' && !initialized) throw new Error('La sesión MCP caducó. Actualiza las conexiones para iniciar otra; no se repitió ninguna operación.');
     if (modern) {
       if ((method !== 'tools/list' && method !== 'tools/call') || !object(params)) throw new Error('Solicitud MCP moderna no compatible.');
-      const request = modernMCPRequest(id, method, params);
+      const request = modernMCPRequest(id, method, params, parameterHeaders);
       if (token) request.headers.Authorization = `Bearer ${token}`;
+      validateModernHTTPHeaders(request.headers);
       const response = await service.request({ url: connection!.endpoint, ...request });
       const value = parseMCPResponse(response, id, MODERN_MCP_VERSION);
       if (classifyModernResult(value) !== 'complete') throw new Error('El servidor solicita información adicional que Capri aún no puede revisar.');
@@ -202,6 +205,11 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
           ...(object(raw.outputSchema) ? { outputSchema: raw.outputSchema } : {}), taskSupport };
         if (tool.description.length > 4000 || canonicalJSON(tool.inputSchema).length > 16 * 1024 ||
           (tool.outputSchema && canonicalJSON(tool.outputSchema).length > 16 * 1024)) throw new Error('Esquema MCP demasiado grande.');
+        if (modern) {
+          // A malformed header annotation makes that tool unusable; retain
+          // other independently valid tools from the same catalog.
+          try { modernMCPParameterHeaders(tool.inputSchema, {}); } catch { continue; }
+        }
         names.add(tool.name); all.push(tool);
         if (all.length > 64 || canonicalJSON(all).length > 512 * 1024) throw new Error('Catálogo MCP demasiado grande; habilita menos herramientas en el servidor.');
       }
@@ -218,14 +226,21 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
     const suffix = (await service.hash(connection.id + '\n' + remote.name)).slice(0, 24);
     return {
       definition: { name: `mcp_${suffix}`, description: `${connection.label}: ${remote.description}`.slice(0, 4000), parameters: structuredClone(remote.inputSchema) },
-      validate(value: unknown) { return validateMCPArguments(remote.inputSchema, value); },
+      validate(value: unknown) { return validateMCPArguments(remote.inputSchema, value, 16 * 1024, modern); },
       async execute(value: unknown, context: ToolContext) {
         if (remote.taskSupport === 'required') throw new Error('Esta herramienta requiere tareas MCP asíncronas, que Capri todavía no admite. No se ejecutó.');
-        const args = validateMCPArguments(remote.inputSchema, value); const argumentsJSON = canonicalJSON(args);
+        const args = validateMCPArguments(remote.inputSchema, value, 16 * 1024, modern); const argumentsJSON = canonicalJSON(args);
+        const parameterHeaders = modern ? modernMCPParameterHeaders(remote.inputSchema, args) : {};
+        if (modern) {
+          const preview = modernMCPRequest('review', 'tools/call', {name:remote.name, arguments:args}, parameterHeaders);
+          if (token) preview.headers.Authorization = `Bearer ${token}`;
+          validateModernHTTPHeaders(preview.headers);
+        }
         context.signal.throwIfAborted(); await current();
         if (!context.askApproval) throw new Error('Esta herramienta remota requiere revisión y aprobación en la conversación.');
         const details = canonicalJSON({ endpoint: connection.endpoint, connectionRevision: connection.revision, tool: remote.name, schema: remote.inputSchema,
-          ...(remote.outputSchema ? { outputSchema: remote.outputSchema } : {}), arguments: args });
+          ...(remote.outputSchema ? { outputSchema: remote.outputSchema } : {}), arguments: args,
+          ...(Object.keys(parameterHeaders).length ? { parameterHeaders } : {}) });
         if (!await context.askApproval({ title: `Revisar ${remote.name} · ${connection.label}`, details, operation: 'mcp.tools.call' })) return { executed: false, approved: false };
         context.signal.throwIfAborted(); await current();
         const fresh = (await catalog()).find(tool => tool.name === remote.name);
@@ -240,7 +255,7 @@ export async function discoverMCPTools(connectionId: string, overrides: Partial<
         await service.begin({ requestId, fingerprint, connectionId, connectionRevision: connection.revision, endpoint: connection.endpoint, toolName: remote.name, schemaJSON, argumentsJSON, state: 'executing', createdAt: time, updatedAt: time });
         try {
           context.signal.throwIfAborted();
-          const result = await rpc('tools/call', { name: remote.name, arguments: args }, requestId);
+          const result = await rpc('tools/call', { name: remote.name, arguments: args }, requestId, parameterHeaders);
           if (!object(result) || !Array.isArray(result.content) || (result.structuredContent !== undefined && !object(result.structuredContent)) ||
             (result.isError !== undefined && typeof result.isError !== 'boolean')) throw new Error('Resultado de herramienta MCP inválido.');
           let outputValidation: 'not_declared' | 'valid' | 'unverified' = 'not_declared';

@@ -84,8 +84,12 @@ fixture y scripts desactivados; usa su servidor moderno en el mismo proceso
 con datos sintéticos; comprueba rechazo de aprobación, una ejecución y journal.
 No prueba URLSession, OAuth, TLS ni el iPhone. Un fixture adicional comprueba el
 desafío OAuth de un servidor sólo moderno después de un rechazo correlacionado;
-no autoriza una cuenta real. Las herramientas que requieren `x-mcp-header`
-todavía se rechazan antes de aprobación y no se afirma conformidad MCP 2026 completa.
+no autoriza una cuenta real. Para `x-mcp-header`, la ruta moderna valida nombres
+y rutas estáticas, codifica los valores según la especificación, sólo genera
+cabeceras `Mcp-Param-*` y muestra los valores derivados en la aprobación exacta.
+La prueba del SDK oficial incluye un valor no ASCII. Se rechazan anotaciones
+inválidas y se conservan límites adicionales de cabeceras y esquemas. Persisten
+otras limitaciones de la ruta y no se afirma conformidad MCP 2026 completa.
 
 El descubrimiento admite hasta 64 herramientas, diez páginas y 512 KiB de catálogo.
 Cada esquema individual puede ocupar 16 KiB. Se validan tipos, propiedades,

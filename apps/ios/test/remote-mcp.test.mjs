@@ -194,12 +194,31 @@ test('modern input_required, missing and unknown result types stay uncertain and
     assert.equal(f.requests.filter(item => item.rpc.method === 'tools/call').length, 1);
   }
 });
-test('modern unsupported header annotations never reach approval or the network call', async () => {
+test('modern parameter headers match the exact user review and cannot override authorization', async () => {
   const f = modernFixture(); f.setInputSchema({type:'object',properties:{region:{type:'string','x-mcp-header':'Region'}}});
-  const [tool] = await discoverMCPTools(id, f.services); let reviewed = false;
-  await assert.rejects(tool.execute({region:'mx'}, context(async () => { reviewed = true; return true; })), /no compatibles/);
-  assert.equal(reviewed, false); assert.equal(f.journal.length, 0);
-  assert.equal(f.requests.some(item => item.rpc.method === 'tools/call'), false);
+  const [tool] = await discoverMCPTools(id, f.services); let reviewed;
+  const result = await tool.execute({region:'México'}, context(async value => { reviewed = JSON.parse(value.details); return true; }));
+  const call = f.requests.find(item => item.rpc.method === 'tools/call');
+  assert.equal(result.confirmed, true); assert.equal(f.journal[0].state, 'succeeded');
+  assert.deepEqual(reviewed.arguments, {region:'México'});
+  assert.deepEqual(reviewed.parameterHeaders, {'Mcp-Param-Region':'=?base64?TcOpeGljbw==?='});
+  assert.equal(call.request.headers['Mcp-Param-Region'], reviewed.parameterHeaders['Mcp-Param-Region']);
+  assert.equal(call.request.headers.Authorization, 'Bearer secret-stays-in-headers');
+  assert.equal(JSON.stringify(reviewed).includes('secret-stays-in-headers'), false);
+});
+test('modern malformed header annotations are excluded from the catalog', async () => {
+  const f = modernFixture(); f.setInputSchema({type:'object',properties:{region:{type:'number','x-mcp-header':'Region'}}});
+  assert.deepEqual(await discoverMCPTools(id, f.services), []);
+  assert.equal(f.journal.length, 0); assert.equal(f.requests.some(item => item.rpc.method === 'tools/call'), false);
+});
+test('a changed modern header mapping invalidates prior approval and never dispatches', async () => {
+  const f = modernFixture();
+  f.setInputSchema({type:'object',properties:{region:{type:'string','x-mcp-header':'Region'}}});
+  const [tool] = await discoverMCPTools(id, f.services);
+  await assert.rejects(tool.execute({region:'mx'}, context(async () => {
+    f.setInputSchema({type:'object',properties:{region:{type:'string','x-mcp-header':'Other'}}}); return true;
+  })), /cambió/);
+  assert.equal(f.journal.length, 0); assert.equal(f.requests.some(item => item.rpc.method === 'tools/call'), false);
 });
 test('MCP 2025-03-26 accepts correlated batches while preserving review and journal ordering', async () => {
   const f = fixture('2025-03-26'); f.setBatchResponses(true);

@@ -24,7 +24,7 @@ export function legacyHandshakeRejectedAsModern(response: HTTPSResponse, id: str
 
 /** These methods are the only ones modelled by this prototype. Validation,
  * authorization, approval and durable execution remain the caller's duty. */
-export function modernMCPRequest(id: string, method: 'server/discover' | 'tools/list' | 'tools/call', params: Record<string, unknown> = {}) {
+export function modernMCPRequest(id: string, method: 'server/discover' | 'tools/list' | 'tools/call', params: Record<string, unknown> = {}, parameterHeaders: Record<string, string> = {}) {
   if (typeof id !== 'string' || !id || id.length > 128 || !['server/discover', 'tools/list', 'tools/call'].includes(method) || !object(params) || Object.hasOwn(params, '_meta')) throw new Error('Solicitud MCP moderna inválida.');
   if (method === 'server/discover' && Object.keys(params).length) throw new Error('Parámetros de descubrimiento inválidos.');
   if (method === 'tools/list' && (Object.keys(params).some(key => key !== 'cursor') ||
@@ -40,7 +40,26 @@ export function modernMCPRequest(id: string, method: 'server/discover' | 'tools/
   const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream',
     'MCP-Protocol-Version': MODERN_MCP_VERSION, 'Mcp-Method': method };
   if (method === 'tools/call') headers['Mcp-Name'] = params.name as string;
+  if (method !== 'tools/call' && Object.keys(parameterHeaders).length) throw new Error('Cabeceras de parámetros MCP inválidas.');
+  for (const [name, value] of Object.entries(parameterHeaders)) {
+    if (!/^Mcp-Param-[A-Za-z0-9!#$%&'*+.^_`|~-]{1,118}$/.test(name) || typeof value !== 'string') throw new Error('Cabecera de parámetro MCP inválida.');
+    headers[name] = value;
+  }
+  validateModernHTTPHeaders(headers);
   return { method: 'POST' as const, headers, body };
+}
+
+/** Match the native bridge limits before requesting approval or dispatch. */
+export function validateModernHTTPHeaders(headers: Record<string, string>): void {
+  const entries = Object.entries(headers), names = new Set<string>(); let total = 0;
+  if (entries.length > 32) throw new Error('Demasiadas cabeceras MCP.');
+  for (const [name, value] of entries) {
+    const lower = name.toLowerCase();
+    if (names.has(lower) || !/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/.test(name) || typeof value !== 'string' ||
+        /[\x00-\x1f\x7f]/.test(value) || bytes(value) > 16 * 1024) throw new Error('Cabecera MCP inválida.');
+    names.add(lower); total += bytes(name) + bytes(value);
+  }
+  if (total > 32 * 1024) throw new Error('Cabeceras MCP demasiado grandes.');
 }
 
 /** Only an explicit legacy-compatible 400 can initiate the older handshake.
