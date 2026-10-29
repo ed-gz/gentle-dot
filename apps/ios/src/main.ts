@@ -31,7 +31,7 @@ import { createDesktopTools } from './desktop-tools.ts';
 import { createLocalTools } from './agent-tools.ts';
 import { createTrustedApprovals } from './trusted-approvals.ts';
 import { createConversationRequests } from './conversation-requests.ts';
-import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCancelWithDeadline, VoiceCancelUnconfirmed, VoiceRetryPending } from './perception.ts';
+import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCancelWithDeadline, voiceAvailabilityNote, VoiceCancelUnconfirmed, VoiceRetryPending } from './perception.ts';
 import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, markVoiceCancellation, clearVoiceCancellation, pendingVoiceCancellation } from './voice-origin.ts';
 import { isTauri } from '@tauri-apps/api/core';
 import { listSharedImports, importSharedItem, recoverImportBatch } from './device-bridge.ts';
@@ -1245,7 +1245,7 @@ element('dictate').addEventListener('click', async () => {
       if (availability.status === 'assets_required') {
         element('voice-status').textContent = 'Descargando la voz en español de Apple. Necesitas internet para esta primera preparación…';
         const prepared = await prepareVoice(owner);
-        if (!prepared.available) throw new Error('Apple aún no terminó de preparar la voz en español. Comprueba la conexión y vuelve a intentarlo.');
+        if (!prepared.available) throw new Error(voiceAvailabilityNote(prepared) ?? 'Apple aún no terminó de preparar la voz en español. Comprueba la conexión y vuelve a intentarlo.');
       }
       if (current !== voiceGeneration) return;
       element('voice-status').textContent = 'Iniciando micrófono…';

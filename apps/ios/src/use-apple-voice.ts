@@ -1,20 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceControls, VoicePhase } from '@gentle-dot/ui/src/useVoice.ts';
-import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCancelWithDeadline, VoiceCancelUnconfirmed, VoiceRetryPending, type VoiceAvailability } from './perception.ts';
+import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCancelWithDeadline, voiceAvailabilityNote, VoiceCancelUnconfirmed, VoiceRetryPending, type VoiceAvailability } from './perception.ts';
 import { localIdentifier } from './local-identifiers.ts';
 import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, sessionVoiceOrigin, markVoiceCancellation, clearVoiceCancellation, pendingVoiceCancellation } from './voice-origin.ts';
-
-function availabilityNote(value: VoiceAvailability): string | undefined {
-  if (value.microphonePermission === 'denied') return 'Activa el micrófono para Capri en Ajustes del iPhone.';
-  if (value.available || value.status === 'assets_required') return undefined;
-  if (value.status === 'unsupported_language') return 'La transcripción local en español no está disponible en este iPhone.';
-  if (value.status === 'unsupported_configuration') return 'La configuración de voz en español no está disponible en este iPhone.';
-  if (value.status === 'assets_downloading') return 'Apple está preparando la voz o esperando condiciones para descargarla. Inténtalo de nuevo en un momento.';
-  if (value.status === 'asset_status_unknown') return 'No pude comprobar el estado de la voz de Apple. Toca el micrófono para intentarlo de nuevo.';
-  if (value.status === 'os_unsupported') return 'El dictado local necesita iOS 26 o posterior.';
-  if (value.status === 'device_not_supported') return 'La transcripción local no está disponible en este dispositivo.';
-  return 'No pude preparar el dictado local. Cierra y vuelve a abrir esta sesión para intentarlo.';
-}
 
 function retryableVoiceStatus(value: VoiceAvailability | undefined): boolean {
   return Boolean(value?.available || value?.status === 'assets_required' || value?.status === 'assets_downloading' || value?.status === 'asset_status_unknown');
@@ -117,7 +105,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
         }
         return;
       }
-      setAvailability(value); setNote(availabilityNote(value));
+      setAvailability(value); setNote(voiceAvailabilityNote(value));
     };
     if (enabled) void refresh().catch(error => { if (live) { setAvailability(undefined); setRetryAvailability(true); setNote(`${String(error.message)} Toca el micrófono para reintentar.`); } });
     else release(false);
@@ -221,14 +209,14 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       if (!current) throw new Error('No pude comprobar la voz. Vuelve a intentarlo.');
       setAvailability(current); setRetryAvailability(false);
       if (!current.available && current.status !== 'assets_required') {
-        throw new Error(availabilityNote(current) ?? 'La voz no está disponible en este iPhone.');
+        throw new Error(voiceAvailabilityNote(current) ?? 'La voz no está disponible en este iPhone.');
       }
       if (current.status === 'assets_required') {
         setNote('Descargando la voz en español de Apple. Necesitas internet para esta primera preparación…');
         const prepared = await prepareVoice(ownerId);
         if (state.epoch !== epoch || !state.enabled) return;
         setAvailability(prepared);
-        if (!prepared.available) throw new Error(availabilityNote(prepared) ?? 'Apple aún no terminó de preparar la voz. Comprueba la conexión y vuelve a intentarlo.');
+        if (!prepared.available) throw new Error(voiceAvailabilityNote(prepared) ?? 'Apple aún no terminó de preparar la voz. Comprueba la conexión y vuelve a intentarlo.');
       }
       setNote('Iniciando el micrófono. Si iOS pide permiso, acéptalo para dictar.');
       const value = await startVoice(ownerId);

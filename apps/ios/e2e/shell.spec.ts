@@ -266,6 +266,30 @@ test('conversation approval renders exact content and cancellation cannot author
   await expect(card.getByRole('button')).toHaveCount(0);
 });
 
+for (const [status, message] of [
+  ['assets_downloading', 'Apple está preparando la voz o esperando condiciones para descargarla.'],
+  ['unsupported_configuration', 'La configuración de voz en español no está disponible en este iPhone.'],
+] as const) {
+  test(`chat reports ${status} after voice preparation`, async ({ page }) => {
+    await nativeFixture(page);
+    await page.addInitScript((resultStatus: string) => {
+      const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+      state.voicePreparationCalls = [];
+      state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+        if (command.endsWith('check_voice')) return { ok: true, available: false, status: 'assets_required', assetsInstalled: false, microphonePermission: 'granted' };
+        if (command.endsWith('prepare_voice')) { state.voicePreparationCalls.push('prepare'); return { ok: true, available: false, status: resultStatus, assetsInstalled: false, microphonePermission: 'granted' }; }
+        if (command.endsWith('start_voice')) state.voicePreparationCalls.push('start');
+        return previous(command, args);
+      };
+    }, status);
+    await page.goto('/');
+    await page.locator('#dictate').click();
+    await expect(page.locator('#voice-status')).toContainText(message);
+    expect(await page.evaluate(() => (globalThis as any).voicePreparationCalls)).toEqual(['prepare']);
+    await expect(page.locator('#voice-status')).not.toContainText('Comprueba la conexión');
+  });
+}
+
 test('voice fixture prepares assets on microphone tap and appends dictation without sending', async ({ page }) => {
   await nativeFixture(page);
   await page.addInitScript(() => {

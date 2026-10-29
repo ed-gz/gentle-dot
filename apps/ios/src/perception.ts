@@ -36,6 +36,19 @@ export interface VoiceAvailability {
   /** Ephemeral input level, not speech detection. Absent when metering is unavailable. */
   microphoneLevel?: number;
 }
+
+/** The same actionable status is shown in chat and in laptop sessions. */
+export function voiceAvailabilityNote(value: VoiceAvailability): string | undefined {
+  if (value.microphonePermission === 'denied') return 'Activa el micrófono para Capri en Ajustes del iPhone.';
+  if (value.available || value.status === 'assets_required') return undefined;
+  if (value.status === 'unsupported_language') return 'La transcripción local en español no está disponible en este iPhone.';
+  if (value.status === 'unsupported_configuration') return 'La configuración de voz en español no está disponible en este iPhone.';
+  if (value.status === 'assets_downloading') return 'Apple está preparando la voz o esperando condiciones para descargarla. Inténtalo de nuevo en un momento.';
+  if (value.status === 'asset_status_unknown') return 'No pude comprobar el estado de la voz de Apple. Toca el micrófono para intentarlo de nuevo.';
+  if (value.status === 'os_unsupported') return 'El dictado local necesita iOS 26 o posterior.';
+  if (value.status === 'device_not_supported') return 'La transcripción local no está disponible en este dispositivo.';
+  return 'No pude preparar el dictado local. Inténtalo de nuevo.';
+}
 export interface VoiceSession { sessionId: string; maxDurationSeconds: number }
 export interface VoiceSegment { text: string; startSeconds: number; endSeconds: number }
 export interface VoiceTranscript {
