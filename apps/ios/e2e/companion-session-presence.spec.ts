@@ -95,6 +95,30 @@ test('the session composer is one readable surface with accessible actions', asy
   }
 });
 
+test('a session answering or finishing moves Capri inside the sessions panel', async ({ page }) => {
+  test.slow();
+  await linkedPhone(page);
+  const artwork = await page.evaluate(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 240; canvas.height = 420;
+    canvas.getContext('2d')!.fillRect(60, 10, 120, 380);
+    return canvas.toDataURL('image/png').split(',')[1]!;
+  });
+  await page.locator('#art').setInputFiles({ name: 'synthetic-capri.png', mimeType: 'image/png', buffer: Buffer.from(artwork, 'base64') });
+  const rig = page.locator('#rig-handle');
+  await expect(rig).toHaveAttribute('data-ready', 'true', { timeout: 30000 });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  // Her resting pose depends on where she perched, so only the reactions
+  // themselves are asserted: they were unreachable in this panel before.
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('gentle-dot-companion-activity', { detail: { kind: 'submitted' } })));
+  await expect(rig).toHaveAttribute('data-pose', 'victory', { timeout: 15000 });
+  // The reaction is transient: she returns to the session's real state.
+  await expect(rig).not.toHaveAttribute('data-pose', 'victory', { timeout: 15000 });
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('gentle-dot-companion-activity', { detail: { kind: 'failed' } })));
+  await expect(rig).toHaveAttribute('data-pose', 'hurt', { timeout: 15000 });
+  await expect(rig).not.toHaveAttribute('data-pose', 'hurt', { timeout: 15000 });
+});
+
 test('Capri restores the conversation reaction after leaving a working session', async ({ page }) => {
   test.slow();
   await page.emulateMedia({ reducedMotion: 'reduce' });

@@ -179,6 +179,9 @@ function animate(now: number) {
   if (!conversationRestored || !engine || document.hidden || foregroundPage.isSuspended() || !['agents', 'chat', 'inbox', 'settings'].includes(panel) || !presenceState.visible) return;
   if (!isReduced() && !framePacer.ready(now)) { frame = requestAnimationFrame(animate); return; }
   if (intent.outcome && now - intent.outcome.at > 2400) { const { outcome: _outcome, ...rest } = intent; intent = rest; revision++; }
+  // A session outcome expires the same way; it is a transient reaction, not a
+  // permanent state of the session.
+  if (sessionIntent.outcome && now - sessionIntent.outcome.at > 2400) { const { outcome: _outcome, ...rest } = sessionIntent; sessionIntent = rest; revision++; }
   if (now - measuredAt >= 1000) {
     layoutCompanion(); measuredAt = now;
     const area = stage.getBoundingClientRect();
@@ -1251,10 +1254,19 @@ document.addEventListener('focusout', event => {
 window.addEventListener('gentle-dot-companion-activity', event => {
   if (panel !== 'agents') return;
   const kind = (event as CustomEvent<{ kind: string }>).detail?.kind;
-  if (kind === 'response') setIntent({ talking: true });
-  if (kind === 'failed') setIntent({ outcome: { kind: 'error', at: performance.now() } });
-  if (kind === 'submitted') setIntent({ outcome: { kind: 'done', at: performance.now() } });
-  if (kind === 'sending') setIntent({ working: true, thinking: true });
+  // These events belong to the session context. Writing them to the chat intent
+  // made them unreachable: while Sesiones is open the rig reads sessionIntent,
+  // so Capri never reacted to a session answering, finishing or failing.
+  const next: RigIntent = kind === 'response' ? { talking: true }
+    : kind === 'failed' ? { outcome: { kind: 'error', at: performance.now() } }
+      : kind === 'submitted' ? { outcome: { kind: 'done', at: performance.now() } }
+        : kind === 'sending' ? { working: true, thinking: true } : {};
+  if (!Object.keys(next).length) return;
+  // Replace, do not merge: a stale "working" under a finished outcome would
+  // keep claiming the session is busy after it answered.
+  sessionIntent = next;
+  travel = undefined;
+  redraw();
 });
 new MutationObserver(() => {
   const next = !!element('requests').querySelector('.actions button:not(:disabled)');
