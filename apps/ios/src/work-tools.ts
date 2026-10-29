@@ -1,6 +1,7 @@
 import type { Tool, ToolContext } from './agent-tools.ts';
 import * as inbox from './work-inbox.ts';
 import { createWorkDispatcher, prepareWorkTransfer } from './work-sync.ts';
+import { createMinuteProposal, listMinuteProposals, validateMinuteProposal } from './minute-proposals.ts';
 export type WorkToolDependencies = {
   getHost: () => string | undefined;
   getDispatcher: (operation?: 'process') => ReturnType<typeof createWorkDispatcher> | undefined;
@@ -61,6 +62,11 @@ export function createWorkTools(dependencies: WorkToolDependencies): Tool[] {
       return { id: item.id, processing: await linked.dispatcher.process(item.id, item.transfer.manifestHash, context.signal) };
     } },
     { definition: { name: 'work_result', description: 'Consulta y conserva offline el borrador de la reunión, con evidencia temporal, fuente, responsables y fechas sustentados. No aprueba el resultado.', parameters: schema(id, ['id']) }, validate(args) { return { id: idOf(args) }; }, execute: async (args, context) => { context.signal.throwIfAborted(); return { id: idOf(args), processing: await getLinked().dispatcher.result(idOf(args)) }; } },
+    { definition: { name: 'work_propose_action', description: 'Guarda una propuesta local de llamada para una minuta aprobada, usando conexión y herramienta descubiertas. No revisa el esquema remoto, no conecta, no aprueba ni ejecuta la acción. Si la minuta cambia, la propuesta deja de estar vigente.', parameters: schema({ workId: { type: 'string' }, revision: { type: 'integer', minimum: 1 }, connectionId: { type: 'string' }, tool: { type: 'string' }, description: { type: 'string', maxLength: 200 }, arguments: { type: 'object' } }, ['workId','revision','connectionId','tool','description','arguments']) },
+      validate(args) { const value = validateMinuteProposal(args); return { workId: value.workId, revision: value.revision, connectionId: value.connectionId, tool: value.tool, description: value.description, arguments: JSON.parse(value.argumentsJSON) }; },
+      async execute(args, context) { context.signal.throwIfAborted(); return createMinuteProposal(args); } },
+    { definition: { name: 'work_proposals', description: 'Consulta propuestas locales de una minuta y si siguen vinculadas a su versión aprobada. Ninguna implica aprobación o ejecución de la acción externa.', parameters: schema(id, ['id']) },
+      validate(args) { return { id: idOf(args) }; }, async execute(args, context) { context.signal.throwIfAborted(); return listMinuteProposals(idOf(args)); } },
     { definition: { name: 'work_correct', description: 'Crea una copia local editable de una minuta recuperada, conservando adjuntos, evidencia y recibo de origen. La corrección empieza sin aprobar.', parameters: schema(versioned, ['id','revision']) }, validate(args) { return { id: idOf(args), revision: revisionOf(args) }; }, execute: async (args, context) => { context.signal.throwIfAborted(); return summary(await store.createWorkFromResult(idOf(args), revisionOf(args))); } },
   ];
 }

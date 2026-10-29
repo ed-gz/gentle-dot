@@ -1,4 +1,5 @@
 import { localIdentifier } from './local-identifiers.ts';
+import type { Proposal } from './minute-proposals.ts';
 import { blobSHA256 } from './blob-sha256.ts';
 import { canonicalWorkManifest, parseWorkSyncManifest, parseWorkResult, type WorkSyncManifest, type WorkSyncReceipt, type WorkResult } from '@gentle-dot/protocol';
 export type WorkTransfer = { host: string; transferId: string; manifest: WorkSyncManifest; manifestHash: string; receipt?: WorkSyncReceipt };
@@ -22,6 +23,7 @@ export type WorkItem = {
   resultHistory?: WorkResult[];
   /** Local human approval only; never authorizes a transfer or an external action. */
   minuteApproval?: MinuteApproval;
+  minuteProposals?: Proposal[];
   source?: { id: string; hash: string };
 };
 export type WorkInput = {
@@ -106,6 +108,7 @@ function nextRevision(item: WorkItem, now: number): WorkItem {
     ...(item.transfer ? { transfer: structuredClone(item.transfer) } : {}),
     ...(item.result ? { result: structuredClone(item.result) } : {}),
     ...(item.resultHistory ? { resultHistory: structuredClone(item.resultHistory) } : {}),
+    ...(item.minuteProposals ? { minuteProposals: structuredClone(item.minuteProposals) } : {}),
     ...(item.source ? { source: { id: item.source.id, hash: item.source.hash } } : {}),
   };
 }

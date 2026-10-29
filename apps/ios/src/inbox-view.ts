@@ -5,6 +5,8 @@ import {
 import { isTauri } from '@tauri-apps/api/core';
 import { exportFileName, exportNativeFile } from './file-export.ts';
 import { parseWorkResult, type WorkResult } from '@gentle-dot/protocol';
+import { deleteMinuteProposal, listMinuteProposals } from './minute-proposals.ts';
+import { getConnection } from './external-connections.ts';
 
 const statusLabels: Record<WorkStatus, string> = {
   local: 'Solo en este iPhone',
@@ -284,6 +286,30 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
         versions.append(detail);
       }
       article.append(versions);
+    }
+
+    if (item.kind === 'meeting' && item.result) {
+      // Proposals are local drafts. Loading them never connects to a service.
+      void listMinuteProposals(item.id).then(async proposals => {
+        if (!article.isConnected || !proposals.length) return;
+        const details = node('details'); details.append(node('summary', `Acciones propuestas (${proposals.length})`));
+        for (const proposal of proposals) {
+          const row = node('div');
+          let label = 'Servicio no disponible';
+          try { label = (await getConnection(proposal.connectionId))?.label ?? label; } catch { /* Keep the proposal visible if settings cannot be read. */ }
+          row.append(node('strong', proposal.description), node('p', `${label} · ${proposal.current ? 'Minuta vigente al consultar' : 'Vigencia sin confirmar'} · acción sin aprobar`, 'hint'));
+          const content = node('details'), preview = node('pre', proposal.argumentsJSON); preview.style.whiteSpace = 'pre-wrap'; preview.style.overflowWrap = 'anywhere';
+          content.append(node('summary', 'Ver contenido propuesto'), preview);
+          const removeProposal = button('Eliminar propuesta');
+          removeProposal.addEventListener('click', () => {
+            if (!window.confirm('¿Eliminar esta propuesta local? La minuta y los servicios no se modificarán.')) return;
+            removeProposal.disabled = true;
+            void deleteMinuteProposal(proposal.id, item.id).then(() => { row.remove(); if (details.querySelectorAll('div').length === 0) details.remove(); status.textContent = 'Propuesta eliminada de este iPhone.'; }).catch(() => { status.textContent = 'No se pudo eliminar la propuesta.'; removeProposal.disabled = false; });
+          });
+          row.append(content, removeProposal); details.append(row);
+        }
+        if (article.isConnected) article.append(details);
+      }).catch(() => { if (article.isConnected) article.append(node('p', 'No se pudieron leer las acciones propuestas.', 'hint')); });
     }
 
     if (item.status !== 'sending' && item.status !== 'sent') {

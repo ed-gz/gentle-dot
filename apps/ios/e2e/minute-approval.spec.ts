@@ -14,6 +14,12 @@ test('human approves exact minute locally; newer drafts and corrections require 
     work = await inbox.saveWorkResult(work.id, transfer.transferId, result);
     return { id: work.id, transferId: transfer.transferId, result };
   });
+  const beforeApproval = await page.evaluate(async id => {
+    const inbox = await import('/src/work-inbox.ts'), proposals = await import('/src/minute-proposals.ts');
+    const work = await inbox.readWork(id);
+    return (await Promise.allSettled([proposals.createMinuteProposal({ workId: id, revision: work.revision, connectionId: '11111111-1111-4111-8111-111111111111', tool: 'mcp_0123456789abcdef01234567', description: 'Seguir', arguments: {} })]))[0].status;
+  }, initial.id);
+  expect(beforeApproval).toBe('rejected');
   await openRecoveryHarness(page);
   let article = page.locator(`[data-work-id="${initial.id}"]`);
   await article.getByText('Minuta · pendiente de revisión').click();
@@ -24,16 +30,47 @@ test('human approves exact minute locally; newer drafts and corrections require 
   await expect(page.locator('#work-status')).toContainText('Ninguna acción externa fue autorizada');
   await page.reload(); await openRecoveryHarness(page);
   await expect(article.getByText('Minuta · aprobada en este iPhone')).toBeVisible();
+  const proposed = await page.evaluate(async id => {
+    const inbox = await import('/src/work-inbox.ts'), tools = await import('/src/work-tools.ts');
+    const work = await inbox.readWork(id);
+    const tool = tools.createWorkTools({ getHost: () => undefined, getDispatcher: () => undefined }).find(t => t.definition.name === 'work_propose_action')!;
+    return tool.execute(tool.validate({ workId: id, revision: work.revision, connectionId: '11111111-1111-4111-8111-111111111111', tool: 'mcp_0123456789abcdef01234567', description: 'Preparar seguimiento', arguments: { mensaje: 'Revisar acuerdo' } }), { signal: new AbortController().signal });
+  }, initial.id);
+  expect(proposed).toMatchObject({ current: true, executed: false, actionApproved: false, description: 'Preparar seguimiento' });
+  await page.reload(); await openRecoveryHarness(page);
+  await article.getByText('Acciones propuestas (1)').click();
+  await expect(article.getByText('Preparar seguimiento')).toBeVisible();
+  await expect(article.getByText('acción sin aprobar', { exact: false })).toBeVisible();
+  await article.getByText('Ver contenido propuesto').click(); await expect(article.locator('pre').filter({ hasText: 'Revisar acuerdo' })).toBeVisible();
   const checks = await page.evaluate(async ({ id, transferId, result }) => {
     const inbox = await import('/src/work-inbox.ts'); let work = await inbox.readWork(id);
     const approved = inbox.validMinuteApproval(work);
     const corruption = inbox.validMinuteApproval({ ...work, result: { ...work.result, minutes: { ...work.result.minutes, summary: 'contenido cambiado' } } });
     const correction = await inbox.createWorkFromResult(id, work.revision);
-    work = await inbox.saveWorkResult(id, transferId, { ...result, createdAt: 201, minutes: { ...result.minutes, summary: 'Nuevo borrador' } });
-    return { approved, corruption, invalidated: !inbox.validMinuteApproval(work), correctionId: correction.id, correctionUnapproved: !inbox.validMinuteApproval(correction) };
+    const proposals = await import('/src/minute-proposals.ts');
+    const race = await Promise.allSettled([
+      proposals.createMinuteProposal({ workId: id, revision: work.revision, connectionId: '11111111-1111-4111-8111-111111111111', tool: 'mcp_0123456789abcdef01234567', description: 'Carrera', arguments: { text: 'test' } }),
+      inbox.saveWorkResult(id, transferId, { ...result, createdAt: 201, minutes: { ...result.minutes, summary: 'Nuevo borrador' } }),
+    ]);
+    work = await inbox.readWork(id);
+    const raced = await proposals.listMinuteProposals(id);
+    const allStale = raced.every(proposal => !proposal.current && !proposal.executed && !proposal.actionApproved);
+    if (race[0].status === 'fulfilled') await proposals.deleteMinuteProposal(race[0].value.id, id);
+    return { approved, corruption, invalidated: !inbox.validMinuteApproval(work), allStale, resultSaved: race[1].status, correctionId: correction.id, correctionUnapproved: !inbox.validMinuteApproval(correction) };
   }, initial);
-  expect(checks).toMatchObject({ approved: true, corruption: false, invalidated: true, correctionUnapproved: true });
-  await openRecoveryHarness(page); article = page.locator(`[data-work-id="${checks.correctionId}"]`);
+  expect(checks).toMatchObject({ approved: true, corruption: false, invalidated: true, allStale: true, resultSaved: 'fulfilled', correctionUnapproved: true });
+  await openRecoveryHarness(page);
+  const proposalsAfterChange = await page.evaluate(async id => (await import('/src/minute-proposals.ts')).listMinuteProposals(id), initial.id);
+  expect(proposalsAfterChange).toMatchObject([{ current: false, actionApproved: false, executed: false }]);
+  const source = page.locator(`[data-work-id="${initial.id}"]`);
+  await source.getByText('Acciones propuestas (1)').click();
+  await expect(source.getByText('Vigencia sin confirmar', { exact: false })).toBeVisible();
+  page.once('dialog', dialog => dialog.dismiss()); await source.getByRole('button', { name: 'Eliminar propuesta' }).click();
+  await expect(source.getByText('Preparar seguimiento')).toBeVisible();
+  page.once('dialog', dialog => dialog.accept()); await source.getByRole('button', { name: 'Eliminar propuesta' }).click();
+  await expect(source.getByText('Acciones propuestas (1)')).toHaveCount(0);
+  expect(await page.evaluate(async id => (await import('/src/minute-proposals.ts')).listMinuteProposals(id), initial.id)).toEqual([]);
+  article = page.locator(`[data-work-id="${checks.correctionId}"]`);
   await article.getByText('Versiones guardadas (1)').click(); await article.getByText('Versión 1 ·', { exact: false }).click();
   await article.getByRole('button', { name: 'Aprobar esta versión' }).click();
   await expect(page.locator('#work-status')).toContainText('Ninguna acción externa fue autorizada');
@@ -51,4 +88,13 @@ test('human approves exact minute locally; newer drafts and corrections require 
   article = page.locator(`[data-work-id="${checks.correctionId}"]`);
   await article.getByText('Versiones guardadas (2)').click(); await article.getByText('Versión 2 ·', { exact: false }).click();
   await expect(article.getByRole('button', { name: 'Aprobar esta versión' })).toBeVisible();
+  const removed = await page.evaluate(async id => {
+    const inbox = await import('/src/work-inbox.ts'), proposals = await import('/src/minute-proposals.ts');
+    let work = await inbox.readWork(id); work = await inbox.approveMinute(id, work.revision, 'version', work.versions.at(-1)!.id);
+    await proposals.createMinuteProposal({ workId: id, revision: work.revision, connectionId: '11111111-1111-4111-8111-111111111111', tool: 'mcp_0123456789abcdef01234567', description: 'Seguir', arguments: {} });
+    work = await inbox.readWork(id); await inbox.deleteWork(id, work.revision);
+    const outcome = await Promise.allSettled([inbox.readWork(id), proposals.listMinuteProposals(id)]);
+    return outcome.map(value => value.status);
+  }, checks.correctionId);
+  expect(removed).toEqual(['rejected', 'rejected']);
 });
