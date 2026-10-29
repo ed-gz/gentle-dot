@@ -164,3 +164,20 @@ test('Capri keeps session and conversation text accessible across scrolling', as
   }
 
 });
+
+for (const motion of ['reduce','no-preference'] as const) test(`keyboard resize keeps Capri away from settings and session inputs (${motion})`, async ({ page }) => {
+  await page.setViewportSize({ width: 568, height: 320 }); await page.emulateMedia({ reducedMotion: motion }); await linkedPhone(page);
+  await page.locator('[data-panel="settings"]').click();
+  const artwork = await page.evaluate(() => { const c=document.createElement('canvas');c.width=240;c.height=420;c.getContext('2d')!.fillRect(0,0,240,420);return c.toDataURL().split(',')[1]!; });
+  await page.locator('#art').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(artwork,'base64')});
+  await expect(page.locator('#rig-handle')).toHaveAttribute('data-ready','true',{timeout:20000}); await page.evaluate(()=>document.documentElement.style.fontSize='200%');
+  for (const panel of ['settings','agents'] as const) {
+    if(panel==='agents'){await page.locator('[data-panel="agents"]').click();await page.locator('.agent-session').filter({hasText:'Operaciones'}).click();}
+    else {const detail=page.locator('.settings-manual');if(!await detail.evaluate(el=>(el as HTMLDetailsElement).open))await detail.locator('summary').click();}
+    const input=panel==='settings'?page.locator('#url'):page.getByRole('textbox',{name:'Continuar esta sesión'});await input.focus();await expect(input).toBeFocused();
+    const values=await page.evaluate(async height=>{const v=window.visualViewport!;Object.defineProperties(v,{height:{configurable:true,value:height},pageTop:{configurable:true,value:0},scale:{configurable:true,value:1}});v.dispatchEvent(new Event('resize'));
+      const take=()=>{const rig=document.querySelector<HTMLElement>('#rig-handle')!,a=rig.getBoundingClientRect(),b=document.activeElement!.getBoundingClientRect();return {overlap:a.left<b.right&&b.left<a.right&&a.top<b.bottom&&b.top<a.bottom,visible:rig.offsetWidth>0&&getComputedStyle(rig).visibility==='visible'&&getComputedStyle(rig).opacity!=='0'};};const values=[take()];for(let i=0;i<20;i++){await new Promise<void>(r=>requestAnimationFrame(()=>r()));values.push(take());}return values;},180);
+    expect(values.some(value=>value.overlap),panel).toBe(false);expect(values.every(value=>value.visible),panel).toBe(true);
+    await input.blur();await page.evaluate(()=>{const v=window.visualViewport!;Object.defineProperty(v,'height',{configurable:true,value:window.innerHeight});v.dispatchEvent(new Event('resize'));});await expect(page.locator('#rig-handle')).toBeVisible();
+  }
+});

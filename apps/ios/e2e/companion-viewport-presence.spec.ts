@@ -1,0 +1,13 @@
+import { expect, test } from './fixtures.ts';
+
+for (const config of [{ width:568,height:320,visible:180,motion:'no-preference' },{ width:320,height:568,visible:300,motion:'no-preference' },{ width:568,height:320,visible:180,motion:'reduce' }]) test(`no companion overlap on first keyboard frame ${config.width} ${config.motion}`, async ({page})=>{
+ await page.setViewportSize({width:config.width,height:config.height}); await page.emulateMedia({reducedMotion:config.motion as 'reduce'|'no-preference'});await page.goto('/');await expect(page.locator('#history-loading')).toBeHidden();
+ const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=240;c.height=420;c.getContext('2d')!.fillRect(0,0,240,420);return c.toDataURL().split(',')[1]!;});
+ await page.locator('[data-panel="settings"]').click();await page.locator('#art').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await expect(page.locator('#rig-handle')).toHaveAttribute('data-ready','true',{timeout:20000});
+ await page.locator('[data-panel="chat"]').click();await page.evaluate(()=>document.documentElement.style.fontSize='200%');await page.locator('#prompt').fill('Texto conservado');await page.locator('#prompt').focus();
+ const samples=await page.evaluate(async height=>{const v=window.visualViewport!;Object.defineProperties(v,{height:{configurable:true,value:height},pageTop:{configurable:true,value:0},scale:{configurable:true,value:1}});v.dispatchEvent(new Event('resize'));
+  const take=()=>{const a=document.querySelector('#rig-handle')!.getBoundingClientRect(),b=document.querySelector('#prompt')!.getBoundingClientRect();const rig=document.querySelector<HTMLElement>('#rig-handle')!;return {overlap:a.left<b.right&&b.left<a.right&&a.top<b.bottom&&b.top<a.bottom,visible:rig.offsetWidth>0&&getComputedStyle(rig).visibility==='visible'&&getComputedStyle(rig).opacity!=='0',promptHit:(()=>{const x=b.x+b.width/2,y=b.y+b.height/2;const top=document.elementFromPoint(x,y);return top===document.querySelector('#prompt');})()};};
+  const values=[take()];for(let i=0;i<30;i++){await new Promise<void>(r=>requestAnimationFrame(()=>r()));values.push(take());}return values;},config.visible);
+ expect(samples.filter(s=>s.overlap)).toEqual([]);expect(samples.every(s=>s.visible)).toBe(true);expect(samples.every(s=>s.promptHit)).toBe(true);
+ await page.locator('#prompt').blur();await page.evaluate(()=>{const v=window.visualViewport!;Object.defineProperty(v,'height',{configurable:true,value:window.innerHeight});v.dispatchEvent(new Event('resize'));});await expect(page.locator('#prompt')).toHaveValue('Texto conservado');await expect(page.locator('#rig-handle')).toBeVisible();
+});

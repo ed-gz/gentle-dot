@@ -398,6 +398,21 @@ rig.addEventListener('keydown', event => {
 new ResizeObserver(() => { place(position.x, position.y); measuredAt = -Infinity; }).observe(stage);
 window.addEventListener('resize', () => { manuallyPlaced = false; layoutCompanion(); redraw(); });
 mountPhoneViewport(element('composer'));
+// The visual viewport can move before the next animation tick. Park Capri in
+// the reserved navigation space synchronously while the keyboard resizes it,
+// then let the normal director choose a new safe perch on the next frame.
+window.visualViewport?.addEventListener('resize', () => {
+  const focused = document.activeElement;
+  if (!(focused instanceof HTMLElement) || !focused.matches('input, textarea, select, [contenteditable="true"]')
+      || !engine || !presenceState.visible || document.hidden) return;
+  if (travel) perched = { ...perched, direction: travel.target.direction };
+  travel = undefined; manuallyPlaced = false; rig.classList.add('docked');
+  layoutCompanion();
+  const area = stage.getBoundingClientRect(), dock = companionDock.getBoundingClientRect();
+  place(dock.left + dock.width / 2 - area.left - area.width / 2,
+    dock.top + dock.height / 2 - area.top - area.height / 2);
+  measuredAt = -Infinity; redraw();
+});
 element('roam').setAttribute('aria-pressed', String(roaming));
 
 function showPanel(next: string) {
