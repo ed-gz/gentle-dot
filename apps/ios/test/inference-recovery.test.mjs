@@ -64,6 +64,15 @@ test('pending work only becomes interrupted content; no resumed model or tool ca
   assert.equal(f.get().state, 'interrupted'); assert.equal(f.get().role, 'notice');
   assert.match(f.get().text, /no repetí ninguna operación/);
 });
+test('a linked interrupted result preserves its assistant identity and request link', async () => {
+  const linked = { ...anchor, replyTo: '02bce422-1da0-4ebc-b2fb-9df32a25434e' };
+  const f = fixture([{ ...answer, status: 'interrupted', text: '' }], linked);
+  await recoverInferenceResults(f.options);
+  assert.equal(f.get().role, 'assistant');
+  assert.equal(f.get().replyTo, linked.replyTo);
+  assert.equal(f.get().state, 'interrupted');
+  assert.equal(archiveEntry(f.get()).replyTo, linked.replyTo);
+});
 test('a still-active native turn remains pending without ACK or replacement', async () => {
   const f = fixture(); f.options.list = async () => ({ items: [{ ...answer, status: 'pending', text: '' }], activeId: id });
   assert.deepEqual(await recoverInferenceResults(f.options), { activeId: id, recovered: 0 });

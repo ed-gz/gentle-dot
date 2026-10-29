@@ -1,7 +1,7 @@
 import type { ChatEntry, ChatActivity, Conversation } from './conversation.ts';
 
 export const ARCHIVE_LIMITS = Object.freeze({ entries: 10000, bytes: 64 * 1024 * 1024, entryBytes: 512 * 1024, batch: 500, page: 100, scan: 1000 });
-export type ArchiveEntry = Pick<ChatEntry, 'id' | 'engine' | 'role' | 'state' | 'text' | 'at' | 'localCancelled'> & { scope: string; activities?: ChatActivity[] };
+export type ArchiveEntry = Pick<ChatEntry, 'id' | 'engine' | 'role' | 'state' | 'text' | 'at' | 'localCancelled' | 'replyTo'> & { scope: string; activities?: ChatActivity[] };
 export type ArchiveRecord = ArchiveEntry & { key: string; sequence: number; storedAt: number; updatedAt: number; bytes: number; snapshotRevision: number };
 export type ArchiveStats = { entries: number; bytes: number; nextSequence: number; maximumEntries: number; maximumBytes: number };
 export type ArchiveWrite = ArchiveStats & { inserted: number; updated: number; unchanged: number };
@@ -11,6 +11,7 @@ type Metadata = { entries: number; bytes: number; nextSequence: number };
 type Cursor = { at: number; sequence: number; filter: string };
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const natural = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
+const uuid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
 const safeText = (value: unknown, max: number): value is string => typeof value === 'string' && value.length <= max;
 const byteLength = (text: string) => new TextEncoder().encode(text).byteLength;
 const TIMEOUT = 12000;
@@ -39,6 +40,10 @@ export function archiveEntry(value: unknown, scope?: string): ArchiveEntry {
   const source = scope ?? archiveScope(value as ChatEntry); if (!validScope(source)) throw new ArchiveError('invalid', 'El origen de conversación no es válido.');
   const entry: ArchiveEntry = { id: value.id, scope: source, engine: value.engine as ChatEntry['engine'], role: value.role as ChatEntry['role'], state: value.state as ChatEntry['state'], text: value.text, at: value.at };
   if (entry.engine === 'iphone' && value.localCancelled === true) entry.localCancelled = true;
+  if (value.replyTo !== undefined) {
+    if (entry.engine !== 'iphone' || entry.role !== 'assistant' || source !== 'iphone:main' || !uuid(entry.id) || !uuid(value.replyTo) || entry.id === value.replyTo) throw new ArchiveError('invalid', 'El vínculo de la respuesta no es válido. El original se conserva.');
+    entry.replyTo = value.replyTo;
+  }
   if (value.activities !== undefined) {
     if (!Array.isArray(value.activities) || value.activities.length > 80) throw new ArchiveError('invalid', 'El mensaje contiene demasiadas actividades; no se descartaron silenciosamente.');
     entry.activities = value.activities.map(activity => {
@@ -148,6 +153,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
           read(entries.get(keyOf(candidate)), raw => {
             const previous = raw === undefined ? undefined : stored(raw);
             if (snapshotRevision !== undefined && previous && snapshotRevision < previous.snapshotRevision) throw new ArchiveError('invalid', 'Una revisión antigua no puede reemplazar un mensaje archivado más reciente.');
+            if (previous?.replyTo && candidate.replyTo !== previous.replyTo) throw new ArchiveError('invalid', 'El vínculo de una respuesta archivada cambió. Se conserva el original.');
             // Arrival order and original event time stay stable when a stream completes later.
             const entry = previous ? { ...candidate, at: previous.at } : candidate;
             const bytes = byteLength(JSON.stringify(entry));
@@ -224,6 +230,7 @@ export function createConversationArchive(options: { databaseName?: string; maxi
           const prior = fallback.entries.find(candidate => candidate.id === entry.id && candidate.engine === entry.engine && candidate.text === entry.text);
           result.push({ id: entry.id, engine: entry.engine, role: entry.role, text: entry.text, at: entry.at,
             ...(entry.localCancelled ? { localCancelled: true } : {}),
+            ...(entry.replyTo ? { replyTo: entry.replyTo } : {}),
             ...(typeof prior?.transportText === 'string' && prior.transportText.length <= 32000 ? { transportText: prior.transportText } : {}),
             state: entry.state === 'pending' ? 'interrupted' : entry.state,
             ...(entry.activities ? { activities: entry.activities.map(activity => ({ ...activity, status: activity.status === 'running' ? 'failed' as const : activity.status })) } : {}) });

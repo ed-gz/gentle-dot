@@ -57,7 +57,7 @@ export async function recoverInferenceResults(options: {
       continue;
     }
     const answered = record.status === 'answer';
-    options.apply({ ...prior, role: answered ? 'assistant' : 'notice', state: answered ? 'complete' : 'interrupted',
+    options.apply({ ...prior, role: answered || prior.replyTo ? 'assistant' : 'notice', state: answered ? 'complete' : 'interrupted',
       text: (!answered && record.status !== 'cancelled' && prior.state === 'interrupted' && prior.text) || record.text || 'La respuesta local quedó interrumpida. Revisa el progreso antes de continuar; no repetí ninguna operación.',
       ...(record.status === 'cancelled' ? { localCancelled: true } : {}) });
   }

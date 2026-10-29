@@ -768,8 +768,9 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
     const id = localIdentifier(); localBusy = true; localTurnId = id; localRecoveryReady = false;
     const controller = new AbortController(); localController = controller;
     const context = createAgentContext(entries, { ...(attachedWork ? { attachedWork } : {}) });
-    add({ id: localIdentifier(), role: 'user', text, engine: 'iphone', state: 'complete', at: Date.now() });
-    let turnEntry: ChatEntry = { id, role: 'assistant', text: '', engine: 'iphone', state: 'pending', at: Date.now() };
+    const userId = localIdentifier();
+    add({ id: userId, role: 'user', text, engine: 'iphone', state: 'complete', at: Date.now() });
+    let turnEntry: ChatEntry = { id, replyTo: userId, role: 'assistant', text: '', engine: 'iphone', state: 'pending', at: Date.now() };
     add(turnEntry);
     prompt.value = ''; sizeDraft(); persist(); updateControls(); setIntent({ working: true, thinking: true }); element('scene-status').textContent = 'Pensando contigo…';
     try {
@@ -802,11 +803,11 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
         finally { if (generation === localGeneration) { setIntent({ thinking: true }); observeLocalActivity(id, 'thinking'); } }
       } });
       if (generation !== localGeneration) return;
-      add({ id, role: 'assistant', text, engine: 'iphone', state: 'complete', at: Date.now() });
+      add({ ...turnEntry, text, state: 'complete' });
       endLocalActivity(id, 'finished');
       setIntent({ outcome: { kind: 'done', at: performance.now() } });
     } catch (error) {
-      if (generation === localGeneration) { add({ id, role: 'notice', text: errorText(error), engine: 'iphone', state: 'interrupted', at: Date.now() }); endLocalActivity(id, 'interrupted'); }
+      if (generation === localGeneration) { add({ ...turnEntry, text: errorText(error), state: 'interrupted' }); endLocalActivity(id, 'interrupted'); }
     } finally { if (generation === localGeneration) { localBusy = false; localTurnId = undefined; element('active-tool').textContent = ''; element('scene-status').textContent = 'Aquí contigo.'; updateControls(); await persist(); await recoverLocalInference(); updateControls(); } }
   } else {
     if (!linked.ready()) { element('chat-notice').textContent = 'La laptop está desconectada. Guarda el trabajo para conservarlo.'; return; }

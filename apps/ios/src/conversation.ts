@@ -1,11 +1,12 @@
 import type { Activity } from '@gentle-dot/protocol';
 export type Engine = 'iphone' | 'gentle';
 export type ChatActivity = Activity & { detail?: string };
-export type ChatEntry = { id: string; role: 'user' | 'assistant' | 'notice'; text: string; transportText?: string; engine: Engine; state: 'complete' | 'pending' | 'interrupted'; at: number; activities?: ChatActivity[]; localCancelled?: true };
+export type ChatEntry = { id: string; role: 'user' | 'assistant' | 'notice'; text: string; transportText?: string; engine: Engine; state: 'complete' | 'pending' | 'interrupted'; at: number; activities?: ChatActivity[]; localCancelled?: true; replyTo?: string };
 export type Conversation = { entries: ChatEntry[]; draft: string; attachedWork?: string; revision?: number };
 const MAX_ENTRIES = 120;
 const MAX_TEXT = 32000;
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const uuid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
 function cleanEntry(value: unknown, restoring = false): ChatEntry | undefined {
   if (!record(value) || typeof value.id !== 'string' || !value.id || value.id.length > 4096 || typeof value.text !== 'string'
     || !['user', 'assistant', 'notice'].includes(value.role as string) || !['iphone', 'gentle'].includes(value.engine as string)
@@ -15,6 +16,7 @@ function cleanEntry(value: unknown, restoring = false): ChatEntry | undefined {
   // Explicit fields only: persisted data must never acquire tokens or native payloads.
   return { ...(activities.length ? { activities } : {}), id: value.id, role: value.role as ChatEntry['role'], text: value.text.slice(0, MAX_TEXT),
     ...(value.engine === 'iphone' && value.localCancelled === true ? { localCancelled: true } : {}),
+    ...(value.engine === 'iphone' && value.role === 'assistant' && uuid(value.id) && uuid(value.replyTo) && value.id !== value.replyTo ? { replyTo: value.replyTo } : {}),
     ...(typeof value.transportText === 'string' ? { transportText: value.transportText.slice(0, MAX_TEXT) } : {}),
     engine: value.engine as Engine, state: restoring && value.state === 'pending' ? 'interrupted' : value.state as ChatEntry['state'], at: value.at };
 }
@@ -27,6 +29,11 @@ export function updateEntry(entries: ChatEntry[], entry: ChatEntry): ChatEntry[]
   if (!safe) return entries;
   const index = entries.findIndex(item => item.id === safe.id);
   const next = [...entries];
+  const prior = index < 0 ? undefined : entries[index];
+  if (prior?.replyTo) {
+    if (safe.engine !== 'iphone' || safe.role !== 'assistant' || (safe.replyTo && safe.replyTo !== prior.replyTo)) return entries;
+    safe.replyTo = prior.replyTo;
+  }
   if (index < 0) next.push(safe); else next[index] = safe;
   return next.slice(-MAX_ENTRIES);
 }
@@ -209,6 +216,14 @@ export async function saveConversation(value: Conversation): Promise<void> {
           const previous = Number(current.revision);
           if (next.revision === undefined || next.revision < previous) throw new Error('Una revisión anterior no puede reemplazar la conversación guardada.');
           if (next.revision === previous && JSON.stringify(conversationSnapshot(current as Conversation)) !== JSON.stringify(next)) throw new Error('La revisión de la conversación ya contiene otros cambios.');
+        }
+        if (record(current)) {
+          const earlier = conversationSnapshot(current as Conversation).entries;
+          for (const prior of earlier) {
+            if (!prior.replyTo) continue;
+            const replacement = next.entries.find(entry => entry.id === prior.id);
+            if (replacement && (replacement.engine !== 'iphone' || replacement.role !== 'assistant' || replacement.replyTo !== prior.replyTo)) throw new Error('El vínculo de una respuesta existente cambió. Se conserva la conversación anterior.');
+          }
         }
         store.put(next, 'current');
       } catch (error) { fail(error instanceof Error ? error : new Error('No se guardó la conversación.')); }

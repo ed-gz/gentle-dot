@@ -53,6 +53,40 @@ test('finishing a streamed entry preserves its place and never mutates the prior
   assert.equal(original[1].state, 'pending');
 });
 
+test('only a new local assistant turn can retain a valid explicit request link', () => {
+  const userId = '02bce422-1da0-4ebc-b2fb-9df32a25434e';
+  const turnId = 'd3dba896-4b5c-4c1c-98c9-4e60238fe6b9';
+  const linked = entry(turnId, { role: 'assistant', replyTo: userId });
+  assert.equal(updateEntry([], linked)[0].replyTo, userId);
+  for (const invalid of [
+    { ...linked, replyTo: turnId }, { ...linked, replyTo: '../escape' },
+    { ...linked, role: 'user' }, { ...linked, role: 'notice' }, { ...linked, engine: 'gentle' },
+  ]) {
+    const saved = updateEntry([], invalid)[0];
+    assert.equal(saved.text, linked.text);
+    assert.equal(Object.hasOwn(saved, 'replyTo'), false);
+  }
+  assert.equal(Object.hasOwn(updateEntry([], entry('historical'))[0], 'replyTo'), false);
+  const timeline = updateEntry([], linked);
+  const completed = updateEntry(timeline, { ...linked, replyTo: undefined, text: 'Terminada' });
+  assert.equal(completed[0].replyTo, userId);
+  const changed = updateEntry(completed, { ...linked, replyTo: 'a3dba896-4b5c-4c1c-98c9-4e60238fe6b9' });
+  assert.equal(changed[0].replyTo, userId);
+  assert.equal(changed[0].text, 'Terminada');
+});
+
+test('a newer visible snapshot cannot erase or replace an existing request link', async () => {
+  const userId = '02bce422-1da0-4ebc-b2fb-9df32a25434e';
+  const turnId = 'd3dba896-4b5c-4c1c-98c9-4e60238fe6b9';
+  const turn = entry(turnId, { role: 'assistant', replyTo: userId });
+  storage({ entries: [turn], draft: '', revision: 4 });
+  for (const replacement of [{ ...turn, replyTo: undefined }, { ...turn, replyTo: 'a3dba896-4b5c-4c1c-98c9-4e60238fe6b9' }, { ...turn, role: 'notice' }]) {
+    await assert.rejects(saveConversation({ entries: [replacement], draft: '', revision: 5 }), /vínculo/);
+  }
+  assert.equal((await loadConversation()).entries[0].replyTo, userId);
+  await saveConversation({ entries: [], draft: '', revision: 5 }); // Normal window pruning.
+});
+
 test('the visible timeline remains bounded and rejects unknown metadata', () => {
   const original = Array.from({ length: 120 }, (_, index) => entry(String(index)));
   const next = updateEntry(original, entry('120', { text: 'a'.repeat(40000), token: 'never-store' }));

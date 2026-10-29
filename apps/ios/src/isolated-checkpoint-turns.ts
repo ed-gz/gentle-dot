@@ -8,15 +8,16 @@ import { createIsolatedTurnStore, type IsolatedTurn } from './isolated-turn-stor
 export function createIsolatedCheckpointTurns(store: ReturnType<typeof createIsolatedTurnStore>): CheckpointTurnStore {
   function project(entry: IsolatedTurn): ChatEntry {
     return { id: entry.id, role: entry.role, engine: entry.engine, state: entry.state, text: entry.text, at: entry.at,
+      ...(entry.replyTo ? { replyTo: entry.replyTo } : {}),
       ...(entry.localCancelled ? { localCancelled: true } : {}) };
   }
   function same(entry: ChatEntry, expected: ChatEntry): boolean {
     // Never silently drop a field from a caller's expected turn before a CAS.
     const keys = Object.keys(expected);
-    return keys.every(key => ['id', 'role', 'engine', 'state', 'text', 'at', 'localCancelled'].includes(key))
+    return keys.every(key => ['id', 'role', 'engine', 'state', 'text', 'at', 'localCancelled', 'replyTo'].includes(key))
       && entry.id === expected.id && entry.role === expected.role && entry.engine === expected.engine
       && entry.state === expected.state && entry.text === expected.text && entry.at === expected.at
-      && entry.localCancelled === expected.localCancelled;
+      && entry.localCancelled === expected.localCancelled && entry.replyTo === expected.replyTo;
   }
   return {
     async readPair(userId, turnId) {
