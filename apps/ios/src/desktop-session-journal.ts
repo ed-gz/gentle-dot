@@ -86,14 +86,18 @@ export function createSessionJournal(databaseName = DATABASE): SessionJournal {
     async begin(value) {
       const item=validate(value); if (item.state !== 'prepared') throw new Error('El intento no está preparado.');
       return transaction<void>('readwrite', (tx, done, fail) => {
-        const attempts=tx.objectStore('attempts'), pending=tx.objectStore('pending'), read=pending.get(item.key);
-        read.onsuccess = () => {
+        const attempts=tx.objectStore('attempts'), pending=tx.objectStore('pending');
+        const reserve=()=>{const read=pending.get(item.key);read.onsuccess = () => {
           if (read.result !== undefined) { fail(new Error('Esta instrucción ya tiene un envío sin resolver. Revisa el historial antes de continuar.')); return; }
           const count=pending.count(); count.onsuccess=() => {
             if (count.result >= MAX_PENDING) { fail(new Error('Hay demasiados envíos sin resolver; revisa los pendientes antes de continuar.')); return; }
             attempts.add(item); pending.add(item.id, item.key); done();
           };
-        };
+        };};
+        if(item.control?.kind!=='create'){reserve();return;}
+        // Include legacy digest-based create reservations; both scan and add
+        // occur in this one readwrite transaction and never load all payloads.
+        const scan=pending.openCursor();scan.onsuccess=()=>{const cursor=scan.result;if(!cursor){reserve();return;}const read=attempts.get(cursor.value);read.onsuccess=()=>{try{const prior=validate(read.result);if(!unresolved(prior.state)||prior.key!==cursor.key)throw new Error('El registro pendiente no es válido.');if(prior.host===item.host&&prior.control?.kind==='create'){fail(new Error('Ya existe una creación sin resolver en esta laptop.'));return;}cursor.continue();}catch(error){fail(error as Error);}};};
       });
     },
     dispatching: id => change(id, item => { if (item.state !== 'prepared') throw new Error('El intento ya cambió.'); return {...item,state:'dispatching'}; }, false),

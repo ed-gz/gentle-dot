@@ -77,3 +77,49 @@ test('a daemon downgraded after discovery never receives a legacy mutation fallb
  });
  expect(result.rejected).toBe(true);expect(result.posts).toEqual(['https://example.test/orchestration/guarded-v1']);expect(result.records.items[0]).toMatchObject({kind:'prompt',state:'unconfirmed'});
 });
+
+test('uncertain creation blocks path aliases and all new creations until human review',async({page})=>{
+ await page.goto('/');
+ const attempt=async(kind:'first'|'alias'|'distinct'|'review')=>page.evaluate(async kind=>{
+  const {createLaptopClient}=await import('/src/laptop-client.ts'),{createDesktopSessionClient}=await import('/src/desktop-tools.ts'),conn={url:'wss://example.test/ws',token:'fixture'},receiptState=async()=>kind==='review'?'terminal' as const:'active' as const;
+  const request=async()=>{const count=Number(sessionStorage.getItem('created-posts')??0)+1;sessionStorage.setItem('created-posts',String(count));if(kind==='first')throw new Error('lost callback');return {status:200,headers:{},body:JSON.stringify({created:true,starting:true})};};
+  const client=createLaptopClient(conn,{current:()=>conn,request,receiptState});if(kind==='review'){const desktop=createDesktopSessionClient({getConnection:()=>conn,request,receiptState});const records=await desktop.listControls();await desktop.resolveControl({id:records.items[0].id},{signal:new AbortController().signal,askApproval:async()=>true});return {blocked:false,posts:Number(sessionStorage.getItem('created-posts')??0)};}
+  const action=kind==='first'?{action:'create' as const,cwd:'/work'}:kind==='alias'?{action:'create' as const,cwd:'/work/.',label:'Gentle Dot',provider:'herdr' as const}:{action:'create' as const,cwd:'/different',label:'Otro trabajo'};
+  let blocked=false;try{await client.act(action);}catch{blocked=true;}return {blocked,posts:Number(sessionStorage.getItem('created-posts')??0)};
+ },kind);
+ expect(await attempt('first')).toEqual({blocked:true,posts:1});await page.reload();expect(await attempt('alias')).toEqual({blocked:true,posts:1});expect(await attempt('distinct')).toEqual({blocked:true,posts:1});expect(await attempt('review')).toEqual({blocked:false,posts:1});expect(await attempt('distinct')).toEqual({blocked:false,posts:2});
+});
+
+test('an uncertain revocation blocks the same policy but not a different policy',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+  const {createLaptopClient}=await import('/src/laptop-client.ts'),conn={url:'wss://example.test/ws',token:'fixture'},receiptState=async()=> 'terminal' as const;let posts:string[]=[];
+  const request=async(req:any)=>{const action=JSON.parse(req.body);posts.push(action.policyId);return {status:200,headers:{},body:JSON.stringify(action.policyId==='p1'?{}:{revoked:true})};};
+  const client=createLaptopClient(conn,{current:()=>conn,request,receiptState});let first=false,blocked=false;try{await client.act({action:'revoke',policyId:'p1'});}catch{first=true;}try{await client.act({action:'revoke',policyId:'p1'});}catch{blocked=true;}await client.act({action:'revoke',policyId:'p2'});
+  return {first,blocked,posts};
+ });
+ expect(result).toEqual({first:true,blocked:true,posts:['p1','p2']});
+});
+
+test('legacy digest-keyed creation still blocks the new host-wide reservation',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+  const {createControlJournal}=await import('/src/desktop-control-journal.ts'),{sessionOperationKey}=await import('/src/desktop-session-journal.ts'),{createLaptopClient}=await import('/src/laptop-client.ts');
+  const journal=createControlJournal(),host='https://example.test/orchestration',text=JSON.stringify(['create','a'.repeat(64)]),id=crypto.randomUUID(),owner=crypto.randomUUID();
+  await journal.begin({id,owner,key:sessionOperationKey(host,'@create','@create',text),host,paneId:'@create',sessionId:'@create',instanceId:'global',text,deliverAs:'followUp',state:'prepared',createdAt:1,nativeReceipt:1,control:{kind:'create',payload:{action:'create',cwd:'/work'}}});await journal.dispatching(id);await journal.unconfirmed(id);
+  let posts=0,blocked=false;const conn={url:'wss://example.test/ws',token:'fixture'},panel=createLaptopClient(conn,{current:()=>conn,request:async()=>{posts++;return {status:200,headers:{},body:'{"created":true}'};}});
+  try{await panel.act({action:'create',cwd:'/work/.'});}catch{blocked=true;}return {blocked,posts,records:await journal.list(host)};
+ });
+ expect(result.blocked).toBe(true);expect(result.posts).toBe(0);expect(result.records).toHaveLength(1);expect(result.records[0].state).toBe('unconfirmed');
+});
+
+test('creation reservations with different legacy keys serialize atomically per host',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+  const {createControlJournal}=await import('/src/desktop-control-journal.ts'),{sessionOperationKey}=await import('/src/desktop-session-journal.ts'),journal=createControlJournal(),host='https://example.test/orchestration';
+  const make=(text:string)=>({id:crypto.randomUUID(),owner:crypto.randomUUID(),key:sessionOperationKey(host,'@create','@create',text),host,paneId:'@create',sessionId:'@create',instanceId:'global',text,deliverAs:'followUp' as const,state:'prepared' as const,createdAt:1,control:{kind:'create' as const,payload:{action:'create',cwd:'/work'}}});
+  const getAll=IDBObjectStore.prototype.getAll;IDBObjectStore.prototype.getAll=function(){throw new Error('bulk read forbidden');};
+  try {const result=await Promise.allSettled([journal.begin(make('legacy-a')),journal.begin(make('new-host-key'))]);return result.map(item=>item.status).sort();}finally{IDBObjectStore.prototype.getAll=getAll;}
+ });
+ expect(result).toEqual(['fulfilled','rejected']);
+});

@@ -5,8 +5,8 @@ import { createSessionJournal, sessionOperationKey, type SessionAttempt, type Se
 export type SessionControl = { kind:'abort'|'answer'|'prompt'|'create'|'close'|'duplicate'|'revoke'; host:string; paneId:string; sessionId:string; instanceId:string; payload:Record<string,unknown>; deviceId?:string };
 export function createControlJournal():SessionJournal { return createSessionJournal('capri-ios-session-control-journal'); }
 function controlKey(value:SessionControl):string {
-  const id=value.kind==='answer' ? value.payload.requestId : value.kind==='revoke' ? value.payload.policyId : ['prompt','create'].includes(value.kind) ? value.payload.operationDigest : null;
-  if(['prompt','create'].includes(value.kind) && (typeof id!=='string' || !/^[a-f0-9]{64}$/.test(id))) throw new Error('Identidad de instrucción inválida.');
+  const id=value.kind==='answer' ? value.payload.requestId : value.kind==='revoke' ? value.payload.policyId : value.kind==='prompt' ? value.payload.operationDigest : value.kind==='create' ? 'host-create' : null;
+  if(value.kind==='prompt' && (typeof id!=='string' || !/^[a-f0-9]{64}$/.test(id))) throw new Error('Identidad de instrucción inválida.');
   if(['answer','revoke'].includes(value.kind) && (typeof id!=='string' || !id || id.length>256)) throw new Error('Pregunta inválida.');
   return JSON.stringify([value.kind,id]);
 }

@@ -122,8 +122,8 @@ export function createLaptopClient(connection: DesktopConnection, options: {
   client.act = async action => {
     if (action.action === 'grant') throw new Error('La autorización temporal desde el teléfono aún no tiene revisión vinculada al contenido; gestiona ese permiso en la laptop.');
     if (action.action === 'create' || action.action === 'revoke') {
-      current();const kind=action.action,operationDigest=kind==='create' ? await promptDigest(JSON.stringify([action.cwd,action.label??null,action.workspaceId??null,action.provider??null])) : undefined;
-      const payload={...structuredClone(action),...(operationDigest?{operationDigest}:{})} as unknown as Record<string,unknown>;
+      current();const kind=action.action;
+      const payload=structuredClone(action) as unknown as Record<string,unknown>;
       const paneId=kind==='create'?'@create':'@policy', sessionId=kind==='create'?'@create':action.policyId;
       await runSessionControl(controlJournal,{kind,host:`${origin}/orchestration`,paneId,sessionId,instanceId:'global',payload,...(captured.deviceId?{deviceId:captured.deviceId}:{})},current,async receipt=>{
         current();const reply=await request({...receipt,url:`${origin}/orchestration`,method:'POST',headers:{Authorization:`Bearer ${captured.token}`,'Content-Type':'application/json'},body:JSON.stringify(action)});current();
