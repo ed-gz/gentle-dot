@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createDesktopSessionClient, createDesktopTools, parseDesktopPage, parseDesktopSessions } from '../src/desktop-tools.ts';
+import { DeviceBridgeError } from '../src/device-bridge.ts';
 
 const conn = { url: 'wss://computer.example.ts.net/ws', token: 'never-print-this-credential', deviceId: 'device-1' };
 const target = { paneId: 'pane-1', sessionId: 'session-1' };
@@ -83,4 +84,66 @@ test('cancellation during the post-approval reread prevents the pending mutation
   const f = fixture({ inspect: (_calls, value) => { if (++reads === 2) controller.abort(); return value; } });
   await assert.rejects(f.client.send({ ...target, text: 'Do work' }, { signal: controller.signal, askApproval: async () => true }));
   assert.equal(f.calls.some(call => call.body && JSON.parse(call.body).action === 'prompt'), false);
+});
+
+test('agent session read adapts valid large history while preserving cursor and reuses the safe limit', async () => {
+  const calls = [];
+  const client = createDesktopSessionClient({ getConnection: () => conn, request: async request => {
+    const payload = JSON.parse(request.body); calls.push(payload);
+    if (payload.limit === 50) throw new DeviceBridgeError('size_limit', 'native limit');
+    return { status: 200, headers: {}, body: JSON.stringify({ ...page(),
+      messages: Array.from({ length: payload.limit }, (_, index) => ({ id: `m${index}`, role: 'assistant', content: 'x'.repeat(25000) })),
+      history: { hasEarlier: true, before: 'previous' } }) };
+  } });
+  const value = await client.read({ ...target, limit: 50, before: 'original' });
+  assert.deepEqual(calls.map(call => call.limit), [50, 25, 12, 6]);
+  assert.ok(calls.every(call => call.action === 'inspect' && call.before === 'original' && call.sessionId === target.sessionId));
+  assert.equal(value.messages.length, 6); assert.equal(value.history.before, 'previous');
+  calls.length = 0; await client.read(target); assert.equal(calls[0].limit, 6);
+});
+
+test('agent session read never retries network failure, cancellation or a changed connection', async () => {
+  let current = conn, calls = 0;
+  const controller = new AbortController();
+  const client = createDesktopSessionClient({ getConnection: () => current, request: async () => {
+    calls++;
+    if (calls === 1) throw new Error('offline');
+    if (calls === 2) { controller.abort(); throw new DeviceBridgeError('size_limit', 'large'); }
+    current = { ...conn, deviceId: 'replacement' };
+    throw new DeviceBridgeError('size_limit', 'large');
+  } });
+  await assert.rejects(client.read(target), /no confirmó/); assert.equal(calls, 1);
+  await assert.rejects(client.read(target, controller.signal), { name: 'AbortError' }); assert.equal(calls, 2);
+  await assert.rejects(client.read(target), /conexión cambió/); assert.equal(calls, 3);
+});
+
+test('agent session read does not retry malformed or oversized individual messages', async () => {
+  let calls = 0;
+  const client = createDesktopSessionClient({ getConnection: () => conn, request: async () => {
+    calls++;
+    return { status: 200, headers: {}, body: JSON.stringify({ ...page(), messages: [{ id: 'm', role: 'assistant', content: 'x'.repeat(32001) }] }) };
+  } });
+  await assert.rejects(client.read(target), /mensaje.*supera/); assert.equal(calls, 1);
+});
+
+test('agent session read also adapts when the JavaScript response limit is exceeded', async () => {
+  const limits = [];
+  const client = createDesktopSessionClient({ getConnection: () => conn, request: async request => {
+    const payload = JSON.parse(request.body); limits.push(payload.limit);
+    return { status: 200, headers: {}, body: JSON.stringify({ ...page(),
+      messages: Array.from({ length: payload.limit }, (_, index) => ({ id: `m${index}`, role: 'assistant', content: 'x'.repeat(25000) })) }) };
+  } });
+  assert.equal((await client.read({ ...target, limit: 50 })).messages.length, 6);
+  assert.deepEqual(limits, [50, 25, 12, 6]);
+});
+
+test('an oversized response to a session mutation remains uncertain and is never replayed', async () => {
+  let sends = 0;
+  const client = createDesktopSessionClient({ getConnection: () => conn, request: async request => {
+    const payload = request.body && JSON.parse(request.body);
+    if (payload?.action === 'prompt') { sends++; throw new DeviceBridgeError('size_limit', 'large'); }
+    return { status: 200, headers: {}, body: JSON.stringify(payload ? page() : { available: true, sessions: [session] }) };
+  } });
+  const result = await client.send({ ...target, text: 'Revisa la sesión' }, context(async () => true));
+  assert.equal(result.status, 'uncertain'); assert.equal(sends, 1);
 });

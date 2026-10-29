@@ -1,5 +1,5 @@
 import { localIdentifier } from './local-identifiers.ts';
-import { httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
+import { DeviceBridgeError, httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import type { Tool, ToolContext } from './agent-tools.ts';
 
 export type DesktopConnection = { url: string; token: string; deviceId?: string };
@@ -8,6 +8,7 @@ export type DesktopDelivery = { id: string; status: 'accepted' | 'queued' | 'del
 export type DesktopPage = { sessionId: string; instanceId: string; messages: { id: string; role: string; text: string }[]; deliveries: DesktopDelivery[]; question?: { id: string; kind: string; title: string; message: string; expiresAt: string; action?: string; fingerprint?: string; requiresConfirmation: boolean; options?: { id: string; label: string; description?: string; effect?: string; consequence?: string }[] }; history: { hasEarlier: boolean; before?: string } };
 export type DesktopDependencies = { getConnection: () => DesktopConnection | undefined; request?: (request: HTTPSRequest) => Promise<HTTPSResponse> };
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+class DesktopPageTooLarge extends Error {}
 const string = (value: unknown, max: number, required = true): value is string => typeof value === 'string' && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value) && (!required || Boolean(value.trim()));
 function field(value: unknown, max: number, label: string): string { if (!string(value, max)) throw new Error(`${label} no válido.`); return value; }
 function identity(args: unknown): { paneId: string; sessionId: string } {
@@ -36,7 +37,8 @@ export function parseDesktopPage(value: unknown, sessionId: string): DesktopPage
     let text = '';
     if (typeof entry.content === 'string') text = entry.content;
     else if (Array.isArray(entry.content)) text = entry.content.filter(object).filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n');
-    if (text.length > 32000 || (chars += text.length) > 180000) throw new Error('Solicita una página más pequeña del historial.');
+    if (text.length > 32000) throw new Error('Un mensaje del historial supera el límite permitido.');
+    if ((chars += text.length) > 180000) throw new DesktopPageTooLarge('Solicita una página más pequeña del historial.');
     messages.push({ id: entry.id, role: entry.role as string, text });
   }
   const deliveries: DesktopDelivery[] = [];
@@ -74,12 +76,33 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
     unchanged(conn);
     let reply: HTTPSResponse;
     try { reply = await request({ url: endpoint(conn), method: payload ? 'POST' : 'GET', headers: { Authorization: `Bearer ${conn.token}`, 'Content-Type': 'application/json' }, ...(payload ? { body: JSON.stringify(payload) } : {}) }); }
-    catch { throw new Error('El host no confirmó la operación. Consulta su estado antes de repetirla.'); }
+    catch (error) {
+      if (error instanceof DeviceBridgeError && error.code === 'size_limit') throw new DesktopPageTooLarge('Respuesta del host demasiado grande.');
+      throw new Error('El host no confirmó la operación. Consulta su estado antes de repetirla.');
+    }
     if (reply.status < 200 || reply.status >= 300) throw new Error(reply.status === 401 || reply.status === 403 ? 'El host rechazó el acceso o la aprobación. Revisa la vinculación.' : reply.status === 409 ? 'La sesión cambió; vuelve a consultarla.' : 'El host no pudo completar la operación.');
-    if (reply.body.length > 1_000_000) throw new Error('Respuesta del host demasiado grande.');
+    if (reply.body.length > 1_000_000) throw new DesktopPageTooLarge('Respuesta del host demasiado grande.');
     try { return JSON.parse(reply.body); } catch { throw new Error('El host devolvió una respuesta inválida.'); }
   }
-  const inspect = async (conn: DesktopConnection, target: { paneId: string; sessionId: string }, limit = 20, before?: string) => parseDesktopPage(await rpc(conn, { action: 'inspect', ...target, limit, ...(before ? { before } : {}) }), target.sessionId);
+  let inspectionLimit = 100;
+  // Only inspect is retried: its cursor and connection remain unchanged. A
+  // valid large history can exceed either the native or the model's limits.
+  const inspect = async (conn: DesktopConnection, target: { paneId: string; sessionId: string }, requestedLimit = 20, before?: string, signal?: AbortSignal) => {
+    let limit = Math.min(requestedLimit, inspectionLimit);
+    for (;;) {
+      signal?.throwIfAborted();
+      try {
+        const response = await rpc(conn, { action: 'inspect', ...target, limit, ...(before ? { before } : {}) });
+        signal?.throwIfAborted(); unchanged(conn);
+        return parseDesktopPage(response, target.sessionId);
+      } catch (error) {
+        signal?.throwIfAborted(); unchanged(conn);
+        if (!(error instanceof DesktopPageTooLarge) || limit <= 1) throw error;
+        limit = Math.max(1, Math.floor(limit / 2));
+        inspectionLimit = Math.min(inspectionLimit, limit);
+      }
+    }
+  };
   async function authorize(context: ToolContext, conn: DesktopConnection, title: string, payload: object): Promise<void> {
     context.signal.throwIfAborted();
     if (!context.askApproval || !await context.askApproval({ title, details: JSON.stringify({ host: endpoint(conn), ...payload }, null, 2), operation: 'desktop-session' })) throw new Error('La acción sobre la sesión no fue aprobada.');
@@ -87,11 +110,11 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
   }
   return {
     async list(): Promise<DesktopSession[]> { return parseDesktopSessions(await rpc(connection())); },
-    async read(args: unknown): Promise<DesktopPage> {
+    async read(args: unknown, signal?: AbortSignal): Promise<DesktopPage> {
       const target = identity(args); const input = args as Record<string, unknown>;
       const limit = input.limit ?? 20; if (!Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > 100) throw new Error('El límite debe ser de 1 a 100 mensajes.');
       const before = input.before === undefined ? undefined : field(input.before, 256, 'Cursor');
-      return inspect(connection(), target, Number(limit), before);
+      return inspect(connection(), target, Number(limit), before, signal);
     },
     async send(args: unknown, context: ToolContext) {
       const target = identity(args); const input = args as Record<string, unknown>; const text = field(input.text, 16000, 'Instrucción');
@@ -146,7 +169,7 @@ export function createDesktopTools(dependencies: DesktopDependencies): Tool[] {
   const schema = (properties: Record<string, unknown>, required: string[]) => ({ type: 'object', additionalProperties: false, properties, required });
   return [
     { definition: { name: 'session_list', description: 'Consulta sesiones Pi existentes de la laptop, su estado y capacidades. No crea sesiones.', parameters: schema({}, []) }, validate(args) { if (!object(args) || Object.keys(args).length) throw new Error('session_list no recibe argumentos.'); return {}; }, execute: async (args, context) => { context.signal.throwIfAborted(); if (!object(args) || Object.keys(args).length) throw new Error('Argumentos inválidos.'); return client.list(); } },
-    { definition: { name: 'session_read', description: 'Lee mensajes, recibos de entrega y preguntas pendientes de una sesión existente. Las preguntas requieren respuesta humana; esta herramienta no las aprueba.', parameters: schema({ ...target, limit: { type: 'integer', minimum: 1, maximum: 100 }, before: { type: 'string' } }, ['paneId','sessionId']) }, validate(args) { identity(args); return args; }, execute: async (args, context) => { context.signal.throwIfAborted(); return client.read(args); } },
+    { definition: { name: 'session_read', description: 'Lee mensajes, recibos de entrega y preguntas pendientes de una sesión existente. Las preguntas requieren respuesta humana; esta herramienta no las aprueba.', parameters: schema({ ...target, limit: { type: 'integer', minimum: 1, maximum: 100 }, before: { type: 'string' } }, ['paneId','sessionId']) }, validate(args) { identity(args); return args; }, execute: async (args, context) => { context.signal.throwIfAborted(); return client.read(args, context.signal); } },
     { definition: { name: 'session_send', description: 'Propone una instrucción exacta para una sesión Pi existente y solicita aprobación humana dentro de la conversación antes de enviarla. Devuelve clientMessageId y estado de recepción; no implica tarea terminada. Nunca reenvíes una entrega incierta automáticamente.', parameters: schema({ ...target, text: { type: 'string', maxLength: 16000 }, deliverAs: { type: 'string', enum: ['followUp', 'steer'] } }, ['paneId','sessionId','text']) }, validate(args) { identity(args); field((args as Record<string, unknown>).text, 16000, 'Instrucción'); return args; }, execute: (args, context) => client.send(args, context) },
     { definition: { name: 'session_abort', description: 'Solicita aprobación humana para detener el trabajo de una sesión Pi compartida concreta. Afecta también al trabajo visible en la laptop.', parameters: schema(target, ['paneId','sessionId']) }, validate: identity, execute: (args, context) => client.abort(args, context) },
   ];
