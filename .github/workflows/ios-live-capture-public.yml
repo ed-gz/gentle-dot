@@ -14,7 +14,7 @@ jobs:
   synthetic-capture-state:
     if: github.repository == 'ed-gz/gentle-dot'
     runs-on: macos-26
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Fetch exact public source without credentials
         env:
@@ -27,3 +27,5 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - name: Compile and exercise empty synthetic buffer
         run: bash apps/ios/scripts/check-live-capture-empty.sh
+      - name: Run native capture, preservation and cancellation fixtures
+        run: bash apps/ios/scripts/check-native-sdk.sh

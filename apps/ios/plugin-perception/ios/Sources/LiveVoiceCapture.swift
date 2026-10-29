@@ -83,6 +83,10 @@ final class LiveCaptureState {
         if !buffer.format.isEqual(sourceFormat) || buffer.frameLength > 8_192 {
             failure = .recordingInterrupted; lifecycle.close(); stop = true
             issueMessage = "Cambió el micrófono y la grabación se interrumpió. Vuelve a intentarlo."
+        } else if buffer.frameLength == 0 {
+            // No samples arrived. This is not a failed copy or lost audio;
+            // keep accepting the next buffer and preserve the current meter.
+            lock.unlock(); return
         } else if writePending >= queueLimit {
             failure = .captureOverflow; lifecycle.close(); stop = true
             issueMessage = "No pude conservar todo el audio. Vuelve a dictarlo."

@@ -30,6 +30,14 @@ La captura de una instrucción puede reservarse en almacenamiento nativo privado
 
 El run macOS efímero 40863590657 probó voz sintética: transcribió un CAF Float32 de 48 kHz tras convertirlo, un archivo ya compatible sin modificar sus bytes y buffers Int16 en el API de resultados provisionales. Un control separado con buffers Float32 terminó con SIGTRAP y el job falló; el padre continuó y confirmó la liberación de la reserva de idioma. La matriz posterior transcribió el archivo convertido con lectura Float32, pero sus casos de lectura Int16 fallaron. Estos resultados se refieren a audio sintético en macOS, no al micrófono ni al comportamiento en iPhone; tampoco confirman que la vista previa Float32 funcione.
 
+El run sintético macOS 40867241941 reprodujo un fallo del estado de captura:
+un buffer PCM vacío se trataba como fallo de copia e impedía conservar las muestras
+siguientes. La corrección ignora ese buffer sin declarar pérdida de audio; sigue
+rechazando formatos cambiados y buffers sobredimensionados. El fixture usa buffers
+sintéticos, no el micrófono, y por sí solo no demuestra que este fuera el origen
+del error observado en el iPhone. La ejecución posterior de la corrección debe
+verificarse antes de dar por superada la regresión.
+
 La selección prioriza un transcriptor ya instalado en español para permitir dictar sin descargar recursos; si hay varios, prefiere `SpeechTranscriber`. También consulta `DictationTranscriber`, que Apple documenta como transcripción local para más dispositivos y locales. Cuando ninguno está instalado, prefiere descargar el modelo de `SpeechTranscriber` si es compatible. La preparación de assets, elección de formato y transcripción usan el mismo módulo seleccionado, opciones de entrega final y el atributo `audioTimeRange`. Si ninguno ofrece español, se indica que no está disponible. Esta ampliación requiere compilación con el SDK y prueba real de ambos caminos; las pruebas Node/Rust no verifican el reconocimiento nativo.
 
 La app cancela captura/transcripción al perder primer plano, entrar en background o recibir una interrupción de audio. El diálogo inicial de permiso puede hacer que la app pierda actividad: se permite completar ese diálogo, pero un cambio real a background invalida el inicio. La cancelación también descarta resultados tardíos. Una instalación de assets ya iniciada la gestiona Apple y puede terminar aunque el usuario cancele el resultado de preparación en Capri.

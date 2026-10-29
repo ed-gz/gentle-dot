@@ -25,6 +25,13 @@ import Foundation
         try file.read(into: read)
         precondition(read.frameLength == 4)
         for index in 0..<4 { precondition(abs(read.floatChannelData![0][index] - Float(index + 1) / 8) < 0.0001) }
+        let bounded = try LiveCaptureState(url: root.appendingPathComponent("oversize.caf"), source: format, target: format, issue: { _ in })
+        bounded.begin()
+        let oversized = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_193)!
+        oversized.frameLength = 8_193
+        bounded.receive(oversized)
+        do { try await bounded.drain(); fatalError("An oversized buffer must not become a verified recording.") }
+        catch LiveVoiceCaptureError.recordingInterrupted { /* Expected fail-closed behavior. */ }
         print("PASS: empty input preserved subsequent synthetic samples. Not a microphone or iPhone test.")
     }
 }
