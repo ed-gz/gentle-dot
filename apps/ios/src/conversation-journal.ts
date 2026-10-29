@@ -1,5 +1,5 @@
 import { archiveEntry, conversationArchive, type ArchiveWrite } from './conversation-archive.ts';
-import { canonicalConversationSnapshot, type ChatEntry, type Conversation } from './conversation.ts';
+import { CONVERSATION_JOURNAL_KEY, canonicalConversationSnapshot, type ChatEntry, type Conversation } from './conversation.ts';
 
 /** Experimental coordinator for the existing conversation and archive schemas.
  * It must not be enabled until every writer (including voice and every WebView)
@@ -15,7 +15,7 @@ export type ConversationJournal = { schema: 'capri-conversation-journal/v1'; id:
  * still current. Only the most recent receipt is retained. It must not be used
  * to acknowledge native results or delete audio. */
 export type JournalCommit = { id: string; revision: number; alreadyCommitted: boolean };
-const JOURNAL = 'conversation-journal:v1', COMMITTED = 'conversation-journal:last-committed:v1';
+const JOURNAL = CONVERSATION_JOURNAL_KEY, COMMITTED = 'conversation-journal:last-committed:v1';
 const LIMIT = 10_000, MAX_BYTES = 64 * 1024 * 1024;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const natural = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -74,7 +74,7 @@ function includeBase(pending: ChatEntry[], base: Conversation | undefined, visib
 function validate(value: unknown): ConversationJournal {
   if (!object(value) || Object.keys(value).some(key => !['schema', 'id', 'baseRevision', 'base', 'revision', 'snapshot', 'pending'].includes(key))
     || value.schema !== 'capri-conversation-journal/v1' || !uuid(value.id) || !natural(value.baseRevision) || value.baseRevision >= Number.MAX_SAFE_INTEGER
-    || value.revision !== value.baseRevision + 1) throw new Error('La reserva de conversación es inválida; no se eliminó.');
+    || !natural(value.revision) || value.revision <= value.baseRevision) throw new Error('La reserva de conversación es inválida; no se eliminó.');
   const base = value.base === undefined ? undefined : cleanConversation(value.base);
   const snapshot = cleanConversation(value.snapshot), pending = cleanPending(value.pending);
   if ((base?.revision ?? 0) !== value.baseRevision) throw new Error('La base reservada no coincide; no se eliminó.');
@@ -141,11 +141,16 @@ export function createConversationJournal(options: { databaseName?: string; arch
   return {
     /** Reserve the exact base and persist the entire snapshot plus every
      * pending message before performing any archive write. */
-    async begin(input: { id: string; baseRevision: number; base?: Conversation; snapshot: Conversation; pending: ChatEntry[] }): Promise<ConversationJournal> {
+    async begin(input: { id: string; baseRevision: number; base?: Conversation; snapshot: Conversation; pending: ChatEntry[]; nextRevision?: number }): Promise<ConversationJournal> {
       const original = structuredClone(input), snapshot = cleanConversation(original.snapshot);
       const base = original.base === undefined ? undefined : cleanConversation(original.base);
       const pending = includeBase(includeVisible(cleanPending(original.pending), snapshot.entries), base, snapshot.entries);
-      const safe = validate({ schema: 'capri-conversation-journal/v1', ...original, snapshot, pending, revision: original.baseRevision + 1 });
+      // A prior archive commit may have survived a crash while the visible
+      // window remained older. The caller may advance past that recovered
+      // revision, but only while binding the complete, unchanged window base.
+      const revision = original.nextRevision ?? original.baseRevision + 1;
+      const safe = validate({ schema: 'capri-conversation-journal/v1', id: original.id, baseRevision: original.baseRevision,
+        ...(base ? { base } : {}), snapshot, pending, revision });
       return transaction(name, 'readwrite', (store, done, fail) => {
         const previous = store.get(JOURNAL);
         previous.onsuccess = () => safely(fail, () => {

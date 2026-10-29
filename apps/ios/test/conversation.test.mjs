@@ -6,7 +6,7 @@ const entry = (id, changes = {}) => ({ id, role: 'user', text: `Message ${id}`, 
 const previousIndexedDB = globalThis.indexedDB;
 afterEach(() => { globalThis.indexedDB = previousIndexedDB; });
 
-function storage(saved) {
+function storage(saved, pendingJournal) {
   let stored = saved;
   globalThis.indexedDB = {
     open() {
@@ -19,7 +19,7 @@ function storage(saved) {
             const transaction = {
               abort() { aborted = true; queueMicrotask(() => transaction.onabort?.()); },
               objectStore: () => ({
-                get: () => request(() => stored),
+                get: key => request(() => key === 'current' ? stored : key === 'conversation-journal:v1' ? pendingJournal : undefined),
                 put: value => request(() => { stored = structuredClone(value); return 'current'; }),
               }),
             };
@@ -188,6 +188,13 @@ test('a stale or conflicting snapshot cannot replace a confirmed conversation re
   await saveConversation({ ...original, draft: 'Nuevo', revision: 13 });
   assert.equal(read().draft, 'Nuevo');
   assert.equal(read().revision, 13);
+});
+
+test('an unrecognized pending journal blocks window writes and preserves the original', async () => {
+  const original = { entries: [entry('original')], draft: 'No reemplazar', revision: 4 };
+  const read = storage(original, { malformed: true });
+  await assert.rejects(saveConversation({ entries: [], draft: 'Otro', revision: 5 }), /reserva de conversación pendiente/);
+  assert.deepEqual(read(), original);
 });
 
 test('transport text survives storage for history reconciliation but stays bounded and out of context', async () => {

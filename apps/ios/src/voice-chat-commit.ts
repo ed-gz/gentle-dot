@@ -1,4 +1,4 @@
-import { canonicalConversationSnapshot, type Conversation } from './conversation.ts';
+import { CONVERSATION_JOURNAL_KEY, canonicalConversationSnapshot, type Conversation } from './conversation.ts';
 import { hashSourceBytes } from './perception.ts';
 import { prepareVoiceReceiptInput, type VoiceReceiptInput } from './voice-receipt-store.ts';
 
@@ -105,7 +105,14 @@ function transact<T>(databaseName: string, mode: IDBTransactionMode,
           tx.onerror = () => { issue ??= new Error('No se confirmó el guardado del dictado.'); };
           const store = tx.objectStore('conversation');
           if (store.keyPath !== null || store.autoIncrement) throw new Error('El esquema de conversación cambió; se conservan los datos.');
-          work(store, value => { result = value; produced = true; }, fail);
+          const run = () => work(store, value => { result = value; produced = true; }, fail);
+          if (mode === 'readwrite') {
+            const guard = store.get(CONVERSATION_JOURNAL_KEY);
+            guard.onsuccess = () => {
+              if (guard.result !== undefined) { fail(new Error('Hay una reserva de conversación pendiente. Recupera el guardado anterior antes de modificar el dictado.')); return; }
+              try { run(); } catch (error) { fail(error instanceof Error ? error : new Error('No se confirmó el guardado del dictado.')); }
+            };
+          } else run();
         } catch (error) { fail(error instanceof Error ? error : new Error('No pude iniciar el guardado del dictado.')); }
       };
     } catch (error) { finish(error instanceof Error ? error : new Error('No pude abrir la conversación.')); }

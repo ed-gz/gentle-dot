@@ -3,6 +3,8 @@ export type Engine = 'iphone' | 'gentle';
 export type ChatActivity = Activity & { detail?: string };
 export type ChatEntry = { id: string; role: 'user' | 'assistant' | 'notice'; text: string; transportText?: string; engine: Engine; state: 'complete' | 'pending' | 'interrupted'; at: number; activities?: ChatActivity[]; localCancelled?: true; replyTo?: string };
 export type Conversation = { entries: ChatEntry[]; draft: string; attachedWork?: string; revision?: number };
+/** All writers of the current window must honor this durable reservation. */
+export const CONVERSATION_JOURNAL_KEY = 'conversation-journal:v1';
 const MAX_ENTRIES = 120;
 const MAX_TEXT = 32000;
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -211,29 +213,35 @@ export function canonicalConversationSnapshot(value: Conversation): Conversation
 export async function saveConversation(value: Conversation): Promise<void> {
   const next = conversationSnapshot(value);
   await access('readwrite', (store, fail) => {
-    // Check and write inside the same transaction. A stale secondary window
-    // must never replace a newer revision, even across separate WebViews.
-    const request = store.get('current');
-    request.onsuccess = () => {
+    // Check the journal and the current window in the same transaction. A
+    // competing writer must not replace the base of a durable reservation.
+    const guard = store.get(CONVERSATION_JOURNAL_KEY);
+    guard.onsuccess = () => {
       try {
-        const current: unknown = request.result;
-        if (record(current) && current.revision !== undefined) {
-          if (!Number.isSafeInteger(current.revision) || Number(current.revision) < 0) throw new Error('La revisión de la conversación guardada no es válida.');
-          const previous = Number(current.revision);
-          if (next.revision === undefined || next.revision < previous) throw new Error('Una revisión anterior no puede reemplazar la conversación guardada.');
-          if (next.revision === previous && JSON.stringify(conversationSnapshot(current as Conversation)) !== JSON.stringify(next)) throw new Error('La revisión de la conversación ya contiene otros cambios.');
-        }
-        if (record(current)) {
-          const earlier = conversationSnapshot(current as Conversation).entries;
-          for (const prior of earlier) {
-            if (!prior.replyTo) continue;
-            const replacement = next.entries.find(entry => entry.id === prior.id);
-            if (replacement && (replacement.engine !== 'iphone' || replacement.role !== 'assistant' || replacement.replyTo !== prior.replyTo)) throw new Error('El vínculo de una respuesta existente cambió. Se conserva la conversación anterior.');
-          }
-        }
-        store.put(next, 'current');
+        if (guard.result !== undefined) throw new Error('Hay una reserva de conversación pendiente. Recupera el guardado anterior antes de escribir.');
+        const request = store.get('current');
+        request.onsuccess = () => {
+          try {
+            const current: unknown = request.result;
+            if (record(current) && current.revision !== undefined) {
+              if (!Number.isSafeInteger(current.revision) || Number(current.revision) < 0) throw new Error('La revisión de la conversación guardada no es válida.');
+              const previous = Number(current.revision);
+              if (next.revision === undefined || next.revision < previous) throw new Error('Una revisión anterior no puede reemplazar la conversación guardada.');
+              if (next.revision === previous && JSON.stringify(conversationSnapshot(current as Conversation)) !== JSON.stringify(next)) throw new Error('La revisión de la conversación ya contiene otros cambios.');
+            }
+            if (record(current)) {
+              const earlier = conversationSnapshot(current as Conversation).entries;
+              for (const prior of earlier) {
+                if (!prior.replyTo) continue;
+                const replacement = next.entries.find(entry => entry.id === prior.id);
+                if (replacement && (replacement.engine !== 'iphone' || replacement.role !== 'assistant' || replacement.replyTo !== prior.replyTo)) throw new Error('El vínculo de una respuesta existente cambió. Se conserva la conversación anterior.');
+              }
+            }
+            store.put(next, 'current');
+          } catch (error) { fail(error instanceof Error ? error : new Error('No se guardó la conversación.')); }
+        };
       } catch (error) { fail(error instanceof Error ? error : new Error('No se guardó la conversación.')); }
     };
-    return request;
+    return guard;
   });
 }

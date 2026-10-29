@@ -31,6 +31,63 @@ test('two windows racing from one durable base reserve only one snapshot before 
   await other.close();
 });
 
+test('a pending journal fences the existing window and voice writers until recovery commits', async ({ page }) => {
+  await page.goto('/');
+  // Finish the shell's initial restore before exercising the shared v1 store.
+  await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).revision ?? 0)).toBeGreaterThanOrEqual(1);
+  const result = await page.evaluate(async () => {
+    const { loadConversation, saveConversation } = await import('/src/conversation.ts');
+    const { createConversationJournal } = await import('/src/conversation-journal.ts');
+    const { createConversationArchive } = await import('/src/conversation-archive.ts');
+    const { createVoiceChatCommit } = await import('/src/voice-chat-commit.ts');
+    const archive = createConversationArchive({ databaseName: `fenced-archive-${crypto.randomUUID()}` });
+    const journal = createConversationJournal({ archive });
+    const base = { entries: [], draft: 'Nota original', revision: 1000 };
+    await saveConversation(base);
+    const id = crypto.randomUUID(), snapshot = { ...base, draft: 'Nota reservada', revision: 1001 };
+    await journal.begin({ id, baseRevision: 1000, base, snapshot, pending: [] });
+    const input = { ownerId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', destination: 'chat', audioSHA256: 'a'.repeat(64), audioBytes: 3,
+      transcript: { sessionId: '12345678-1234-4234-8234-123456789012', text: 'Dictado', locale: 'es-MX', source: 'apple-speech-analyzer', durationSeconds: 2,
+        segments: [{ text: 'Dictado', startSeconds: 0.1, endSeconds: 1.8 }] } };
+    const writes = await Promise.allSettled([
+      saveConversation({ ...base, draft: 'No sobrescribir', revision: 1002 }),
+      createVoiceChatCommit().apply(input, { draft: base.draft, revision: base.revision }),
+    ]);
+    const during = await loadConversation(), pending = await journal.pending();
+    const recovered = await journal.resume(id);
+    await saveConversation({ ...snapshot, draft: 'Edición posterior', revision: 1002 });
+    return { writes: writes.map(value => value.status), during, pending: pending?.id, recovered, after: await loadConversation() };
+  });
+  expect(result.writes).toEqual(['rejected', 'rejected']);
+  expect(result.during).toMatchObject({ draft: 'Nota original', revision: 1000 });
+  expect(result.pending).toBeTruthy();
+  expect(result.recovered).toMatchObject({ revision: 1001, alreadyCommitted: false });
+  expect(result.after).toMatchObject({ draft: 'Edición posterior', revision: 1002 });
+});
+
+test('a journal reservation racing the existing window writer never allows both to win', async ({ page }) => {
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(async () => (await (await import('/src/conversation.ts')).loadConversation()).revision ?? 0)).toBeGreaterThanOrEqual(1);
+  const result = await page.evaluate(async () => {
+    const { loadConversation, saveConversation } = await import('/src/conversation.ts');
+    const { createConversationJournal } = await import('/src/conversation-journal.ts');
+    const { createConversationArchive } = await import('/src/conversation-archive.ts');
+    const journal = createConversationJournal({ archive: createConversationArchive({ databaseName: `race-fence-${crypto.randomUUID()}` }) });
+    const base = { entries: [], draft: 'Base', revision: 2000 };
+    await saveConversation(base);
+    const id = crypto.randomUUID();
+    const outcomes = await Promise.allSettled([
+      journal.begin({ id, baseRevision: 2000, base, snapshot: { ...base, draft: 'Reservado', revision: 2001 }, pending: [] }),
+      saveConversation({ ...base, draft: 'Otra ventana', revision: 2001 }),
+    ]);
+    const pending = await journal.pending(), current = await loadConversation();
+    if (pending) await journal.resume(id);
+    return { outcomes: outcomes.map(value => value.status), pending: Boolean(pending), draft: current.draft };
+  });
+  expect(result.outcomes.sort()).toEqual(['fulfilled', 'rejected']);
+  expect(result.draft).toBe(result.pending ? 'Base' : 'Otra ventana');
+});
+
 test('partial archive failure keeps the whole reservation and replay completes without duplicates', async ({ page }) => {
   await page.goto('/');
   const result = await page.evaluate(async () => {
@@ -137,6 +194,36 @@ test('an old snapshot with an invented newer revision is rejected before archive
   expect(result.error).toContain('conversación cambió');
   expect(result.pending).toBeUndefined();
   expect(result.records.entries[0]).toMatchObject({ state: 'complete', text: 'Respuesta confirmada' });
+});
+
+test('a recovered newer archive can advance while an exact visible base still guards the reservation', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { createConversationJournal } = await import('/src/conversation-journal.ts');
+    const { createConversationArchive } = await import('/src/conversation-archive.ts');
+    const suffix = crypto.randomUUID(), databaseName = `floor-journal-${suffix}`;
+    const archive = createConversationArchive({ databaseName: `floor-archive-${suffix}` });
+    const journal = createConversationJournal({ databaseName, archive });
+    const entry = { id: crypto.randomUUID(), role: 'user', engine: 'iphone', state: 'complete', text: 'Solicitud', at: 1000 };
+    const base = { entries: [entry], draft: 'Base', revision: 1 };
+    await new Promise<void>((resolve, reject) => {
+      const opening = indexedDB.open(databaseName, 1); opening.onupgradeneeded = () => opening.result.createObjectStore('conversation'); opening.onerror = () => reject(opening.error);
+      opening.onsuccess = () => { const db = opening.result, tx = db.transaction('conversation', 'readwrite'); tx.objectStore('conversation').put(base, 'current'); tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
+    });
+    await archive.upsert([entry], undefined, [entry], 4);
+    const snapshot = { ...base, draft: 'Continuación', revision: 5 };
+    const id = crypto.randomUUID();
+    const stale = await Promise.allSettled([journal.begin({ id, baseRevision: 1, base: { ...base, draft: 'Obsoleto' }, nextRevision: 5, snapshot, pending: [] })]);
+    await journal.begin({ id, baseRevision: 1, base, nextRevision: 5, snapshot, pending: [] });
+    const committed = await journal.resume(id);
+    const restored = await archive.restoreState(snapshot);
+    return { stale: stale[0].status, committed, restored, pending: await journal.pending() };
+  });
+  expect(result.stale).toBe('rejected');
+  expect(result.committed).toMatchObject({ revision: 5, alreadyCommitted: false });
+  expect(result.restored.revision).toBe(5);
+  expect(result.restored.entries).toHaveLength(1);
+  expect(result.pending).toBeUndefined();
 });
 
 test('the reservation includes visible messages and refuses divergent copies before any write', async ({ page }) => {
