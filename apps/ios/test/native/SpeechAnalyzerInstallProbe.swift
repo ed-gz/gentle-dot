@@ -66,7 +66,11 @@ private func probe() async -> Int32 {
         }
         print(result)
         // A skipped synthesis or unsupported analyzer is never a transcript pass.
-        if result.hasPrefix("PASS: real DictationTranscriber") || result.hasPrefix("SKIP:") { exitCode = 0 }
+        if result.hasPrefix("PASS: real DictationTranscriber") {
+            stage = "captured-formats"
+            try await runCaptureFormatProbe(locale: locale)
+            exitCode = 0
+        } else if result.hasPrefix("SKIP:") { exitCode = 0 }
         else { print("FAIL: no real synthetic transcript was confirmed.") }
     } catch {
         // Only fixed phase names, known domains and bounded codes leave the
