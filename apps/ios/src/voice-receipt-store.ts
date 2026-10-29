@@ -176,7 +176,10 @@ export function createVoiceReceiptStore(options: { databaseName?: string } = {})
           done(all.result.map(stored).filter(item => item.destination === destination).sort((a, b) => a.createdAt - b.createdAt));
         });
       });
-      return Promise.all(items.map(verify));
+      // Native SHA fallback has a bounded number of concurrent slots.
+      const verified: StoredVoiceReceipt[] = [];
+      for (const item of items) verified.push(await verify(item));
+      return verified;
     },
     readDraft(destination: string): Promise<VoiceReceiptDraft> {
       if (!destinationOK(destination)) return Promise.reject(new Error('El destino no es válido.'));

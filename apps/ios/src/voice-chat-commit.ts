@@ -185,7 +185,13 @@ export function createVoiceChatCommit(options: { databaseName?: string } = {}) {
           });
         });
       });
-      return Promise.all(values.map(value => verifyReceipt(value, value.input.transcript.sessionId)));
+      // WKWebView may hash through a limited native bridge; do not exhaust its
+      // slots by verifying every stored receipt simultaneously.
+      const verified: VoiceChatCommit[] = [];
+      for (const value of values) verified.push(await verifyReceipt(value, value.input.transcript.sessionId));
+      verified.sort((a, b) => a.appliedRevision - b.appliedRevision);
+      if (verified.some((item, index) => index > 0 && item.appliedRevision === verified[index - 1]!.appliedRevision)) throw new Error('Dos dictados comparten revisión; se conservan para revisión.');
+      return verified;
     },
   };
 }
