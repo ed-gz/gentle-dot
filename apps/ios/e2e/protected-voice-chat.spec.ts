@@ -9,14 +9,14 @@ async function native(page: Page, text: string, loseStop = false) {
       const state = load();
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
       if (command.endsWith('results_list') || command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
-      if (command.endsWith('check_voice')) return { ok: true, available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted', ...(state.record ? { sessionId: state.record.id, ownerId: state.record.owner, recoveryPending: true } : {}) };
+      if (command.endsWith('check_voice')) return { ok: true, available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted', ...(state.record && state.activeOwner && !state.discardPending ? { sessionId: state.record.id, ownerId: state.activeOwner, retainedAudio: state.record, recoveryPending: true } : {}) };
       if (command.endsWith('inspect_retained_voice')) return state.discardPending ? { ok: true, discardPending: state.record } : { ok: true, retainedAudio: state.record };
       if (command.endsWith('list_voice_receipts')) return { ok: true, receipts: state.receipt ? [state.receipt] : [] };
       if (command.endsWith('get_voice_receipt')) return { ok: true, receipt: state.receipt?.receipt.audio.id.toLowerCase() === args.sessionId.toLowerCase() ? state.receipt : null };
       if (command.endsWith('start_voice')) {
         const id = 'ABCDEF01-ABCD-4BCD-8BCD-ABCDEF012345';
         if (state.record) throw new Error('occupied');
-        state.record = { id, owner: args.ownerId, destination: args.retainDestination, locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'capturing' }; save(state);
+        state.record = { id, owner: args.ownerId, destination: args.retainDestination, locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'capturing' }; state.activeOwner = args.ownerId; save(state);
         return { ok: true, sessionId: id, maxDurationSeconds: 90, retainedAudio: state.record };
       }
       if (command.endsWith('stop_voice')) {
@@ -27,7 +27,7 @@ async function native(page: Page, text: string, loseStop = false) {
         if (loseStop && !state.lossUsed) { state.lossUsed = true; save(state); throw new Error('callback lost'); }
         save(state); return { ok: true, ...transcript, retainedAudio: state.record };
       }
-      if (command.endsWith('cancel_voice')) return { ok: true };
+      if (command.endsWith('cancel_voice')) { if (args.ownerId === state.activeOwner) { state.activeOwner = null; save(state); } return { ok: true }; }
       if (command.endsWith('release_retained_voice')) { if (state.failRelease) return { ok: false, error: 'receipt_unavailable' }; if (JSON.stringify(args.receipt) !== JSON.stringify(state.receipt?.receipt)) throw new Error('identity'); state.receipt.releaseState = 'released'; state.lastRelease = true; state.record = null; save(state); return { ok: true, releaseState: 'released' }; }
       if (command.endsWith('discard_voice_receipt')) { if (JSON.stringify(args.receipt) !== JSON.stringify(state.receipt?.receipt) || state.receipt.releaseState !== 'released') throw new Error('identity'); state.receipt = null; state.cleaned = true; save(state); return { ok: true }; }
       if (command.endsWith('discard_retained_voice')) { state.record = null; state.discardPending = false; save(state); return { ok: true }; }

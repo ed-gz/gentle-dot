@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceControls, VoicePhase } from '@gentle-dot/ui/src/useVoice.ts';
 import { checkVoice, prepareVoice, cancelVoice, voiceCancelWithDeadline, voiceAvailabilityNote, VoiceCancelUnconfirmed, VoiceRetryPending, type VoiceAvailability } from './perception.ts';
-import { createRetainedVoiceBridge, RetainedVoiceAssetsRequired, type RetainedVoiceRecord } from './retained-voice.ts';
+import { createRetainedVoiceBridge, activeRetainedOwner, RetainedVoiceAssetsRequired, type RetainedVoiceRecord } from './retained-voice.ts';
 import { createNativeVoiceReceipts, type NativeVoiceReceipt } from './native-voice-receipts.ts';
 import { createProtectedVoice, cleanupDeliveredVoiceReceipt, prepareNativeVoiceCapacity } from './protected-voice.ts';
 import { createSessionVoiceDrafts } from './session-voice-drafts.ts';
@@ -56,7 +56,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
           if (state.epoch === epoch && state.enabled && pendingVoiceCancellation() === ownerId) {
             state.pending = false;
             setRetryCancellation(true);
-            setNote('No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.');
+            setNote('No pude confirmar que terminó el intento de voz. Toca para reintentar.');
           }
         });
     }
@@ -75,7 +75,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       forgetVoiceOrigin(id);
       if (state.epoch === epoch) { state.ownerId = ''; state.session = ''; state.record = undefined; state.retry = false; state.discardPending = false; setRetryPending(false); setNote('Audio eliminado.'); }
     }).catch(error => {
-      if (state.epoch === epoch) setNote(error.message || 'No pude confirmar que se eliminó el audio.');
+      if (state.epoch === epoch) setNote(error instanceof VoiceCancelUnconfirmed ? 'No pude confirmar que terminó el intento de voz. Toca para reintentar.' : error.message || 'No pude confirmar que se eliminó el audio.');
     }).finally(() => { if (state.epoch === epoch) state.pending = false; setDiscarding(false); });
   }, [discarding]);
   useEffect(() => {
@@ -83,7 +83,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
       if (pendingVoiceCancellation()) {
-        if (live) { setRetryCancellation(true); setNote('No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.'); }
+        if (live) { setRetryCancellation(true); setNote('No pude confirmar que terminó el intento de voz. Toca para reintentar.'); }
         return;
       }
       const inspected = await retainedBridge.inspectState();
@@ -96,14 +96,15 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
         if (!expected || record.destination !== expected) { setAvailability({ ...value, available: false, status: 'recovery_elsewhere' }); setNote('Hay un audio pendiente en otra conversación. Vuelve a su destino original para reintentar.'); return; }
         const state = owner.current; state.record = record; state.ownerId = record.owner; state.retry = true;
         if (inspected.state === 'discard-pending') { state.session = ''; state.discardPending = true; setRetryPending(true); setAvailability(value); setNote('La eliminación del audio espera confirmación.'); return; }
-        const active = value.sessionId?.toLowerCase() === record.id.toLowerCase() && value.ownerId?.toLowerCase() === record.owner.toLowerCase();
+        const activeOwner = activeRetainedOwner(value, record); const active = Boolean(activeOwner);
+        if (activeOwner) state.ownerId = activeOwner;
         if (active && value.busy) { setAvailability({ ...value, available: false, status: 'voice_finishing' }); setNote('Terminando el audio guardado…'); timer = setTimeout(() => void refresh().catch(error => { if (live) setNote(String(error.message)); }), 500); return; }
         if (record.state === 'capturing' && !(active && value.recoveryPending)) { state.session = ''; setRetryPending(true); setAvailability(value); setNote('La grabación quedó incompleta. El audio se conserva.'); return; }
         state.session = record.id; state.needsAttach = !active; setRetryPending(true); setAvailability(value);
-        setNote('Hay audio guardado. Toca Dictar para reintentar.'); return;
+        setNote('Hay audio guardado. Toca el micrófono para reintentar la transcripción.'); return;
       }
       if (pendingVoiceCancellation()) {
-        setRetryCancellation(true); setNote('No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.');
+        setRetryCancellation(true); setNote('No pude confirmar que terminó el intento de voz. Toca para reintentar.');
         return;
       }
       setRetryAvailability(false);
@@ -148,7 +149,11 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     void (async () => {
       if (!record || !originalDestination || record.id.toLowerCase() !== id.toLowerCase()) throw new Error('No pude verificar el audio de este dictado.');
       let saved;
-      try { saved = state.needsAttach ? await protectedVoice.recover(record) : await protectedVoice.finish(record); }
+      const operationOwner = state.needsAttach ? localIdentifier() : originalOwner;
+      if (!operationOwner) throw new Error('No pude identificar el reintento de voz.');
+      if (state.needsAttach) state.ownerId = operationOwner;
+      const attached = () => { if (state.epoch === epoch) state.needsAttach = false; };
+      try { saved = state.needsAttach ? await protectedVoice.recover(record, operationOwner, attached) : await protectedVoice.finish(record, operationOwner.toLowerCase() === record.owner.toLowerCase() ? undefined : operationOwner); }
       catch (error) {
         if (!(error instanceof RetainedVoiceAssetsRequired) || !state.needsAttach || state.epoch !== epoch) throw error;
         const preparationOwner = localIdentifier();
@@ -158,10 +163,10 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
           await retainedBridge.prepare(record, preparationOwner);
           if (state.epoch !== epoch || !state.enabled || state.destination !== originalDestination || document.hidden) return;
         } finally {
-          if (state.epoch === epoch) { state.ownerId = originalOwner; state.preparingRetained = false; }
+          if (state.epoch === epoch) { state.ownerId = operationOwner; state.preparingRetained = false; }
         }
         setNote('Transcribiendo en este iPhone…');
-        saved = await protectedVoice.recover(record);
+        saved = await protectedVoice.recover(record, operationOwner, attached);
       }
       if (state.epoch !== epoch || !state.enabled || state.destination !== originalDestination) return;
       if (originalOwner) forgetVoiceOrigin(originalOwner);

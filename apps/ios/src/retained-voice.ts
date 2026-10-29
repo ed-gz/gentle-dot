@@ -49,6 +49,12 @@ function sameRecord(a: RetainedVoiceRecord, b: RetainedVoiceRecord): boolean {
     && a.kind === b.kind && a.createdAt === b.createdAt && a.state === b.state
     && (a.state === 'capturing' || (b.state === 'ready' && a.byteCount === b.byteCount && a.sha256 === b.sha256));
 }
+export function activeRetainedOwner(value: { sessionId?: string; ownerId?: string; retainedAudio?: unknown }, input: unknown): string | undefined {
+  const expected = parseRetainedVoiceRecord(input);
+  if (!value.sessionId || value.sessionId.toLowerCase() !== expected.id.toLowerCase() || !uuid(value.ownerId)) return undefined;
+  try { return sameRecord(parseRetainedVoiceRecord(value.retainedAudio), expected) ? value.ownerId : undefined; }
+  catch { return undefined; }
+}
 function reply(value: unknown): Record<string, unknown> {
   if (!isObject(value) || value.ok !== true) throw recordError();
   return value;
@@ -90,14 +96,14 @@ export function createRetainedVoiceBridge(call: typeof native = native, deadline
         throw error;
       }
     },
-    async attach(input: unknown): Promise<RetainedVoiceRecord> {
+    async attach(input: unknown, owner: string): Promise<RetainedVoiceRecord> {
       const record = parseRetainedVoiceRecord(input);
-      if (record.state !== 'ready') throw recordError();
-      const raw = await call('attach_retained_voice', { record }); retainedAssetFailure(raw);
+      if (record.state !== 'ready' || !uuid(owner) || owner.toLowerCase() === record.owner.toLowerCase()) throw recordError();
+      const raw = await call('attach_retained_voice', { record, ownerId: owner }); retainedAssetFailure(raw);
       const value = reply(raw);
       const actual = parseRetainedVoiceRecord(value.retainedAudio);
       if (!sameRecord(record, actual) || typeof value.sessionId !== 'string' || value.sessionId.toLowerCase() !== record.id.toLowerCase()
-        || typeof value.ownerId !== 'string' || value.ownerId.toLowerCase() !== record.owner.toLowerCase()) throw recordError();
+        || typeof value.ownerId !== 'string' || value.ownerId.toLowerCase() !== owner.toLowerCase()) throw recordError();
       return actual;
     },
     /** Explicit user retry only. A fresh preparation owner never replaces the
@@ -115,11 +121,24 @@ export function createRetainedVoiceBridge(call: typeof native = native, deadline
       const current = await inspectState();
       if (current.state !== 'retained' || !sameRecord(current.record, expected)) throw recordError();
     },
+    async activeOwner(input: unknown): Promise<string | undefined> {
+      const expected = parseRetainedVoiceRecord(input);
+      const state = parseVoiceAvailability(await call('check_voice'));
+      const owner = activeRetainedOwner(state, expected);
+      if (state.sessionId && !owner) throw recordError();
+      return owner;
+    },
+    async drain(input: unknown): Promise<void> {
+      const expected = parseRetainedVoiceRecord(input);
+      const owner = await this.activeOwner(expected);
+      const target = owner ?? expected.owner;
+      await voiceCancelWithDeadline(async () => { reply(await call('cancel_voice', { ownerId: target })); }, deadlines.cancel);
+    },
     async discard(input: unknown): Promise<void> {
       const expected = parseRetainedVoiceRecord(input);
       // Stop the exact owner and drain any reader or writer first. Neither a
       // lost cancellation nor an altered journal can authorize deletion.
-      await voiceCancelWithDeadline(async () => { reply(await call('cancel_voice', { ownerId: expected.owner })); }, deadlines.cancel);
+      await this.drain(expected);
       const inspected = await inspectState();
       if (inspected.state !== 'none' && !sameRecord(inspected.record, expected)) throw recordError();
       // Native rechecks even absence under its lock; a completed deletion may
@@ -136,9 +155,10 @@ export function createRetainedVoiceBridge(call: typeof native = native, deadline
       if (value.exported === false && value.cancelled === true) return 'cancelled';
       throw new Error('El selector no confirmó la exportación del audio incompleto.');
     },
-    async stop(input: unknown): Promise<RetainedVoiceResult> {
+    async stop(input: unknown, operationOwner?: string): Promise<RetainedVoiceResult> {
       const expected = parseRetainedVoiceRecord(input);
-      const raw = await call('stop_voice', { sessionId: expected.id, ownerId: expected.owner, retainDestination: expected.destination });
+      if (operationOwner !== undefined && (!uuid(operationOwner) || operationOwner.toLowerCase() === expected.owner.toLowerCase())) throw recordError();
+      const raw = await call('stop_voice', { sessionId: expected.id, ownerId: expected.owner, retainDestination: expected.destination, ...(operationOwner ? { operationOwnerId: operationOwner } : {}) });
       // parseVoiceTranscript preserves the original session-bound retry signal.
       const transcript = parseVoiceTranscript(raw, expected.id), value = reply(raw);
       const record = parseRetainedVoiceRecord(value.retainedAudio);

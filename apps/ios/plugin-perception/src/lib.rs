@@ -188,8 +188,13 @@ async fn stop_voice<R: Runtime>(
     session_id: String,
     owner_id: Option<String>,
     retain_destination: Option<String>,
+    operation_owner_id: Option<String>,
 ) -> Result<Value, String> {
-    if !valid_session_id(&session_id) {
+    if !valid_session_id(&session_id)
+        || operation_owner_id
+            .as_ref()
+            .is_some_and(|owner| !valid_session_id(owner))
+    {
         return Err("invalid_voice_session".into());
     }
     match (&owner_id, &retain_destination) {
@@ -198,7 +203,7 @@ async fn stop_voice<R: Runtime>(
             if valid_session_id(owner) && valid_retention_destination(destination) => {}
         _ => return Err("invalid_voice_retention".into()),
     }
-    native_call(app, "stopVoice", json!({"sessionId": session_id, "ownerId": owner_id, "retainDestination": retain_destination})).await
+    native_call(app, "stopVoice", json!({"sessionId": session_id, "ownerId": owner_id, "retainDestination": retain_destination, "operationOwnerId": operation_owner_id})).await
 }
 #[tauri::command]
 async fn cancel_voice<R: Runtime>(
@@ -263,11 +268,21 @@ async fn prepare_retained_voice<R: Runtime>(
 async fn attach_retained_voice<R: Runtime>(
     app: AppHandle<R>,
     record: RetainedVoiceRecord,
+    owner_id: String,
 ) -> Result<Value, String> {
-    if !valid_retained_voice(&record) || record.state != "ready" {
+    if !valid_retained_voice(&record)
+        || record.state != "ready"
+        || !valid_session_id(&owner_id)
+        || owner_id.eq_ignore_ascii_case(&record.owner)
+    {
         return Err("invalid_voice_retention".into());
     }
-    native_call(app, "attachRetainedVoice", json!({"record": record})).await
+    native_call(
+        app,
+        "attachRetainedVoice",
+        json!({"record": record, "ownerId": owner_id}),
+    )
+    .await
 }
 
 #[tauri::command]

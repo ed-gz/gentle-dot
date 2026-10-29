@@ -26,3 +26,13 @@ struct VoiceOwners {
     mutating func clearIfOwned(_ id: String) { if active == id { active = nil } }
     mutating func finishAttempt(_ id: String, succeeded: Bool) { if !succeeded { clearIfOwned(id) } }
 }
+
+/// The caller must name the exact live attempt when resuming a retained file.
+/// A callback from an older attempt cannot start analysis for its successor.
+enum VoiceRecoveryAttempt {
+    static func mayFinish(caller: String?, bound: String?, active: String?) -> Bool {
+        guard let bound else { return caller == nil }
+        guard let caller, let active else { return false }
+        return caller.lowercased() == bound.lowercased() && active.lowercased() == bound.lowercased()
+    }
+}

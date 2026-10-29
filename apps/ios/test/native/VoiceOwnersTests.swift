@@ -24,6 +24,16 @@ struct VoiceOwnersTests {
         owners.finishAttempt("failed", succeeded: false)
         precondition(owners.claim("retry"))
         owners.clear()
+        // Capturing A is cancelled after publishing its audio. B claims a new
+        // operational identity without reviving A; a late stop from A is fenced.
+        var recovery = VoiceOwners()
+        precondition(recovery.claim("capture-a")); precondition(recovery.cancel("capture-a")); recovery.clear()
+        precondition(!recovery.claim("capture-a")); precondition(recovery.claim("attempt-b"))
+        precondition(!recovery.cancel("capture-a")); precondition(recovery.active == "attempt-b")
+        precondition(!VoiceRecoveryAttempt.mayFinish(caller: "capture-a", bound: "attempt-b", active: recovery.active))
+        precondition(!VoiceRecoveryAttempt.mayFinish(caller: nil, bound: "attempt-b", active: recovery.active))
+        precondition(VoiceRecoveryAttempt.mayFinish(caller: "ATTEMPT-B", bound: "attempt-b", active: recovery.active))
+        precondition(VoiceRecoveryAttempt.mayFinish(caller: nil, bound: nil, active: "capture"))
         // A flood of abandoned cancellations remains bounded and fails closed.
         var bounded = VoiceOwners()
         for number in 0...4096 { _ = bounded.cancel("cancelled-\(number)") }

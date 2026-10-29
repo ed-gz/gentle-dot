@@ -1,8 +1,8 @@
-import { cancelVoice, voiceCancelWithDeadline } from './perception.ts';
+import { localIdentifier } from './local-identifiers.ts';
 import { createRetainedVoiceBridge, type RetainedVoiceRecord } from './retained-voice.ts';
 import { createNativeVoiceReceipts, type NativeVoiceReceipt, type NativeVoiceReceiptEnvelope } from './native-voice-receipts.ts';
 
-type Bridge = Pick<ReturnType<typeof createRetainedVoiceBridge>, 'inspect' | 'start' | 'attach' | 'stop'>;
+type Bridge = Pick<ReturnType<typeof createRetainedVoiceBridge>, 'inspect' | 'start' | 'attach' | 'stop' | 'drain'>;
 type Receipts = Pick<ReturnType<typeof createNativeVoiceReceipts>, 'get' | 'release'>;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const issue = () => new Error('No pude verificar el dictado guardado. Revisa su estado antes de continuar.');
@@ -19,18 +19,18 @@ export function createProtectedVoice(options: {
   bridge?: Bridge; receipts?: Receipts; cancel?: (owner: string) => Promise<void>; isDelivered?: (receipt: NativeVoiceReceipt) => Promise<boolean>;
 } = {}) {
   const bridge = options.bridge ?? createRetainedVoiceBridge(), receipts = options.receipts ?? createNativeVoiceReceipts();
-  const cancel = options.cancel ?? (owner => voiceCancelWithDeadline(() => cancelVoice(owner)));
+
   async function exact(record: RetainedVoiceRecord): Promise<NativeVoiceReceiptEnvelope | undefined> {
     const saved = await receipts.get(record.id);
     if (saved && !belongs(saved.receipt, record)) throw issue();
     return saved;
   }
-  async function finish(record: RetainedVoiceRecord): Promise<NativeVoiceReceiptEnvelope> {
+  async function finish(record: RetainedVoiceRecord, operationOwner?: string): Promise<NativeVoiceReceiptEnvelope> {
     // A lost callback may already have produced an immutable receipt. Reuse
     // it rather than transcribing the same audio and generating new text.
     const prior = await exact(record);
     if (prior) return prior;
-    const result = await bridge.stop(record);
+    const result = await bridge.stop(record, operationOwner);
     const saved = await exact(result.record);
     if (!saved || !same(saved.receipt.audio, result.record) || !same(saved.receipt.transcript, result.transcript)) throw issue();
     return saved;
@@ -44,7 +44,7 @@ export function createProtectedVoice(options: {
     if (!saved || !same(saved.receipt, receipt)) throw issue();
     // Even a previously released receipt must recheck the native journal.
     if (saved.releaseState === 'released') { await checkDelivery(); await receipts.release(receipt); return; }
-    await cancel(receipt.audio.owner);
+    if (options.cancel) await options.cancel(receipt.audio.owner); else await bridge.drain(receipt.audio);
     const verified = await receipts.get(receipt.audio.id);
     if (!verified || !same(verified.receipt, receipt)) throw issue();
     await checkDelivery();
@@ -57,12 +57,13 @@ export function createProtectedVoice(options: {
       return bridge.start(owner, destination);
     },
     finish,
-    async recover(record: RetainedVoiceRecord): Promise<NativeVoiceReceiptEnvelope> {
+    async recover(record: RetainedVoiceRecord, operationOwner = localIdentifier(), onAttached?: () => void): Promise<NativeVoiceReceiptEnvelope> {
       const prior = await exact(record);
       if (prior) return prior;
       if (record.state !== 'ready') throw new Error('La grabación quedó incompleta. El audio se conserva para revisión.');
-      await bridge.attach(record);
-      return finish(record);
+      await bridge.attach(record, operationOwner);
+      onAttached?.();
+      return finish(record, operationOwner);
     },
     /** The native operation validates the exact receipt under its own lock.
      * First close the owner-specific reader lease; a timeout never authorizes

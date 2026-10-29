@@ -19,7 +19,7 @@ async function linkedPhone(page: Page) {
       }
       if (command.endsWith('check_availability')) return { available: false, status: 'model_not_ready', supportsSpanish: false };
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
-      if (command.endsWith('check_voice')) return { available: !state.voiceNeedsAssets, status: state.voiceNeedsAssets ? 'assets_required' : 'available', assetsInstalled: !state.voiceNeedsAssets, microphonePermission: 'granted', recording: false };
+      if (command.endsWith('check_voice')) { const record = JSON.parse(sessionStorage.getItem('session-voice-fixture') || '{\"record\":null}').record; return { available: !state.voiceNeedsAssets, status: state.voiceNeedsAssets ? 'assets_required' : 'available', assetsInstalled: !state.voiceNeedsAssets, microphonePermission: 'granted', recording: false, ...(state.recoveryOwner && record ? {sessionId:record.id,ownerId:state.recoveryOwner,retainedAudio:record,recoveryPending:true} : {}) }; }
       if (command.endsWith('prepare_voice')) { state.voiceNeedsAssets = false; return { ok: true, available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' }; }
       const retained = () => JSON.parse(sessionStorage.getItem('session-voice-fixture') || '{"record":null,"receipt":null}');
       const keep = (value: any) => sessionStorage.setItem('session-voice-fixture', JSON.stringify(value));
@@ -33,7 +33,8 @@ async function linkedPhone(page: Page) {
         current.receipt.releaseState = 'released'; current.record = null; keep(current); return { ok: true, releaseState: 'released' }; }
       if (command.endsWith('discard_voice_receipt')) { const current = retained(); if (!same(args.receipt, current.receipt?.receipt) || current.receipt.releaseState !== 'released') throw new Error('receipt mismatch'); current.receipt = null; keep(current); return { ok: true }; }
       if (command.endsWith('discard_retained_voice')) { const current = retained(); if (!same(args.record, current.record)) throw new Error('audio mismatch'); current.record = null; keep(current); return { ok: true }; }
-      if (command.endsWith('attach_retained_voice')) { const current = retained(); if (!same(args.record, current.record)) throw new Error('audio mismatch'); return { ok: true, retainedAudio: current.record, sessionId: current.record.id, ownerId: current.record.owner }; }
+      if (command.endsWith('attach_retained_voice')) { const current = retained(); if (state.recoveryOwner) return {ok:false,error:'busy'}; if (!same(args.record, current.record) || !args.ownerId || args.ownerId === current.record.owner) throw new Error('audio mismatch'); state.recoveryOwner = args.ownerId; return { ok: true, retainedAudio: current.record, sessionId: current.record.id, ownerId: args.ownerId }; }
+      if (command.endsWith('cancel_voice')) { if (args.ownerId === state.recoveryOwner) state.recoveryOwner = null; return {ok:true}; }
       if (command.endsWith('start_voice')) {
         const id = '12345678-1234-1234-1234-123456789012';
         if (!args.retainDestination) return { ok: true, sessionId: id, maxDurationSeconds: 90 };
@@ -46,7 +47,7 @@ async function linkedPhone(page: Page) {
         const text = state.sessionTranscript ?? 'Revisa la evidencia.';
         const transcript = { sessionId: args.sessionId, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2, text, segments: [{ text, startSeconds: 0, endSeconds: 2 }] };
         const current = retained(); if (!current.record) return { ok: true, ...transcript };
-        if (args.ownerId !== current.record.owner || args.retainDestination !== current.record.destination) throw new Error('owner mismatch');
+        if (args.ownerId !== current.record.owner || args.retainDestination !== current.record.destination || (state.recoveryOwner && args.operationOwnerId !== state.recoveryOwner)) throw new Error('owner mismatch');
         current.record = { ...current.record, state:'ready', byteCount:10, sha256:'a'.repeat(64) };
         current.receipt = { receipt: { schema:'capri-native-voice-receipt/v1', audio:current.record, transcript }, releaseState:'retained' }; keep(current);
         return { ok: true, ...transcript, retainedAudio: current.record };
@@ -683,7 +684,7 @@ test('leaving a session retains its late dictation only for the original session
   await page.getByRole('button', { name: 'Todos los agentes' }).click();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   await expect(page.getByText(/Hay audio guardado/)).toBeVisible();
-  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Reintentar transcripción' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Revisa la evidencia.');
 });
 
@@ -696,7 +697,7 @@ test('a preserved session recording cannot migrate to another session or chat', 
     state.voiceRecoveryCancels = 0;
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
-        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id, recoveryIssue: 'No detecté palabras. Descarta este audio y vuelve a dictar.' } : {}) };
+        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id, retainedAudio: JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record, recoveryIssue: 'No detecté palabras. Descarta este audio y vuelve a dictar.' } : {}) };
       if (command.endsWith('start_voice')) { owner = args.ownerId; return previous(command, args); }
       if (command.endsWith('cancel_voice')) { state.voiceRecoveryCancels++; pending = false; return { ok: true }; }
       if (command.endsWith('stop_voice')) {
@@ -723,7 +724,7 @@ test('a preserved session recording cannot migrate to another session or chat', 
   await page.getByRole('button', { name: 'Todos los agentes' }).click();
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   await expect(page.getByText(/Hay audio guardado/i)).toBeVisible();
-  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Reintentar transcripción' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Sólo en operaciones.');
 });
 
@@ -735,7 +736,7 @@ test('returning to the original session while stopping reveals its eventual retr
     let owner = '', pending = false, busy = false, stops = 0;
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
-        ...(pending ? { recoveryPending: true, busy, ownerId: owner, sessionId: id } : {}) };
+        ...(pending ? { recoveryPending: true, busy, ownerId: owner, sessionId: id, retainedAudio: JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record } : {}) };
       if (command.endsWith('start_voice')) { owner = args.ownerId; return previous(command, args); }
       if (command.endsWith('stop_voice')) {
         if (++stops === 1) {
@@ -758,7 +759,7 @@ test('returning to the original session while stopping reveals its eventual retr
   await expect(page.getByText('Terminando el audio guardado…')).toBeVisible();
   await page.evaluate(() => (globalThis as any).finishPendingStop());
   await expect(page.getByText(/Hay audio guardado/i)).toBeVisible();
-  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Reintentar transcripción' }).click();
   await expect(page.getByRole('textbox', { name: 'Continuar esta sesión' })).toHaveValue('Recuperado al volver.');
 });
 
@@ -771,7 +772,7 @@ test('a session can discard a silent recording explicitly, and a failed discard 
     state.voiceDiscardCalls = 0;
     state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
       if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted',
-        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id, recoveryIssue: 'No detecté palabras. Descarta este audio y vuelve a dictar.' } : {}) };
+        ...(pending ? { recoveryPending: true, ownerId: owner, sessionId: id, retainedAudio: JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record, recoveryIssue: 'No detecté palabras. Descarta este audio y vuelve a dictar.' } : {}) };
       if (command.endsWith('start_voice')) { owner = args.ownerId; return previous(command, args); }
       if (command.endsWith('stop_voice')) { pending = true; return { ok: false, error: 'preview_pending', sessionId: id, message: 'No detecté palabras. Descarta este audio y vuelve a dictar.' }; }
       if (command.endsWith('cancel_voice')) {
@@ -794,7 +795,7 @@ test('a session can discard a silent recording explicitly, and a failed discard 
   expect(await page.evaluate(() => (globalThis as any).voiceDiscardCalls)).toBe(0);
   page.once('dialog', dialog => dialog.accept());
   await discard.click();
-  await expect(page.getByText(/No pude confirmar que el micrófono se detuvo/)).toBeVisible();
+  await expect(page.getByText(/No pude confirmar que terminó el intento de voz/)).toBeVisible();
   await expect(discard).toBeVisible();
   page.once('dialog', dialog => dialog.accept());
   await discard.click();
@@ -868,7 +869,7 @@ test('a session shows an unconfirmed cancellation and retries its original owner
   await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await page.getByRole('button', { name: 'Cancelar grabación' }).click();
-  await expect(page.getByText(/No pude confirmar que el micrófono se detuvo/)).toBeVisible();
+  await expect(page.getByText(/No pude confirmar que terminó el intento de voz/)).toBeVisible();
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect(page.getByText('La grabación quedó incompleta. El audio se conserva.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Descartar audio pendiente' })).toBeVisible();
@@ -1059,7 +1060,7 @@ test('an oversized session dictation remains selectable and retained across rest
   await expect(page.getByText(/Hay audio guardado/)).toBeVisible();
   await expect(input).toHaveValue('Antes');
   expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).receipt.receipt.transcript.text.length)).toBe(12000);
-  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Reintentar transcripción' }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'No se confirmó el dictado' })).toBeVisible();
   await page.getByText('Ver dictado').click();
   await expect(page.getByRole('region', { name: 'Sesión Operaciones' }).getByText('L'.repeat(12000), { exact: true })).toBeVisible();
@@ -1076,7 +1077,7 @@ test('a late session transcript cannot enter another session and remains recover
   await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture') || '{}').receipt?.receipt?.transcript?.text)).toBe('Revisa la evidencia.');
   await page.getByRole('button', { name: 'Todos los agentes' }).click(); await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   await expect(page.getByText(/Hay audio guardado/)).toBeVisible();
-  await page.getByRole('button', { name: 'Dictar mensaje' }).click(); await expect(input).toHaveValue('Revisa la evidencia.');
+  await page.getByRole('button', { name: 'Reintentar transcripción' }).click(); await expect(input).toHaveValue('Revisa la evidencia.');
 });
 
 test('changing session during a durable voice commit never writes into the new session', async ({ page }) => {
@@ -1102,7 +1103,7 @@ test('changing session during a durable voice commit never writes into the new s
   await page.getByRole('button', { name: 'Todos los agentes' }).click(); await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
   await expect(input).toHaveValue('Revisa la evidencia.');
   await expect(page.getByText(/Hay audio guardado/)).toBeVisible();
-  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await page.getByRole('button', { name: 'Reintentar transcripción' }).click();
   await expect(input).toHaveValue('Revisa la evidencia.');
   await expect.poll(() => page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture') || '{}').record)).toBeNull();
 });

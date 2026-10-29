@@ -95,6 +95,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
     private let retentionLatch = VoiceStartLatch()
     private var retentionBinding: VoiceRetentionBinding?
     private var retainedRecord: VoiceRecoveryRecord?
+    private var recoveryOperationOwner: String?
     private var retainedLease: VoiceRecoveryReadLease?
     private var retentionCaptureIncomplete = false
     private var pendingStartURL: URL?
@@ -289,7 +290,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                 assetsInstalled: true, microphonePermission: permission, recording: recording,
                 readyToTranscribe: !recording, busy: busy, sessionId: id,
                 ownerId: owners.active, recoveryPending: recoveryPending, recoveryIssue: recoveryIssue, maxDurationSeconds: Int(maximumDuration),
-                partial: liveTranscript.text, previewIssue: previewIssue, microphoneLevel: level)
+                partial: liveTranscript.text, previewIssue: previewIssue, microphoneLevel: level, retainedAudio: retainedRecord)
         }
         guard let selected = await preferredTranscriber() else {
             return VoiceReply(available: false, status: "unsupported_language", microphonePermission: permission)
@@ -479,13 +480,16 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         return false
     }
 
-    func stop(id: String, retainOwner: String? = nil, retainDestination: String? = nil) async -> VoiceReply {
+    func stop(id: String, retainOwner: String? = nil, retainDestination: String? = nil, operationOwner: String? = nil) async -> VoiceReply {
         guard !busy, id == sessionID, let url = recordingURL, let locale = recordedLocale, let kind = recordedKind,
               let format = recordedFormat else { return .failure("invalid_voice_session", "Ese comando de voz ya terminó o fue cancelado.") }
+        guard VoiceRecoveryAttempt.mayFinish(caller: operationOwner, bound: recoveryOperationOwner, active: owners.active) else {
+            return .failure("invalid_voice_owner", "El reintento de voz pertenece a otra operación.")
+        }
         let retainRequested = retainOwner != nil || retainDestination != nil
         if retainRequested {
             guard let retainOwner, UUID(uuidString: retainOwner) != nil,
-                  let active = owners.active, active.lowercased() == retainOwner.lowercased(),
+                  let active = owners.active, active.lowercased() == (recoveryOperationOwner ?? retainOwner).lowercased(),
                   let binding = retentionBinding, binding.id.lowercased() == id.lowercased(),
                   binding.owner.lowercased() == retainOwner.lowercased(), binding.destination == retainDestination,
                   VoiceRetentionBinding.validDestination(retainDestination) else {
@@ -964,14 +968,15 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
 
     /// Explicitly reconnect a verified, completed recording to its original
     /// owner and destination. This never begins recording or transcribing.
-    func attachRetained(_ expected: VoiceRecoveryRecord) async -> VoiceReply {
-        guard expected.state == .ready, !busy, sessionID == nil, !startLatch.active,
+    func attachRetained(_ expected: VoiceRecoveryRecord, ownerID: String) async -> VoiceReply {
+        guard expected.state == .ready, UUID(uuidString: ownerID) != nil, ownerID.lowercased() != expected.owner.lowercased(),
+              !busy, sessionID == nil, !startLatch.active,
               !retentionLatch.active, !cancellationBarrier.active, pendingCancellation == nil,
               !previewDrain.active, !finalDrain.active else {
             return .failure("busy", "Termina el dictado actual antes de recuperar otro.")
         }
         guard UIApplication.shared.applicationState == .active, let root = VoiceRetentionBinding.defaultRoot(),
-              owners.claim(expected.owner) else {
+              owners.claim(ownerID) else {
             return .failure("retention_unavailable", "Abre Capri para revisar el audio guardado.")
         }
         busy = true; startLatch.begin(); generation += 1
@@ -982,7 +987,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         var attached = false
         defer {
             startLatch.end(); busy = false
-            if !attached { owners.clearIfOwned(expected.owner); retentionBinding = nil; retainedRecord = nil }
+            if !attached { owners.clearIfOwned(ownerID); retentionBinding = nil; retainedRecord = nil }
         }
         let locale = Locale(identifier: expected.locale)
         let kind: VoiceTranscriberKind
@@ -1022,8 +1027,8 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             }
             retainedLease = lease; retainedRecord = expected; recordingURL = lease.url
             sessionID = expected.id; recordedLocale = locale; recordedKind = kind; recordedFormat = format
-            recoveryPending = true; attached = true
-            return VoiceReply(ok: true, sessionId: expected.id, ownerId: expected.owner, retainedAudio: expected)
+            recoveryPending = true; recoveryOperationOwner = ownerID; attached = true
+            return VoiceReply(ok: true, sessionId: expected.id, ownerId: ownerID, retainedAudio: expected)
         } catch {
             return .failure("retention_unavailable", "No pude verificar el audio guardado. Se conserva para revisión.")
         }
@@ -1114,6 +1119,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         owners.clear()
         retentionBinding = nil
         retainedRecord = nil
+        recoveryOperationOwner = nil
         retainedLease?.close(); retainedLease = nil
         retentionCaptureIncomplete = false
     }

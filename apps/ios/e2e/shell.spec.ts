@@ -1041,7 +1041,7 @@ test('retained voice prepares its exact language then retries without losing aud
       if (command.endsWith('list_voice_receipts')) return {ok:true,receipts:[]};
       if (command.endsWith('get_voice_receipt')) return {ok:true,receipt:null};
       if (command.endsWith('check_voice')) return {available:true,status:'available',assetsInstalled:true,microphonePermission:'granted'};
-      if (command.endsWith('attach_retained_voice')) { state.calls.push('attach'); return state.prepared ? {ok:true,retainedAudio:record,sessionId:record.id,ownerId:record.owner} : {ok:false,error:'assets_required'}; }
+      if (command.endsWith('attach_retained_voice')) { state.calls.push('attach'); return state.prepared ? {ok:true,retainedAudio:record,sessionId:record.id,ownerId:args.ownerId} : {ok:false,error:'assets_required'}; }
       if (command.endsWith('prepare_retained_voice')) { state.calls.push(['prepare',args]); state.prepared=true; return {ok:true,available:true,status:'available',locale:record.locale,assetsInstalled:true}; }
       if (command.endsWith('stop_voice')) { state.calls.push('stop'); return {ok:false,message:'Transcripción incompleta'}; }
       if (command.endsWith('discard_retained_voice') || command.endsWith('release_retained_voice')) { state.calls.push('delete'); return {ok:true}; }
@@ -1095,4 +1095,43 @@ test('audit cancelling retained preparation must not claim the microphone is rec
   expect(await page.evaluate(() => (globalThis as any).savedAudio)).toEqual(args.record);
   expect(await page.evaluate(() => (globalThis as any).assetCalls.filter((x:any) => x === 'attach').length)).toBe(1);
   expect(await page.evaluate(() => (globalThis as any).assetCalls)).not.toContain('discard');
+});
+
+test('a ready retained recording remains recoverable after its capture owner was cancelled', async ({page}) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const record = { id:'12345678-1234-1234-1234-123456789012', owner:'abcdef03-abcd-4bcd-8bcd-abcdef012345', destination:'chat', locale:'es-MX', kind:'speech', createdAt:1, state:'ready', byteCount:10, sha256:'a'.repeat(64) };
+    const text='Audio recuperado';
+    const transcript={sessionId:record.id,source:'apple-speech-analyzer',locale:record.locale,durationSeconds:1,text,segments:[{text,startSeconds:0,endSeconds:1}]};
+    state.cancelledOwners = [record.owner]; state.savedAudio=record; state.receipt=null; state.ownerCalls=[];
+    state.__TAURI_INTERNALS__.invoke = async (command:string,args:any) => {
+      if (command.endsWith('inspect_retained_voice')) return {ok:true,retainedAudio:state.savedAudio};
+      if (command.endsWith('list_voice_receipts')) return {ok:true,receipts:state.receipt ? [state.receipt] : []};
+      if (command.endsWith('get_voice_receipt')) return {ok:true,receipt:state.receipt};
+      if (command.endsWith('check_voice')) return {available:true,status:'available',assetsInstalled:true,microphonePermission:'granted', ...(state.activeRecoveryOwner ? {sessionId:record.id,ownerId:state.activeRecoveryOwner,retainedAudio:record} : {})};
+      if (command.endsWith('cancel_voice')) { if (args.ownerId === state.activeRecoveryOwner) state.activeRecoveryOwner=null; state.cancelledOwners.push(args.ownerId); return {ok:true}; }
+      if (command.endsWith('release_retained_voice')) { state.receipt.releaseState='released'; state.savedAudio=null; return {ok:true,releaseState:'released'}; }
+      if (command.endsWith('discard_voice_receipt')) { state.receipt=null; return {ok:true}; }
+      if (command.endsWith('attach_retained_voice')) {
+        const op=args.ownerId ?? args.record.owner; state.ownerCalls.push(['attach',op]);
+        if (state.cancelledOwners.includes(op)) return {ok:false,error:'retention_unavailable'};
+        state.activeRecoveryOwner=op; return {ok:true,retainedAudio:record,sessionId:record.id,ownerId:op};
+      }
+      if (command.endsWith('stop_voice')) {
+        state.ownerCalls.push(['stop',args.operationOwnerId]);
+        if (args.operationOwnerId !== state.activeRecoveryOwner || args.ownerId !== record.owner) return {ok:false,error:'invalid_voice_retention'};
+        state.receipt={receipt:{schema:'capri-native-voice-receipt/v1',audio:record,transcript},releaseState:'retained'};
+        return {ok:true,...transcript,retainedAudio:record};
+      }
+      return previous(command,args);
+    };
+  });
+  await page.goto('/'); await expect(page.locator('#dictate')).toHaveAccessibleName('Reintentar transcripción');
+  await page.locator('#dictate').click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).ownerCalls.length)).toBeGreaterThan(0);
+  const calls=await page.evaluate(() => (globalThis as any).ownerCalls);
+  expect(calls[0][1]).not.toBe('abcdef03-abcd-4bcd-8bcd-abcdef012345');
+  await expect(page.locator('#prompt')).toHaveValue('Audio recuperado');
+  const final=await page.evaluate(() => (globalThis as any).ownerCalls); expect(final[1][1]).toBe(final[0][1]);
 });

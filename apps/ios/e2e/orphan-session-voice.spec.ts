@@ -19,7 +19,7 @@ async function linkedPhone(page: Page) {
       }
       if (command.endsWith('check_availability')) return { available: false, status: 'model_not_ready', supportsSpanish: false };
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
-      if (command.endsWith('check_voice')) return { available: !state.voiceNeedsAssets, status: state.voiceNeedsAssets ? 'assets_required' : 'available', assetsInstalled: !state.voiceNeedsAssets, microphonePermission: 'granted', recording: false };
+      if (command.endsWith('check_voice')) { const record = JSON.parse(sessionStorage.getItem('session-voice-fixture') || '{\"record\":null}').record; return { available: !state.voiceNeedsAssets, status: state.voiceNeedsAssets ? 'assets_required' : 'available', assetsInstalled: !state.voiceNeedsAssets, microphonePermission: 'granted', recording: false, ...(state.recoveryOwner && record ? {sessionId:record.id,ownerId:state.recoveryOwner,retainedAudio:record,recoveryPending:true} : {}) }; }
       if (command.endsWith('prepare_voice')) { state.voiceNeedsAssets = false; return { ok: true, available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' }; }
       const retained = () => JSON.parse(sessionStorage.getItem('session-voice-fixture') || '{"record":null,"receipt":null}');
       const keep = (value: any) => sessionStorage.setItem('session-voice-fixture', JSON.stringify(value));
@@ -37,7 +37,8 @@ async function linkedPhone(page: Page) {
         state.incompleteExports = (state.incompleteExports ?? 0) + 1;
         if (state.incompleteExportMode === 'error') throw new Error('fixture error');
         return state.incompleteExportMode === 'cancel' ? { ok: true, exported: false, cancelled: true } : { ok: true, exported: true, cancelled: false }; }
-      if (command.endsWith('attach_retained_voice')) { const current = retained(); if (!same(args.record, current.record)) throw new Error('audio mismatch'); return { ok: true, retainedAudio: current.record, sessionId: current.record.id, ownerId: current.record.owner }; }
+      if (command.endsWith('attach_retained_voice')) { const current = retained(); state.attachCount = (state.attachCount ?? 0) + 1; if (state.recoveryOwner) return {ok:false,error:'busy'}; if (!same(args.record, current.record) || !args.ownerId || args.ownerId === current.record.owner) throw new Error('audio mismatch'); state.recoveryOwner = args.ownerId; return { ok: true, retainedAudio: current.record, sessionId: current.record.id, ownerId: args.ownerId }; }
+      if (command.endsWith('cancel_voice')) { if (args.ownerId === state.recoveryOwner) state.recoveryOwner = null; return {ok:true}; }
       if (command.endsWith('start_voice')) {
         const id = '12345678-1234-1234-1234-123456789012';
         if (!args.retainDestination) return { ok: true, sessionId: id, maxDurationSeconds: 90 };
@@ -51,7 +52,7 @@ async function linkedPhone(page: Page) {
         const text = state.sessionTranscript ?? 'Revisa la evidencia.';
         const transcript = { sessionId: args.sessionId, source: 'apple-speech-analyzer', locale: 'es-MX', durationSeconds: 2, text, segments: [{ text, startSeconds: 0, endSeconds: 2 }] };
         const current = retained(); if (!current.record) return { ok: true, ...transcript };
-        if (args.ownerId !== current.record.owner || args.retainDestination !== current.record.destination) throw new Error('owner mismatch');
+        if (args.ownerId !== current.record.owner || args.retainDestination !== current.record.destination || (state.recoveryOwner && args.operationOwnerId !== state.recoveryOwner)) throw new Error('owner mismatch');
         current.record = { ...current.record, state:'ready', byteCount:10, sha256:'a'.repeat(64) };
         current.receipt = { receipt: { schema:'capri-native-voice-receipt/v1', audio:current.record, transcript }, releaseState:'retained' }; keep(current);
         return { ok: true, ...transcript, retainedAudio: current.record };
@@ -161,6 +162,7 @@ test('a ready orphan without receipt can be transcribed without changing destina
   expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!).record.state)).toBe('ready');
   await recover.click();
   await expect(page.getByRole('button', { name: 'Revisar dictado' })).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as any).attachCount)).toBe(1);
   await page.getByRole('button', { name: 'Revisar dictado' }).click();
   await page.getByText('Dictado de otra sesión').click();
   await expect(page.getByText('Revisa la evidencia.', { exact: true })).toBeVisible();
