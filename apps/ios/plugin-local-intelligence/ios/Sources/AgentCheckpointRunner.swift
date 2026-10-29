@@ -4,7 +4,8 @@ import Foundation
 /// the iOS execution lease and supplies one model step; this type neither
 /// schedules background work nor executes a tool. It stops at every ordinary
 /// tool proposal so the foreground review and existing execution journal can
-/// make the decision. Not yet registered as an application command.
+/// make the decision. The native bridge exposes planning only; it does not
+/// authorize or invoke the returned proposal.
 struct AgentCheckpointRunner {
     typealias Infer = (String) async throws -> CheckpointDecision
     let journal: AgentCheckpointJournal

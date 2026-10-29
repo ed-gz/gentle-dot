@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-checkpoint-remove"
+description = "Enables the checkpoint_remove command without any pre-configured scope."
+commands.allow = ["checkpoint_remove"]
+
+[[permission]]
+identifier = "deny-checkpoint-remove"
+description = "Denies the checkpoint_remove command without any pre-configured scope."
+commands.deny = ["checkpoint_remove"]

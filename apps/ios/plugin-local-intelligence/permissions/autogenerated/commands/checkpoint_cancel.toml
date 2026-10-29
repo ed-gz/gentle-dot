@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-checkpoint-cancel"
+description = "Enables the checkpoint_cancel command without any pre-configured scope."
+commands.allow = ["checkpoint_cancel"]
+
+[[permission]]
+identifier = "deny-checkpoint-cancel"
+description = "Denies the checkpoint_cancel command without any pre-configured scope."
+commands.deny = ["checkpoint_cancel"]

@@ -9,6 +9,17 @@ private struct PromptArgs: Decodable { let prompt: String; let turnId: String?; 
 private struct JournalArgs: Decodable { let turnId: String; let revision: String? }
 private struct CancelArgs: Decodable { let turnId: String? }
 private struct NotificationArgs: Decodable { let enabled: Bool }
+private struct CheckpointCreateArgs: Decodable { let id: String; let instruction: String; let context: String; let tools: [CheckpointTool] }
+private struct CheckpointRunArgs: Decodable { let id: String; let revision: String; let allowBackground: Bool? }
+private struct CheckpointIdentityArgs: Decodable { let id: String; let revision: String }
+private struct CheckpointReply: Encodable {
+    var ok: Bool
+    var record: AgentCheckpoint? = nil
+    var items: [AgentCheckpoint]? = nil
+    var activeId: String? = nil
+    var error: String? = nil
+    var message: String? = nil
+}
 private struct JournalReply: Encodable { let ok: Bool; let items: [InferenceRecord]; let activeId: String? }
 private struct Availability: Encodable {
     let available: Bool
@@ -86,6 +97,9 @@ final class LocalIntelligencePlugin: Plugin {
     private var pending: Invoke?
     private var cancellationRequested = false
     private let journal = InferenceJournal()
+    private let checkpointJournal = AgentCheckpointJournal()
+    private var activeCheckpointID: String?
+    private var activeCheckpointStartRevision: String?
     private var notificationService: CompletionNotifications?
     @MainActor private var completionNotifications: CompletionNotifications {
         if let notificationService { return notificationService }
@@ -101,7 +115,7 @@ final class LocalIntelligencePlugin: Plugin {
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
         ) { [weak self] _ in
             guard let self = self, !self.inferenceLease.holdsRuntime else { return }
-            self.cancelCurrent(message: "iOS no concedió tiempo para completar la respuesta fuera de Capri. Tu conversación se conserva.")
+            self.cancelCurrent(message: "iOS no concedió tiempo para completar la respuesta fuera de Capri. Tu conversación se conserva.", includeCheckpoint: true)
         }
     }
 
@@ -116,7 +130,7 @@ final class LocalIntelligencePlugin: Plugin {
     // the WebView agent nor external tools are run under this native lease.
     private func beginInferenceLease() {
         inferenceLease.begin { [weak self] in
-            self?.cancelCurrent(message: "iOS terminó el tiempo disponible para esta respuesta. Tu conversación se conserva.")
+            self?.cancelCurrent(message: "iOS terminó el tiempo disponible para esta respuesta. Tu conversación se conserva.", includeCheckpoint: true)
         }
     }
     private func endInferenceLease(success: Bool = false) { inferenceLease.finish(success: success) }
@@ -245,6 +259,190 @@ final class LocalIntelligencePlugin: Plugin {
         }
     }
 
+    // These commands expose a native planning loop only. A returned tool
+    // proposal is data for a future foreground executor; no tool, approval or
+    // network action is performed by this bridge.
+    @objc func checkpointCreate(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(CheckpointCreateArgs.self) else {
+            invoke.resolve(CheckpointReply(ok: false, error: "invalid_checkpoint")); return
+        }
+        DispatchQueue.main.async {
+            do {
+                let record = try self.checkpointJournal.create(id: args.id, instruction: args.instruction,
+                                                               context: args.context, tools: args.tools)
+                invoke.resolve(CheckpointReply(ok: true, record: record))
+            } catch { invoke.resolve(self.checkpointFailure(error)) }
+        }
+    }
+
+    @objc func checkpointList(_ invoke: Invoke) {
+        DispatchQueue.main.async {
+            do { invoke.resolve(CheckpointReply(ok: true, items: try self.checkpointJournal.list(), activeId: self.activeCheckpointID)) }
+            catch { invoke.resolve(self.checkpointFailure(error)) }
+        }
+    }
+
+    @objc func checkpointRun(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(CheckpointRunArgs.self) else {
+            invoke.resolve(CheckpointReply(ok: false, error: "invalid_checkpoint")); return
+        }
+        DispatchQueue.main.async { self.startCheckpoint(args, invoke: invoke) }
+    }
+
+    private func startCheckpoint(_ args: CheckpointRunArgs, invoke: Invoke) {
+        guard UIApplication.shared.applicationState == .active else {
+            invoke.resolve(CheckpointReply(ok: false, error: "not_foreground", message: "Abre Capri para continuar.")); return
+        }
+        guard task == nil else {
+            invoke.resolve(CheckpointReply(ok: false, error: "busy", message: "Espera a que termine la respuesta actual.")); return
+        }
+        let state = availability()
+        guard state.available else {
+            invoke.resolve(CheckpointReply(ok: false, error: state.status, message: "La IA local aún no está disponible en este iPhone.")); return
+        }
+        do {
+            guard let record = try checkpointJournal.list().first(where: { $0.id == args.id }),
+                  record.revision == args.revision, record.state == "ready" else { throw AgentCheckpointError.stale }
+        } catch { invoke.resolve(checkpointFailure(error)); return }
+        if #available(iOS 26.0, *) {
+            let requestContinued = args.allowBackground == true && continuedTurns.take(args.id)
+            pending = invoke
+            activeCheckpointID = args.id
+            activeCheckpointStartRevision = args.revision
+            cancellationRequested = false
+            beginInferenceLease()
+            task = Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                var succeeded = false
+                defer { self.task = nil; self.pending = nil; self.activeCheckpointID = nil; self.activeCheckpointStartRevision = nil; self.cancellationRequested = false; self.endInferenceLease(success: succeeded) }
+                do {
+                    if requestContinued { await self.inferenceLease.waitForStart() }
+                    try Task.checkCancellation()
+                    let runner = AgentCheckpointRunner(journal: self.checkpointJournal)
+                    let result = try await runner.run(id: args.id, revision: args.revision) { prompt in
+                        try await self.checkpointDecision(prompt)
+                    }
+                    try Task.checkCancellation()
+                    guard !self.cancellationRequested else { return }
+                    succeeded = true
+                    let callback = self.pending; self.pending = nil
+                    callback?.resolve(CheckpointReply(ok: true, record: result))
+                } catch {
+                    if !self.cancellationRequested {
+                        let callback = self.pending; self.pending = nil
+                        callback?.resolve(self.checkpointFailure(error))
+                    }
+                }
+            }
+        }
+    }
+
+    @available(iOS 26.0, *)
+    @MainActor private func checkpointDecision(_ prompt: String) async throws -> CheckpointDecision {
+        let session = LanguageModelSession(instructions: agentInstructions)
+        let result = try await session.respond(to: prompt, generating: GeneratedDecision.self,
+                                               options: GenerationOptions(maximumResponseTokens: 768))
+        try Task.checkCancellation()
+        let value = result.content
+        let kind: String
+        switch value.kind { case .tool: kind = "tool"; case .answer: kind = "answer" }
+        guard value.text.unicodeScalars.count <= 2_400, value.toolName.unicodeScalars.count <= 80,
+              value.argumentsJSON.unicodeScalars.count <= 4_000 else { throw AgentCheckpointError.invalid }
+        return CheckpointDecision(kind: kind, text: value.text, toolName: value.toolName, argumentsJSON: value.argumentsJSON)
+    }
+
+    private func checkpointFailure(_ error: Error) -> CheckpointReply {
+        if let checkpoint = error as? AgentCheckpointError {
+            switch checkpoint {
+            case .invalid: return CheckpointReply(ok: false, error: "invalid_checkpoint", message: "La solicitud o decisión no es válida; conservé el registro.")
+            case .stale, .state: return CheckpointReply(ok: false, error: "checkpoint_changed", message: "El estado cambió. Consulta el registro antes de continuar.")
+            case .budget: return CheckpointReply(ok: false, error: "checkpoint_budget", message: "Se alcanzó el límite de este análisis. El progreso se conserva.")
+            case .full, .corrupt: return CheckpointReply(ok: false, error: "native_storage_failed", message: "No pude confirmar el guardado nativo. Conservé los registros existentes.")
+            }
+        }
+        let model = failure(error)
+        return CheckpointReply(ok: false, error: model.error, message: model.message)
+    }
+
+    // Explicit recovery never dispatches a proposal. A running record from a
+    // dead process is first marked interrupted; a live task cannot be stolen.
+    @objc func checkpointResume(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(CheckpointIdentityArgs.self) else {
+            invoke.resolve(CheckpointReply(ok: false, error: "invalid_checkpoint")); return
+        }
+        DispatchQueue.main.async {
+            do {
+                guard self.activeCheckpointID != args.id,
+                      var record = try self.checkpointJournal.list().first(where: { $0.id == args.id }),
+                      record.revision == args.revision else { throw AgentCheckpointError.stale }
+                if record.state == "running", let stepID = record.stepID {
+                    record = try self.checkpointJournal.interrupt(id: args.id, revision: args.revision, stepID: stepID)
+                }
+                let resumed = try self.checkpointJournal.resumeInterrupted(id: args.id, revision: record.revision, confirmedByUser: true)
+                invoke.resolve(CheckpointReply(ok: true, record: resumed))
+            } catch { invoke.resolve(self.checkpointFailure(error)) }
+        }
+    }
+
+    @objc func checkpointCancel(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(CheckpointIdentityArgs.self) else {
+            invoke.resolve(CheckpointReply(ok: false, error: "invalid_checkpoint")); return
+        }
+        DispatchQueue.main.async {
+            do {
+                guard self.activeCheckpointID != args.id else { throw AgentCheckpointError.state }
+                invoke.resolve(CheckpointReply(ok: true, record: try self.checkpointJournal.cancel(id: args.id, revision: args.revision)))
+            } catch { invoke.resolve(self.checkpointFailure(error)) }
+        }
+    }
+
+    @objc func checkpointStop(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(CheckpointIdentityArgs.self) else {
+            invoke.resolve(CheckpointReply(ok: false, error: "invalid_checkpoint")); return
+        }
+        DispatchQueue.main.async {
+            if self.activeCheckpointID == args.id && self.activeCheckpointStartRevision == args.revision {
+                do {
+                    guard let current = try self.checkpointJournal.list().first(where: { $0.id == args.id }) else { throw AgentCheckpointError.stale }
+                    // Fence the exact live record before stopping inference.
+                    // A late result can neither replace this cancellation nor
+                    // leave a tool proposal behind after the user pressed Stop.
+                    let cancelled = try self.checkpointJournal.cancel(id: args.id, revision: current.revision)
+                    _ = self.cancelCurrent(message: "Análisis cancelado.", explicit: true, includeCheckpoint: true)
+                    invoke.resolve(CheckpointReply(ok: true, record: cancelled))
+                } catch {
+                    // Still request cancellation, but never claim the journal
+                    // committed it if the write failed or the answer won.
+                    _ = self.cancelCurrent(message: "Se solicitó detener el análisis; consulta el registro.", explicit: true, includeCheckpoint: true)
+                    invoke.resolve(self.checkpointFailure(error))
+                }
+                return
+            }
+            guard self.activeCheckpointID != args.id else {
+                invoke.resolve(CheckpointReply(ok: false, error: "checkpoint_changed")); return
+            }
+            do {
+                // A stop that arrives before run changes the revision so the
+                // delayed run cannot start after the user cancelled it.
+                let result = try self.checkpointJournal.cancel(id: args.id, revision: args.revision)
+                invoke.resolve(CheckpointReply(ok: true, record: result))
+            } catch { invoke.resolve(self.checkpointFailure(error)) }
+        }
+    }
+
+    @objc func checkpointRemove(_ invoke: Invoke) {
+        guard let args = try? invoke.parseArgs(CheckpointIdentityArgs.self) else {
+            invoke.resolve(CheckpointReply(ok: false, error: "invalid_checkpoint")); return
+        }
+        DispatchQueue.main.async {
+            do {
+                guard self.activeCheckpointID != args.id else { throw AgentCheckpointError.state }
+                try self.checkpointJournal.removeTerminal(id: args.id, revision: args.revision)
+                invoke.resolve(CheckpointReply(ok: true))
+            } catch { invoke.resolve(self.checkpointFailure(error)) }
+        }
+    }
+
     private func start(prompt: String, invoke: Invoke) {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               prompt.unicodeScalars.count <= 4_000 else {
@@ -339,15 +537,26 @@ final class LocalIntelligencePlugin: Plugin {
         return reply
     }
     @discardableResult
-    private func cancelCurrent(message: String, explicit: Bool = false) -> Reply {
+    private func cancelCurrent(message: String, explicit: Bool = false, includeCheckpoint: Bool = false) -> Reply {
         guard task != nil else { return Reply(ok: true) }
+        // Legacy reset/cancel commands are not scoped to a checkpoint. A late
+        // command from an older conversation must not stop another planner.
+        if activeCheckpointID != nil && !includeCheckpoint {
+            return Reply(ok: false, error: "busy", message: "Hay otro análisis activo. Deténlo desde su propia conversación.")
+        }
+        var checkpointWriteFailed = false
+        if let id = activeCheckpointID {
+            do { _ = try checkpointJournal.interruptPlanning(id: id) }
+            catch { checkpointWriteFailed = true }
+        }
         conversation = nil
         cancellationRequested = true
         task?.cancel()
-        let result = resolveAgent(Reply(ok: false, error: "cancelled", message: message), terminalStatus: explicit ? "cancelled" : "interrupted")
+        let reply = checkpointWriteFailed ? journalFailure() : Reply(ok: false, error: "cancelled", message: message)
+        let result = resolveAgent(reply, terminalStatus: explicit ? "cancelled" : "interrupted")
         pending = nil
         endInferenceLease()
-        return result.error == "native_storage_failed" ? result : Reply(ok: true)
+        return checkpointWriteFailed || result.error == "native_storage_failed" ? result : Reply(ok: true)
     }
 
     @objc func resultsList(_ invoke: Invoke) {
@@ -382,6 +591,12 @@ final class LocalIntelligencePlugin: Plugin {
     @objc func cancel(_ invoke: Invoke) {
         let args = try? invoke.parseArgs(CancelArgs.self)
         DispatchQueue.main.async {
+            // The old conversation command cannot confirm cancellation of a
+            // checkpoint; its revision-bound stop must be used instead.
+            if let id = args?.turnId, id == self.activeCheckpointID {
+                invoke.resolve(Reply(ok: false, error: "busy", message: "Detén este análisis desde su propia conversación."))
+                return
+            }
             if let id = args?.turnId, id != self.activeJournalID {
                 // Completion can beat a human Stop while its WebView callback waits.
                 do {

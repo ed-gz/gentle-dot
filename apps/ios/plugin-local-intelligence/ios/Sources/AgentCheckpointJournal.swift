@@ -412,6 +412,24 @@ final class AgentCheckpointJournal {
             value.stepID = nil; value.state = "interrupted"
         }
     }
+
+    /// Fence a live planner before its task is cancelled by the system. The
+    /// planner can be waiting for a lease before its first step, or between
+    /// two steps, so `ready` must also require an explicit resume. Completed
+    /// answers and proposals remain available for review.
+    func interruptPlanning(id: String) throws -> AgentCheckpoint {
+        try withLock {
+            var records = try read()
+            guard let index = records.firstIndex(where: { $0.id == id }) else { throw AgentCheckpointError.stale }
+            guard ["ready", "running"].contains(records[index].state) else { return records[index] }
+            records[index].stepID = nil
+            records[index].state = "interrupted"
+            records[index].revision = Self.id()
+            let result = records[index]
+            try write(records)
+            return result
+        }
+    }
     func resumeInterrupted(id: String, revision: String, confirmedByUser: Bool) throws -> AgentCheckpoint {
         guard confirmedByUser else { throw AgentCheckpointError.state }
         return try update(id, revision: revision) { value in

@@ -5,6 +5,13 @@ Check and use Capri's local model, cancel a response, and clear its in-memory co
 - `allow-check-availability`
 - `allow-respond`
 - `allow-agent-step`
+- `allow-checkpoint-create`
+- `allow-checkpoint-list`
+- `allow-checkpoint-run`
+- `allow-checkpoint-resume`
+- `allow-checkpoint-cancel`
+- `allow-checkpoint-stop`
+- `allow-checkpoint-remove`
 - `allow-reset`
 - `allow-cancel`
 - `allow-results-list`
@@ -95,6 +102,188 @@ Enables the check_availability command without any pre-configured scope.
 <td>
 
 Denies the check_availability command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-checkpoint-cancel`
+
+</td>
+<td>
+
+Enables the checkpoint_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-checkpoint-cancel`
+
+</td>
+<td>
+
+Denies the checkpoint_cancel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-checkpoint-create`
+
+</td>
+<td>
+
+Enables the checkpoint_create command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-checkpoint-create`
+
+</td>
+<td>
+
+Denies the checkpoint_create command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-checkpoint-list`
+
+</td>
+<td>
+
+Enables the checkpoint_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-checkpoint-list`
+
+</td>
+<td>
+
+Denies the checkpoint_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-checkpoint-remove`
+
+</td>
+<td>
+
+Enables the checkpoint_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-checkpoint-remove`
+
+</td>
+<td>
+
+Denies the checkpoint_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-checkpoint-resume`
+
+</td>
+<td>
+
+Enables the checkpoint_resume command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-checkpoint-resume`
+
+</td>
+<td>
+
+Denies the checkpoint_resume command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-checkpoint-run`
+
+</td>
+<td>
+
+Enables the checkpoint_run command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-checkpoint-run`
+
+</td>
+<td>
+
+Denies the checkpoint_run command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:allow-checkpoint-stop`
+
+</td>
+<td>
+
+Enables the checkpoint_stop command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`local-intelligence:deny-checkpoint-stop`
+
+</td>
+<td>
+
+Denies the checkpoint_stop command without any pre-configured scope.
 
 </td>
 </tr>

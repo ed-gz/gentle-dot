@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-checkpoint-run"
+description = "Enables the checkpoint_run command without any pre-configured scope."
+commands.allow = ["checkpoint_run"]
+
+[[permission]]
+identifier = "deny-checkpoint-run"
+description = "Denies the checkpoint_run command without any pre-configured scope."
+commands.deny = ["checkpoint_run"]

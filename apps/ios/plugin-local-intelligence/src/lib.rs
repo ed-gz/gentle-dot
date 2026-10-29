@@ -83,6 +83,97 @@ async fn agent_step<R: Runtime>(
     .await
 }
 
+#[tauri::command]
+async fn checkpoint_create<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+    instruction: String,
+    context: String,
+    tools: Value,
+) -> Result<Value, String> {
+    if !valid_id(&id)
+        || instruction.trim().is_empty()
+        || instruction.chars().count() > 2_400
+        || context.chars().count() > 8_000
+        || !tools.as_array().is_some_and(|items| items.len() <= 64)
+        || tools.to_string().len() > 1_048_576
+    {
+        return Ok(json!({"ok": false, "error": "invalid_checkpoint"}));
+    }
+    native_call(
+        app,
+        "checkpointCreate",
+        json!({"id": id, "instruction": instruction, "context": context, "tools": tools}),
+    )
+    .await
+}
+
+#[tauri::command]
+async fn checkpoint_list<R: Runtime>(app: AppHandle<R>) -> Result<Value, String> {
+    native_call(app, "checkpointList", json!({})).await
+}
+
+async fn checkpoint_identity_call<R: Runtime>(
+    app: AppHandle<R>,
+    command: &'static str,
+    id: String,
+    revision: String,
+) -> Result<Value, String> {
+    if !valid_id(&id) || !valid_id(&revision) {
+        return Ok(json!({"ok": false, "error": "invalid_identity"}));
+    }
+    native_call(app, command, json!({"id": id, "revision": revision})).await
+}
+
+#[tauri::command]
+async fn checkpoint_run<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+    revision: String,
+    allow_background: Option<bool>,
+) -> Result<Value, String> {
+    if !valid_id(&id) || !valid_id(&revision) {
+        return Ok(json!({"ok": false, "error": "invalid_identity"}));
+    }
+    native_call(app, "checkpointRun", json!({"id": id, "revision": revision, "allowBackground": allow_background.unwrap_or(false)})).await
+}
+
+#[tauri::command]
+async fn checkpoint_resume<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+    revision: String,
+) -> Result<Value, String> {
+    checkpoint_identity_call(app, "checkpointResume", id, revision).await
+}
+
+#[tauri::command]
+async fn checkpoint_cancel<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+    revision: String,
+) -> Result<Value, String> {
+    checkpoint_identity_call(app, "checkpointCancel", id, revision).await
+}
+
+#[tauri::command]
+async fn checkpoint_stop<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+    revision: String,
+) -> Result<Value, String> {
+    checkpoint_identity_call(app, "checkpointStop", id, revision).await
+}
+
+#[tauri::command]
+async fn checkpoint_remove<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+    revision: String,
+) -> Result<Value, String> {
+    checkpoint_identity_call(app, "checkpointRemove", id, revision).await
+}
+
 fn valid_id(id: &str) -> bool {
     id.len() == 36
         && id.bytes().enumerate().all(|(i, b)| {
@@ -148,6 +239,13 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             check_availability,
             respond,
             agent_step,
+            checkpoint_create,
+            checkpoint_list,
+            checkpoint_run,
+            checkpoint_resume,
+            checkpoint_cancel,
+            checkpoint_stop,
+            checkpoint_remove,
             results_list,
             results_acknowledge,
             notification_status,
