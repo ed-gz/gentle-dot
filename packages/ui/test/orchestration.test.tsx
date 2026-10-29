@@ -407,7 +407,7 @@ describe("remote agent controls", () => {
 		expect(screen.queryByText("Adjuntos no disponibles")).toBeNull();
 		expect(screen.queryByRole("button", { name: "Adjuntar archivos" })).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("Archivos para esta sesión")).not.toBeInTheDocument();
-		expect(screen.getByLabelText("Continuar esta sesión")).toBeEnabled();
+		await waitFor(() => expect(screen.getByLabelText("Continuar esta sesión")).toBeEnabled());
 		expect(screen.getByRole("button", { name: "Enviar instrucción" })).toBeDisabled();
 	});
 	it("separates identified delegate results without interpreting the words in human messages", async () => {
