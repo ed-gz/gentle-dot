@@ -1,0 +1,72 @@
+name: Capri iOS archive preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact 40-character commit in ed-gz/gentle-dot
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  archive-preflight:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Validate source identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: '[[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]'
+      - name: Checkout pinned source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ed-gz/gentle-dot
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - name: Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Workspace dependencies
+        run: |
+          npm install --global pnpm@11.5.0
+          pnpm install --frozen-lockfile --ignore-scripts --filter @gentle-dot/ios...
+      - name: Select Xcode 26 or newer
+        run: |
+          xcode_path=$(node --input-type=module <<'NODE'
+          import { readdirSync } from 'node:fs';
+          const candidates = readdirSync('/Applications')
+            .filter(name => /^Xcode_\d+(?:\.\d+)*\.app$/.test(name))
+            .filter(name => Number(name.match(/\d+/)[0]) >= 26)
+            .sort((a, b) => b.localeCompare(a, 'en', { numeric: true }));
+          if (!candidates.length) throw new Error('Xcode 26+ is required');
+          console.log(`/Applications/${candidates[0]}`);
+          NODE
+          )
+          export DEVELOPER_DIR="$xcode_path/Contents/Developer"
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Install XcodeGen and Rust target
+        run: |
+          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
+          rustup target add aarch64-apple-ios
+      - name: Restore Tauri CLI
+        id: tauri-cli-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/capri-tauri-cli/bin/cargo-tauri
+          key: capri-tauri-cli-v1-macos-15-${{ runner.arch }}-2.12.1
+      - name: Install Tauri CLI
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version 2.12.1 --locked --jobs 4 --root "$RUNNER_TEMP/capri-tauri-cli"
+      - name: Build iOS archive without IPA
+        run: |
+          echo "$RUNNER_TEMP/capri-tauri-cli/bin" >> "$GITHUB_PATH"
+          export PATH="$RUNNER_TEMP/capri-tauri-cli/bin:$PATH"
+          cd apps/ios
+          CI=true bash scripts/check-device-archive.sh
