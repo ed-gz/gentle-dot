@@ -59,8 +59,30 @@ private func run() async throws -> String {
     try say.run(); say.waitUntilExit()
     guard say.terminationReason == .exit, say.terminationStatus == 0 else { throw ProbeError.synthesis }
     let synthetic = try AVAudioFile(forReading: source)
-    guard synthetic.length > 0 else { throw ProbeError.synthesis }
-    guard let (_, selected) = await candidate() else { return "SKIP: Spanish voice synthesis succeeded, but no compatible module with installed Spanish assets; no transcription was run." }
+    guard synthetic.length > 0, synthetic.processingFormat.sampleRate > 0 else { throw ProbeError.synthesis }
+    // Exercise the actual conversion routine even when SpeechAnalyzer models
+    // are absent. Force a different sample rate; preserve duration and samples.
+    let sampleRate = synthetic.processingFormat.sampleRate == 16_000 ? 48_000.0 : 16_000.0
+    guard let sampleFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { throw ProbeError.noFormat }
+    let formatProbeURL = root.appendingPathComponent("format-probe.caf")
+    var usedConverter = false
+    let formatProbe = try VoiceAudio.openForAnalysis(source: source, converted: formatProbeURL, format: sampleFormat, maximumSeconds: 90,
+        diagnostic: { if $0 == "create-converter" { usedConverter = true } })
+    let sourceDuration = Double(synthetic.length) / synthetic.processingFormat.sampleRate
+    let outputDuration = Double(formatProbe.length) / formatProbe.processingFormat.sampleRate
+    guard usedConverter, formatProbe.processingFormat.isEqual(sampleFormat), sourceDuration.isFinite,
+          outputDuration.isFinite, sourceDuration > 0, sourceDuration <= 90,
+          abs(sourceDuration - outputDuration) < 0.05 else { throw ProbeError.audio }
+    guard let buffer = AVAudioPCMBuffer(pcmFormat: sampleFormat, frameCapacity: 4096) else { throw ProbeError.audio }
+    var peak: Float = 0
+    while formatProbe.framePosition < formatProbe.length {
+        try formatProbe.read(into: buffer)
+        guard buffer.frameLength > 0, let channel = buffer.floatChannelData?[0] else { throw ProbeError.audio }
+        for index in 0..<Int(buffer.frameLength) { peak = max(peak, abs(channel[index])) }
+    }
+    guard peak > 0.001 else { throw ProbeError.audio }
+    print("PASS: Spanish voice synthesis and VoiceAudio resampling preserve audible samples and duration. No transcription claimed.")
+    guard let (_, selected) = await candidate() else { return "SKIP: no compatible module with installed Spanish assets; no transcription was run." }
     guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [selected.final]) else { throw ProbeError.noFormat }
     var convertedInput = false
     let file = try VoiceAudio.openForAnalysis(source: source, converted: converted, format: format, maximumSeconds: 90,
