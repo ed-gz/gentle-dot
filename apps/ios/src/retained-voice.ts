@@ -19,7 +19,10 @@ export function parseRetainedVoiceRecord(input: unknown): RetainedVoiceRecord {
     || !uuid(value.id) || !uuid(value.owner) || value.id.toLowerCase() === value.owner.toLowerCase()
     || !destinationOK(value.destination) || !localeOK(value.locale) || (value.kind !== 'speech' && value.kind !== 'dictation')
     || !Number.isSafeInteger(value.createdAt) || (value.createdAt as number) < 1) throw recordError();
-  const base = { id: value.id.toLowerCase(), owner: value.owner.toLowerCase(), destination: value.destination,
+  // Swift's journal compares the original serialized record exactly. Keep
+  // the native spelling when returning it for stop/attach/discard; UUID
+  // validation below compares identity without depending on letter case.
+  const base = { id: value.id, owner: value.owner, destination: value.destination,
     locale: value.locale, kind: value.kind as 'speech' | 'dictation', createdAt: value.createdAt as number };
   if (value.state === 'capturing' && value.byteCount == null && value.sha256 == null) return { ...base, state: 'capturing' };
   if (value.state === 'ready' && Number.isSafeInteger(value.byteCount) && (value.byteCount as number) > 0
@@ -30,7 +33,7 @@ export function parseRetainedVoiceRecord(input: unknown): RetainedVoiceRecord {
 }
 
 function sameRecord(a: RetainedVoiceRecord, b: RetainedVoiceRecord): boolean {
-  return a.id === b.id && a.owner === b.owner && a.destination === b.destination && a.locale === b.locale
+  return a.id.toLowerCase() === b.id.toLowerCase() && a.owner.toLowerCase() === b.owner.toLowerCase() && a.destination === b.destination && a.locale === b.locale
     && a.kind === b.kind && a.createdAt === b.createdAt && a.state === b.state
     && (a.state === 'capturing' || (b.state === 'ready' && a.byteCount === b.byteCount && a.sha256 === b.sha256));
 }
@@ -58,7 +61,7 @@ export function createRetainedVoiceBridge(call: typeof native = native, deadline
       const raw = await voiceStartWithDeadline(call('start_voice', { ownerId: normalizedOwner, retainDestination: destination }), cancel, deadlines.start, deadlines.cancel);
       try {
         const session = parseVoiceSession(raw), value = reply(raw), record = parseRetainedVoiceRecord(value.retainedAudio);
-        if (record.state !== 'capturing' || record.id !== session.sessionId.toLowerCase() || record.owner !== normalizedOwner || record.destination !== destination) throw recordError();
+        if (record.state !== 'capturing' || record.id.toLowerCase() !== session.sessionId.toLowerCase() || record.owner.toLowerCase() !== normalizedOwner || record.destination !== destination) throw recordError();
         return { session, record };
       } catch (error) {
         // A malformed reply does not prove that capture didn't start. Fence
@@ -72,8 +75,8 @@ export function createRetainedVoiceBridge(call: typeof native = native, deadline
       if (record.state !== 'ready') throw recordError();
       const value = reply(await call('attach_retained_voice', { record }));
       const actual = parseRetainedVoiceRecord(value.retainedAudio);
-      if (!sameRecord(record, actual) || typeof value.sessionId !== 'string' || value.sessionId.toLowerCase() !== record.id
-        || typeof value.ownerId !== 'string' || value.ownerId.toLowerCase() !== record.owner) throw recordError();
+      if (!sameRecord(record, actual) || typeof value.sessionId !== 'string' || value.sessionId.toLowerCase() !== record.id.toLowerCase()
+        || typeof value.ownerId !== 'string' || value.ownerId.toLowerCase() !== record.owner.toLowerCase()) throw recordError();
       return actual;
     },
     async stop(input: unknown): Promise<RetainedVoiceResult> {
@@ -82,7 +85,7 @@ export function createRetainedVoiceBridge(call: typeof native = native, deadline
       // parseVoiceTranscript preserves the original session-bound retry signal.
       const transcript = parseVoiceTranscript(raw, expected.id), value = reply(raw);
       const record = parseRetainedVoiceRecord(value.retainedAudio);
-      if (record.state !== 'ready' || record.id !== expected.id || record.owner !== expected.owner
+      if (record.state !== 'ready' || record.id.toLowerCase() !== expected.id.toLowerCase() || record.owner.toLowerCase() !== expected.owner.toLowerCase()
         || record.destination !== expected.destination || record.locale !== expected.locale || record.kind !== expected.kind || record.createdAt !== expected.createdAt
         || transcript.locale.toLowerCase() !== record.locale.toLowerCase()
         || (expected.state === 'ready' && !sameRecord(record, expected))) throw recordError();

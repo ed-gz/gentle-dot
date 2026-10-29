@@ -35,6 +35,39 @@ test('protected start and stop bind the same owner, destination, audio and trans
   assert.deepEqual(calls[1].args, { sessionId: id, ownerId: owner, retainDestination: 'chat' });
 });
 
+test('native UUID spelling survives capture, stop, inspection and attachment', async () => {
+  const nativeId = 'ABCDEF01-ABCD-4BCD-8BCD-ABCDEF012345';
+  const nativeOwner = 'abcdef02-abcd-4bcd-8bcd-abcdef012345';
+  const pending = { ...capturing(), id: nativeId, owner: nativeOwner };
+  const closed = { ...ready(), id: nativeId, owner: nativeOwner };
+  const nativeTranscript = { ...transcript(), sessionId: nativeId };
+  const seen = [];
+  const bridge = createRetainedVoiceBridge(async (command, args) => {
+    seen.push(command);
+    if (command === 'start_voice') {
+      assert.equal(args.ownerId, nativeOwner);
+      return { ok: true, sessionId: nativeId, maxDurationSeconds: 90, retainedAudio: pending };
+    }
+    if (command === 'stop_voice') {
+      assert.equal(args.sessionId, nativeId); // Swift checks literal session ID.
+      assert.equal(args.ownerId, nativeOwner);
+      return { ...nativeTranscript, retainedAudio: closed };
+    }
+    if (command === 'inspect_retained_voice') return { ok: true, retainedAudio: closed };
+    if (command === 'attach_retained_voice') {
+      assert.deepEqual(args.record, closed); // Swift compares the full serialized record.
+      return { ok: true, sessionId: nativeId, ownerId: nativeOwner, retainedAudio: closed };
+    }
+    throw new Error('Unexpected native operation');
+  });
+  const started = await bridge.start(nativeOwner.toUpperCase(), 'chat');
+  assert.equal(started.record.id, nativeId);
+  assert.equal((await bridge.stop(started.record)).transcript.sessionId, nativeId);
+  const inspected = await bridge.inspect();
+  assert.deepEqual(await bridge.attach(inspected), closed);
+  assert.deepEqual(seen, ['start_voice', 'stop_voice', 'inspect_retained_voice', 'attach_retained_voice']);
+});
+
 test('invalid or cross-destination start is fenced by the exact owner', async () => {
   const calls = [];
   const bridge = createRetainedVoiceBridge(async (command, args) => {
