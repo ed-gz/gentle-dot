@@ -65,6 +65,18 @@ La evaluación de compatibilidad de `2026-07-28` debe comprobar, como mínimo:
 4. Compatibilidad anterior: servidor dual con versión moderna, servidor sólo moderno, servidor 2025, error `UnsupportedProtocolVersion`, discrepancia de cabeceras, ausencia de capacidad y 401 OAuth deben probarse por separado; un error moderno reconocido no habilita un downgrade silencioso. OAuth debe revisarse independientemente y no requiere credenciales para los fixtures.
 5. La especificación exige JSON Schema 2020-12 completo; Capri sólo implementa un subconjunto y rechaza restricciones que no puede evaluar. Ampliarlo y probarlo contra casos oficiales es requisito para afirmar conformidad completa. Referencias: [mensajes y esquema](https://modelcontextprotocol.io/specification/2026-07-28/basic), [cabeceras y retrocompatibilidad HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http), [herramientas](https://modelcontextprotocol.io/specification/2026-07-28/server/tools) y [autorización](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization).
 
+`mcp-modern-protocol.ts` es un prototipo puro, no conectado al cliente de la app:
+construye las cabeceras básicas y `_meta`, clasifica descubrimiento y distingue un
+resultado `input_required`. Sus pruebas no ejecutan llamadas ni autorizaciones.
+La clasificación conservadora rechaza un HTTP 400 vacío y un error `-32601` en
+HTTP 200 en lugar de asumir que son legados: eso evita bajar de protocolo ante
+una respuesta ambigua, pero puede impedir la conexión con algunos servidores 2025.
+Una contraoferta moderna `-32022` se conserva como error tipado sin elegir ni
+reintentar otra versión automáticamente.
+No acepta aún parámetros `x-mcp-header` ni constituye soporte MCP 2026; la
+integración debe mantener revisión/journal, límites, OAuth y control de resultados
+inciertos, además de pruebas de interoperabilidad con un servidor real.
+
 El descubrimiento admite hasta 64 herramientas, diez páginas y 512 KiB de catálogo.
 Cada esquema individual puede ocupar 16 KiB. Se validan tipos, propiedades,
 obligatorios, referencias locales, combinaciones, enumeraciones, constantes y
