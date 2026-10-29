@@ -2,15 +2,21 @@ import { expect, test, type Page } from './fixtures.ts';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
 const link = `gentledot://pair?${new URLSearchParams({ url: 'https://laptop.example.ts.net', code: 'a'.repeat(32), name: 'Mi laptop' })}`;
-async function fixture(page: Page, options: { codes?: string[]; hold?: boolean; native?: boolean; liveError?: string } = {}) {
+async function fixture(page: Page, options: { codes?: string[]; hold?: boolean; native?: boolean; liveError?: string; cancelFails?: number; cancelHold?: boolean } = {}) {
   await page.route('**/pairing-fixture', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><body><form id="fixture"><h2>Vincular laptop</h2><label>Invitación<input id="invitation"></label><button type="submit">Vincular iPhone</button></form></body></html>' }));
   await page.goto('/pairing-fixture');
-  await page.evaluate(async ({ codes, hold, native, liveError }) => {
+  await page.evaluate(async ({ codes, hold, native, liveError, cancelFails, cancelHold }) => {
     const state = globalThis as any; state.isTauri = native; state.qrCommands = []; state.pairSubmits = 0;
+    state.cancelCalls = 0;
     state.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
       if (command.endsWith('results_list')) return { ok: true, items: [] };
       state.qrCommands.push(command);
-      if (command.endsWith('|pairing_scan_cancel')) return { ok: true };
+      if (command.endsWith('|pairing_scan_cancel')) {
+        state.cancelCalls++;
+        if (state.cancelCalls <= cancelFails) return { ok: false, message: 'Cierre no confirmado.' };
+        if (cancelHold) return new Promise(resolve => { state.finishCancel = () => resolve({ ok: true }); });
+        return { ok: true };
+      }
       if (command.endsWith('|pairing_scan')) {
         if (liveError) return { ok: false, error: 'unavailable', message: liveError };
         const result = { ok: true, value: codes[0], cancelled: false };
@@ -29,7 +35,7 @@ async function fixture(page: Page, options: { codes?: string[]; hold?: boolean; 
     const module = await import(path), form = document.querySelector<HTMLFormElement>('#fixture')!, input = document.querySelector<HTMLInputElement>('#invitation')!;
     state.qrMount = module.mountPairingInput(form, input); module.mountPairingInput(form, input);
     form.addEventListener('submit', event => { event.preventDefault(); state.pairSubmits++; });
-  }, { codes: options.codes ?? [link], hold: options.hold ?? false, native: options.native ?? true, liveError: options.liveError });
+  }, { codes: options.codes ?? [link], hold: options.hold ?? false, native: options.native ?? true, liveError: options.liveError, cancelFails: options.cancelFails ?? 0, cancelHold: options.cancelHold ?? false });
 }
 
 test('photo QR fills one validated invitation, shows its host and requires separate human submission', async ({ page }) => {
@@ -67,6 +73,57 @@ test('cancellation blocks a late result and pending scan blocks form submission'
   await expect(page.locator('#invitation')).toHaveValue('');
   await expect(page.locator('.pairing-scan-status')).toContainText('cancelada');
   expect(await page.evaluate(() => (globalThis as any).qrCommands)).toContain('plugin:device-bridge|pairing_scan_cancel');
+});
+
+test('confirmed cancellation unlocks a scanner even if its original callback never arrives', async ({ page }) => {
+  await fixture(page, { hold: true });
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
+  await page.waitForFunction(() => typeof (globalThis as any).finishQR === 'function');
+  await page.evaluate(() => { (globalThis as any).finishOldQR = (globalThis as any).finishQR; });
+  await page.getByRole('button', { name: 'Cancelar lectura' }).click();
+  await expect(page.getByRole('button', { name: 'Escanear QR', exact: true })).toBeEnabled();
+  await expect(page.locator('#invitation')).toHaveValue('');
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
+  await page.waitForFunction(() => (globalThis as any).finishQR !== (globalThis as any).finishOldQR);
+  await page.evaluate(() => (globalThis as any).finishOldQR());
+  await expect(page.locator('.pairing-scan')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#invitation')).toHaveValue('');
+  await page.evaluate(() => (globalThis as any).finishQR());
+  await expect(page.locator('#invitation')).toHaveValue(link);
+  expect(await page.evaluate(() => (globalThis as any).pairSubmits)).toBe(0);
+});
+
+test('an unconfirmed scanner close blocks rescans and repeated taps until retry succeeds', async ({ page }) => {
+  await fixture(page, { hold: true, cancelFails: 1, cancelHold: true });
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
+  await page.waitForFunction(() => typeof (globalThis as any).finishQR === 'function');
+  await page.getByRole('button', { name: 'Cancelar lectura' }).click();
+  await expect(page.locator('.pairing-scan-status')).toContainText('No pude confirmar');
+  await expect(page.getByRole('button', { name: 'Escanear QR', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Reintentar cierre' }).click();
+  await page.waitForFunction(() => typeof (globalThis as any).finishCancel === 'function');
+  await expect(page.getByRole('button', { name: 'Escanear QR', exact: true })).toBeDisabled();
+  await page.evaluate(() => { document.querySelector<HTMLButtonElement>('#pairing-camera')!.click(); document.querySelector<HTMLButtonElement>('.pairing-scan-controls button:last-child')!.click(); });
+  expect(await page.evaluate(() => (globalThis as any).cancelCalls)).toBe(2);
+  await page.evaluate(() => (globalThis as any).finishCancel());
+  await expect(page.getByRole('button', { name: 'Escanear QR', exact: true })).toBeEnabled();
+  await expect(page.locator('#invitation')).toHaveValue('');
+  expect(await page.evaluate(() => (globalThis as any).qrCommands.filter((command: string) => command.endsWith('|pairing_scan')).length)).toBe(1);
+});
+
+test('a cancellation callback that never arrives keeps the scanner fenced and explains the delay', async ({ page }) => {
+  await fixture(page, { hold: true, cancelHold: true });
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
+  await page.waitForFunction(() => typeof (globalThis as any).finishQR === 'function');
+  await page.getByRole('button', { name: 'Cancelar lectura' }).click();
+  await page.waitForFunction(() => typeof (globalThis as any).finishCancel === 'function');
+  await expect(page.locator('.pairing-scan-status')).toContainText('No se ha confirmado el cierre', { timeout: 6000 });
+  await expect(page.getByRole('button', { name: 'Escanear QR', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Cancelar lectura' })).toBeDisabled();
+  await page.evaluate(() => document.querySelector<HTMLButtonElement>('#pairing-camera')!.click());
+  expect(await page.evaluate(() => (globalThis as any).qrCommands.filter((command: string) => command.endsWith('|pairing_scan')).length)).toBe(1);
+  await page.evaluate(() => (globalThis as any).finishCancel());
+  await expect(page.getByRole('button', { name: 'Escanear QR', exact: true })).toBeEnabled();
 });
 
 test('camera permission obscuring the web view does not cancel the native scanner', async ({ page }) => {
