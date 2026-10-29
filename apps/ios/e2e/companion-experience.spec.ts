@@ -78,8 +78,34 @@ test('personal package starts with the shared animated rig and real draggable tr
   const area = await page.locator('#stage').boundingBox();
   const direction = area!.x + area!.width - before!.x - before!.width >= 70 ? 1 : -1;
   await page.mouse.move(before!.x + before!.width / 2, before!.y + before!.height / 2);
-  await page.mouse.down(); await page.mouse.move(before!.x + before!.width / 2 + direction * 70, before!.y + before!.height / 2, { steps: 8 }); await page.mouse.up();
-  const after = await rig.boundingBox(); expect(Math.abs(after!.x - before!.x)).toBeGreaterThan(40);
+  await page.mouse.down(); await page.mouse.move(before!.x + before!.width / 2 + direction * 70, before!.y + before!.height / 2, { steps: 8 });
+  const held = await rig.boundingBox();
+  const available = direction > 0 ? area!.x + area!.width - before!.x - before!.width - 4 : before!.x - area!.x - 4;
+  expect(Math.abs(held!.x - before!.x)).toBeCloseTo(Math.min(70, Math.max(0, available)), 0);
+  await page.mouse.up(); await page.clock.runFor(100);
+  const after = await rig.boundingBox();
+  const safe = await page.evaluate(() => {
+    const rig = document.querySelector<HTMLElement>('#rig-handle')!.getBoundingClientRect();
+    const blocked: object[] = [];
+    const intersects = (box: DOMRect) => box.width > 0 && box.height > 0 && rig.left < box.right + 5
+      && rig.right + 5 > box.left && rig.top < box.bottom + 5 && rig.bottom + 5 > box.top;
+    for (const container of [document.querySelector<HTMLElement>('#panel-chat')!, document.querySelector<HTMLElement>('.masthead')!]) {
+      for (const control of container.querySelectorAll('button, input, textarea, select, summary, img, video, [role="button"]')) {
+        if (!control.closest('[hidden], #stage')) for (const box of control.getClientRects()) {
+          if (intersects(box)) blocked.push({ kind: 'control', tag: control.tagName, id: control.id, box: box.toJSON() });
+        }
+      }
+      const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const text = walker.currentNode;
+        if (!text.textContent?.trim() || text.parentElement?.closest('[hidden], #stage, script, style')) continue;
+        const range = document.createRange(); range.selectNodeContents(text);
+        for (const box of range.getClientRects()) if (intersects(box)) blocked.push({ kind: 'text', box: box.toJSON() });
+      }
+    }
+    return { rig: rig.toJSON(), blocked };
+  });
+  expect(safe.blocked, `La posición al soltar debe respetar el texto y los controles: ${JSON.stringify(safe)}`).toEqual([]);
   // Geometry refresh must respect the same manual pause as the PC roam director.
   await page.clock.runFor(1300);
   expect((await rig.boundingBox())!.x).toBeCloseTo(after!.x, 0);
