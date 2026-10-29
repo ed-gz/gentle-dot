@@ -10,7 +10,7 @@ enum LiveVoiceCaptureError: Error {
 /// original file. If the file writer falls behind, stop and report failure
 /// instead of silently returning an incomplete recording as successful.
 @available(iOS 26.0, *)
-private final class LiveCaptureState {
+final class LiveCaptureState {
     let inputs: AsyncStream<AnalyzerInput>
     private let continuation: AsyncStream<AnalyzerInput>.Continuation
     private let writeQueue = DispatchQueue(label: "dev.gentledot.capri.voice.write", qos: .userInitiated)

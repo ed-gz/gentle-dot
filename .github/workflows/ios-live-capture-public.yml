@@ -1,0 +1,29 @@
+name: Capri synthetic capture-state check
+
+# Only generated PCM buffers; no microphone, credentials, signing or artifacts.
+on:
+  push:
+    branches:
+      - fix/android-capri-motion-mobile
+    paths:
+      - .github/workflows/ios-live-capture-public.yml
+
+permissions: {}
+
+jobs:
+  synthetic-capture-state:
+    if: github.repository == 'ed-gz/gentle-dot'
+    runs-on: macos-26
+    timeout-minutes: 5
+    steps:
+      - name: Fetch exact public source without credentials
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init .
+          git -c credential.helper= fetch --depth=1 https://github.com/ed-gz/gentle-dot.git "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Compile and exercise empty synthetic buffer
+        run: bash apps/ios/scripts/check-live-capture-empty.sh
