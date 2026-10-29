@@ -61,7 +61,8 @@ func runReferenceMatrix(locale: Locale) async {
         let sourceInfo = try AVAudioFile(forReading: source)
         print("MATRIX FORMAT: original file \(formatFacts(sourceInfo.fileFormat)); processing \(formatFacts(sourceInfo.processingFormat)); frames=\(sourceInfo.length) start=\(sourceInfo.framePosition)")
         print("MATRIX: originalAudible=\(try audible(sourceInfo))")
-        var cases: [(String, URL, Bool)] = [("original-analyze", source, false), ("original-start", source, true)]
+        var cases: [(String, URL, Bool)] = [("original-analyze", source, false), ("original-start", source, true),
+                                            ("original-int16-read-analyze", source, false), ("original-int16-read-start", source, true)]
         do {
             // A CAF copy at the source processing rate isolates the container
             // from VoiceAudio's resampling and format changes.
@@ -83,6 +84,29 @@ func runReferenceMatrix(locale: Locale) async {
             cases.append(("caf-copy-analyze", cafSource, false)); cases.append(("caf-copy-start", cafSource, true))
         } catch { print("MATRIX FAIL: caf-copy-setup \(errorIdentity(error)).") }
         do {
+            // Preserve the original rate/samples while writing a 16-bit CAF.
+            // This isolates physical encoding from resampling and read format.
+            let int16URL = root.appendingPathComponent("source-int16.caf")
+            let input = try AVAudioFile(forReading: source)
+            guard let physical = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: input.processingFormat.sampleRate,
+                                               channels: input.processingFormat.channelCount, interleaved: true),
+                  let buffer = AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 4096) else { throw ProbeError.audio }
+            let output = try AVAudioFile(forWriting: int16URL, settings: physical.settings,
+                                         commonFormat: input.processingFormat.commonFormat, interleaved: input.processingFormat.isInterleaved)
+            while input.framePosition < input.length {
+                try input.read(into: buffer)
+                guard buffer.frameLength > 0 else { throw ProbeError.audio }
+                try output.write(from: buffer)
+            }
+            output.close()
+            let int16 = try AVAudioFile(forReading: int16URL)
+            print("MATRIX FORMAT: caf-int16 file \(formatFacts(int16.fileFormat)); processing \(formatFacts(int16.processingFormat)); frames=\(int16.length) start=\(int16.framePosition)")
+            guard try samePCM(source, int16URL) else { throw ProbeError.audio }
+            print("MATRIX: cafInt16MatchesSource=true")
+            cases.append(("caf-int16-default-analyze", int16URL, false)); cases.append(("caf-int16-default-start", int16URL, true))
+            cases.append(("caf-int16-read-analyze", int16URL, false)); cases.append(("caf-int16-read-start", int16URL, true))
+        } catch { print("MATRIX FAIL: caf-int16-setup \(errorIdentity(error)).") }
+        do {
             let prepared = try VoiceAudio.openForAnalysis(source: source, converted: converted, format: format, maximumSeconds: 90)
             let convertedURL = prepared.url
             print("MATRIX FORMAT: converted file \(formatFacts(prepared.fileFormat)); processing \(formatFacts(prepared.processingFormat)); frames=\(prepared.length) start=\(prepared.framePosition)")
@@ -91,6 +115,8 @@ func runReferenceMatrix(locale: Locale) async {
             print("MATRIX: convertedDistinct=\(convertedURL.standardizedFileURL != source.standardizedFileURL)")
             cases.append(("converted-analyze", convertedURL, false))
             cases.append(("converted-start", convertedURL, true))
+            cases.append(("converted-default-analyze", convertedURL, false))
+            cases.append(("converted-default-start", convertedURL, true))
         } catch {
             print("MATRIX FAIL: converted-setup \(errorIdentity(error)).")
         }
@@ -109,9 +135,11 @@ func runReferenceMatrix(locale: Locale) async {
                 // Open the original directly; open the converted file in the
                 // requested processing representation without conversion.
                 let file: AVAudioFile
-                if label.hasPrefix("converted") { file = try AVAudioFile(forReading: fileURL, commonFormat: format.commonFormat, interleaved: format.isInterleaved) }
+                if label.contains("int16-read") { file = try AVAudioFile(forReading: fileURL, commonFormat: .pcmFormatInt16, interleaved: true) }
+                else if label.hasPrefix("converted") && !label.contains("default") { file = try AVAudioFile(forReading: fileURL, commonFormat: format.commonFormat, interleaved: format.isInterleaved) }
                 else { file = try AVAudioFile(forReading: fileURL) }
                 guard file.length > 0 else { throw ProbeError.audio }
+                print("MATRIX INPUT: \(label) file \(formatFacts(file.fileFormat)); processing \(formatFacts(file.processingFormat)); frames=\(file.length) start=\(file.framePosition)")
                 stage = autonomous ? "start" : "analyze"
                 if autonomous { try await analyzer.start(inputAudioFile: file, finishAfterFile: true) }
                 else {
