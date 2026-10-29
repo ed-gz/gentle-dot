@@ -1,0 +1,33 @@
+name: Capri no-preview speech integration
+
+# Synthetic speech and ephemeral Apple assets only; no microphone, user audio,
+# signing, IPA, artifact, or cache. This is not a VoiceController/iPhone test.
+on:
+  push:
+    branches:
+      - capri-ci/no-preview-speech
+    paths:
+      - .github/workflows/ios-no-preview-synthetic-public.yml
+
+permissions:
+  contents: read
+
+jobs:
+  no-preview-speech:
+    if: github.repository == 'ed-gz/gentle-dot'
+    runs-on: macos-26
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Compile native synthetic integration
+        env:
+          CAPRI_SPEECH_INSTALL_COMPILE_ONLY: '1'
+        run: bash apps/ios/scripts/check-synthetic-speech-install.sh
+      - name: Capture and transcribe generated Spanish without preview
+        env:
+          CAPRI_EPHEMERAL_SPEECH_INSTALL: '1'
+          CAPRI_NO_PREVIEW_SYNTHETIC_ONLY: '1'
+        run: bash apps/ios/scripts/check-synthetic-speech-install.sh

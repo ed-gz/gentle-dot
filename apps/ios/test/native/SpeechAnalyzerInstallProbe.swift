@@ -26,19 +26,20 @@ func errorIdentity(_ error: Error) -> String {
 // builds an IPA. A system download may continue after failure or termination.
 @available(macOS 26.0, *)
 private func probe() async -> Int32 {
+    let noPreviewOnly = ProcessInfo.processInfo.environment["CAPRI_NO_PREVIEW_SYNTHETIC_ONLY"] == "1"
     let requested = Locale(identifier: "es-MX")
     guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: requested),
           locale.identifier.lowercased().replacingOccurrences(of: "_", with: "-") == "es-mx" else {
         print("SKIP: exact es-MX DictationTranscriber is unavailable; no assets requested and no transcription run.")
-        return 0
+        return noPreviewOnly ? 1 : 0
     }
     let final = DictationTranscriber(locale: locale, contentHints: [], transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
     let preview = DictationTranscriber(locale: locale, contentHints: [], transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [.audioTimeRange])
-    let modules: [any SpeechModule] = [final, preview]
+    let modules: [any SpeechModule] = noPreviewOnly ? [final] : [final, preview]
     let status = await AssetInventory.status(forModules: modules)
     guard status == .installed || status == .supported || status == .downloading else {
         print("SKIP: exact es-MX module configuration is unsupported or unknown; no assets requested.")
-        return 0
+        return noPreviewOnly ? 1 : 0
     }
     let canonical: (Locale) -> String = { $0.identifier.lowercased().replacingOccurrences(of: "_", with: "-") }
     let before = Set((await AssetInventory.reservedLocales).map(canonical))
@@ -69,10 +70,14 @@ private func probe() async -> Int32 {
         if result.hasPrefix("PASS: real DictationTranscriber") {
             stage = "captured-formats"
             try await runCaptureFormatProbe(locale: locale)
-            stage = "preview-buffers"
-            try await runPreviewBufferProbe(locale: locale)
+            if noPreviewOnly {
+                print("SKIP: live preview buffer comparison is outside this no-preview gate.")
+            } else {
+                stage = "preview-buffers"
+                try await runPreviewBufferProbe(locale: locale)
+            }
             exitCode = 0
-        } else if result.hasPrefix("SKIP:") { exitCode = 0 }
+        } else if result.hasPrefix("SKIP:") { exitCode = noPreviewOnly ? 1 : 0 }
         else { print("FAIL: no real synthetic transcript was confirmed.") }
     } catch {
         // Only fixed phase names, known domains and bounded codes leave the

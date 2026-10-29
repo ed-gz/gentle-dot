@@ -40,6 +40,46 @@ func runCaptureFormatProbe(locale: Locale) async throws {
     try await transcribeCaptureProbe(file: first, module: firstModule)
     print("PASS: synthetic Float32 48 kHz CAF capture converted and transcribed by DictationTranscriber; not an iPhone test.")
 
+    // Run the actual capture state with the preview deliberately unavailable,
+    // preserve every original sample, then analyze its output using the same
+    // final-only conversion and SpeechAnalyzer path as the controller.
+    let noPreviewURL = root.appendingPathComponent("no-preview.caf")
+    let noPreview = try LiveCaptureState(url: noPreviewURL, source: capture.processingFormat,
+        target: target, previewEnabled: false, issue: { _ in })
+    noPreview.begin()
+    capture.framePosition = 0
+    guard let input = AVAudioPCMBuffer(pcmFormat: capture.processingFormat, frameCapacity: 8_192) else { throw ProbeError.audio }
+    while capture.framePosition < capture.length {
+        try capture.read(into: input)
+        guard input.frameLength > 0 else { throw ProbeError.audio }
+        noPreview.receive(input)
+        // Let the real bounded writer make progress, as it does during live capture.
+        try await Task.sleep(nanoseconds: 1_000_000)
+    }
+    noPreview.closeInput()
+    noPreview.receive(input) // A late callback must not add a second copy.
+    try await noPreview.drain()
+    var previewInputs = noPreview.inputs.makeAsyncIterator()
+    if case .some = await previewInputs.next() { throw ProbeError.audio }
+    let preserved = try AVAudioFile(forReading: noPreviewURL)
+    guard preserved.length == capture.length, preserved.processingFormat.isEqual(capture.processingFormat),
+          let sourceChunk = AVAudioPCMBuffer(pcmFormat: capture.processingFormat, frameCapacity: 8_192),
+          let savedChunk = AVAudioPCMBuffer(pcmFormat: preserved.processingFormat, frameCapacity: 8_192) else { throw ProbeError.audio }
+    capture.framePosition = 0
+    while capture.framePosition < capture.length {
+        try capture.read(into: sourceChunk); try preserved.read(into: savedChunk)
+        guard sourceChunk.frameLength == savedChunk.frameLength,
+              let a = sourceChunk.floatChannelData?[0], let b = savedChunk.floatChannelData?[0] else { throw ProbeError.audio }
+        for index in 0..<Int(sourceChunk.frameLength) where a[index].bitPattern != b[index].bitPattern { throw ProbeError.audio }
+    }
+    let originalBytes = try Data(contentsOf: noPreviewURL)
+    let finalModule = DictationTranscriber(locale: locale, contentHints: [], transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])
+    let finalFile = try VoiceAudio.openForAnalysis(source: noPreviewURL,
+        converted: root.appendingPathComponent("no-preview-converted.caf"), format: target, maximumSeconds: 90)
+    try await transcribeCaptureProbe(file: finalFile, module: finalModule)
+    guard try Data(contentsOf: noPreviewURL) == originalBytes else { throw ProbeError.audio }
+    print("PASS: no-preview capture preserved every sample and final SpeechAnalyzer transcribed synthetic Spanish; not VoiceController, a microphone, or an iPhone test.")
+
     // The target-format path must keep the existing file and all its bytes.
     let before = try Data(contentsOf: converted)
     var unnecessaryConversion = false

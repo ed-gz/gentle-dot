@@ -10,7 +10,13 @@ verification=$(mktemp -d "${TMPDIR:-/tmp}/capri-speech-install.XXXXXX")
 trap 'rm -rf "$verification"' EXIT
 xcrun --sdk macosx swiftc -swift-version 5 -parse-as-library -D CAPRI_ASSET_INSTALL_PROBE \
   -target "$(uname -m)-apple-macosx26.0" -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
-  plugin-perception/ios/Sources/VoiceAudio.swift test/native/SpeechAnalyzerSyntheticTests.swift \
+  plugin-perception/ios/Sources/VoiceAudio.swift \
+  plugin-perception/ios/Sources/LiveAudioBuffer.swift \
+  plugin-perception/ios/Sources/LiveCaptureLifecycle.swift \
+  plugin-perception/ios/Sources/LiveVoiceDrain.swift \
+  plugin-perception/ios/Sources/VoiceLevel.swift \
+  plugin-perception/ios/Sources/LiveVoiceCapture.swift \
+  test/native/SpeechAnalyzerSyntheticTests.swift \
   test/native/SpeechAnalyzerInstallProbe.swift test/native/SpeechAnalyzerReferenceMatrix.swift \
   test/native/SpeechCaptureFormatProbe.swift test/native/SpeechPreviewBufferProbe.swift -o "$verification/probe"
 "$verification/probe" --diagnostics-self-test
