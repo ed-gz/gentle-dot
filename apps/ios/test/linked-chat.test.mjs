@@ -270,4 +270,17 @@ test('malformed advertised capabilities never cross the ready boundary', () => {
   socket.receive({ type: 'ready', agentState: 'idle', features: { conversations: false, workSync: 1 } }); assert.equal(chat.ready(), true);
 });
 
+
+test('accepts namespaced daemon IDs consistently for user, streamed text, activities and completion', () => {
+  const { socket, messages } = fixture(); ready(socket);
+  const id = 'm123e4567-e89b-42d3-a456-426614174000:2';
+  socket.receive({ type: 'user_message', messageId: 'u123e4567-e89b-42d3-a456-426614174000:1', text: 'Hola' });
+  socket.receive({ type: 'message_delta', messageId: id, delta: 'Res' });
+  socket.receive({ type: 'activity', messageId: id, activity: { id: 'a', title: 'Revisar', kind: 'read', status: 'done' } });
+  socket.receive({ type: 'message_done', messageId: id, text: 'Respuesta' });
+  assert.deepEqual(messages.filter(message => message.messageId).map(message => message.messageId), [
+    'u123e4567-e89b-42d3-a456-426614174000:1', id, id, id,
+  ]);
+});
+
 });

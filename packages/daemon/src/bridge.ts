@@ -170,6 +170,10 @@ export class DotBridge {
 	private readonly options: BridgeOptions;
 	private state: AgentState = "starting";
 	private interrupted = false;
+	// A restarted bridge starts its sequence at zero. Namespace that sequence
+	// so a phone restoring an earlier live event cannot overwrite it after a
+	// daemon restart; the ID remains the same for every update of one stream.
+	private readonly messageNamespace = randomUUID();
 	private nextMessage = 0;
 	private assistantId: string | undefined;
 	private restartPending = false;
@@ -1395,18 +1399,18 @@ export class DotBridge {
 			const { text, attachments } = splitAttachments(textOf(message));
 			this.broadcast({
 				type: "user_message",
-				messageId: `u${++this.nextMessage}`,
+				messageId: `u${this.messageNamespace}:${++this.nextMessage}`,
 				text,
 				...(attachments.length > 0 ? { attachments } : {}),
 			});
 		}
-		if (message?.role === "assistant") this.assistantId = `m${++this.nextMessage}`;
+		if (message?.role === "assistant") this.assistantId = `m${this.messageNamespace}:${++this.nextMessage}`;
 	}
 
 	private onMessageUpdate(event: AgentRecord): void {
 		const update = event.assistantMessageEvent as { type?: string; delta?: unknown } | undefined;
 		if (update?.type !== "text_delta" || typeof update.delta !== "string") return;
-		this.assistantId ??= `m${++this.nextMessage}`;
+		this.assistantId ??= `m${this.messageNamespace}:${++this.nextMessage}`;
 		this.broadcast({ type: "message_delta", messageId: this.assistantId, delta: update.delta });
 	}
 
@@ -1416,7 +1420,7 @@ export class DotBridge {
 			| undefined;
 		if (message?.role !== "assistant") return;
 		if (message.stopReason === "aborted" || message.stopReason === "error") this.invalidateCapture();
-		const messageId = this.assistantId ?? `m${++this.nextMessage}`;
+		const messageId = this.assistantId ?? `m${this.messageNamespace}:${++this.nextMessage}`;
 		const intermediate = ["toolUse", "deferred"].includes(message.stopReason ?? "") || hasToolCalls(message);
 		const text = this.screenshotDelivery.finish(
 			presentText(textOf(message)),
@@ -1452,7 +1456,7 @@ export class DotBridge {
 		}
 		const status = started ? "running" : event.isError ? "failed" : "done";
 		// Start and end of one tool call must land on the same message.
-		this.assistantId ??= `m${++this.nextMessage}`;
+		this.assistantId ??= `m${this.messageNamespace}:${++this.nextMessage}`;
 		this.broadcast({
 			type: "activity",
 			messageId: this.assistantId,
