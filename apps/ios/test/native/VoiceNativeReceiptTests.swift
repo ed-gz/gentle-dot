@@ -32,15 +32,38 @@ struct VoiceNativeReceiptTests {
         let preserved = try fresh.get(id)
         check(fm.fileExists(atPath: path.path) && preserved?.receipt == receipt, "a changed file and the receipt are preserved")
         try Data([1, 2, 3]).write(to: path, options: .atomic)
+        let syncFailure = VoiceRecoveryJournal(root: audioRoot, syncDirectory: { _ in throw VoiceRecoveryJournalError.invalid })
+        check(reject { try fresh.release(receipt, audioJournal: syncFailure) }, "a failed audio-directory sync cannot confirm release")
+        check(try fresh.get(id)?.releaseState == "releasing", "failed sync leaves the full receipt in recovery")
+        check(try audio.current() == ready, "the exact binding remains until the audio unlink is synchronized")
+        // Simulate audio reappearing after a crash before the unsynced unlink.
+        try Data([1, 2, 3]).write(to: path, options: .atomic)
+        var syncCalls = 0
+        let manifestSyncFailure = VoiceRecoveryJournal(root: audioRoot, syncDirectory: { _ in
+            syncCalls += 1
+            if syncCalls == 2 { throw VoiceRecoveryJournalError.invalid }
+        })
+        check(reject { try fresh.release(receipt, audioJournal: manifestSyncFailure) }, "a failed manifest-directory sync cannot confirm release")
+        check(try fresh.get(id)?.releaseState == "releasing", "failed final sync keeps the transcript recoverable")
+        check(try audio.current() == nil && !fm.fileExists(atPath: path.path), "lost callback can leave both unlinks applied")
         try fresh.release(receipt, audioJournal: audio)
         try fresh.release(receipt, audioJournal: audio)
         check(try fresh.get(id)?.releaseState == "released", "lost callback retries same release")
         check(!fm.fileExists(atPath: path.path), "only matching audio removed")
         check(try fresh.get(id)?.receipt.transcript.text == "Hola Capri", "release keeps all words")
+        let absentRoot = root.appendingPathComponent("initially-absent")
+        try VoiceRecoveryJournal(root: absentRoot).releaseExact(ready)
+        check(fm.fileExists(atPath: absentRoot.path), "retry on an absent root establishes and syncs the empty journal")
         let (other, otherPath) = try audio.reserve(id: UUID().uuidString, owner: UUID().uuidString, destination: "chat", locale: "es-MX", kind: .speech)
         try Data([4, 5]).write(to: otherPath)
         try fresh.release(receipt, audioJournal: audio)
         check(try audio.current() == other && fm.fileExists(atPath: otherPath.path), "old release cannot remove new capture")
+        // If old bytes reappear alongside a new capture, do not guess which
+        // operation owns them or touch either capture on a release retry.
+        try Data([1, 2, 3]).write(to: path, options: .atomic)
+        check(reject { try fresh.release(receipt, audioJournal: audio) }, "reappearing old audio requires review")
+        check(try audio.current() == other && fm.fileExists(atPath: otherPath.path) && fm.fileExists(atPath: path.path), "retry preserves both old bytes and the newer capture")
+        try fm.removeItem(at: path)
         var changed = transcript
         changed = VoiceNativeTranscript(sessionId: id, text: "distinto", segments: [VoiceSegment(text: "distinto", startSeconds: 0, endSeconds: 1)], durationSeconds: 1, locale: "es-MX", source: transcript.source)
         let mismatch = VoiceNativeReceipt(schema: receipt.schema, audio: ready, transcript: changed)

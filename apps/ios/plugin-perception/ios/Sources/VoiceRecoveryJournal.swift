@@ -69,11 +69,21 @@ final class VoiceRecoveryJournal {
     private static let lock = NSLock()
     private let root: URL
     private let manager: FileManager
+    private let syncDirectory: (URL) throws -> Void
     private let maxAudioBytes: Int64 = 128 * 1024 * 1024
     private var manifest: URL { root.appendingPathComponent("current.json") }
     private var lockFile: URL { root.appendingPathComponent(".journal.lock") }
 
-    init(root: URL, manager: FileManager = .default) { self.root = root; self.manager = manager }
+    init(root: URL, manager: FileManager = .default, syncDirectory: @escaping (URL) throws -> Void = VoiceRecoveryJournal.syncDirectory) {
+        self.root = root; self.manager = manager; self.syncDirectory = syncDirectory
+    }
+
+    private static func syncDirectory(_ url: URL) throws {
+        let fd = url.path.withCString { open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) }
+        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        defer { _ = closeVoiceDescriptor(fd) }
+        guard fsync(fd) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+    }
 
     private func locked<T>(_ operation: () throws -> T) rethrows -> T {
         Self.lock.lock(); defer { Self.lock.unlock() }; return try operation()
@@ -298,12 +308,16 @@ final class VoiceRecoveryJournal {
             let existing = try read()
             if existing == nil {
                 guard !(try exists(audio(expected))) else { throw VoiceRecoveryJournalError.changed }
+                // A previous unlink may have succeeded before its callback or
+                // directory synchronization failed. Confirm it on retry.
+                try syncDirectory(root)
                 return
             }
             if existing != expected {
                 // A newer capture can occupy the journal after the old audio
                 // was released. Never touch it when retrying the old receipt.
                 guard !(try exists(audio(expected))) else { throw VoiceRecoveryJournalError.changed }
+                try syncDirectory(root)
                 return
             }
             let file = audio(expected)
@@ -312,7 +326,11 @@ final class VoiceRecoveryJournal {
                 guard identity.byteCount == expected.byteCount, identity.sha256 == expected.sha256 else { throw VoiceRecoveryJournalError.changed }
                 try manager.removeItem(at: file)
             }
+            // Do not remove the binding until the audio unlink is durable.
+            // Retry even if a previous attempt already removed the file.
+            try syncDirectory(root)
             try manager.removeItem(at: manifest)
+            try syncDirectory(root)
           }
         }
     }
