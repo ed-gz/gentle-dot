@@ -828,7 +828,8 @@ test('character artwork persists; appearance and motion controls fit small and l
   await page.locator('[data-panel="settings"]').click();
   await expect(page.locator('#panel-settings')).toBeVisible();
   await page.locator('#art').setInputFiles({ name: 'capri-test.png', mimeType: 'image/png', buffer: Buffer.from(png!, 'base64') });
-  try { await expect(page.locator('#settings-status')).toHaveText('Arte guardado en este dispositivo.'); }
+  // Software WebGL can stall the browser task queue after the status is set.
+  try { await expect(page.locator('#settings-status')).toHaveText('Arte guardado en este dispositivo.', { timeout: 20000 }); }
   catch (error) {
     console.log('Artwork selection failure', await page.evaluate(async () => ({
       fileCount: (document.querySelector('#art') as HTMLInputElement).files?.length,
