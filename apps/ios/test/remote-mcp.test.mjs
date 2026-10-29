@@ -53,6 +53,29 @@ test('JSON schema validates nested arguments, refs, bounds and rejects unsafe un
   assert.throws(() => validateMCPArguments({ type: 'object', patternProperties: { '.*': {} } }, {}), /no compatibles/);
   assert.throws(() => canonicalJSON(JSON.parse('{"__proto__":{"x":1}}')));
 });
+test('rejects unsupported dialects and malformed or hidden schema restrictions before approval or execution', async () => {
+  const supported = { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties: { n: { type: 'number', exclusiveMinimum: 0 } } };
+  assert.deepEqual(validateMCPArguments(supported, { n: 1 }), { n: 1 });
+  assert.throws(() => validateMCPArguments(supported, { n: 0 }));
+  const unsupported = [
+    { $schema: 'http://json-schema.org/draft-04/schema#', type: 'object', properties: { n: { type: 'number', minimum: 0, exclusiveMinimum: true } } },
+    { $schema: ['https://json-schema.org/draft/2020-12/schema'], type: 'object' },
+    { type: 'object', properties: { n: { type: 'number', exclusiveMinimum: true } } },
+    { type: 'object', properties: { unused: { type: 'string', pattern: '^allowed' } } },
+    { type: 'object', properties: { unused: { $schema: 'http://json-schema.org/draft-04/schema#', type: 'number' } } },
+    { type: 'object', properties: { unused: { $id: 'https://other.example/', $ref: '#/$defs/value' } } },
+    { type: 'object', properties: { unused: { type: 'string', minLength: '4' } } },
+    { type: 'object', properties: { unused: { $ref: '#/$defs/a%2Fb' } }, $defs: { 'a/b': { type: 'string' } } },
+  ];
+  for (const inputSchema of unsupported) {
+    assert.throws(() => validateMCPArguments(inputSchema, { n: 0 }));
+    const f = fixture(); f.setInputSchema(inputSchema);
+    const [tool] = await discoverMCPTools(id, f.services); let reviewed = false;
+    await assert.rejects(tool.execute({ n: 0 }, context(async () => { reviewed = true; return true; })));
+    assert.equal(reviewed, false); assert.equal(f.journal.length, 0);
+    assert.equal(f.calls.some(call => call.rpc.method === 'tools/call'), false);
+  }
+});
 test('unsupported combinator branches never become false matches that permit a call', () => {
   for (const combinator of ['oneOf', 'anyOf', 'allOf']) {
     const uncertain = { type: 'object', properties: { text: { [combinator]: [
@@ -114,6 +137,18 @@ test('unsupported versions stop after initialization without advertising readine
     assert.deepEqual(f.calls.map(call => call.rpc.method), ['initialize']);
     assert.equal(f.journal.length, 0);
   }
+});
+test('a modern-only server rejecting legacy initialization does not trigger a tool call or fallback', async () => {
+  const f = fixture(); let requests = 0;
+  f.services.request = async request => {
+    requests++;
+    const rpc = JSON.parse(request.body);
+    assert.equal(rpc.method, 'initialize');
+    return { status: 400, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: rpc.id,
+      error: { code: -32602, message: 'Missing per-request metadata' } }) };
+  };
+  await assert.rejects(discoverMCPTools(id, f.services), /HTTP 400/);
+  assert.equal(requests, 1); assert.equal(f.journal.length, 0);
 });
 test('MCP 2025-03-26 accepts correlated batches while preserving review and journal ordering', async () => {
   const f = fixture('2025-03-26'); f.setBatchResponses(true);
@@ -186,6 +221,7 @@ test('invalid or unsupported output schema remains an unverified correlated resu
   for (const output of [
     { type: 'object', properties: { number: { type: 'integer', minimum: 10 } }, required: ['number'] },
     { type: 'object', patternProperties: { '.*': {} } },
+    { $schema: 'http://json-schema.org/draft-04/schema#', type: 'object', properties: { number: { type: 'integer', minimum: 5, exclusiveMinimum: true } } },
     { type: 'object', properties: { number: { oneOf: [{ type: 'integer' }, { type: 'integer', multipleOf: 5 }] } } },
   ]) {
     const f = fixture('2025-11-25'); f.setOutputSchema(output); f.setCallResult({ content: [], structuredContent: { number: 5 } });

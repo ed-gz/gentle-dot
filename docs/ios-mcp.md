@@ -3,7 +3,7 @@
 Capri puede descubrir herramientas de un servidor MCP remoto configurado por el
 usuario. No hay una lista fija de proveedores. El endpoint usa HTTPS; la credencial
 Bearer opcional se guarda en Keychain y nunca se entrega al modelo. También se puede autorizar un cliente OAuth público nativo previamente registrado por el servicio. Los servicios
-deben ofrecer Streamable HTTP y negociar MCP `2025-11-25` o `2025-06-18`, con
+deben ofrecer Streamable HTTP y negociar MCP `2025-11-25`, `2025-06-18` o `2025-03-26`, con
 respuestas JSON o SSE que terminen dentro de 30 segundos y 2 MiB. Esto requiere
 internet; no depende de la PC.
 
@@ -38,7 +38,7 @@ posteriores. El resultado es un arreglo de `Tool` compatible con el registro loc
 sus nombres `mcp_<hash>` son estables por conexión y herramienta.
 
 El cliente propone `2025-11-25` al inicializar. Acepta una contraoferta
-`2025-06-18` y usa exclusivamente la versión negociada en los encabezados de la
+`2025-06-18` o `2025-03-26` y usa exclusivamente la versión negociada en los encabezados de la
 notificación y todas las solicitudes posteriores. Si el servidor ofrece otra
 versión, no envía la notificación de inicialización ni consultas o llamadas a
 herramientas. No reintenta la inicialización en respuesta a errores HTTP genéricos.
@@ -57,11 +57,21 @@ revisión propia. No basta cambiar el número de versión. Referencias: [version
 [transporte](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)
 y [versiones del SDK oficial](https://ts.sdk.modelcontextprotocol.io/v2/protocol-versions).
 
+La evaluación de compatibilidad de `2026-07-28` debe comprobar, como mínimo:
+
+1. Descubrimiento inocuo `server/discover` con `_meta` de versión y capacidades; detectar errores JSON-RPC modernos en HTTP 400 antes de intentar el handshake anterior. Ningún `tools/call` se usa para detectar versiones ni se repite automáticamente tras un error incierto.
+2. Solicitudes modernas sin sesión, con `MCP-Protocol-Version` y `Mcp-Method`; `tools/call` también exige `Mcp-Name`. Los parámetros anotados con `x-mcp-header` requieren cabeceras `Mcp-Param-*` validadas y codificadas según el transporte, con correspondencia exacta entre cuerpo y cabeceras.
+3. `resultType` y solicitudes de varias rondas: no tratar `input_required` como éxito. Mientras no exista una interacción revisable para elicitación y demás capacidades, rechazarla de forma explícita; un eventual siguiente paso debe vincular la aprobación al contenido completo y conservar la evidencia sin reejecutar una operación incierta.
+4. Compatibilidad anterior: servidor dual con versión moderna, servidor sólo moderno, servidor 2025, error `UnsupportedProtocolVersion`, discrepancia de cabeceras, ausencia de capacidad y 401 OAuth deben probarse por separado; un error moderno reconocido no habilita un downgrade silencioso. OAuth debe revisarse independientemente y no requiere credenciales para los fixtures.
+5. La especificación exige JSON Schema 2020-12 completo; Capri sólo implementa un subconjunto y rechaza restricciones que no puede evaluar. Ampliarlo y probarlo contra casos oficiales es requisito para afirmar conformidad completa. Referencias: [mensajes y esquema](https://modelcontextprotocol.io/specification/2026-07-28/basic), [cabeceras y retrocompatibilidad HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http), [herramientas](https://modelcontextprotocol.io/specification/2026-07-28/server/tools) y [autorización](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization).
+
 El descubrimiento admite hasta 64 herramientas, diez páginas y 512 KiB de catálogo.
 Cada esquema individual puede ocupar 16 KiB. Se validan tipos, propiedades,
 obligatorios, referencias locales, combinaciones, enumeraciones, constantes y
-límites de números, textos y arreglos. Las restricciones no implementadas —por
-ejemplo patrones regulares o referencias externas— producen un error explícito
+límites de números, textos y arreglos. Se admite el dialecto predeterminado
+2020-12 o su identificador explícito; otros dialectos, identificadores de recurso
+`$id`, restricciones malformadas y palabras no implementadas —por ejemplo
+patrones regulares o referencias externas— producen un error explícito
 antes de ejecutar. No se ignoran para fingir compatibilidad.
 
 Cada llamada solicita una revisión humana dentro de la conversación, incluso si el

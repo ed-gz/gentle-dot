@@ -27,8 +27,49 @@ export function validateMCPArguments(schema: Record<string, unknown>, value: unk
   // cannot evaluate. Treating both as false could make oneOf accept a value
   // even though another (unsupported) branch might match it as well.
   class UnsupportedSchema extends Error {}
-  const keywords = new Set(['$schema', '$id', '$defs', 'definitions', '$ref', 'title', 'description', 'default', 'examples', 'deprecated', 'readOnly', 'writeOnly',
+  const keywords = new Set(['$schema', '$defs', 'definitions', '$ref', 'title', 'description', 'default', 'examples', 'deprecated', 'readOnly', 'writeOnly',
     'type', 'properties', 'required', 'additionalProperties', 'items', 'minItems', 'maxItems', 'uniqueItems', 'minLength', 'maxLength', 'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'enum', 'const', 'anyOf', 'oneOf', 'allOf', 'minProperties', 'maxProperties']);
+  // Validate the schema itself before inspecting arguments. Otherwise an
+  // unvisited property or an ill-typed keyword can silently weaken approval.
+  let nodes = 0;
+  function inspect(rule: unknown, depth = 0): void {
+    if (++nodes > 2000 || depth > 24) throw new UnsupportedSchema('Esquema demasiado complejo.');
+    if (typeof rule === 'boolean') return;
+    if (!object(rule) || Object.keys(rule).some(key => !keywords.has(key))) throw new UnsupportedSchema('El esquema MCP usa validaciones aún no compatibles; no se ejecutó la herramienta.');
+    if (rule.$schema !== undefined && (depth !== 0 || typeof rule.$schema !== 'string' || !['https://json-schema.org/draft/2020-12/schema', 'https://json-schema.org/draft/2020-12/schema#'].includes(rule.$schema)))
+      throw new UnsupportedSchema('El dialecto del esquema MCP no es compatible.');
+    if (rule.$ref !== undefined && (typeof rule.$ref !== 'string' || !rule.$ref.startsWith('#/') || /%|~(?![01])/.test(rule.$ref)))
+      throw new UnsupportedSchema('Referencias externas o no compatibles no admitidas.');
+    const types = ['null', 'array', 'object', 'integer', 'number', 'string', 'boolean'];
+    if (rule.type !== undefined) {
+      const declared = Array.isArray(rule.type) ? rule.type : [rule.type];
+      if (!declared.length || declared.some(type => typeof type !== 'string' || !types.includes(type)) || new Set(declared).size !== declared.length)
+        throw new UnsupportedSchema('Tipo de esquema MCP inválido.');
+    }
+    for (const key of ['minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum'])
+      if (rule[key] !== undefined && (typeof rule[key] !== 'number' || !Number.isFinite(rule[key]))) throw new UnsupportedSchema('Límite de esquema MCP inválido.');
+    for (const key of ['minItems', 'maxItems', 'minLength', 'maxLength', 'minProperties', 'maxProperties'])
+      if (rule[key] !== undefined && (!Number.isSafeInteger(rule[key]) || (rule[key] as number) < 0)) throw new UnsupportedSchema('Límite de esquema MCP inválido.');
+    for (const key of ['uniqueItems', 'deprecated', 'readOnly', 'writeOnly'])
+      if (rule[key] !== undefined && typeof rule[key] !== 'boolean') throw new UnsupportedSchema('Atributo de esquema MCP inválido.');
+    for (const key of ['title', 'description'])
+      if (rule[key] !== undefined && typeof rule[key] !== 'string') throw new UnsupportedSchema('Atributo de esquema MCP inválido.');
+    if (rule.examples !== undefined && !Array.isArray(rule.examples)) throw new UnsupportedSchema('Ejemplos de esquema MCP inválidos.');
+    if (rule.enum !== undefined && (!Array.isArray(rule.enum) || !rule.enum.length || new Set(rule.enum.map(canonicalJSON)).size !== rule.enum.length)) throw new UnsupportedSchema('Enumeración de esquema MCP inválida.');
+    if (rule.required !== undefined && (!Array.isArray(rule.required) || rule.required.some(key => typeof key !== 'string') || new Set(rule.required).size !== rule.required.length))
+      throw new UnsupportedSchema('Campos obligatorios de esquema MCP inválidos.');
+    for (const key of ['properties', '$defs', 'definitions']) if (rule[key] !== undefined) {
+      if (!object(rule[key])) throw new UnsupportedSchema('Propiedades de esquema MCP inválidas.');
+      for (const value of Object.values(rule[key])) inspect(value, depth + 1);
+    }
+    for (const key of ['additionalProperties', 'items']) if (rule[key] !== undefined) inspect(rule[key], depth + 1);
+    for (const key of ['anyOf', 'oneOf', 'allOf']) if (rule[key] !== undefined) {
+      const branches = rule[key];
+      if (!Array.isArray(branches) || !branches.length || branches.length > 20) throw new UnsupportedSchema('Combinación de esquema inválida.');
+      for (const branch of branches) inspect(branch, depth + 1);
+    }
+  }
+  inspect(schema);
   function check(rule: unknown, input: unknown, depth = 0): void {
     if (depth > 24) throw new UnsupportedSchema('Esquema demasiado profundo.');
     if (typeof rule === 'boolean') { if (!rule) throw new Error('Valor no admitido.'); return; }
