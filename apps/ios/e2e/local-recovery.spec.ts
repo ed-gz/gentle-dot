@@ -80,7 +80,7 @@ test('failed conversation restoration preserves stored history and retries with 
   await page.locator('[data-panel="chat"]').click();
   await expect(page.locator('#retry-conversation')).toBeVisible();
   await expect(page.locator('#send')).toBeDisabled();
-  await expect(page.locator('#engine-status')).toContainText('Lista');
+  await expect(page.locator('#engine-status')).toContainText('Revisa la recuperación de la conversación');
 
   const editedDraft = 'Conservar también lo que escribí durante la recuperación.';
   await page.clock.install();

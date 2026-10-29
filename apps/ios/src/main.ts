@@ -903,6 +903,7 @@ function updateControls() {
     : localBusy ? 'Una respuesta del iPhone está en curso.'
     : recoveringNativeId ? 'Una respuesta anterior sigue en curso en este iPhone.'
     : !localRecoveryReady ? recoveringLocal ? 'Comprobando respuestas guardadas en este iPhone…'
+      : conversationRestoreFailed ? 'Revisa la recuperación de la conversación antes de enviar.'
       : !conversationReady ? 'Preparando la conversación en este iPhone…'
       : 'Revisa la recuperación antes de iniciar otra respuesta local.'
     : health.local.detail;
