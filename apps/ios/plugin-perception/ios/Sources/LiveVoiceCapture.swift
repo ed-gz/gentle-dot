@@ -28,6 +28,7 @@ private final class LiveCaptureState {
     private let queueLimit = 64
     private var remainingFrames: Int64
     private var failure: LiveVoiceCaptureError?
+    private var level: Double?
     var stopEngine: (() -> Void)?
 
     init(url: URL, source: AVAudioFormat, target: AVAudioFormat, issue: @escaping (String) -> Void) throws {
@@ -58,6 +59,8 @@ private final class LiveCaptureState {
 
     func enableHardwareMonitor() { lock.lock(); lifecycle.enableHardwareMonitor(); lock.unlock() }
 
+    var microphoneLevel: Double? { lock.lock(); defer { lock.unlock() }; return level }
+
     /// This may arrive on the audio engine's internal queue. Do not tear down
     /// the engine here; report the failure and schedule teardown on main.
     func hardwareChanged() {
@@ -84,6 +87,7 @@ private final class LiveCaptureState {
             failure = .captureOverflow; lifecycle.close(); stop = true
             issueMessage = "No pude conservar todo el audio. Vuelve a dictarlo."
         } else {
+            level = VoiceLevel.measure(buffer)
             let frames = AVAudioFrameCount(min(Int64(buffer.frameLength), remainingFrames))
             if let copy = LiveAudioBuffer.copy(buffer, frames: frames) {
                 remainingFrames -= Int64(frames)
@@ -240,6 +244,7 @@ final class LiveVoiceCapture {
     private var configurationObserver: NSObjectProtocol?
 
     var recording: Bool { running }
+    var microphoneLevel: Double? { state.microphoneLevel }
 
     init(url: URL, analyzerFormat: AVAudioFormat, onPreviewIssue: @escaping (String) -> Void) throws {
         self.url = url

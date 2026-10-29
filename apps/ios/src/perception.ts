@@ -33,6 +33,8 @@ export interface VoiceAvailability {
   /** Provisional text is display-only and must never be sent as a final transcript. */
   partial?: string;
   previewIssue?: string;
+  /** Ephemeral input level, not speech detection. Absent when metering is unavailable. */
+  microphoneLevel?: number;
 }
 export interface VoiceSession { sessionId: string; maxDurationSeconds: number }
 export interface VoiceSegment { text: string; startSeconds: number; endSeconds: number }
@@ -99,7 +101,34 @@ function successful(value: unknown): Record<string, unknown> {
 }
 async function native(command: string, args?: Record<string, unknown>): Promise<unknown> {
   if (!isTauri()) throw new Error('La voz y Vision requieren Capri instalada en el iPhone. Este navegador es una vista previa.');
-  return invoke(`plugin:perception|${command}`, args);
+  try { return await invoke(`plugin:perception|${command}`, args); }
+  catch { throw new Error('No pude comunicarme con las funciones del iPhone. Cierra y vuelve a abrir Capri.'); }
+}
+
+export class VoiceBridgeTimeout extends Error {
+  constructor(message: string) { super(message); this.name = 'VoiceBridgeTimeout'; }
+}
+/** A late result can never turn a timed-out status check into success. */
+export async function withVoiceDeadline<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([operation, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new VoiceBridgeTimeout(message)), timeoutMs);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+/** Fence a timed-out start by owner. An old attempt must not cancel a newer one. */
+export async function voiceStartWithDeadline<T>(operation: Promise<T>, cancelOwner: () => Promise<void>, timeoutMs = 60_000, cancelTimeoutMs = 8_000): Promise<T> {
+  try {
+    return await withVoiceDeadline(operation, timeoutMs, 'El micrófono tardó demasiado. Revisa el permiso de iOS y vuelve a intentarlo.');
+  } catch (error) {
+    if (error instanceof VoiceBridgeTimeout) {
+      try { await withVoiceDeadline(cancelOwner(), cancelTimeoutMs, 'No se confirmó la cancelación.'); }
+      catch { throw new Error('No pude confirmar que el micrófono se detuvo. Sal de Capri para interrumpirlo.'); }
+    }
+    throw error;
+  }
 }
 
 export function parseVoiceAvailability(value: unknown): VoiceAvailability {
@@ -119,6 +148,8 @@ export function parseVoiceAvailability(value: unknown): VoiceAvailability {
     ...(reply.recoveryIssue !== undefined ? { recoveryIssue: string(reply.recoveryIssue, 500) } : {}),
     ...(reply.partial !== undefined ? { partial: string(reply.partial, 4_800, true) } : {}),
     ...(reply.previewIssue !== undefined ? { previewIssue: string(reply.previewIssue, 500) } : {}),
+    ...(typeof reply.microphoneLevel === 'number' && Number.isFinite(reply.microphoneLevel) && reply.microphoneLevel >= 0 && reply.microphoneLevel <= 1
+      ? { microphoneLevel: reply.microphoneLevel } : {}),
   };
 }
 export function parseVoiceSession(value: unknown): VoiceSession {
@@ -189,14 +220,22 @@ export function parseRecognizedDocument(value: unknown, expected: { name: string
     coordinateSystem: 'normalized-bottom-left', engine: 'apple-vision', warnings: reply.warnings.map(value => string(value, 500)) };
 }
 
-export async function checkVoice(): Promise<VoiceAvailability> { return parseVoiceAvailability(await native('check_voice')); }
+export async function checkVoice(): Promise<VoiceAvailability> {
+  return parseVoiceAvailability(await withVoiceDeadline(native('check_voice'), 12_000,
+    'La comprobación de voz no respondió. Vuelve a tocar el micrófono.'));
+}
 /** Explicit user action: Apple may download shared language assets using internet. */
 export async function prepareVoice(ownerId?: string): Promise<VoiceAvailability> {
   const result = await native('prepare_voice', ownerId ? { ownerId: sessionId(ownerId) } : undefined);
   successful(result);
   return parseVoiceAvailability(result);
 }
-export async function startVoice(ownerId?: string): Promise<VoiceSession> { return parseVoiceSession(await native('start_voice', ownerId ? { ownerId: sessionId(ownerId) } : undefined)); }
+export async function startVoice(ownerId?: string): Promise<VoiceSession> {
+  if (!ownerId) throw new Error('No pude identificar este dictado. Vuelve a intentarlo.');
+  const owner = sessionId(ownerId);
+  const reply = await voiceStartWithDeadline(native('start_voice', { ownerId: owner }), () => cancelVoice(owner));
+  return parseVoiceSession(reply);
+}
 /** Returns a draft; it never sends the instruction to a conversation or service. */
 export async function stopVoice(id: string): Promise<VoiceTranscript> {
   return parseVoiceTranscript(await native('stop_voice', { sessionId: sessionId(id) }), id);

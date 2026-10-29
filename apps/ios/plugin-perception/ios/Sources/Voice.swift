@@ -29,6 +29,7 @@ struct VoiceReply: Encodable {
     var maxDurationSeconds: Int? = nil
     var partial: String? = nil
     var previewIssue: String? = nil
+    var microphoneLevel: Double? = nil
     var text: String? = nil
     var segments: [VoiceSegment]? = nil
     var durationSeconds: Double? = nil
@@ -239,11 +240,16 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
         }
         if let id = sessionID, let locale = recordedLocale {
             let recording = (recorder?.isRecording ?? false) || (liveCapture?.recording ?? false)
+            var level: Double?
+            if recording {
+                if let capture = liveCapture { level = capture.microphoneLevel }
+                else if let capture = recorder { capture.updateMeters(); level = VoiceLevel.fromDecibels(capture.averagePower(forChannel: 0)) }
+            }
             return VoiceReply(ok: true, available: true, status: "available", locale: locale.identifier(.bcp47),
                 assetsInstalled: true, microphonePermission: permission, recording: recording,
                 readyToTranscribe: !recording, busy: busy, sessionId: id,
                 ownerId: owners.active, recoveryPending: recoveryPending, recoveryIssue: recoveryIssue, maxDurationSeconds: Int(maximumDuration),
-                partial: liveTranscript.text, previewIssue: previewIssue)
+                partial: liveTranscript.text, previewIssue: previewIssue, microphoneLevel: level)
         }
         guard let selected = await preferredTranscriber() else {
             return VoiceReply(available: false, status: "unsupported_language", microphonePermission: permission)
@@ -348,6 +354,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
                     AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
                 ])
                 capture.delegate = self
+                capture.isMeteringEnabled = true
                 guard capture.prepareToRecord(), capture.record(forDuration: maximumDuration) else {
                     throw NSError(domain: "CapriVoice", code: 1)
                 }

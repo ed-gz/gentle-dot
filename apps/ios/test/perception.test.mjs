@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { MAX_DOCUMENT_BYTES, hashSourceBytes, parseVoiceAvailability, parseVoiceSession, parseVoiceTranscript, VoiceRetryPending,
+import { MAX_DOCUMENT_BYTES, hashSourceBytes, parseVoiceAvailability, parseVoiceSession, parseVoiceTranscript, VoiceRetryPending, VoiceBridgeTimeout, withVoiceDeadline, voiceStartWithDeadline,
   validateDocument, parseRecognizedDocument } from '../src/perception.ts';
 
 const id = '01234567-89ab-cdef-0123-456789abcdef';
@@ -11,6 +11,24 @@ const document = () => ({ ok: true, engine: 'apple-vision', coordinateSystem: 'n
   source: { name: expected.name, mimeType: expected.type, size: expected.size, sha256: expected.sha256 },
   text: 'E-503', warnings: ['Contrasta el OCR.'], pages: [{ page: 1, pixelWidth: 200, pixelHeight: 100,
     text: 'E-503', observations: [{ kind: 'text', text: 'E-503', confidence: 0.8, bounds: { x: 0.1, y: 0.2, width: 0.5, height: 0.2 } }] }] });
+
+test('voice timeout reports an unresponsive bridge and fences only the timed-out start', async () => {
+  let resolveLate;
+  const delayed = new Promise(resolve => { resolveLate = resolve; });
+  await assert.rejects(withVoiceDeadline(delayed, 5, 'Sin respuesta'), error => error instanceof VoiceBridgeTimeout && error.message === 'Sin respuesta');
+  resolveLate('late');
+  assert.equal(await withVoiceDeadline(Promise.resolve('ready'), 50, 'late'), 'ready');
+
+  let cancelled = 0;
+  let finishStart;
+  const pending = new Promise(resolve => { finishStart = resolve; });
+  await assert.rejects(voiceStartWithDeadline(pending, async () => { cancelled++; }, 5), VoiceBridgeTimeout);
+  assert.equal(cancelled, 1);
+  finishStart('late');
+  await assert.rejects(voiceStartWithDeadline(Promise.reject(new Error('denied')), async () => { cancelled++; }, 50), /denied/);
+  assert.equal(cancelled, 1, 'ordinary native failure must not cancel another capture');
+  await assert.rejects(voiceStartWithDeadline(new Promise(() => {}), () => new Promise(() => {}), 5, 5), /No pude confirmar que el micrófono se detuvo/);
+});
 
 test('retry is limited to the original native voice session', () => {
   const reply = { ok: false, error: 'preview_pending', message: 'Audio guardado', sessionId: id };
@@ -45,6 +63,11 @@ test('voice availability requires downloaded assets and never infers microphone 
   assert.equal(pending.recoveryIssue, 'No detecté palabras.');
   assert.throws(() => parseVoiceAvailability({ status: 'available', recoveryIssue: 'x'.repeat(501) }));
   assert.throws(() => parseVoiceAvailability({ status: 'available', recoveryIssue: 1 }));
+  assert.equal(parseVoiceAvailability({ status: 'available', recording: true, microphoneLevel: 0 }).microphoneLevel, 0);
+  assert.equal(parseVoiceAvailability({ status: 'available', recording: true, microphoneLevel: 0.6 }).microphoneLevel, 0.6);
+  for (const level of [-1, 1.1, NaN, Infinity, '0.5']) {
+    assert.equal(parseVoiceAvailability({ status: 'available', recording: true, microphoneLevel: level }).microphoneLevel, undefined);
+  }
 });
 
 test('voice session accepts only bounded native recordings and valid request identity', () => {

@@ -22,6 +22,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
   const [availability, setAvailability] = useState<VoiceAvailability>();
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [elapsed, setElapsed] = useState(0);
+  const [level, setLevel] = useState(0);
   const [partial, setPartial] = useState('');
   const [note, setNote] = useState<string>();
   const [retryPending, setRetryPending] = useState(false);
@@ -35,7 +36,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     const ownerId = state.ownerId;
     const retainAudio = state.retry && !discardRetry;
     state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false; state.retry = false;
-    setPhase('idle'); setElapsed(0); setPartial(''); setDraft(undefined); setNote(undefined); setRetryPending(false);
+    setPhase('idle'); setElapsed(0); setLevel(0); setPartial(''); setDraft(undefined); setNote(undefined); setRetryPending(false);
     if (ownerId && !retainAudio) { forgetVoiceOrigin(ownerId); void cancelVoice(ownerId).catch(() => {}); }
   }, []);
   // Shared session components call cancel on unmount; preserve a completed
@@ -99,7 +100,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     const state = owner.current;
     if (!state.session || state.pending) return;
     const id = state.session, epoch = state.epoch, originalDestination = state.destination, originalOwner = state.ownerId;
-    state.pending = true; state.retry = true; setRetryPending(false); setPartial(''); setPhase('transcribing');
+    state.pending = true; state.retry = true; setRetryPending(false); setLevel(0); setPartial(''); setPhase('transcribing');
     void stopVoice(id).then(value => {
       if (originalOwner) forgetVoiceOrigin(originalOwner);
       if (state.epoch === epoch && state.enabled) { state.retry = false; setNote(undefined); setDraft({ id: epoch, text: value.text }); }
@@ -129,6 +130,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       try {
         const value = await checkVoice();
         if (!live || state.epoch !== epoch || state.session !== id || value.sessionId?.toLowerCase() !== id.toLowerCase()) return;
+        setLevel(value.microphoneLevel ?? 0);
         if (!value.recording && value.readyToTranscribe) {
           // A stopped native capture must not continue to appear as recording.
           // stop() is owner/epoch scoped and will surface any loss of audio.
@@ -171,7 +173,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     })().catch(error => { if (state.epoch === epoch) { forgetVoiceOrigin(ownerId); state.ownerId = ''; setNote(error.message); } }).finally(() => { if (state.epoch === epoch) state.pending = false; });
   }, [availability, destination, stop]);
   return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : availability?.available || availability?.status === 'assets_required' ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
-    phase, elapsed, level: 0, partial, note, draft, start, stop, cancel, retryPending, discarding, discardPending,
+    phase, elapsed, level, partial, note, draft, start, stop, cancel, retryPending, discarding, discardPending,
     draftTaken: id => setDraft(value => value?.id === id ? undefined : value),
     speaking: false, muted: true, stopSpeaking() {}, setMuted() {}, typed() {}, sent() {}, sendOnStop: false, setSendOnStop() {} };
 }
