@@ -166,7 +166,12 @@ advertencia lo dice antes de cerrar el aviso. Un cambio concurrente invalida la
 revisión. Los registros terminales no bloquean por ese límite, pero se conservan y
 pueden agotar la cuota real del dispositivo; falta una gestión de exportación y
 archivado sin pérdida. La consulta del agente pagina mediante el índice de estado y
-no carga resultados de ejecuciones ya terminadas.
+no carga resultados de ejecuciones ya terminadas. Sólo los registros `uncertain`,
+guardados después de recibir un error o resultado no verificable del transporte,
+pueden revisarse para cerrar el aviso. Los `executing` permanecen bloqueados:
+el cierre o la pérdida del proceso JavaScript no demuestra que URLSession nativa
+haya terminado. Falta un comprobante nativo correlacionado que permita recuperar
+esos registros sin liberar una petición todavía activa.
 
 Las pruebas Node verifican negociación de ambas versiones, rechazo de versiones
 desconocidas, sesiones, paginación, validación,

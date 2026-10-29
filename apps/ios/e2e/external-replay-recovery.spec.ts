@@ -53,11 +53,11 @@ test('a stale approval cannot close a changed remote operation', async ({page})=
     const store=await import('/src/external-connections.ts'), tools=await import('/src/connection-tools.ts');
     const connection=await store.saveConnection({kind:'mcp',label:'Servicio',endpoint:'https://fixture.example/mcp'},'');
     const attempt={requestId:crypto.randomUUID(),fingerprint:'b'.repeat(64),connectionId:connection.id,connectionRevision:connection.revision,endpoint:connection.endpoint,toolName:'send',schemaJSON:'{"type":"object"}',argumentsJSON:'{"text":"Exacto"}',state:'executing',createdAt:1,updatedAt:1};
-    await store.beginRemoteExecution(attempt);const resolve=tools.createConnectionTools().find(tool=>tool.definition.name==='connection_execution_resolve')!;
-    let blocked=false;try{await resolve.execute({requestId:attempt.requestId},{signal:new AbortController().signal,askApproval:async()=>{await store.finishRemoteExecution(attempt.requestId,'uncertain');return true;}});}catch{blocked=true;}
+    await store.beginRemoteExecution(attempt);await store.finishRemoteExecution(attempt.requestId,'uncertain');const resolve=tools.createConnectionTools().find(tool=>tool.definition.name==='connection_execution_resolve')!;
+    let blocked=false;try{await resolve.execute({requestId:attempt.requestId},{signal:new AbortController().signal,askApproval:async()=>{const changed=await store.getRemoteExecution(attempt.requestId);await store.reviewRemoteExecution(changed!);return true;}});}catch{blocked=true;}
     return {blocked,records:await store.listRemoteExecutions()};
   });
-  expect(result.blocked).toBe(true);expect(result.records[0].state).toBe('uncertain');
+  expect(result.blocked).toBe(true);expect(result.records[0].state).toBe('reviewed');
 });
 
 test('pending pagination and new reservations ignore large completed histories', async ({page})=>{
@@ -97,4 +97,29 @@ test('version-two records survive migration and protect newly recreated connecti
     return {blocked,records:await store.listRemoteExecutions()};
   });
   expect(result.blocked).toBe(true);expect(result.records).toHaveLength(1);expect(result.records[0].state).toBe('uncertain');
+});
+
+
+test('live and orphaned network operations stay blocked until transport durably settles', async ({page,context})=>{
+  await page.goto('/');const other=await context.newPage();await other.goto('/');
+  const attempt=await page.evaluate(async()=>{
+    const s=await import('/src/external-connections.ts'),p=await import('/src/provider-tools.ts');
+    const c=await s.saveConnection({kind:'https-api',provider:'github',label:'Servicio',endpoint:'https://api.github.com/'},'');
+    let ready!:()=>void;const started=new Promise<void>(resolve=>ready=resolve);
+    const tools=await p.createProviderTools(c.id,{getConnection:async()=>c,access:async()=>({connection:c,accessToken:'fixture'}),hash:async()=> 'b'.repeat(64),request:async()=>{ready();return new Promise(()=>{});}});
+    const call=tools.find(tool=>tool.definition.name.endsWith('_create_issue'))!;
+    (globalThis as any).held=call.execute({repository:'org/repo',title:'Exacto',text:'Texto',labels:[]},{signal:new AbortController().signal,askApproval:async()=>true});
+    await started;return (await s.listRemoteExecutions())[0];
+  });
+  const check=async()=>other.evaluate(async entry=>{
+    const s=await import('/src/external-connections.ts'),t=await import('/src/connection-tools.ts');let approvals=0,blocked=false,duplicate=false,directBlocked=false;
+    try{await t.createConnectionTools().find(x=>x.definition.name==='connection_execution_resolve')!.execute({requestId:entry.requestId},{signal:new AbortController().signal,askApproval:async()=>{approvals++;return true;}});}catch{blocked=true;}
+    try{await s.reviewRemoteExecution(entry);}catch{directBlocked=true;}
+    try{await s.beginRemoteExecution({...entry,requestId:crypto.randomUUID()});}catch{duplicate=true;}
+    return {approvals,blocked,directBlocked,duplicate,record:await s.getRemoteExecution(entry.requestId)};
+  },attempt);
+  expect(await check()).toMatchObject({approvals:0,blocked:true,directBlocked:true,duplicate:true,record:{state:'executing'}});
+  await page.close();
+  expect(await check()).toMatchObject({approvals:0,blocked:true,directBlocked:true,duplicate:true,record:{state:'executing'}});
+  await other.close();
 });

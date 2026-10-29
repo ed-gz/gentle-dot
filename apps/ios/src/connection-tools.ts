@@ -40,7 +40,8 @@ export function createConnectionTools(overrides: Partial<{ getConnection: typeof
       async execute(value,context) {
         const {requestId}=value as {requestId:string};context.signal.throwIfAborted();
         const current=await services.getRemoteExecution(requestId);context.signal.throwIfAborted();
-        if (!current || !['executing','uncertain'].includes(current.state) || typeof current.endpoint!=='string' || validEndpoint(current.endpoint)!==current.endpoint || typeof current.toolName!=='string' || !current.toolName || current.toolName.length>256 || typeof current.argumentsJSON!=='string' || current.argumentsJSON.length>100_000 || typeof current.schemaJSON!=='string' || current.schemaJSON.length>100_000) throw new Error('El registro requiere revisión y no se modificó.');
+        if (current?.state === 'executing') throw new Error('Esta operación sigue en curso o perdió su comprobante de transporte. Permanece bloqueada; revisa el servicio.');
+        if (!current || current.state !== 'uncertain' || typeof current.endpoint!=='string' || validEndpoint(current.endpoint)!==current.endpoint || typeof current.toolName!=='string' || !current.toolName || current.toolName.length>256 || typeof current.argumentsJSON!=='string' || current.argumentsJSON.length>100_000 || typeof current.schemaJSON!=='string' || current.schemaJSON.length>100_000) throw new Error('El registro requiere revisión y no se modificó.');
         let args:unknown, definition:unknown;try {args=JSON.parse(current.argumentsJSON);definition=JSON.parse(current.schemaJSON);} catch {throw new Error('El registro requiere revisión y no se modificó.');}
         if (!object(args) || !object(definition)) throw new Error('El registro requiere revisión y no se modificó.');
         const expected:RemoteExecution=structuredClone(current);

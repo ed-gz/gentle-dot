@@ -227,12 +227,12 @@ export async function getRemoteExecution(id:string):Promise<RemoteExecution | nu
 /** Human review closes only the exact unresolved record; it does not send,
  * cancel the original request or assert that the remote action succeeded. */
 export async function reviewRemoteExecution(expected: RemoteExecution): Promise<void> {
-  if (!expected || !uuid.test(expected.requestId) || !['executing','uncertain'].includes(expected.state)) throw new Error('El registro no requiere esta revisión.');
+  if (!expected || !uuid.test(expected.requestId) || expected.state !== 'uncertain') throw new Error('El registro no requiere esta revisión.');
   const original = structuredClone(expected);
   await transaction<void>(['executions'], 'readwrite', (tx, done, fail) => {
     const store = tx.objectStore('executions'), read = store.get(original.requestId);
     read.onsuccess = () => {
-      if (!read.result || JSON.stringify(read.result) !== JSON.stringify(original) || !['executing','uncertain'].includes(read.result.state)) {
+      if (!read.result || JSON.stringify(read.result) !== JSON.stringify(original) || read.result.state !== 'uncertain') {
         fail(new Error('La operación cambió después de la revisión.')); return;
       }
       store.put({ ...read.result, state:'reviewed', updatedAt:Date.now() }); done();
