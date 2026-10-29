@@ -9,6 +9,16 @@ func expectsError(_ message: String, _ body: () throws -> Void) {
     do { try body(); require(false, message) } catch { }
 }
 
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--probe-owner" {
+    do { let gate = try ProvenanceLeaseGate(root: URL(fileURLWithPath: CommandLine.arguments[2])); withExtendedLifetime(gate) {}; exit(0) }
+    catch ProvenanceLeaseError.busy { exit(23) }
+    catch { exit(24) }
+}
+func probeOwner(_ root: URL) throws -> Int32 {
+    let process = Process(); process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]); process.arguments = ["--probe-owner", root.path]
+    process.standardOutput = Pipe(); process.standardError = Pipe(); try process.run(); process.waitUntilExit(); return process.terminationStatus
+}
+
 do {
     let root = uniqueRoot(); defer { try? FileManager.default.removeItem(at: root) }
     var clock = 10.0, schedules = 0
@@ -18,6 +28,7 @@ do {
     do { _ = try ProvenanceLeaseGate(root: root, bootId: secondBoot); require(false, "second owner must not enter") }
     catch ProvenanceLeaseError.busy { }
     catch { require(false, "second owner must fail specifically with busy") }
+    let concurrentProcess = try probeOwner(root); require(concurrentProcess == 23, "another process must be fenced")
     let a = id(), first = try gate!.prepare(id: a, revision: 3, model: "apple-local", input: "hello")
     require(first.inputSHA256 == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "hash of exact input")
     expectsError("identity binding", { _ = try gate!.start(id: a, leaseId: first.leaseId, revision: 3, model: "apple-local", input: "different", schedule: { schedules += 1 }) })
@@ -39,6 +50,7 @@ do {
     _ = try gate!.cancelPrepared(id: afterOrphanId, leaseId: afterOrphan.leaseId)
     let d = id(), fourth = try gate!.prepare(id: d, revision: 6, model: "apple-local", input: "cuarto")
     gate = nil
+    let releasedProcess = try probeOwner(root); require(releasedProcess == 0, "owner lock must release")
     let restarted = try ProvenanceLeaseGate(root: root, bootId: secondBoot, now: { 1 })
     let expiredStatus = try restarted.status(id: d)
     require(expiredStatus.state == "expired", "restart expires prepared lease")
