@@ -21,7 +21,12 @@ final class PairingScanner: NSObject, PairingScannerSession, DataScannerViewCont
     func present(from presenter: UIViewController) {
         backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
             object: nil, queue: .main) { [weak self] _ in
-                self?.finish(.failure(DeviceFailure.unavailable("El escáner se detuvo al salir de Capri. Vuelve a intentar o elige una foto del QR.")))
+                // NotificationCenter delivers this observer on OperationQueue.main.
+                // Keep dismissal synchronous with backgrounding while making
+                // the actor isolation explicit to Swift's concurrency checker.
+                MainActor.assumeIsolated {
+                    self?.finish(.failure(DeviceFailure.unavailable("El escáner se detuvo al salir de Capri. Vuelve a intentar o elige una foto del QR.")))
+                }
             }
         Task { @MainActor [weak self, weak presenter] in
             guard let self = self else { return }

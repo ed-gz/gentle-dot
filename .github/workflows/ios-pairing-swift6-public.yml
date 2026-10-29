@@ -1,0 +1,29 @@
+name: Capri pairing scanner Swift 6 check
+
+# Public source and a typecheck stub only; no signing, IPA or artifacts.
+on:
+  push:
+    branches:
+      - fix/android-capri-motion-mobile
+    paths:
+      - .github/workflows/ios-pairing-swift6-public.yml
+
+permissions: {}
+
+jobs:
+  swift6:
+    if: github.repository == 'ed-gz/gentle-dot'
+    runs-on: macos-26
+    timeout-minutes: 5
+    steps:
+      - name: Fetch exact public source without credentials
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git init .
+          git -c credential.helper= fetch --depth=1 https://github.com/ed-gz/gentle-dot.git "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Typecheck scanner with Swift 6 strict concurrency
+        run: bash apps/ios/scripts/check-pairing-scanner-swift6.sh
