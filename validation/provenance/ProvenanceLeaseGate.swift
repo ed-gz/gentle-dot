@@ -24,8 +24,11 @@ enum ProvenanceLeaseStart { case acceptedNew, acceptedEarlier, rejected, expired
 final class ProvenanceLeaseGate {
     private struct Envelope: Codable { let version: Int; let records: [ProvenanceLeaseRecord] }
     private static let processBootId = UUID().uuidString.lowercased()
+    private static let ownershipLock = NSLock()
+    private static var ownedPaths = Set<String>()
     private let root: URL
     private let lockDescriptor: Int32
+    private let lockPath: String
     private let queueLock = NSRecursiveLock()
     private var scheduling = false
     private let bootId: String
@@ -47,13 +50,25 @@ final class ProvenanceLeaseGate {
         let rootAttributes = try FileManager.default.attributesOfItem(atPath: root.path)
         guard rootAttributes[.type] as? FileAttributeType == .typeDirectory else { throw ProvenanceLeaseError.corrupt }
         try Self.syncDirectory(parent)
-        let path = root.appendingPathComponent("leases.lock").path
+        let path = root.standardizedFileURL.resolvingSymlinksInPath().appendingPathComponent("leases.lock").path
+        Self.ownershipLock.lock(); defer { Self.ownershipLock.unlock() }
+        guard !Self.ownedPaths.contains(path) else { throw ProvenanceLeaseError.busy }
         let descriptor = path.withCString { Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, mode_t(0o600)) }
         guard descriptor >= 0 else { throw ProvenanceLeaseError.uncertain }
-        guard Darwin.flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { Darwin.close(descriptor); throw ProvenanceLeaseError.busy }
-        self.root = root; self.lockDescriptor = descriptor; self.bootId = bootId ?? Self.processBootId; self.now = now
+        var owner = flock(); owner.l_type = Int16(F_WRLCK); owner.l_whence = Int16(SEEK_SET); owner.l_start = 0; owner.l_len = 0
+        guard Darwin.fcntl(descriptor, F_SETLK, &owner) == 0 else {
+            let code = errno; Darwin.close(descriptor)
+            if code == EACCES || code == EAGAIN { throw ProvenanceLeaseError.busy }
+            throw ProvenanceLeaseError.uncertain
+        }
+        Self.ownedPaths.insert(path)
+        self.root = root; self.lockDescriptor = descriptor; self.lockPath = path; self.bootId = bootId ?? Self.processBootId; self.now = now
     }
-    deinit { Darwin.flock(lockDescriptor, LOCK_UN); Darwin.close(lockDescriptor) }
+    deinit {
+        Self.ownershipLock.lock(); defer { Self.ownershipLock.unlock() }
+        var owner = flock(); owner.l_type = Int16(F_UNLCK); owner.l_whence = Int16(SEEK_SET); owner.l_start = 0; owner.l_len = 0
+        Darwin.fcntl(lockDescriptor, F_SETLK, &owner); Darwin.close(lockDescriptor); Self.ownedPaths.remove(lockPath)
+    }
     private static func syncDirectory(_ url: URL) throws {
         let descriptor = url.path.withCString { Darwin.open($0, O_RDONLY | O_CLOEXEC) }
         guard descriptor >= 0 else { throw ProvenanceLeaseError.uncertain }
