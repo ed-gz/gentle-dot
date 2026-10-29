@@ -24,7 +24,15 @@ async function fixture(page: Page, onRequest: (message: WireMessage, send: (mess
   await page.addInitScript(() => {
     const state = globalThis as any;
     state.isTauri = true;
-    state.__TAURI_INTERNALS__ = { invoke: async (command: string) => {
+    state.__TAURI_INTERNALS__ = { invoke: async (command: string, wrapper: any) => {
+      const request = wrapper?.request;
+      if (command.endsWith('secret_get')) {
+        const value = sessionStorage.getItem(`fixture-keychain:${request.scope}:${request.account}`);
+        return value === null ? { ok: true } : { ok: true, value };
+      }
+      if (command.endsWith('secret_set')) {
+        sessionStorage.setItem(`fixture-keychain:${request.scope}:${request.account}`, request.value); return { ok: true };
+      }
       if (command.endsWith('results_list')) return { ok: true, items: [] };
       if (command.endsWith('share_list') || command.endsWith('documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: true, status: 'available', supportsSpanish: true };
@@ -47,13 +55,13 @@ async function connect(page: Page) {
   await page.locator('#url').fill(endpoint);
   await page.locator('#token').fill('fixture-only');
   await page.locator('#connection button[type="submit"]').click();
-  await expect(page.locator('#status')).toHaveText('Vinculado a Gentle Dot');
+  await expect(page.locator('#status')).toContainText('Acceso guardado en Keychain');
   await page.locator('[data-panel="chat"]').click();
   await page.locator('.engine-details summary').click();
   await page.locator('#engine').selectOption('gentle');
 }
 
-test('history aliases keep DOM chronology and coalesce tool replies around local dialogue', async ({ page }) => {
+test('history preserves uncorrelated live and historical turns around local dialogue', async ({ page }) => {
   let wireText = '';
   const link = await fixture(page, (message, send) => {
     if (message.type === 'get_history') send({ type: 'history', conversationId: 'c1', messages: wireText ? [
@@ -70,20 +78,20 @@ test('history aliases keep DOM chronology and coalesce tool replies around local
   await connect(page);
   await page.locator('#prompt').fill('Solicitud para la laptop');
   await page.locator('#send').click();
-  await expect(page.locator('.chat-text')).toHaveText(['Solicitud para la laptop', 'Primera parte', 'Parte final']);
+  await expect(page.locator('.chat-text')).toHaveText(['Solicitud para la laptop', 'Solicitud para la laptop', 'Primera parte', 'Parte final']);
   await page.locator('#engine').selectOption('iphone');
   await page.locator('#prompt').fill('Mi siguiente turno es local');
   await page.locator('#send').click();
-  await expect(page.locator('.chat-text')).toHaveCount(5);
+  await expect(page.locator('.chat-text')).toHaveCount(6);
   await link.drop();
   await expect.poll(link.connections).toBe(2);
   await expect(page.locator('.chat-text')).toHaveText([
-    'Solicitud para la laptop', 'Primera parte\n\nParte final', 'Mi siguiente turno es local', 'Respuesta del fixture local',
+    'Solicitud para la laptop', 'Solicitud para la laptop', 'Primera parte', 'Parte final', 'Mi siguiente turno es local', 'Respuesta del fixture local', 'Solicitud para la laptop', 'Primera parte\n\nParte final',
   ], { useInnerText: true });
   expect(link.requests.filter(message => message.type === 'send')).toHaveLength(1);
   await expect.poll(async () => page.evaluate(async () =>
     (await (await import('/src/conversation.ts' as string)).loadConversation()).entries.map((entry: any) => entry.text),
-  )).toEqual(['Solicitud para la laptop', 'Primera parte\n\nParte final', 'Mi siguiente turno es local', 'Respuesta del fixture local']);
+  )).toEqual(['Solicitud para la laptop', 'Solicitud para la laptop', 'Primera parte', 'Parte final', 'Mi siguiente turno es local', 'Respuesta del fixture local', 'Solicitud para la laptop', 'Primera parte\n\nParte final']);
 });
 
 test('a stream interrupted by disconnect stays explicit and is never replayed during reconnect', async ({ page }) => {
@@ -106,15 +114,15 @@ test('a stream interrupted by disconnect stays explicit and is never replayed du
   await link.drop();
   await expect(page.locator('.chat-card[data-role="assistant"] small')).toContainText('Interrumpido o sin confirmar');
   await expect.poll(link.connections).toBe(2);
-  await expect(page.locator('.chat-text')).toHaveText(['No repitas este envío', 'Respuesta parcial']);
+  await expect(page.locator('.chat-text')).toHaveText(['No repitas este envío', 'No repitas este envío', 'Respuesta parcial', 'No repitas este envío']);
   await expect(page.locator('#send')).toBeEnabled();
   expect(link.requests.filter(message => message.type === 'send')).toHaveLength(1);
   link.send({ type: 'message_done', messageId: 'm2', text: 'Respuesta final confirmada' });
-  await expect(page.locator('.chat-text')).toHaveText(['No repitas este envío', 'Respuesta final confirmada']);
+  await expect(page.locator('.chat-text')).toHaveText(['No repitas este envío', 'No repitas este envío', 'Respuesta final confirmada', 'No repitas este envío']);
   await expect(page.locator('.chat-card[data-role="assistant"] small')).toHaveText('');
 });
 
-test('history recovers an input whose echo was lost without exposing context or duplicating the request', async ({ page }) => {
+test('history preserves an unconfirmed input and the distinct host record without exposing context', async ({ page }) => {
   let wireText = '';
   const link = await fixture(page, (message, send) => {
     if (message.type === 'get_history') send({ type: 'history', conversationId: 'c1', messages: wireText ? [
@@ -133,7 +141,7 @@ test('history recovers an input whose echo was lost without exposing context or 
   await link.drop();
   await expect.poll(link.connections).toBe(2);
   await expect(page.locator('.chat-text')).toHaveText([
-    'Contexto local antes del corte', 'Respuesta del fixture local', 'Recupera mi solicitud',
+    'Contexto local antes del corte', 'Respuesta del fixture local', 'Recupera mi solicitud', 'Recupera mi solicitud',
   ]);
   await expect(page.locator('.chat-card[data-role="user"]').last().locator('small')).toHaveText('');
   expect(wireText).toContain('Contexto reciente de Capri');

@@ -164,6 +164,18 @@ describe("gateway", () => {
 		expect(done.text).toBe("Echo: shared");
 	});
 
+	it("acknowledges an opted-in prompt only to its requester after engine success", async () => {
+		const d = await daemon();
+		const a = await authed(d);
+		const b = await authed(d);
+		send(a, { type: "send", text: "fixture", requestId: "request-ack-1", receipt: "accepted-v1" });
+		await find(a, "request_accepted", value => value.requestId === "request-ack-1");
+		await find(b, "message_done");
+		expect(b.messages.some(value => value.type === "request_accepted")).toBe(false);
+		expect(a.messages.filter(value => value.type === "request_accepted")).toHaveLength(1);
+		expect(a.messages.find(value => value.type === "request_accepted")).not.toHaveProperty("messageId");
+	});
+
 	it("ignores a repeated requestId", async () => {
 		const d = await daemon();
 		const client = await authed(d);

@@ -97,6 +97,25 @@ test('a failed socket send returns false and never queues the prompt for replay'
   assert.deepEqual(next.sent.map(message => message.type), ['hello', 'get_history']);
 });
 
+test('opt-in acceptance preserves its caller-provided identity and old hosts never receive the extension', () => {
+  const legacy = fixture(); ready(legacy.socket);
+  assert.equal(legacy.chat.send('legacy', 'legacy-id'), true);
+  assert.deepEqual(legacy.socket.sent.at(-1), { type: 'send', text: 'legacy', requestId: 'legacy-id' });
+  legacy.socket.receive({ type: 'request_accepted', requestId: 'legacy-id' });
+  assert.equal(legacy.messages.some(message => message.type === 'request_accepted'), false);
+  legacy.chat.disconnect();
+  const modern = fixture(); ready(modern.socket, { sendAccepted: 1 });
+  assert.equal(modern.chat.supportsSendAccepted(), true);
+  assert.equal(modern.chat.send('new', 'request-1'), true);
+  assert.deepEqual(modern.socket.sent.at(-1), { type: 'send', text: 'new', requestId: 'request-1', receipt: 'accepted-v1' });
+  modern.socket.receive({ type: 'request_accepted', requestId: '' });
+  modern.socket.receive({ type: 'request_accepted', requestId: 'x'.repeat(201) });
+  modern.socket.receive({ type: 'request_accepted', requestId: 'request-1' });
+  assert.deepEqual(modern.messages.filter(value => value.type === 'request_accepted').map(value => value.requestId), ['request-1']);
+  modern.socket.drop();
+  assert.equal(modern.chat.supportsSendAccepted(), false);
+});
+
 test('times out a silent handshake and caps offline retry delay', () => {
   const { socket } = fixture();
   socket.open();

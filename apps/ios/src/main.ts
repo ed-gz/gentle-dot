@@ -511,7 +511,7 @@ let conversationReady = false;
 let draftEdited = false;
 let host = settings.url;
 let remoteConversation = 'default';
-let pendingRemote: { id: string; text: string; displayText: string } | undefined;
+let pendingRemote: { id: string; requestId: string; text: string } | undefined;
 let pendingTimer: ReturnType<typeof setTimeout> | undefined;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 const rescueHistory = document.createElement('button');
@@ -675,15 +675,21 @@ function handleMessage(message: ServerMessage) {
     unconfirmedRemote(); renderChat(); scheduleSave();
     if (selected === 'gentle') setIntent({});
   }
+  if (message.type === 'request_accepted' && pendingRemote?.requestId === message.requestId) {
+    const id = pendingRemote.id;
+    entries = entries.map(entry => entry.id === id ? { ...entry, state: 'complete' } : entry);
+    pendingRemote = undefined; clearTimeout(pendingTimer); renderChat(); scheduleSave(); updateControls();
+    if (!element('chat-notice').textContent) element('chat-notice').textContent = 'La laptop aceptó la solicitud; esto no confirma que esté guardada.';
+  }
   if (message.type === 'user_message') {
-    let displayText = message.text;
-    if (pendingRemote && message.text === pendingRemote.text) {
-      displayText = pendingRemote.displayText;
-      // This protocol has no correlation between our requestId and this
-      // event. Another client can send identical text, so retain our request
-      // as unconfirmed and release the composer without auto-resending it.
-      unconfirmedRemote();
-    }
+    // Redact known context wrappers even if acceptance arrived before the
+    // echo. Text equality affects display only and never establishes identity.
+    const aliases = entries.filter(entry => entry.engine === 'gentle' && entry.role === 'user' && entry.transportText === message.text);
+    const displayText = aliases.length && aliases.every(entry => entry.text === aliases[0]!.text)
+      ? aliases[0]!.text : aliases.length ? 'Solicitud recibida con contexto adjunto.' : message.text;
+    // Legacy hosts cannot acknowledge the request; release it as unconfirmed
+    // without interpreting this echo as ours or automatically resending it.
+    if (pendingRemote && message.text === pendingRemote.text && !linked.supportsSendAccepted()) unconfirmedRemote();
     add({ id: remoteId(message.messageId), role: 'user', text: displayText, transportText: message.text, engine: 'gentle', state: 'complete', at: Date.now() });
   }
   if (message.type === 'message_delta') {
@@ -925,8 +931,9 @@ element<HTMLFormElement>('composer').addEventListener('submit', async event => {
     const id = remoteId(`pending:${localIdentifier()}`);
     let request: string;
     try { request = linkedPrompt(entries, attachedWork ? `${text}\n\nTengo material guardado sólo en el iPhone como trabajo ${attachedWork}. No tienes sus bytes hasta que se confirme una transferencia; no afirmes haberlo leído.` : text); } catch (error) { element('chat-notice').textContent = errorText(error); return; }
-    if (linked.send(request)) {
-      pendingRemote = { id, text: request, displayText: text };
+    const requestId = localIdentifier();
+    if (linked.send(request, requestId)) {
+      pendingRemote = { id, requestId, text: request };
       pendingTimer = setTimeout(unconfirmedRemote, 15000);
       add({ id, role: 'user', text, transportText: request, engine: 'gentle', state: 'pending', at: Date.now() });
       prompt.value = ''; sizeDraft(); persist(); updateControls();

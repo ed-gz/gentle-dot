@@ -88,6 +88,8 @@ export interface Features {
 	conversations: boolean;
 	/** Correlates background history refreshes so a late response cannot move a reader. */
 	historyRefresh?: boolean;
+	/** Optional per-request notice after a successful engine response; not durable storage or message identity. */
+	sendAccepted?: 1;
 	/** Durable inbox RPC version. Absent means unsupported; chat remains compatible. */
 	workSync?: number;
 	/** Meeting draft processor version; requires workSync. */
@@ -353,7 +355,7 @@ export type ClientMessage =
 	| WorkSyncRequest
 	| { type: "hello"; token: string; protocol: number }
 	/** `text` may be empty when files are attached. */
-	| { type: "send"; text: string; requestId?: string; attachments?: AttachmentRef[] }
+	| { type: "send"; text: string; requestId?: string; receipt?: "accepted-v1"; attachments?: AttachmentRef[] }
 	| { type: "steer"; text: string }
 	| { type: "abort" }
 	| { type: "ui_response"; requestId: string; value?: string; confirmed?: boolean; cancelled?: boolean }
@@ -427,6 +429,8 @@ export type ServerPayload =
 	  }
 	| { type: "pin_status"; pin: PinStatus }
 	| { type: "agent_state"; state: AgentState }
+	/** The engine returned success for this request. This is not a durable receipt or an echo identity. */
+	| { type: "request_accepted"; requestId: string }
 	| { type: "user_message"; messageId: string; text: string; attachments?: AttachmentInfo[] }
 	| { type: "message_delta"; messageId: string; delta: string }
 	| {
@@ -634,8 +638,10 @@ export function parseClientMessage(raw: string): ClientMessage | undefined {
 			if (!isString(m.text) || m.text.length > MAX_TEXT) return undefined;
 			if (m.text.trim() === "" && !attachments) return undefined;
 			if (!isOptional(m.requestId, isString)) return undefined;
+			if (m.receipt !== undefined && (m.receipt !== "accepted-v1" || !isShortString(m.requestId) || !m.requestId)) return undefined;
 			const send: Extract<ClientMessage, { type: "send" }> = { type: "send", text: m.text };
 			if (m.requestId !== undefined) send.requestId = m.requestId as string;
+			if (m.receipt === "accepted-v1") send.receipt = m.receipt;
 			if (attachments) send.attachments = attachments;
 			return send;
 		}

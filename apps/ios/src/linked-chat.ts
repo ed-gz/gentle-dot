@@ -37,11 +37,13 @@ function parse(raw: unknown): ServerMessage | undefined {
       valid = state(message.agentState) && optional(message.conversationId, id) && optional(message.clientId, id)
         && optional(message.model, string)
         && optional(message.features, value => record(value) && boolean(value.conversations) && optional(value.historyRefresh, boolean)
-          && optional(value.workSync, featureVersion) && optional(value.meetingDrafts, featureVersion))
+          && optional(value.workSync, featureVersion) && optional(value.meetingDrafts, featureVersion)
+          && optional(value.sendAccepted, featureVersion))
         && optional(message.voice, value => record(value) && boolean(value.transcribe) && boolean(value.speak) && optional(value.local, boolean))
         && optional(message.pin, value => record(value) && boolean(value.set) && optional(value.locked, boolean));
       break;
     case 'agent_state': valid = state(message.state); break;
+    case 'request_accepted': valid = id(message.requestId) && message.requestId.length <= 200; break;
     case 'history':
       valid = optional(message.conversationId, id) && optional(message.requestId, id) && optional(message.hasEarlier, boolean)
         && Array.isArray(message.messages) && message.messages.length <= 2000 && message.messages.every(entry => record(entry)
@@ -88,7 +90,7 @@ export function createLinkedChat(callbacks: Callbacks) {
   let attempts = 0;
   let suspended = false;
   let authenticated = false;
-  let workSync = false, meetingDrafts = false;
+  let workSync = false, meetingDrafts = false, sendAccepted = false;
   const asks = new Map<string, Ask>();
   const requests = new Map<string, { transferId: string; resolve(reply: WorkSyncReply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
 
@@ -98,7 +100,7 @@ export function createLinkedChat(callbacks: Callbacks) {
     retryTimer = connectTimer = undefined;
     const old = socket;
     socket = undefined;
-    authenticated = false; workSync = meetingDrafts = false;
+    authenticated = false; workSync = meetingDrafts = sendAccepted = false;
     asks.clear();
     for (const request of requests.values()) {
       clearTimeout(request.timer);
@@ -138,6 +140,7 @@ export function createLinkedChat(callbacks: Callbacks) {
       if (!current()) return;
       const message = parse(event.data);
       if (!message || message.seq <= sequence || (!authenticated && message.type !== 'ready')) return;
+      if (message.type === 'request_accepted' && !sendAccepted) return;
       sequence = message.seq;
       if (message.type === 'ask') asks.set(message.ask.requestId, message.ask);
       if (message.type === 'ask_resolved') asks.delete(message.requestId);
@@ -154,6 +157,7 @@ export function createLinkedChat(callbacks: Callbacks) {
         connectTimer = undefined;
         authenticated = true;
         workSync = message.features?.workSync === 1; meetingDrafts = workSync && message.features?.meetingDrafts === 1;
+        sendAccepted = message.features?.sendAccepted === 1;
         attempts = 0;
         callbacks.onStatus('ready');
         if (!current() || !transmit({ type: 'get_history' })) return;
@@ -195,10 +199,12 @@ export function createLinkedChat(callbacks: Callbacks) {
       suspended = false;
       if (credentials && !socket && !retryTimer) { attempts = 0; open(); }
     },
-    send(text: string): boolean {
+    send(text: string, requestId?: string): boolean {
       const value = text.trim();
       if (!value || text.length > 8000 || !authenticated) return false;
-      return transmit({ type: 'send', text: value, requestId: localIdentifier() });
+      const identifier = requestId ?? localIdentifier();
+      if (!id(identifier) || identifier.length > 200) return false;
+      return transmit({ type: 'send', text: value, requestId: identifier, ...(sendAccepted ? { receipt: 'accepted-v1' } : {}) });
     },
     answer(requestId: string, fields: { value?: string; confirmed?: boolean; cancelled?: boolean }, expected?: Ask): boolean {
       const ask = asks.get(requestId);
@@ -230,6 +236,7 @@ export function createLinkedChat(callbacks: Callbacks) {
     abort: () => transmit({ type: 'abort' }),
     supportsWorkSync: () => authenticated && workSync,
     supportsMeetingDrafts: () => authenticated && meetingDrafts,
+    supportsSendAccepted: () => authenticated && sendAccepted,
     ready: () => authenticated && socket?.readyState === WebSocket.OPEN,
   };
 }

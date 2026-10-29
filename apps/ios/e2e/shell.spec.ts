@@ -242,7 +242,8 @@ test('host activity, exact human answers and steering stay in the same conversat
   await expect(page.locator('#active-tool')).toBeEmpty();
   await expect(page.locator('.chat-card[data-role="assistant"]')).toContainText('Revisión preparada.');
   await expect(page.locator('.chat-card[data-role="assistant"] .tool-trace > summary')).toHaveText('1 acción · Completada');
-  await expect(page.locator('.chat-card[data-role="user"]')).toHaveCount(2);
+  // The legacy host supplies no identity tying either echo to our request.
+  await expect(page.locator('.chat-card[data-role="user"]')).toHaveCount(4);
 });
 
 test('conversation approval renders exact content and cancellation cannot authorize it', async ({ page }) => {

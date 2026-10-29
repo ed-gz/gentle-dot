@@ -385,7 +385,7 @@ export class DotBridge {
 			clientId,
 			...this.conversationRef(),
 			...(this.supervisor.model ? { model: this.supervisor.model } : {}),
-			features: { conversations: this.features.conversations, historyRefresh: true,
+			features: { conversations: this.features.conversations, historyRefresh: true, sendAccepted: 1,
 				...(client.workSync ? { workSync: 1, ...(client.workSync.meetingDrafts ? { meetingDrafts: 1 } : {}) } : {}) },
 			...(this.options.voice ? { voice: this.options.voice.capability() } : {}),
 			...(this.options.pin && !this.options.app?.connected ? { pin: this.options.pin.status() } : {}),
@@ -535,6 +535,8 @@ export class DotBridge {
 					// agent_start reaches this process. Every human message has priority over
 					// continuing the old answer, including messages with attachments.
 					await this.supervisor.request({ type: "prompt", ...prompt, streamingBehavior: "steer" });
+					if (message.receipt === "accepted-v1" && message.requestId && this.clients.has(client))
+						this.deliver(client, { type: "request_accepted", requestId: message.requestId });
 					if (message.attachments) this.options.uploads?.consume(message.attachments);
 				} finally {
 					this.sending -= 1;
