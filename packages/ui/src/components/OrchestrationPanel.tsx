@@ -3,7 +3,7 @@ import type { AgentConversation, AgentSession, OrchestrationClient } from "../or
 import type { OrchestrationControls } from "../useOrchestration.ts";
 import { isLegacyDelivery, sessionDeliveryIdentity, reconcileDeliveries, restoreDeliveries, persistDeliveries, prepareDeliveryArchive, compactDeliveryArchive, type DeliveryArchive, type OutgoingMessage } from "../session-delivery.ts";
 import { useSessionPolling } from "../useSessionPolling.ts";
-import { reconcileRecentConversation } from "../session-history.ts";
+import { reconcileRecentConversation, sameSessionInstance } from "../session-history.ts";
 import { publishCompanionActivity, useCompanionResponse } from "../companion-activity.ts";
 import "../session-delivery.css";
 import { AgentPermissionCard } from "./AgentPermissionCard.tsx";
@@ -158,6 +158,7 @@ export function OrchestrationPanel({
 	const id = useId();
 	const viewedSession = useRef<string | undefined>(undefined);
 	const viewedClient = useRef(client);
+	const sessionPanelActive = useRef(active);
 	const conversationViewport = useRef<HTMLDivElement>(null);
 	const panel = useRef<HTMLElement>(null);
 	const handledRequest = useRef<number | undefined>(undefined);
@@ -213,6 +214,10 @@ export function OrchestrationPanel({
 		return () => onVisibleSession?.(undefined);
 	}, [visiblePaneId, visibleSessionId, onVisibleSession]);
 	useLayoutEffect(() => {
+		const reopened = capriMobile && active && !sessionPanelActive.current;
+		const hidden = capriMobile && !active && sessionPanelActive.current;
+		sessionPanelActive.current = active;
+		if (hidden) { pageAbort.current?.abort(); setLoadingEarlier(false); }
 		const clientChanged = viewedClient.current !== client;
 		if (clientChanged) {
 			// A new connection must not recover drafts from its predecessor, even
@@ -223,7 +228,7 @@ export function OrchestrationPanel({
 			positions.current.clear();
 			history.current.clear();
 		}
-		if (!clientChanged && viewedSession.current === identity) return;
+		if (!clientChanged && viewedSession.current === identity && !reopened) return;
 		// Discovery can temporarily lose a terminal or replace the session in its
 		// pane without a selection click. Preserve the previous owner's draft and
 		// loaded history before switching; never carry either into the new owner.
@@ -239,11 +244,24 @@ export function OrchestrationPanel({
 		const saved = identity ? positions.current.get(identity) : undefined;
 		followConversation.current = saved?.following ?? true;
 		restoreTop.current = saved?.top;
-		setConversation(identity ? history.current.get(identity) : undefined);
+		// An iPhone cache is only a previous observation. Wait for a fresh page
+		// before showing it so a recycled session ID cannot display another runtime.
+		setConversation(!capriMobile && identity ? history.current.get(identity) : undefined);
 		setConversationError(undefined);
 		setInstruction(identity ? (drafts.current.get(identity) ?? "") : "");
 		setReceipt(undefined);
-	}, [identity, client]);
+	}, [identity, client, active, capriMobile]);
+	useEffect(() => {
+		if (!capriMobile) return;
+		const hide = () => {
+			if (document.visibilityState !== "hidden") return;
+			if (identity && currentConversation.current) history.current.set(identity, currentConversation.current);
+			pageAbort.current?.abort(); setLoadingEarlier(false);
+			setConversation(undefined); setConversationError(undefined);
+		};
+		document.addEventListener("visibilitychange", hide);
+		return () => document.removeEventListener("visibilitychange", hide);
+	}, [identity, capriMobile]);
 	useLayoutEffect(() => {
 		const element = conversationViewport.current;
 		if (active && !wasActive.current && identity) restoreTop.current = positions.current.get(identity)?.top;
@@ -265,6 +283,11 @@ export function OrchestrationPanel({
 		if (!identity || !session?.sessionId || !conversation?.history?.before || loadingEarlier) return;
 		const key = identity;
 		const before = conversation.history.before;
+		const requestedConversation = conversation;
+		if (capriMobile && !sameSessionInstance(requestedConversation, requestedConversation)) {
+			setConversationError("La laptop necesita actualizarse para verificar páginas anteriores de esta sesión. El historial reciente sigue disponible.");
+			return;
+		}
 		const controller = new AbortController();
 		pageAbort.current = controller;
 		setLoadingEarlier(true);
@@ -275,6 +298,10 @@ export function OrchestrationPanel({
 				limit: 50,
 			});
 			if (controller.signal.aborted || viewedSession.current !== key) return;
+			if (capriMobile && (!sameSessionInstance(requestedConversation, earlier) || !sameSessionInstance(requestedConversation, currentConversation.current))) {
+				setConversationError("La instancia de la sesión cambió mientras cargaba el historial. Vuelve a pedir los mensajes anteriores.");
+				return;
+			}
 			if (currentConversation.current?.history?.before !== before) {
 				setConversationError("El historial cambió mientras se cargaba. Vuelve a pedir los mensajes anteriores.");
 				return;
@@ -283,7 +310,7 @@ export function OrchestrationPanel({
 			if (element) pendingPrepend.current = { top: element.scrollTop, height: element.scrollHeight };
 			followConversation.current = false;
 			setConversation((current) =>
-				current && current.history?.before === before
+				current && current.history?.before === before && (!capriMobile || sameSessionInstance(requestedConversation, current))
 					? {
 							...current,
 							history: earlier.history,
@@ -304,7 +331,8 @@ export function OrchestrationPanel({
 		session?.state === "working" || outbox.some(item => item.identity === identity && ["sending", "accepted", "queued"].includes(item.status)),
 		(next) => {
 			setConversation((current) => {
-				const value = reconcileRecentConversation(current, next);
+				const cached = capriMobile && identity ? history.current.get(identity) : undefined;
+				const value = reconcileRecentConversation(current ?? cached, next, capriMobile);
 				if (identity) {
 					history.current.set(identity, value);
 					if (history.current.size > 12) { const oldest = history.current.keys().next().value; if (oldest) history.current.delete(oldest); }

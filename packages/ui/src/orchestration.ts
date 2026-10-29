@@ -239,6 +239,8 @@ export interface AgentDelivery {
 }
 
 export interface AgentConversation {
+	/** Runtime instance that produced this page, when supplied by the host. */
+	instanceId?: string;
 	deliveries?: AgentDelivery[];
 	metadata?: AgentMetadata;
 	capabilities?: {

@@ -90,7 +90,7 @@ export function createLaptopClient(connection: DesktopConnection, options: {
         inspectionLimit = Math.min(inspectionLimit, limit);
       }
     }
-    if (value.sessionId !== sessionId || value.messages.length > 200 || value.messages.some(message =>
+    if (value.sessionId !== sessionId || (value.instanceId !== undefined && (typeof value.instanceId !== 'string' || !value.instanceId || value.instanceId.length > 256)) || value.messages.length > 200 || value.messages.some(message =>
       typeof message.id !== 'string' || message.id.length > 256 ||
       !['user', 'assistant', 'system', 'tool', 'toolResult'].includes(message.role) ||
       !Array.isArray(message.content) || message.content.length > 1000 || message.content.some(block => {

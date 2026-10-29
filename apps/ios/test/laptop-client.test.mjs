@@ -20,6 +20,9 @@ test('session identity, malformed inventory and aborted reads cannot be presente
   assert.equal((await client.snapshot()).sessions[0].label, 'Work');
   value = { ...state, sessions: [{ ...state.sessions[0], state: 'invented' }] }; await assert.rejects(client.snapshot(), /sesión no válida/);
   value = { sessionId: 'different', messages: [], deliveries: [] }; await assert.rejects(client.inspect('p', 's'), /no corresponde/);
+  for (const instanceId of ['', 3, 'x'.repeat(257)]) {
+    value = { sessionId:'s', instanceId, messages:[], deliveries:[] }; await assert.rejects(client.inspect('p','s'), /no corresponde/);
+  }
   const abort = new AbortController(); abort.abort(); await assert.rejects(client.snapshot(abort.signal), { name: 'AbortError' });
 });
 test('a long terminal title cannot hide other valid sessions or change their identities', async () => {

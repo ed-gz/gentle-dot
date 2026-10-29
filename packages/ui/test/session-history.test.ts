@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { reconcileRecentConversation } from '../src/session-history.ts';
+import { reconcileRecentConversation, sameSessionInstance } from '../src/session-history.ts';
 import type { AgentConversation } from '../src/orchestration.ts';
 
 function page(ids: string[], before = 'older'): AgentConversation {
@@ -29,5 +29,15 @@ describe('session history refresh', () => {
     for (const next of [page(['b', 'a']), page([]), { ...page(['b']), sessionId: 'other' }]) {
       expect(reconcileRecentConversation(current, next)).toEqual(next);
     }
+  });
+  it('requires the same verified runtime instance when iPhone retains older pages', () => {
+    const current = { ...page(['old','a','b']), instanceId:'instance-a' };
+    const updated = { ...page(['a','b','new']), instanceId:'instance-a' };
+    expect(ids(reconcileRecentConversation(current,updated,true))).toEqual(['old','a','b','new']);
+    for (const next of [{ ...updated, instanceId:'instance-b' }, { ...updated, instanceId:undefined }]) {
+      expect(sameSessionInstance(current,next)).toBe(false);
+      expect(reconcileRecentConversation(current,next,true)).toEqual(next);
+    }
+    expect(sameSessionInstance(page(['a']),page(['a']))).toBe(false);
   });
 });
