@@ -896,7 +896,7 @@ final class VoiceController: NSObject, AVAudioRecorderDelegate {
             return VoiceReply(ok: true, retainedAudio: result.retainedAudio, discardPending: result.discardPending)
         }
         catch {
-            return .failure("retention_unavailable", "No pude verificar el audio guardado. Se conserva para revisión.")
+            return .failure("retention_unavailable", "No pude verificar el estado del audio. Queda pendiente de revisión.")
         }
     }
 
