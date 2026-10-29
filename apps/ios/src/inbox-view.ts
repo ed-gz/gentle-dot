@@ -1,5 +1,5 @@
 import {
-  addWorkVersion, createWork, deleteWork, listWork, readWorkFile, reviseWork,
+  addWorkVersion, approveMinute, createWork, deleteWork, listWork, readWorkFile, reviseWork, validMinuteApproval,
   WORK_LIMITS, type WorkItem, type WorkStatus,
 } from './work-inbox.ts';
 import { isTauri } from '@tauri-apps/api/core';
@@ -234,7 +234,8 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
       if (current && history && history.every(Boolean)) {
         const drafts = [...history as WorkResult[], current];
         const minutes = node('details');
-        minutes.append(node('summary', drafts.length === 1 ? 'Minuta · pendiente de revisión' : `Minutas (${drafts.length}) · pendientes de revisión`));
+        const resultApproved = validMinuteApproval(item) && item.minuteApproval?.kind === 'result';
+        minutes.append(node('summary', drafts.length === 1 ? `Minuta · ${resultApproved ? 'aprobada en este iPhone' : 'pendiente de revisión'}` : `Minutas (${drafts.length}) · ${resultApproved ? 'última aprobada en este iPhone' : 'pendientes de revisión'}`));
         let rendered = false;
         minutes.addEventListener('toggle', () => {
           if (!minutes.open || rendered) return;
@@ -245,7 +246,18 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
             try { when = dateLabel(draft.createdAt); } catch { /* Keep malformed dates from hiding the stored draft. */ }
             version.append(node('summary', `Borrador ${index + 1} · ${when}`));
             let built = false;
-            version.addEventListener('toggle', () => { if (version.open && !built) { built = true; version.append(renderMinute(draft, item)); } });
+            version.addEventListener('toggle', () => {
+              if (!version.open || built) return;
+              built = true; version.append(renderMinute(draft, item));
+              if (index === drafts.length - 1 && item.kind === 'meeting' && item.status === 'sent' && item.transfer?.receipt) {
+                if (resultApproved) version.append(node('p', 'Aprobada en este iPhone. Esto no envía ni autoriza acciones externas.', 'hint'));
+                else {
+                  const approve = button('Aprobar esta minuta');
+                  approve.addEventListener('click', () => { void changeItem(item, article, () => approveMinute(item.id, item.revision, 'result'), 'Minuta aprobada en este iPhone. Ninguna acción externa fue autorizada.'); });
+                  version.append(approve);
+                }
+              }
+            });
             minutes.append(version);
           }
         });
@@ -261,6 +273,14 @@ export function mountInbox(onUse: (text: string) => void): { refresh(): Promise<
         const text = node('p');
         detail.append(node('summary', `Versión ${index + 1} · ${dateLabel(version.createdAt)}`), text);
         detail.addEventListener('toggle', () => { text.textContent = detail.open ? version.text : ''; });
+        if (item.kind === 'meeting' && item.result && item.status !== 'sent' && item.status !== 'sending' && index === item.versions.length - 1) {
+          if (validMinuteApproval(item) && item.minuteApproval?.kind === 'version') detail.append(node('p', 'Versión aprobada en este iPhone. Esto no envía ni autoriza acciones externas.', 'hint'));
+          else {
+            const approve = button('Aprobar esta versión');
+            approve.addEventListener('click', () => { void changeItem(item, article, () => approveMinute(item.id, item.revision, 'version', version.id), 'Versión aprobada en este iPhone. Ninguna acción externa fue autorizada.'); });
+            detail.append(approve);
+          }
+        }
         versions.append(detail);
       }
       article.append(versions);

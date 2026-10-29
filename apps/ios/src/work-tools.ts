@@ -11,7 +11,7 @@ const record = (value: unknown): value is Record<string, unknown> => typeof valu
 function input(value: unknown): Record<string, unknown> { if (!record(value)) throw new Error('Argumentos de trabajo inválidos.'); return value; }
 function idOf(value: unknown): string { const id = input(value).id; if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) throw new Error('Identificador de trabajo inválido.'); return id; }
 function revisionOf(value: unknown): number { const revision = input(value).revision; if (!Number.isSafeInteger(revision) || Number(revision) < 1) throw new Error('Indica la revisión exacta del trabajo.'); return Number(revision); }
-const summary = (item: inbox.WorkItem) => ({ id: item.id, title: item.title, kind: item.kind, status: item.status, revision: item.revision, files: item.files.map(file => ({ id: file.id, name: file.name, type: file.type, size: file.size })), versions: item.versions.length, hasResult: Boolean(item.result) });
+const summary = (item: inbox.WorkItem) => ({ id: item.id, title: item.title, kind: item.kind, status: item.status, revision: item.revision, files: item.files.map(file => ({ id: file.id, name: file.name, type: file.type, size: file.size })), versions: item.versions.length, hasResult: Boolean(item.result), minuteApprovedLocally: inbox.validMinuteApproval(item) });
 /** Local work and durable transfers participate in the same conversational tool registry. */
 export function createWorkTools(dependencies: WorkToolDependencies): Tool[] {
   const store = dependencies.inbox ?? inbox;

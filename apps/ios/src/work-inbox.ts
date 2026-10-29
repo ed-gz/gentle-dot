@@ -2,6 +2,7 @@ import { localIdentifier } from './local-identifiers.ts';
 import { canonicalWorkManifest, parseWorkSyncManifest, parseWorkResult, type WorkSyncManifest, type WorkSyncReceipt, type WorkResult } from '@gentle-dot/protocol';
 export type WorkTransfer = { host: string; transferId: string; manifest: WorkSyncManifest; manifestHash: string; receipt?: WorkSyncReceipt };
 export type WorkStatus = 'local' | 'prepared' | 'approved' | 'sending' | 'sent' | 'uncertain' | 'failed';
+export type MinuteApproval = { kind: 'result' | 'version'; revision: number; approvedAt: number; snapshot: string; versionId?: string };
 export type WorkItem = {
   id: string;
   title: string;
@@ -18,6 +19,8 @@ export type WorkItem = {
   result?: WorkResult;
   /** Previous host drafts, oldest first. Each remains a draft requiring review. */
   resultHistory?: WorkResult[];
+  /** Local human approval only; never authorizes a transfer or an external action. */
+  minuteApproval?: MinuteApproval;
   source?: { id: string; hash: string };
 };
 export type WorkInput = {
@@ -104,6 +107,38 @@ function nextRevision(item: WorkItem, now: number): WorkItem {
     ...(item.resultHistory ? { resultHistory: structuredClone(item.resultHistory) } : {}),
     ...(item.source ? { source: { id: item.source.id, hash: item.source.hash } } : {}),
   };
+}
+
+/** A locally approved minute must still equal the exact reviewed content and revision. */
+export function validMinuteApproval(item: WorkItem): boolean {
+  const approval = item.minuteApproval;
+  if (!approval || item.kind !== 'meeting' || approval.revision !== item.revision || !Number.isSafeInteger(approval.approvedAt) || approval.approvedAt < 0 || typeof approval.snapshot !== 'string') return false;
+  if (approval.kind === 'result') {
+    const result = item.result && parseWorkResult(item.result);
+    return item.status === 'sent' && !!item.transfer?.receipt && !!result && approval.versionId === undefined && approval.snapshot === JSON.stringify(result);
+  }
+  if (approval.kind === 'version') {
+    const version = item.versions.at(-1);
+    return item.status !== 'sent' && item.status !== 'sending' && !!parseWorkResult(item.result) && !!version && approval.versionId === version.id && approval.snapshot === version.text;
+  }
+  return false;
+}
+
+export function approveMinuteItem(item: WorkItem, kind: MinuteApproval['kind'], versionId?: string, now = Date.now()): WorkItem {
+  if (item.kind !== 'meeting' || !Number.isSafeInteger(now) || now < 0) throw new Error('No se puede aprobar esta minuta.');
+  let snapshot: string;
+  if (kind === 'result') {
+    const result = item.result && parseWorkResult(item.result);
+    if (item.status !== 'sent' || !item.transfer?.receipt || !result || versionId !== undefined) throw new Error('La minuta ya no está disponible para revisión.');
+    snapshot = JSON.stringify(result);
+  } else if (kind === 'version') {
+    const version = item.versions.at(-1);
+    if (item.status === 'sent' || item.status === 'sending' || !parseWorkResult(item.result) || !version || version.id !== versionId) throw new Error('La versión ya no está disponible para revisión.');
+    snapshot = version.text;
+  } else throw new Error('No se puede aprobar esta minuta.');
+  const next = nextRevision(item, now);
+  next.minuteApproval = { kind, revision: next.revision, approvedAt: now, snapshot, ...(versionId ? { versionId } : {}) };
+  return next;
 }
 
 function assertEditable(item: WorkItem): void {
@@ -390,6 +425,11 @@ export function readWorkFile(workId: string, fileId: string): Promise<Blob | und
 
 export function reviseWork(id: string, expectedRevision: number, instruction: string): Promise<WorkItem> {
   return updateWork(id, expectedRevision, item => reviseWorkItem(item, instruction));
+}
+
+/** Called only by the explicit human review control, with a compare-and-swap revision. */
+export function approveMinute(id: string, expectedRevision: number, kind: MinuteApproval['kind'], versionId?: string): Promise<WorkItem> {
+  return updateWork(id, expectedRevision, item => approveMinuteItem(item, kind, versionId));
 }
 
 export function addWorkVersion(id: string, expectedRevision: number, text: string): Promise<WorkItem> {
