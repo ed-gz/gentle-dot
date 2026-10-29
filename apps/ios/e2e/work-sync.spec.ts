@@ -111,6 +111,22 @@ test('source validation accepts audio transcription and timed text from confirme
   expect(saved.evidence.map((item: any) => item.source)).toEqual(['desktop-transcriber', 'imported-text']);
 });
 
+test('malformed imported timestamps cannot be normalized away before a draft is saved', async ({ page }) => {
+  await page.goto('/');
+  const outcomes = await page.evaluate(async () => {
+    const inbox = await import('/src/work-inbox.ts'); const sync = await import('/src/work-sync.ts');
+    let item = await inbox.createWork({ title: 'Meeting', kind: 'meeting', instruction: '', files: [new File(['Texto fuente'], 'transcript.txt', { type: 'text/plain' })] });
+    item = await inbox.transitionWork(item.id, item.revision, 'prepared'); item = await inbox.transitionWork(item.id, item.revision, 'approved');
+    const transfer = await sync.prepareWorkTransfer(item, 'wss://host/ws'); item = await inbox.beginWorkTransfer(item.id, item.revision, transfer);
+    item = await inbox.settleWorkTransfer(item.id, transfer.transferId, { transferId: transfer.transferId, workId: item.id, revision: transfer.manifest.revision, manifestHash: transfer.manifestHash, committedAt: 123 });
+    const result = { schema: 1, manifestHash: transfer.manifestHash, createdAt: 200, model: 'fixture', minutes: { title: 'Meeting', summary: 'Draft', items: [] }, evidence: [{ id: 'e1', fileId: item.files[0].id, text: 'Texto fuente', source: 'imported-text', endMs: 3000 }], transcriptComparison: '', requiresReview: true };
+    const dispatcher = sync.createWorkDispatcher(async (request: any) => ({ type: 'work_sync_reply', requestId: request.requestId, transferId: request.transferId, state: 'processing', processing: { status: 'ready', result } }), 'wss://host/ws');
+    const attempt = await Promise.allSettled([dispatcher.result(item.id)]);
+    return { status: attempt[0].status, saved: Boolean((await inbox.readWork(item.id)).result) };
+  });
+  expect(outcomes).toEqual({ status: 'rejected', saved: false });
+});
+
 test('cancelling an approved upload stops subsequent chunks and keeps its immutable recovery snapshot', async ({ page }) => {
   await page.goto('/');
   const stopped = await page.evaluate(async () => {

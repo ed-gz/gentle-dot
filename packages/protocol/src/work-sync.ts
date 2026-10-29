@@ -68,7 +68,12 @@ export function parseWorkResult(v: unknown): WorkResult | undefined {
   if (!object(v) || v.schema !== 1 || !hash(v.manifestHash) || !natural(v.createdAt) || !text(v.model, 200) || (v.sessionId !== undefined && !text(v.sessionId, 200)) || v.requiresReview !== true || !text(v.transcriptComparison, 12000) || !Array.isArray(v.evidence) || v.evidence.length > 500 || !object(v.minutes) || !text(v.minutes.title, 120) || !text(v.minutes.summary, 12000) || !Array.isArray(v.minutes.items) || v.minutes.items.length > 100) return;
   const evidence: WorkEvidence[] = []; let total = 0;
   for (const e of v.evidence) {
-    if (!object(e) || !id(e.id) || !id(e.fileId) || evidence.some(prior => prior.id === e.id) || !text(e.text, 20000) || !['desktop-transcriber', 'imported-text'].includes(e.source as string) || (e.startMs !== undefined && !natural(e.startMs)) || (e.endMs !== undefined && !natural(e.endMs)) || (e.source === 'desktop-transcriber' && (!natural(e.startMs) || !natural(e.endMs) || e.endMs <= e.startMs))) return;
+    if (!object(e) || !id(e.id) || !id(e.fileId) || evidence.some(prior => prior.id === e.id) || !text(e.text, 20000) || !['desktop-transcriber', 'imported-text'].includes(e.source as string) || (e.startMs !== undefined && !natural(e.startMs)) || (e.endMs !== undefined && !natural(e.endMs))) return;
+    // Never normalize away one half of an imported time range. Untimed text
+    // remains valid; timed text and desktop segments must have an ordered pair.
+    if ((e.startMs === undefined) !== (e.endMs === undefined)
+      || (e.source === 'desktop-transcriber' && e.startMs === undefined)
+      || (natural(e.startMs) && natural(e.endMs) && e.endMs <= e.startMs)) return;
     total += e.text.length; if (total > 100000) return;
     evidence.push({ id: e.id, fileId: e.fileId, text: e.text, source: e.source as WorkEvidence['source'], ...(e.startMs !== undefined ? { startMs: e.startMs as number, endMs: e.endMs as number } : {}) });
   }

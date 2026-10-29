@@ -282,8 +282,7 @@ export async function settleWorkTransfer(id: string, transferId: string, outcome
 /** Receiving a draft is not approving its contents or any suggested external action. */
 export async function saveWorkResult(id: string, transferId: string, value: WorkResult): Promise<WorkItem> {
   const result = parseWorkResult(value); if (!result) throw new Error('La minuta recibida no es válida.');
-  // Check the original payload: parseWorkResult normalizes optional fields,
-  // so an unmatched end time would otherwise be lost before validation.
+  // Defense in depth if a future protocol parser changes its normalization.
   if (value.evidence.some(e => (e.startMs === undefined) !== (e.endMs === undefined)
     || (e.startMs !== undefined && e.endMs !== undefined && e.endMs <= e.startMs))) {
     throw new Error('La evidencia contiene un intervalo temporal incompleto o inválido.');
