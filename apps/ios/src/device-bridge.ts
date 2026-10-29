@@ -8,6 +8,12 @@ export type SharedFile = { id: string; name: string; mime: string; size: number;
 export type SharedImport = { schemaVersion: 1; id: string; createdAt: number; title: string; notes: string; files: SharedFile[] };
 export type DeviceInvoker = <T extends NativeReply>(command: string, request: Record<string, unknown>) => Promise<T>;
 
+/** Preserve the native failure category without exposing request data or credentials. */
+export class DeviceBridgeError extends Error {
+  readonly code: string | undefined;
+  constructor(code: string | undefined, message: string) { super(message); this.code = code; this.name = 'DeviceBridgeError'; }
+}
+
 /** The only web→native entry point. Never log requests or failures containing credentials. */
 export const deviceInvoke: DeviceInvoker = async <T extends NativeReply>(command: string, request: Record<string, unknown>): Promise<T> => {
   if (!isTauri()) throw new Error('Esta función requiere Capri instalado en el iPhone.');
@@ -18,7 +24,7 @@ export const deviceInvoke: DeviceInvoker = async <T extends NativeReply>(command
   return value;
 };
 export function requireNative<T extends NativeReply>(reply: T): T {
-  if (!reply.ok) throw new Error(reply.message || 'La operación nativa no se completó.');
+  if (!reply.ok) throw new DeviceBridgeError(reply.error, reply.message || 'La operación nativa no se completó.');
   return reply;
 }
 export async function secretGet(scope: SecretScope, account: string): Promise<string | null> {

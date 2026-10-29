@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createLaptopClient } from '../src/laptop-client.ts';
+import { DeviceBridgeError } from '../src/device-bridge.ts';
 const connection = { url: 'wss://laptop.example/ws', token: 'fixture-only' };
 const state = { available: true, sessions: [{ paneId: 'p', sessionId: 's', provider: 'herdr', label: 'Work', state: 'idle', connected: true }], approvals: [], policies: [], events: [] };
 const reply = value => ({ status: 200, headers: {}, body: JSON.stringify(value) });
@@ -26,4 +27,48 @@ test('cancelling a native read releases the session view before the late bridge 
   const client = createLaptopClient(connection, { current: () => connection, request: () => new Promise(r => resolve = r) });
   const result = client.snapshot(abort.signal); abort.abort();
   await assert.rejects(result, { name: 'AbortError' }); resolve(reply(state));
+});
+
+test('a large history page is retried at a smaller size with the same cursor, never replaying mutations', async () => {
+  const calls = [];
+  const client = createLaptopClient(connection, { current: () => connection, request: async request => {
+    const body = request.body && JSON.parse(request.body); calls.push(body);
+    if (body?.action === 'prompt') throw new DeviceBridgeError('size_limit', 'Límite de respuesta.');
+    if (body?.limit > 12) throw new DeviceBridgeError('size_limit', 'Límite de respuesta.');
+    return reply({ sessionId: 's', messages: [{ id: 'one', role: 'assistant', content: [{ type: 'text', text: 'Historia' }] }], history: { supported: true, hasEarlier: true, before: 'previous' } });
+  } });
+  const result = await client.inspect('p', 's', undefined, { before: 'cursor', limit: 50 });
+  assert.equal(result.history.before, 'previous');
+  assert.deepEqual(calls.map(({ limit, before }) => ({ limit, before })), [50, 25, 12].map(limit => ({ limit, before: 'cursor' })));
+  calls.length = 0;
+  await client.inspect('p', 's');
+  assert.equal(calls[0].limit, 12, 'subsequent polls reuse the proven page size');
+  calls.length = 0;
+  await assert.rejects(client.act({ action: 'prompt', paneId: 'p', sessionId: 's', text: 'hola' }), /Límite/);
+  assert.equal(calls.length, 1);
+});
+
+test('history pagination does not retry non-size failures or cross a changed connection', async () => {
+  let attempts = 0, current = connection;
+  const client = createLaptopClient(connection, { current: () => current, request: async () => {
+    attempts++;
+    if (attempts === 1) throw new DeviceBridgeError('network', 'Sin conexión.');
+    current = { ...connection, token: 'replacement' };
+    throw new DeviceBridgeError('size_limit', 'Límite.');
+  } });
+  await assert.rejects(client.inspect('p', 's'), /Sin conexión/);
+  assert.equal(attempts, 1);
+  await assert.rejects(client.inspect('p', 's'), /Cambió la laptop/);
+  assert.equal(attempts, 2);
+});
+
+test('the JavaScript response limit also retries oversized UTF-8 history pages', async () => {
+  const sizes = [];
+  const client = createLaptopClient(connection, { current: () => connection, request: async request => {
+    const { limit } = JSON.parse(request.body); sizes.push(limit);
+    if (limit === 50) return reply({ oversized: '😀'.repeat(530_000) });
+    return reply({ sessionId: 's', messages: [], history: { supported: true, hasEarlier: false } });
+  } });
+  assert.deepEqual((await client.inspect('p', 's')).messages, []);
+  assert.deepEqual(sizes, [50, 25]);
 });

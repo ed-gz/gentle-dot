@@ -1,5 +1,5 @@
 import { createOrchestrationClient, type OrchestrationClient } from '@gentle-dot/ui/src/orchestration.ts';
-import { httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
+import { DeviceBridgeError, httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { validDaemonUrl } from './local-state.ts';
 import type { DesktopConnection } from './desktop-tools.ts';
 import { uploadSessionFile } from './session-upload.ts';
@@ -36,7 +36,7 @@ export function createLaptopClient(connection: DesktopConnection, options: {
       if (init.signal!.aborted) onAbort();
     })]) : pending).finally(() => { if (onAbort) init?.signal?.removeEventListener('abort', onAbort); });
     current(); init?.signal?.throwIfAborted();
-    if (new TextEncoder().encode(reply.body).byteLength > 2 * 1024 * 1024) throw new Error('La sesión devolvió demasiados datos. Carga una página más pequeña.');
+    if (new TextEncoder().encode(reply.body).byteLength > 2 * 1024 * 1024) throw new DeviceBridgeError('size_limit', 'La sesión devolvió demasiados datos. Carga una página más pequeña.');
     return new Response(reply.body, { status: reply.status, headers: reply.headers });
   };
   const client = createOrchestrationClient(captured, { fetch: transport, terminalMood: false });
@@ -54,8 +54,25 @@ export function createLaptopClient(connection: DesktopConnection, options: {
     return value;
   };
   const inspect = client.inspect;
+  // The daemon permits 50 messages by default, each potentially 32k UTF-16
+  // units. A legitimate page can exceed the native 2 MiB response cap. Retry
+  // only this read, preserving the cursor; actions are never replayed.
+  let inspectionLimit = 50;
   client.inspect = async (paneId, sessionId, signal, page) => {
-    const value = await inspect(paneId, sessionId, signal, page);
+    let limit = Math.min(page?.limit ?? 50, inspectionLimit);
+    let value;
+    for (;;) {
+      try {
+        value = await inspect(paneId, sessionId, signal, { ...page, limit });
+        break;
+      } catch (error) {
+        if (!(error instanceof DeviceBridgeError) || error.code !== 'size_limit' || limit <= 1) throw error;
+        signal?.throwIfAborted();
+        current();
+        limit = Math.max(1, Math.floor(limit / 2));
+        inspectionLimit = Math.min(inspectionLimit, limit);
+      }
+    }
     if (value.sessionId !== sessionId || value.messages.length > 200 || value.messages.some(message =>
       typeof message.id !== 'string' || message.id.length > 256 ||
       !['user', 'assistant', 'system', 'tool', 'toolResult'].includes(message.role) ||
