@@ -11,6 +11,7 @@ Use local Apple speech transcription and Vision document recognition in Capri. M
 - `allow-discard-retained-voice`
 - `allow-export-incomplete-voice`
 - `allow-attach-retained-voice`
+- `allow-prepare-retained-voice`
 - `allow-list-voice-receipts`
 - `allow-get-voice-receipt`
 - `allow-discard-voice-receipt`
@@ -311,6 +312,32 @@ Enables the list_voice_receipts command without any pre-configured scope.
 <td>
 
 Denies the list_voice_receipts command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:allow-prepare-retained-voice`
+
+</td>
+<td>
+
+Enables the prepare_retained_voice command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`perception:deny-prepare-retained-voice`
+
+</td>
+<td>
+
+Denies the prepare_retained_voice command without any pre-configured scope.
 
 </td>
 </tr>

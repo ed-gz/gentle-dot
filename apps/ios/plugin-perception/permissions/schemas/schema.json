@@ -405,6 +405,16 @@
           "const": "deny-list-voice-receipts"
         },
         {
+          "description": "Enables the prepare_retained_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-prepare-retained-voice"
+        },
+        {
+          "description": "Denies the prepare_retained_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-prepare-retained-voice"
+        },
+        {
           "description": "Enables the prepare_voice command without any pre-configured scope.",
           "type": "string",
           "const": "allow-prepare-voice"
