@@ -82,12 +82,21 @@ export function createLaptopClient(connection: DesktopConnection, options: {
     if (value.sessionId !== sessionId || value.messages.length > 200 || value.messages.some(message =>
       typeof message.id !== 'string' || message.id.length > 256 ||
       !['user', 'assistant', 'system', 'tool', 'toolResult'].includes(message.role) ||
-      !Array.isArray(message.content) || message.content.some(block => !block || block.type !== 'text' || typeof block.text !== 'string' || block.text.length > 200_000))) throw new Error('El historial no corresponde a esta sesión.');
+      !Array.isArray(message.content) || message.content.length > 1000 || message.content.some(block => {
+        const part = block as unknown as { type?: unknown; text?: unknown } | null;
+        return !part || (part.type !== 'image' && (part.type !== 'text' || typeof part.text !== 'string' || part.text.length > 200_000));
+      }))) throw new Error('El historial no corresponde a esta sesión.');
     // Older adapters use Pi's `toolResult` role. The shared session view uses
     // `tool`; accepting the former without translating it silently hides real
     // history. Keep identity, text, error flags and ordering unchanged.
-    return { ...value, messages: value.messages.map(message =>
-      (message as { role: string }).role === 'toolResult' ? { ...message, role: 'tool' as const } : message) };
+    return { ...value, messages: value.messages.map(message => ({ ...message,
+      role: (message as { role: string }).role === 'toolResult' ? 'tool' as const : message.role,
+      // Legacy adapters can return inline images. Keep surrounding captions and
+      // order, but do not retain or silently claim to display image bytes.
+      content: message.content.map(block => (block as { type: string }).type === 'image'
+        ? { type: 'text' as const, text: '[Imagen adjunta no disponible en esta vista]' }
+        : { type: 'text' as const, text: block.text }),
+    })) };
   };
   client.uploadAttachment = (paneId, sessionId, file, uploadId, signal) => {
     current();

@@ -101,6 +101,39 @@ test('a long Herdr terminal title does not prevent opening the other sessions', 
   await expect(page.getByText('Historial de session-1.', { exact: true })).toBeVisible();
 });
 
+test('a legacy image block keeps the session history readable and does not expose image bytes', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(() => {
+    const state = globalThis as any, original = state.__TAURI_INTERNALS__.invoke;
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      const reply = await original(command, args);
+      if (command.endsWith('https_request') && args.request?.body) {
+        const request = JSON.parse(args.request.body);
+        if (request.action === 'inspect' && request.sessionId === 'session-0' && !request.before) {
+          const body = JSON.parse(reply.body);
+          body.messages.unshift({ id: 'photo-user', role: 'user', content: [
+            { type: 'text', text: 'Primero revisa esto' },
+            { type: 'image', data: 'PRIVATE-IMAGE-FIXTURE', mimeType: 'image/png' },
+            { type: 'text', text: 'y luego el registro' },
+          ] });
+          return { ...reply, body: JSON.stringify(body) };
+        }
+      }
+      return reply;
+    };
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session[data-pane-id="pane-0"]').click();
+  const user = page.locator('[data-message-id="photo-user"]');
+  await expect(user).toContainText('Primero revisa esto');
+  await expect(user).toContainText('Imagen adjunta no disponible en esta vista');
+  await expect(user).toContainText('y luego el registro');
+  await expect(page.getByText('Historial de session-0.', { exact: true })).toBeVisible();
+  await expect(page.locator('.agent-conversation')).not.toContainText('PRIVATE-IMAGE-FIXTURE');
+  await page.getByRole('button', { name: 'Ver mensajes anteriores' }).click();
+  await expect(page.getByText('Acuerdo anterior verificable.')).toBeVisible();
+});
+
 test('small phone keeps navigation and the session composer on one line', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 568 });
   await linkedPhone(page);

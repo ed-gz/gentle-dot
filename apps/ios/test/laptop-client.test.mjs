@@ -55,6 +55,22 @@ test('legacy toolResult entries remain visible without changing their content or
   ]);
 });
 
+test('legacy image blocks retain the surrounding history without exposing inline bytes', async () => {
+  let payload = { sessionId: 's', messages: [
+    { id: 'u', role: 'user', content: [{ type: 'text', text: 'Antes' }, { type: 'image', data: 'private-base64-image', mimeType: 'image/png' }, { type: 'text', text: 'Después' }] },
+    { id: 'a', role: 'assistant', content: [{ type: 'text', text: 'Continuación real' }] },
+  ], history: { supported: true, hasEarlier: true, before: 'previous' } };
+  const client = createLaptopClient(connection, { current: () => connection, request: async () => reply(payload) });
+  const value = await client.inspect('p', 's');
+  assert.deepEqual(value.messages.map(message => message.id), ['u', 'a']);
+  assert.deepEqual(value.messages[0].content.map(block => block.text), ['Antes', '[Imagen adjunta no disponible en esta vista]', 'Después']);
+  assert.equal(value.messages[1].content[0].text, 'Continuación real');
+  assert.equal(value.history.before, 'previous');
+  assert.doesNotMatch(JSON.stringify(value), /private-base64-image/);
+  payload = { sessionId: 's', messages: [{ id: 'u', role: 'user', content: [{ type: 'unexpected', data: 'private' }] }] };
+  await assert.rejects(client.inspect('p', 's'), /historial no corresponde/i);
+});
+
 test('a large history page is retried at a smaller size with the same cursor, never replaying mutations', async () => {
   const calls = [];
   const client = createLaptopClient(connection, { current: () => connection, request: async request => {
