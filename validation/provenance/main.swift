@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     guard condition() else { fputs("FAIL: \(message)\n", stderr); exit(1) }
@@ -29,6 +30,10 @@ do {
     catch ProvenanceLeaseError.busy { }
     catch { require(false, "second owner must fail specifically with busy") }
     let concurrentProcess = try probeOwner(root); require(concurrentProcess == 23, "another process must be fenced")
+    let sidecar = root.appendingPathComponent("leases.lock").path
+    let extra = sidecar.withCString { Darwin.open($0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW) }
+    require(extra >= 0, "open second descriptor"); Darwin.close(extra)
+    let afterExtraClose = try probeOwner(root); require(afterExtraClose == 23, "closing another descriptor must not release owner")
     let a = id(), first = try gate!.prepare(id: a, revision: 3, model: "apple-local", input: "hello")
     require(first.inputSHA256 == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "hash of exact input")
     expectsError("identity binding", { _ = try gate!.start(id: a, leaseId: first.leaseId, revision: 3, model: "apple-local", input: "different", schedule: { schedules += 1 }) })

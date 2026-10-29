@@ -1,6 +1,7 @@
 import Foundation
 import CryptoKit
 import Darwin
+import CapriLeaseLock
 
 // Isolated prototype only. It is not registered with the Tauri plugin and has
 // not been compiled or run on Apple platforms in this environment.
@@ -55,8 +56,7 @@ final class ProvenanceLeaseGate {
         guard !Self.ownedPaths.contains(path) else { throw ProvenanceLeaseError.busy }
         let descriptor = path.withCString { Darwin.open($0, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, mode_t(0o600)) }
         guard descriptor >= 0 else { throw ProvenanceLeaseError.uncertain }
-        var owner = flock(); owner.l_type = Int16(F_WRLCK); owner.l_whence = Int16(SEEK_SET); owner.l_start = 0; owner.l_len = 0
-        guard Darwin.fcntl(descriptor, F_SETLK, &owner) == 0 else {
+        guard capri_lease_lock(descriptor) == 0 else {
             let code = errno; Darwin.close(descriptor)
             if code == EACCES || code == EAGAIN { throw ProvenanceLeaseError.busy }
             throw ProvenanceLeaseError.uncertain
@@ -66,8 +66,7 @@ final class ProvenanceLeaseGate {
     }
     deinit {
         Self.ownershipLock.lock(); defer { Self.ownershipLock.unlock() }
-        var owner = flock(); owner.l_type = Int16(F_UNLCK); owner.l_whence = Int16(SEEK_SET); owner.l_start = 0; owner.l_len = 0
-        Darwin.fcntl(lockDescriptor, F_SETLK, &owner); Darwin.close(lockDescriptor); Self.ownedPaths.remove(lockPath)
+        capri_lease_unlock(lockDescriptor); Darwin.close(lockDescriptor); Self.ownedPaths.remove(lockPath)
     }
     private static func syncDirectory(_ url: URL) throws {
         let descriptor = url.path.withCString { Darwin.open($0, O_RDONLY | O_CLOEXEC) }

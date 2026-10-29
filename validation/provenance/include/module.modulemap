@@ -1,0 +1,4 @@
+module CapriLeaseLock {
+  header "lease_lock.h"
+  export *
+}

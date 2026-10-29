@@ -13,5 +13,6 @@ jobs:
           persist-credentials: false
       - name: Compile and run isolated Swift gate
         run: |
-          swiftc validation/provenance/ProvenanceLeaseGate.swift validation/provenance/main.swift -o "$RUNNER_TEMP/capri-provenance-gate"
+          clang -c validation/provenance/lease_lock.c -I validation/provenance/include -o "$RUNNER_TEMP/lease_lock.o"
+          swiftc -I validation/provenance/include validation/provenance/ProvenanceLeaseGate.swift validation/provenance/main.swift "$RUNNER_TEMP/lease_lock.o" -o "$RUNNER_TEMP/capri-provenance-gate"
           "$RUNNER_TEMP/capri-provenance-gate"
