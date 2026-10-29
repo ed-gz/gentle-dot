@@ -671,9 +671,10 @@ function handleMessage(message: ServerMessage) {
     let displayText = message.text;
     if (pendingRemote && message.text === pendingRemote.text) {
       displayText = pendingRemote.displayText;
-      persistence.enqueue(entries.map(entry => entry.id === pendingRemote!.id ? { ...entry, state: 'complete' as const } : entry));
-      entries = entries.filter(entry => entry.id !== pendingRemote!.id); pendingRemote = undefined;
-      clearTimeout(pendingTimer);
+      // This protocol has no correlation between our requestId and this
+      // event. Another client can send identical text, so retain our request
+      // as unconfirmed and release the composer without auto-resending it.
+      unconfirmedRemote();
     }
     add({ id: remoteId(message.messageId), role: 'user', text: displayText, transportText: message.text, engine: 'gentle', state: 'complete', at: Date.now() });
   }

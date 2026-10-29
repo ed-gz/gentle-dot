@@ -832,7 +832,10 @@ test('linked stream, intermediate completion, error and reconnect remain honest'
   await page.locator('#connection button[type="submit"]').click();
   await expect.poll(() => connection).toBe(2);
   await page.locator('[data-panel="chat"]').click();
-  await expect(page.locator('.chat-card[data-role="user"]')).toHaveCount(userCount);
+  // A historical ID and a live ID cannot be merged just because their text
+  // matches. Keep both until the host provides a verified identity link.
+  await expect(page.locator('.chat-card[data-role="user"]')).toHaveCount(userCount + 1);
+  await expect(page.locator('#cards')).not.toContainText('Contexto reciente de Capri en el iPhone');
   expect(sentCount).toBe(1);
   const persisted = await page.evaluate(() => JSON.stringify(localStorage));
   expect(persisted).not.toContain('fixture-only');

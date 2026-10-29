@@ -240,55 +240,48 @@ const host = 'host:wss://fixture.example/ws|c1|';
 const remote = (id, changes = {}) => entry(host + id, { engine: 'gentle', ...changes });
 const snapshot = (id, role, text) => ({ id, role, text });
 
-test('history confirms an input whose echo was lost, retaining the clean card and local turn order', () => {
-  const original = [entry('local1'), remote('pending:one', {
-    text: 'Request', transportText: 'Local context\nRequest', state: 'interrupted',
-  }), entry('local2')];
+test('history does not claim an ambiguous pending input but keeps its transport wrapper private', () => {
+  const original = [entry('local1'), remote('pending:one', { text: 'Request', transportText: 'Local context\nRequest', state: 'interrupted' }), entry('local2')];
   const result = reconcileHostHistory(original, host, [snapshot('h1', 'user', 'Local context\nRequest')]);
-  assert.deepEqual(result.map(item => item.id), ['local1', host + 'h1', 'local2']);
-  assert.equal(result[1].text, 'Request');
-  assert.equal(result[1].transportText, 'Local context\nRequest');
-  assert.equal(result[1].state, 'complete');
-  assert.equal(original[1].state, 'interrupted');
+  assert.deepEqual(result.map(item => item.id), ['local1', host + 'pending:one', 'local2', host + 'h1']);
+  assert.equal(result[1].state, 'interrupted');
+  assert.equal(result[3].text, 'Request'); assert.equal(result[3].transportText, 'Local context\nRequest');
+  assert.deepEqual(reconcileHostHistory(result, host, [snapshot('h1','user','Local context\nRequest')]), result);
 });
 
-test('history coalesces intermediate host replies within a confirmed turn without moving local dialogue', () => {
+test('history preserves live fragments and local dialogue when source IDs differ', () => {
   const original = [remote('u1', { text: 'Request' }), remote('m2', { role: 'assistant', text: 'First part' }),
     entry('local-between'), remote('m3', { role: 'assistant', text: 'Final part' }), entry('local-after')];
   const history = [snapshot('h1', 'user', 'Request'), snapshot('h2', 'assistant', 'First part\n\nFinal part')];
   const result = reconcileHostHistory(original, host, history);
-  assert.deepEqual(result.map(item => item.id), [host + 'h1', host + 'h2', 'local-between', 'local-after']);
-  assert.equal(result[1].text, 'First part\n\nFinal part');
+  assert.deepEqual(result.map(item => item.id), [host+'u1', host+'m2', 'local-between', host+'m3', 'local-after', host+'h1', host+'h2']);
   assert.deepEqual(reconcileHostHistory(result, host, history), result);
 });
 
-test('a recovered partial assistant keeps its uncertain outcome until a terminal event', () => {
-  const original = [remote('u1', { text: 'Request' }), remote('m2', { role: 'assistant', text: 'Partial', state: 'interrupted' })];
+test('an exact recovered partial assistant keeps its uncertain outcome until a terminal event', () => {
+  const original = [remote('h1', { text: 'Request' }), remote('h2', { role: 'assistant', text: 'Partial', state: 'interrupted' })];
   const result = reconcileHostHistory(original, host, [snapshot('h1', 'user', 'Request'), snapshot('h2', 'assistant', 'Partial recovered text')]);
-  assert.equal(result.length, 2);
-  assert.equal(result[1].text, 'Partial recovered text');
-  assert.equal(result[1].state, 'interrupted');
-  assert.doesNotMatch(localPrompt(result, 'Continue'), /Partial recovered/);
+  assert.equal(result.length, 2); assert.equal(result[1].text, 'Partial recovered text');
+  assert.equal(result[1].state, 'interrupted'); assert.doesNotMatch(localPrompt(result, 'Continue'), /Partial recovered/);
 });
 
-test('history inserts missed older turns before their known successor and never mixes another host or session', () => {
+test('history inserts missed older turns before their exact known successor and never mixes another host or session', () => {
   const foreign = entry('host:wss://different.example/ws|c1|h1', { engine: 'gentle', text: 'Earlier' });
-  const original = [foreign, entry('local'), remote('u3', { text: 'Known request' }), remote('m4', { role: 'assistant', text: 'Known reply' })];
+  const original = [foreign, entry('local'), remote('h3', { text: 'Known request' }), remote('h4', { role: 'assistant', text: 'Known reply' })];
   const history = [snapshot('h1', 'user', 'Earlier'), snapshot('h2', 'assistant', 'Earlier reply'),
     snapshot('h3', 'user', 'Known request'), snapshot('h4', 'assistant', 'Known reply')];
   const result = reconcileHostHistory(original, host, history);
   assert.deepEqual(result.map(item => item.text), ['Earlier', 'Message local', 'Earlier', 'Earlier reply', 'Known request', 'Known reply']);
-  assert.deepEqual(result[0], foreign);
-  assert.deepEqual(result.slice(2).map(item => item.id), ['h1', 'h2', 'h3', 'h4'].map(id => host + id));
+  assert.deepEqual(result[0], foreign); assert.deepEqual(result.slice(2).map(item => item.id), ['h1','h2','h3','h4'].map(id => host + id));
 });
 
-test('repeated host text is matched once per turn and fragments never cross another user request', () => {
+test('identical host turns with different IDs are preserved and do not multiply on repeated snapshots', () => {
   const original = [remote('u1', { text: 'Repeat' }), remote('m2', { role: 'assistant', text: 'Same' }),
     remote('u3', { text: 'Repeat' }), remote('m4', { role: 'assistant', text: 'Same' })];
-  const result = reconcileHostHistory(original, host, [snapshot('h1', 'user', 'Repeat'), snapshot('h2', 'assistant', 'Same'),
-    snapshot('h3', 'user', 'Repeat'), snapshot('h4', 'assistant', 'Same')]);
-  assert.deepEqual(result.map(item => item.id), ['h1', 'h2', 'h3', 'h4'].map(id => host + id));
-  assert.equal(result.length, 4);
+  const history = [snapshot('h1','user','Repeat'), snapshot('h2','assistant','Same'), snapshot('h3','user','Repeat'), snapshot('h4','assistant','Same')];
+  const result = reconcileHostHistory(original, host, history);
+  assert.deepEqual(result.map(item=>item.id), ['u1','m2','u3','m4','h1','h2','h3','h4'].map(id=>host+id));
+  assert.deepEqual(reconcileHostHistory(result, host, history), result);
 });
 
 test('history preserves live tool evidence when a snapshot has no activity records', () => {
@@ -309,7 +302,7 @@ test('older repeated text cannot steal the identity of a later known historical 
 });
 
 test('history merges tool activity by identity without losing detail or regressing a terminal result', () => {
-  const original = [remote('user', { text: 'Consulta' }), remote('answer', { role: 'assistant', text: 'Resultado', activities: [
+  const original = [remote('h1', { text: 'Consulta' }), remote('h2', { role: 'assistant', text: 'Resultado', activities: [
     { id: 'a', title: 'Leer', kind: 'read', status: 'done', detail: 'Resultado conservado' },
     { id: 'b', title: 'Buscar', kind: 'search', status: 'running' },
   ] })];

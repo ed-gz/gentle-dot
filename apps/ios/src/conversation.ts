@@ -66,58 +66,33 @@ function mergeHistoryActivities(live: readonly ChatActivity[], historical: reado
   }
   return [...merged.values()];
 }
-/** Reconcile the host's durable snapshot IDs with its separate live-event IDs. */
+/** Update exact host IDs only. Text equality cannot prove that a historical
+ * message is the same event as a live or pending message. */
 export function reconcileHostHistory(entries: ChatEntry[], prefix: string, history: HostHistoryEntry[], at = Date.now(), beforePrune?: (entries: ChatEntry[]) => void): ChatEntry[] {
   const remote = entries.map((entry, index) => ({ entry, index })).filter(({ entry }) =>
     entry.engine === 'gentle' && entry.id.startsWith(prefix) && entry.role !== 'notice');
   const used = new Set<string>();
   const replacements = new Map<number, ChatEntry>();
-  const removed = new Set<number>();
   const resolved: { entry: ChatEntry; index?: number }[] = [];
-  // A known durable ID belongs to that exact snapshot item, even if an older
-  // turn contains identical text. Never consume it as a text-only match.
-  const historyIds = new Set(history.map(item => JSON.stringify([prefix + item.id, item.role])));
-  let userAnchor: number | undefined;
-  let lastMatch = -1;
   for (const item of history) {
     const id = prefix + item.id;
-    let matches: typeof remote = [];
-    // Pi combines consecutive assistant messages into one history turn. Only
-    // coalesce text inside an identified user turn, never across another request.
-    if (item.role === 'assistant' && userAnchor !== undefined) {
-      const start = remote.findIndex(candidate => candidate.index === userAnchor);
-      const turn: typeof remote = [];
-      for (const candidate of remote.slice(start + 1)) {
-        if (candidate.entry.role === 'user') break;
-        if (!used.has(candidate.entry.id) && (candidate.entry.id === id || !historyIds.has(JSON.stringify([candidate.entry.id, candidate.entry.role])))) turn.push(candidate);
-      }
-      const combined = turn.map(({ entry }) => entry.text).filter(Boolean).join('\n\n');
-      if (turn.length && (combined === item.text || (combined && item.text.startsWith(combined)
-        && turn.at(-1)!.entry.state !== 'complete'))) matches = turn;
-    }
-    if (!matches.length) {
-      const direct = remote.find(({ entry }) => !used.has(entry.id) && entry.id === id && entry.role === item.role);
-      const sameText = remote.find(({ entry, index }) => index > lastMatch && !used.has(entry.id)
-        && entry.role === item.role && !historyIds.has(JSON.stringify([entry.id, entry.role])) && (entry.transportText ?? entry.text) === item.text);
-      const match = direct ?? sameText;
-      if (match) matches = [match];
-    }
-    const prior = matches[0];
+    const prior = remote.find(({ entry }) => !used.has(entry.id) && entry.id === id && entry.role === item.role);
+    // A known transport wrapper is private display metadata. Redacting the
+    // wrapper does not establish that the two records have the same identity.
+    const aliases = item.role === 'user' ? remote.filter(({ entry }) => entry.role === 'user' && entry.transportText !== undefined && entry.transportText === item.text) : [];
+    const aliasText = aliases.length && aliases.every(({ entry }) => entry.text === aliases[0]!.entry.text)
+      ? aliases[0]!.entry.text : aliases.length ? 'Solicitud recibida con contexto adjunto.' : undefined;
+    const displayText = prior?.entry.transportText !== undefined ? prior.entry.text : aliasText ?? item.text;
+    const alias = prior?.entry.transportText ?? (aliasText !== undefined ? item.text : undefined);
     const entry: ChatEntry = {
-      id, role: item.role, activities: mergeHistoryActivities(matches.flatMap(match => match.entry.activities ?? []), item.activities ?? []), text: prior?.entry.transportText ? prior.entry.text : item.text,
-      ...(prior?.entry.transportText ? { transportText: prior.entry.transportText } : {}),
+      id, role: item.role, activities: mergeHistoryActivities(prior?.entry.activities ?? [], item.activities ?? []), text: displayText,
+      ...(alias !== undefined ? { transportText: alias } : {}),
       engine: 'gentle',
-      // History contains text, not the terminal outcome. Keep a known interrupted
-      // assistant interrupted; seeing the user input in history confirms receipt.
-      state: item.role === 'assistant' && matches.some(({ entry }) => entry.state !== 'complete') ? 'interrupted' : 'complete',
+      // History has no terminal outcome; preserve interruption on an exact ID.
+      state: item.role === 'assistant' && prior && prior.entry.state !== 'complete' ? 'interrupted' : 'complete',
       at: prior?.entry.at ?? at,
     };
-    for (const match of matches) { used.add(match.entry.id); removed.add(match.index); }
-    if (prior) {
-      replacements.set(prior.index, entry); removed.delete(prior.index);
-      lastMatch = Math.max(lastMatch, matches.at(-1)!.index);
-    }
-    if (item.role === 'user') userAnchor = prior?.index;
+    if (prior) { used.add(prior.entry.id); replacements.set(prior.index, entry); }
     resolved.push({ entry, index: prior?.index });
   }
   // An older history item that was never observed live belongs before its next
@@ -132,7 +107,7 @@ export function reconcileHostHistory(entries: ChatEntry[], prefix: string, histo
     else before.set(successor, [...before.get(successor) ?? [], item.entry]);
   }
   const merged = entries.flatMap((entry, index) => [
-    ...before.get(index) ?? [], ...(removed.has(index) ? [] : [replacements.get(index) ?? entry]),
+    ...before.get(index) ?? [], replacements.get(index) ?? entry,
   ]);
   const complete = [...merged, ...tail];
   beforePrune?.(complete);
