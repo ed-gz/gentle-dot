@@ -43,6 +43,8 @@ export interface VoiceControls {
 	start(): void;
 	stop(): void;
 	cancel(): void;
+	/** Cancel a pending platform preparation or transcription, preserving its recovery state. */
+	cancelPending?(): void;
 	stopSpeaking(): void;
 	setMuted(muted: boolean): void;
 	/** The user sent a typed message: its reply is not read aloud. */

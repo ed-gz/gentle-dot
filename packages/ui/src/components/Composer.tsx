@@ -80,6 +80,7 @@ export function Composer({
 	// A dictation for this iOS session is still being prepared, transcribed or
 	// joined to its draft. Don't dispatch the earlier partial instruction.
 	const voiceInputPending = capriMobile && inputOnly && Boolean(voice?.inputBusy || recording || voice?.phase === "transcribing" || voice?.draft);
+	const cancelPendingVoice = Boolean(capriMobile && inputOnly && voice?.cancelPending && (voice.inputBusy || voice.phase === "transcribing"));
 	const voiceStatus =
 		voice?.phase === "transcribing" ? copy("Transcribing…", "Transcribiendo…") : voice?.note;
 
@@ -287,14 +288,14 @@ export function Composer({
 						type="button"
 						className={`composer-mic${recording ? " composer-mic-on" : ""}`}
 						aria-label={
-							recording
+							cancelPendingVoice ? "Cancelar dictado" : recording
 								? voice.sendOnStop
 									? copy("Stop and send", "Terminar y enviar")
 									: copy("Stop and review", "Terminar y revisar")
 								: copy("Talk", "Dictar mensaje")
 						}
 						title={
-							voice.mic.available
+							cancelPendingVoice ? "Cancelar dictado" : voice.mic.available
 								? voice.sendOnStop
 									? copy("Tap to talk, tap again to send", "Toca para hablar y otra vez para enviar")
 									: copy(
@@ -303,10 +304,10 @@ export function Composer({
 										)
 								: voice.mic.reason
 						}
-						disabled={disabled || pending || !voice.mic.available || voice.phase === "transcribing" || (capriMobile && inputOnly && voice.inputBusy === true)}
-						onClick={recording ? voice.stop : voice.start}
+						disabled={disabled || pending || (!cancelPendingVoice && (!voice.mic.available || voice.phase === "transcribing" || (capriMobile && inputOnly && voice.inputBusy === true)))}
+						onClick={cancelPendingVoice ? voice.cancelPending : recording ? voice.stop : voice.start}
 					>
-						<MicIcon />
+						{cancelPendingVoice ? <StopIcon /> : <MicIcon />}
 					</button>
 				) : null}
 				{showStop ? (

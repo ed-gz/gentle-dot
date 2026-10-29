@@ -440,7 +440,7 @@ test('a session cannot send its partial instruction while its own dictation is p
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
   await expect.poll(() => page.evaluate(() => typeof (globalThis as any).finishStart)).toBe('function');
   await expect(send).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Dictar mensaje' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Cancelar dictado' })).toBeEnabled();
   await page.locator('.agent-reply form').evaluate((form: HTMLFormElement) => form.requestSubmit());
   expect(await page.evaluate(() => (globalThis as any).sessionCalls.filter((c: any) => c.body && JSON.parse(c.body).action === 'prompt'))).toHaveLength(0);
   await page.evaluate(() => (globalThis as any).finishStart());
@@ -870,7 +870,8 @@ test('a session shows an unconfirmed cancellation and retries its original owner
   await page.getByRole('button', { name: 'Cancelar grabación' }).click();
   await expect(page.getByText(/No pude confirmar que el micrófono se detuvo/)).toBeVisible();
   await page.getByRole('button', { name: 'Dictar mensaje' }).click();
-  await expect(page.getByText('Micrófono detenido. Toca de nuevo para dictar.')).toBeVisible();
+  await expect(page.getByText('La grabación quedó incompleta. El audio se conserva.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Descartar audio pendiente' })).toBeVisible();
   const { cancelOwners, startOwners } = await page.evaluate(() => ({ cancelOwners: (globalThis as any).cancelOwners, startOwners: (globalThis as any).startOwners }));
   expect(cancelOwners).toEqual([startOwners[0], startOwners[0]]);
   expect(startOwners).toHaveLength(1);

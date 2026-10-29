@@ -23,6 +23,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
   const [availability, setAvailability] = useState<VoiceAvailability>();
   const [retryAvailability, setRetryAvailability] = useState(false);
   const [retryCancellation, setRetryCancellation] = useState(false);
+  const [recoveryRevision, setRecoveryRevision] = useState(0);
   const [phase, setPhase] = useState<VoicePhase>('idle');
   const [preparing, setPreparing] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -36,10 +37,10 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
   const owner = useRef<{ epoch: number; session: string; ownerId: string; pending: boolean; retry: boolean; enabled: boolean; destination?: string; record?: RetainedVoiceRecord; needsAttach: boolean; discardPending: boolean }>({ epoch: 0, session: '', ownerId: '', pending: false, retry: false, enabled, destination, needsAttach: false, discardPending: false });
   owner.current.enabled = enabled;
   owner.current.destination = destination;
-  const release = useCallback((discardRetry: boolean) => {
+  const release = useCallback((discardRetry: boolean, forceCancel = false) => {
     const state = owner.current;
     const ownerId = state.ownerId;
-    const retainAudio = state.retry && !discardRetry;
+    const retainAudio = state.retry && !discardRetry && !forceCancel;
     state.epoch++; state.session = ''; state.ownerId = ''; state.pending = false; state.retry = false; state.record = undefined; state.needsAttach = false; state.discardPending = false;
     setPhase('idle'); setPreparing(false); setElapsed(0); setLevel(0); setPartial(''); setDraft(undefined); setNote(undefined); setRetryPending(false); setRetryCancellation(false);
     if (ownerId && !retainAudio) {
@@ -47,10 +48,13 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
       // identity until native confirms, so another view can safely retry.
       markVoiceCancellation(ownerId);
       const epoch = state.epoch;
+      if (forceCancel) { state.pending = true; setRetryCancellation(true); setNote('Deteniendo el dictado…'); }
       void voiceCancelWithDeadline(() => cancelVoice(ownerId))
-        .then(() => { clearVoiceCancellation(ownerId); forgetVoiceOrigin(ownerId); })
+        .then(() => { clearVoiceCancellation(ownerId); forgetVoiceOrigin(ownerId);
+          if (forceCancel && state.epoch === epoch && state.enabled) { state.pending = false; setRetryCancellation(false); setRecoveryRevision(value => value + 1); } })
         .catch(() => {
           if (state.epoch === epoch && state.enabled && pendingVoiceCancellation() === ownerId) {
+            state.pending = false;
             setRetryCancellation(true);
             setNote('No pude confirmar que el micrófono se detuvo. Toca el micrófono para reintentar.');
           }
@@ -60,6 +64,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
   // Shared session components call cancel on unmount; preserve a completed
   // recording awaiting recovery through that cleanup.
   const cancel = useCallback(() => release(false), [release]);
+  const cancelPending = useCallback(() => release(false, true), [release]);
   const discardPending = useCallback(() => {
     const state = owner.current, id = state.ownerId, epoch = state.epoch;
     const record = state.record;
@@ -126,7 +131,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     if (enabled) void refresh().catch(error => { if (live) { setAvailability(undefined); setRetryAvailability(true); setNote(`${String(error.message)} Toca el micrófono para reintentar.`); } });
     else release(false);
     return () => { live = false; clearTimeout(timer); release(false); };
-  }, [enabled, destination, release]);
+  }, [enabled, destination, release, recoveryRevision]);
   useEffect(() => {
     // A native permission dialog may obscure the web view before a capture is
     // established. The native controller handles real background transitions.
@@ -198,12 +203,9 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
           if (state.ownerId === pendingCancellation) { state.ownerId = ''; state.session = ''; state.retry = false; setRetryPending(false); }
           setRetryCancellation(Boolean(pendingVoiceCancellation()));
           setNote('Micrófono detenido. Toca de nuevo para dictar.');
-          try {
-            const current = await checkVoice();
-            if (state.epoch === epoch && state.enabled) { setAvailability(current); setRetryAvailability(false); }
-          } catch {
-            if (state.epoch === epoch && state.enabled) setRetryAvailability(true);
-          }
+          // Cancellation can leave a retained recording. Reinspect the exact
+          // owner/destination before offering another start or discard.
+          setRecoveryRevision(value => value + 1);
         }
       }).catch(error => { if (state.epoch === epoch) { setRetryCancellation(true); setNote(error.message); } })
         .finally(() => { if (state.epoch === epoch) state.pending = false; });
@@ -258,7 +260,7 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
     } }).finally(() => { if (state.epoch === epoch) { state.pending = false; setPreparing(false); } });
   }, [availability, destination, retryAvailability, stop]);
   return { mic: discarding ? { available: false, reason: 'Descartando el audio pendiente.' } : retryCancellation || retryAvailability || retryableVoiceStatus(availability) ? { available: true } : { available: false, reason: note ?? 'El dictado necesita SpeechAnalyzer disponible en este iPhone.' },
-    phase, inputBusy: preparing, elapsed, level, partial, note, draft, start, stop, cancel, retryPending, discarding, discardPending,
+    phase, inputBusy: preparing, elapsed, level, partial, note, draft, start, stop, cancel, cancelPending, retryPending, discarding, discardPending,
     deferDraft: id => {
       const pending = pendingReceipt.current;
       if (!pending || pending.id !== id) return;
