@@ -197,6 +197,16 @@ test('a scanner interrupted by backgrounding reports why without treating it as 
   expect(await page.evaluate(() => (globalThis as any).pairSubmits)).toBe(0);
 });
 
+test('a camera restriction is shown without claiming the user denied permission', async ({ page }) => {
+  await fixture(page, { liveError: 'La cámara está autorizada, pero el escáner no está disponible. Revisa las restricciones de Cámara del iPhone o elige una foto del QR.' });
+  await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();
+  await expect(page.locator('.pairing-scan-status')).toContainText('cámara está autorizada');
+  await expect(page.locator('.pairing-scan-status')).toContainText('restricciones');
+  await expect(page.locator('.pairing-scan-status')).not.toContainText('Permite Cámara');
+  await expect(page.getByRole('button', { name: 'Elegir foto del QR' })).toBeEnabled();
+  expect(await page.evaluate(() => (globalThis as any).pairSubmits)).toBe(0);
+});
+
 test('native camera result for an unrelated URL cannot become a candidate', async ({ page }) => {
   await fixture(page, { codes: ['https://evil.example/approve'] });
   await page.getByRole('button', { name: 'Escanear QR', exact: true }).click();

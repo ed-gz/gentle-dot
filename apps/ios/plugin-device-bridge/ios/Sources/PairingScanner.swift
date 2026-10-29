@@ -35,8 +35,8 @@ final class PairingScanner: NSObject, PairingScannerSession, DataScannerViewCont
             default: authorized = false
             }
             guard self.completion != nil else { return }
-            guard authorized, DataScannerViewController.isAvailable else {
-                self.finish(.failure(DeviceFailure.unavailable("Permite Cámara para Capri en Ajustes del iPhone, o elige una foto del QR."))); return
+            if let issue = pairingCameraIssue(authorized: authorized, available: true) {
+                self.finish(.failure(DeviceFailure.unavailable(issue))); return
             }
             // Camera consent briefly leaves the app inactive while its system
             // sheet dismisses. Do not mistake that transition for backgrounding.
@@ -48,6 +48,9 @@ final class PairingScanner: NSObject, PairingScannerSession, DataScannerViewCont
             guard UIApplication.shared.applicationState == .active, let presenter = presenter,
                   presenter.viewIfLoaded?.window != nil, presenter.presentedViewController == nil else {
                 self.finish(.failure(DeviceFailure.unavailable("Vuelve a Capri y cierra el selector abierto antes de escanear."))); return
+            }
+            if let issue = pairingCameraIssue(authorized: true, available: DataScannerViewController.isAvailable) {
+                self.finish(.failure(DeviceFailure.unavailable(issue))); return
             }
             let scanner = DataScannerViewController(recognizedDataTypes: [.barcode(symbologies: [.qr])],
                 qualityLevel: .balanced, recognizesMultipleItems: true, isHighFrameRateTrackingEnabled: false,
