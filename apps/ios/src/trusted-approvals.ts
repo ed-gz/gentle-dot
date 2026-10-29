@@ -1,7 +1,9 @@
 import { httpsRequest, type HTTPSRequest, type HTTPSResponse } from './device-bridge.ts';
 import { validDaemonUrl } from './local-state.ts';
+import { createLaptopClient } from './laptop-client.ts';
+import type { DotApproval } from '@gentle-dot/ui/src/orchestration.ts';
 
-export type TrustedApproval = Readonly<{ requestId: string; title: string; body: string; expiresAt: string; origin: string }>;
+export type TrustedApproval = Readonly<{ requestId: string; title: string; body: string; expiresAt: string; origin: string; revision?: string }>;
 export type ApprovalConnection = { url: string; token: string };
 export type ApprovalFailureCode = 'disconnected' | 'unauthorized' | 'forbidden' | 'expired' | 'changed' | 'invalid' | 'busy' | 'network' | 'uncertain';
 export class ApprovalFailure extends Error {
@@ -9,7 +11,7 @@ export class ApprovalFailure extends Error {
   constructor(code: ApprovalFailureCode, message: string) { super(message); this.name = 'ApprovalFailure'; this.code = code; }
 }
 type Current = { origin: string; token: string };
-type ApprovalView = { id: string; title: string; message: string; expiresAt: string };
+type ApprovalView = { id: string; title: string; message: string; expiresAt: string; revision?: string };
 type Witness = { connection: Current; exact: string };
 const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -23,7 +25,8 @@ function parseViews(body: string): ApprovalView[] {
       typeof raw.title !== 'string' || typeof raw.message !== 'string' || typeof raw.expiresAt !== 'string' || !Number.isFinite(Date.parse(raw.expiresAt))) {
       throw new ApprovalFailure('invalid', 'Un permiso del host no tiene una vista verificable. Revísalo en la laptop.');
     }
-    const view = { id: raw.id, title: raw.title, message: raw.message, expiresAt: raw.expiresAt };
+    if (raw.revision !== undefined && typeof raw.revision !== 'string') throw new ApprovalFailure('invalid', 'La revisión del permiso no es válida.');
+    const view = { id: raw.id, title: raw.title, message: raw.message, expiresAt: raw.expiresAt, ...(typeof raw.revision === 'string' ? { revision: raw.revision } : {}) };
     if (new TextEncoder().encode(JSON.stringify(view)).length > 64 * 1024) throw new ApprovalFailure('invalid', 'El permiso supera el tamaño de revisión. Revísalo completo en la laptop.');
     ids.add(raw.id); result.push(view);
   }
@@ -72,7 +75,7 @@ export function createTrustedApprovals(options: {
       const connection = current();
       const views = await fetchViews(connection);
       return views.filter(view => Date.parse(view.expiresAt) > now()).map(view => {
-        const snapshot: TrustedApproval = Object.freeze({ requestId: view.id, title: view.title, body: view.message, expiresAt: view.expiresAt, origin: connection.origin });
+        const snapshot: TrustedApproval = Object.freeze({ requestId: view.id, title: view.title, body: view.message, expiresAt: view.expiresAt, origin: connection.origin, ...(view.revision ? { revision:view.revision } : {}) });
         witnessed.set(snapshot, { connection, exact: JSON.stringify(view) });
         return snapshot;
       });
@@ -80,6 +83,7 @@ export function createTrustedApprovals(options: {
     async answer(snapshot: TrustedApproval, approved: boolean): Promise<{ confirmed: true; approved: boolean }> {
       const witness = witnessed.get(snapshot);
       if (!witness || typeof approved !== 'boolean') throw new ApprovalFailure('invalid', 'Primero abre y revisa el permiso actual.');
+      if (approved) throw new ApprovalFailure('forbidden', 'Para permitir esta solicitud, revísala y responde en la laptop.');
       if (consumed.has(snapshot)) throw new ApprovalFailure('uncertain', 'Esta respuesta ya se intentó. Consulta el host y revisa una nueva copia antes de repetir.');
       if (Date.parse(snapshot.expiresAt) <= now()) throw new ApprovalFailure('expired', 'El permiso venció. Actualiza la conversación.');
       const key = `${snapshot.origin}\n${snapshot.requestId}`;
@@ -91,21 +95,14 @@ export function createTrustedApprovals(options: {
         const fresh = views.find(view => view.id === snapshot.requestId);
         if (!fresh || Date.parse(fresh.expiresAt) <= now()) throw new ApprovalFailure('expired', 'La solicitud ya terminó o venció.');
         if (JSON.stringify(fresh) !== witness.exact) throw new ApprovalFailure('changed', 'El contenido del permiso cambió. Revisa su nueva versión antes de responder.');
+        if (!fresh.revision || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(fresh.revision)) throw new ApprovalFailure('forbidden', 'La laptop necesita actualizarse para responder este permiso desde el iPhone.');
         sameConnection(witness.connection);
+        const live = options.getConnection();
+        if (!live) throw new ApprovalFailure('changed', 'La conexión cambió. Revisa de nuevo el permiso antes de responder.');
+        const client = createLaptopClient(live, { current: () => options.getConnection() ?? undefined, request });
         consumed.add(snapshot);
-        let response: HTTPSResponse;
-        try {
-          response = await request({ url: witness.connection.origin + '/api/mobile/answer', method: 'POST',
-            headers: { Authorization: `Bearer ${witness.connection.token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ requestId: snapshot.requestId, approved }) });
-        } catch { throw new ApprovalFailure('uncertain', 'No se confirmó la respuesta. Consulta el host antes de intentar de nuevo.'); }
-        if (response.status !== 200) {
-          if ([401, 403, 409].includes(response.status)) throw statusFailure(response.status);
-          throw new ApprovalFailure('uncertain', 'El host no confirmó la respuesta. Consulta el permiso antes de volver a intentar.');
-        }
-        let value: unknown;
-        try { value = JSON.parse(response.body); } catch { /* Success is only a verified server ACK. */ }
-        if (!object(value) || value.ok !== true) throw new ApprovalFailure('uncertain', 'El host no confirmó la respuesta. Actualiza los permisos antes de repetir.');
+        try { await client.answerDotApproval!(snapshot.requestId, false, fresh as DotApproval); }
+        catch { throw new ApprovalFailure('uncertain', 'No se confirmó el rechazo. Consulta el aviso antes de intentar de nuevo; el transporte puede seguir en curso.'); }
         return { confirmed: true, approved };
       } finally { inFlight.delete(key); }
     },

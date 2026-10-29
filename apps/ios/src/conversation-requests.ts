@@ -8,7 +8,7 @@ const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text = '') => {
 export function createConversationRequests(container: HTMLElement, options: { append?: (section: HTMLElement, mutate: () => void) => void } = {}) {
   const announcement = node('p'); announcement.className = 'sr-only'; announcement.setAttribute('role', 'status');
   container.append(announcement);
-  const hostCards = new Map<string, { card: HTMLElement; sent: boolean; ask: Ask }>();
+  const hostCards = new Map<string, { card: HTMLElement; sent: boolean; ask: Ask; identity?: string }>();
   let connected = false;
   function card(title: string, details: string) {
     const section = node('section'); section.className = 'review-card';
@@ -46,15 +46,15 @@ export function createConversationRequests(container: HTMLElement, options: { ap
         view.mount();
       });
     },
-    host(ask: Ask, send: (fields: { value?: string; confirmed?: boolean; cancelled?: boolean }) => boolean | Promise<{ confirmed: true }>, trusted = false) {
+    host(ask: Ask, send: (fields: { value?: string; confirmed?: boolean; cancelled?: boolean }) => boolean | Promise<{ confirmed: true }>, trusted = false, identity?: string, readOnly = false) {
       const previous = hostCards.get(ask.requestId);
-      if (previous && askSnapshot(previous.ask) === askSnapshot(ask)) return;
+      if (previous && askSnapshot(previous.ask) === askSnapshot(ask) && previous.identity === identity) return;
       if (previous) {
         previous.card.querySelector('.actions')?.replaceChildren();
         const status = previous.card.querySelector('[role="status"]'); if (status) status.textContent = 'La solicitud cambió. Revisa la versión actual debajo.';
       }
       const view = card(ask.title, ask.message ?? '');
-      const state = { card: view.section, sent: false, ask }; hostCards.set(ask.requestId, state);
+      const state = { card: view.section, sent: false, ask, identity }; hostCards.set(ask.requestId, state);
       const expired = () => ask.expiresAt !== undefined && (!Number.isFinite(Date.parse(ask.expiresAt)) || Date.parse(ask.expiresAt) <= Date.now());
       const answer = async (fields: { value?: string; confirmed?: boolean; cancelled?: boolean }) => {
         if (!connected || hostCards.get(ask.requestId) !== state || state.sent || expired()) { view.status.textContent = 'La solicitud perdió vigencia o conexión. Revisa el estado del host.'; return; }
@@ -69,9 +69,17 @@ export function createConversationRequests(container: HTMLElement, options: { ap
           // No automatic retry after a possibly delivered decision.
         }
       };
-      if (ask.method === 'confirm' || (ask.method === 'app' && trusted)) {
+      if (readOnly) view.status.textContent = 'Para responder esta solicitud, revísala en Gentle Dot en la laptop.';
+      else if (ask.method === 'confirm') {
         const approve = button('Permitir', () => answer({ confirmed: true })); approve.className = 'primary';
         view.actions.append(button('Rechazar', () => answer({ confirmed: false })), approve);
+      }
+      else if (ask.method === 'app' && trusted) {
+        if (!identity || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(identity)) view.status.textContent = 'La laptop necesita actualizarse para responder desde el iPhone. Revisa esta solicitud en la laptop.';
+        else {
+          view.status.textContent = 'Para permitir, revisa y responde en la laptop. Desde aquí puedes rechazar.';
+          view.actions.append(button('Rechazar', () => answer({ confirmed: false })));
+        }
       }
       else if (ask.method === 'select') for (const option of ask.options ?? []) view.actions.append(button(option, () => answer({ value: option })));
       else if (ask.method === 'input' || ask.method === 'editor') {
@@ -80,13 +88,14 @@ export function createConversationRequests(container: HTMLElement, options: { ap
       } else {
         view.status.textContent = ask.method === 'app' ? 'Esta autorización requiere el canal del dispositivo vinculado. Por ahora revísala en Gentle Dot.' : 'Esta autorización requiere el PIN del servidor. Revísala en Gentle Dot.';
       }
-      if (!['app', 'pin'].includes(ask.method)) view.actions.append(button('Cancelar', () => answer({ cancelled: true })));
+      if (!readOnly && !['app', 'pin'].includes(ask.method)) view.actions.append(button('Cancelar', () => answer({ cancelled: true })));
       if (expired()) { view.actions.replaceChildren(); view.status.textContent = 'Esta solicitud venció.'; }
       view.mount();
     },
     resolved(requestId: string) {
       const state = hostCards.get(requestId);
       if (!state) return;
+      hostCards.delete(requestId);
       state.card.querySelector('.actions')?.replaceChildren();
       const status = state.card.querySelector('[role="status"]');
       if (status) status.textContent = 'Solicitud cerrada por el host.';

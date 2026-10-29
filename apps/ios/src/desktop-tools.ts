@@ -265,11 +265,12 @@ export function createDesktopSessionClient(dependencies: DesktopDependencies) {
       const target = identity(args); const conn = connection(); const page = await inspect(conn, target, 1); const question = page.question;
       if (!question || question.id !== args.requestId || Date.parse(question.expiresAt) <= Date.now()) throw new Error('La solicitud humana cambió o venció.');
       if (!['confirm','select','input'].includes(question.kind)) throw new Error('Este formulario requiere la interfaz humana de la laptop.');
+      if (!page.questionRevision) throw new Error('Esta sesión no puede verificar el contenido al responder. Actualiza el adaptador o responde en la laptop.');
       const answer = { ...(typeof args.confirmed === 'boolean' ? { confirmed: args.confirmed } : {}), ...(typeof args.cancelled === 'boolean' ? { cancelled: args.cancelled } : {}), ...(args.optionId !== undefined ? { optionId: field(args.optionId, 256, 'Opción') } : {}), ...(args.text !== undefined ? { text: field(args.text, 8000, 'Respuesta') } : {}) };
       if (!Object.keys(answer).length) throw new Error('Selecciona una respuesta humana explícita.');
       await requireInstanceFence(conn);
-      const payload = { action: 'answer', ...target, requestId: question.id, ...answer, expectedInstanceId:page.instanceId, ...(page.questionRevision ? {expectedQuestionRevision:page.questionRevision} : {}) };
-      await authorize(context, conn, question.title, { request: question, response: payload, ...(!page.questionRevision ? {warning:'La laptop usa un contrato anterior y no puede verificar atómicamente el contenido al responder.'} : {}) });
+      const payload = { action: 'answer', ...target, requestId: question.id, ...answer, expectedInstanceId:page.instanceId, expectedQuestionRevision:page.questionRevision };
+      await authorize(context, conn, question.title, { request: question, response: payload });
       const fresh = await inspect(conn, target, 1);
       if (fresh.instanceId !== page.instanceId || fresh.questionRevision !== page.questionRevision || JSON.stringify(fresh.question) !== JSON.stringify(question)) throw new Error('El permiso cambió después de revisarlo.');
       context.signal.throwIfAborted();

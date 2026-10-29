@@ -36,8 +36,9 @@ export function AgentPermissionCard({
 	const [pending, setPending] = useState(false);
 	const [answered, setAnswered] = useState<string>();
 	const [error, setError] = useState<{ key: string; message: string }>();
+	const unbound = controls.requiresReviewedApproval === true && !/^[a-f0-9]{64}$/.test(approval.questionRevision ?? "");
 	const locked =
-		disabled || controls.busy || pending || answered === key || !approval.answerable || expired || !supported;
+		disabled || controls.busy || pending || answered === key || !approval.answerable || expired || !supported || unbound;
 	const answer = async (value: AgentAnswer) => {
 		if (locked || sending.current || requestExpired(approval.expiresAt, true)) return false;
 		sending.current = true;
@@ -78,7 +79,7 @@ export function AgentPermissionCard({
 			<section className="agent-permission-detail" tabIndex={0} aria-label="Detalle de la solicitud">
 				<pre>{approval.message}</pre>
 			</section>
-			{controls.requiresReviewedApproval && !approval.questionRevision ? <p className="muted">La laptop usa un contrato anterior y no puede verificar el contenido al momento de responder.</p> : null}
+			{unbound ? <p className="muted">Esta sesión no puede verificar el contenido al responder. Actualiza el adaptador o responde en la laptop.</p> : null}
 			<p className="muted" role="status">
 				{answered === key
 					? "Respuesta enviada"

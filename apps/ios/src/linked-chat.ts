@@ -221,14 +221,10 @@ export function createLinkedChat(callbacks: Callbacks) {
       if (!historyPaging || !id(before) || before.length > 200 || !id(requestId) || requestId.length > 200 || !id(conversationId)) return false;
       return transmit({ type: 'get_earlier', before, requestId, conversationId });
     },
-    answer(requestId: string, fields: { value?: string; confirmed?: boolean; cancelled?: boolean }, expected?: Ask): boolean {
-      const ask = asks.get(requestId);
-      if (!ask || (expected && askSnapshot(ask) !== askSnapshot(expected)) || !authenticated || ask.method === 'app' || ask.method === 'pin'
-        || (ask.expiresAt !== undefined && (!Number.isFinite(Date.parse(ask.expiresAt)) || Date.parse(ask.expiresAt) <= Date.now()))) return false;
-      if (fields.cancelled === true) return transmit({ type: 'ui_response', requestId, cancelled: true });
-      if (ask.method === 'confirm' && typeof fields.confirmed === 'boolean') return transmit({ type: 'ui_response', requestId, confirmed: fields.confirmed });
-      if (['input', 'editor', 'select'].includes(ask.method) && typeof fields.value === 'string' && fields.value.length <= 32000
-        && (ask.method !== 'select' || ask.options?.includes(fields.value))) return transmit({ type: 'ui_response', requestId, value: fields.value });
+    answer(_requestId: string, _fields: { value?: string; confirmed?: boolean; cancelled?: boolean }, _expected?: Ask): boolean {
+      // The legacy daemon identifies extension questions only by requestId;
+      // it cannot atomically fence a reused ID and changed question in Pi.
+      // Preserve visibility but require the human to answer on the laptop.
       return false;
     },
     exchange(request: WorkSyncRequest, expectedHost?: string): Promise<WorkSyncReply> {

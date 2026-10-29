@@ -954,6 +954,7 @@ async function receiveEarlier(message: Extract<ServerMessage, { type: 'earlier' 
     }
   }
 }
+const activeHostAsks = new Map<string, object>();
 function handleMessage(message: ServerMessage) {
   if (message.type === 'ready') { hostAgentState = message.agentState; remoteConversation = message.conversationId ?? 'default'; linkedBusy = ['thinking', 'working', 'needs_you'].includes(message.agentState); }
   if (message.type === 'agent_state') {
@@ -1038,16 +1039,19 @@ function handleMessage(message: ServerMessage) {
   if (message.type === 'error' && !linked.supportsSendAccepted()) unconfirmedRemote();
   if (message.type === 'ask') {
     const ask = message.ask;
+    const generation = {}; activeHostAsks.set(ask.requestId, generation);
     if (ask.method === 'app' && isTauri() && runtimeConnection) {
+      const connection = runtimeConnection;
       const client = createTrustedApprovals({ getConnection: () => runtimeConnection ?? null });
       void client.list().then(approvals => {
+        if (activeHostAsks.get(ask.requestId) !== generation || linkedStatus !== 'ready' || runtimeConnection !== connection) return;
         const snapshot = approvals.find(item => item.requestId === ask.requestId);
         if (!snapshot) throw new Error('La autorización ya no está vigente.');
-        reviews.host({ ...ask, title: snapshot.title, message: snapshot.body, expiresAt: snapshot.expiresAt }, fields => client.answer(snapshot, fields.confirmed === true), true);
-      }).catch(() => reviews.host(ask, () => false));
-    } else reviews.host(ask, fields => linked.answer(ask.requestId, fields, ask));
+        reviews.host({ ...ask, title: snapshot.title, message: snapshot.body, expiresAt: snapshot.expiresAt }, fields => client.answer(snapshot, fields.confirmed === true), true, snapshot.revision);
+      }).catch(() => { if (activeHostAsks.get(ask.requestId) === generation && linkedStatus === 'ready' && runtimeConnection === connection) reviews.host(ask, () => false); });
+    } else reviews.host(ask, () => false, false, undefined, ask.method !== 'app' && ask.method !== 'pin');
   }
-  if (message.type === 'ask_resolved') reviews.resolved(message.requestId);
+  if (message.type === 'ask_resolved') { activeHostAsks.delete(message.requestId); reviews.resolved(message.requestId); }
   updateControls();
 }
 async function commitManualSelection(attempt: ManualAttempt) {
@@ -1114,7 +1118,7 @@ function failPairingHandshake(attempt: NonNullable<typeof pairingAttempt>) {
 }
 const linked = createLinkedChat({
   onStatus(value) {
-    if (value !== 'ready') { clearTimeout(historyTimer); historyEpoch++; historyPaging.reset(); updateHistoryControl(); }
+    if (value !== 'ready') { activeHostAsks.clear(); clearTimeout(historyTimer); historyEpoch++; historyPaging.reset(); updateHistoryControl(); }
     let pairingFailed = false;
     if (value === 'ready' && pairingAttempt) {
       const attempt = pairingAttempt; pairingAttempt = undefined;

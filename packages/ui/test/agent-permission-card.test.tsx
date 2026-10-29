@@ -5,6 +5,15 @@ import { SessionPendingQuestion } from "../src/components/SessionDetails.tsx";
 import type { AgentApproval, AgentSession } from "../src/orchestration.ts";
 import { AgentPermissionCard } from "../src/components/AgentPermissionCard.tsx";
 
+it("keeps an unbound legacy question visible but disables phone answers", async () => {
+ const send=vi.fn(async()=>true), approval:AgentApproval={id:'q',paneId:'p',sessionId:'s',title:'Permiso',message:'Contenido',action:'confirm',kind:'confirm',answerable:true,createdAt:'',expiresAt:''};
+ const controls={act:send,busy:false,refresh:vi.fn(),requiresReviewedApproval:true};
+ const {rerender}=render(<AgentPermissionCard approval={approval} controls={controls} disabled={false}/>);
+ expect(screen.getByText(/responde en la laptop/)).toBeVisible();expect(screen.getByRole('button',{name:'Permitir'})).toBeDisabled();expect(screen.getByRole('button',{name:'Rechazar'})).toBeDisabled();expect(send).not.toHaveBeenCalled();
+ rerender(<AgentPermissionCard approval={{...approval,questionRevision:'a'.repeat(64)}} controls={controls} disabled={false}/>);
+ await userEvent.click(screen.getByRole('button',{name:'Permitir'}));expect(send).toHaveBeenCalledOnce();
+});
+
 it.each([
  { action: "review-consent" },
  { consentBinding: "opaque-provider-binding" },

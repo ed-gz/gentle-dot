@@ -6,11 +6,11 @@ test('a lost human answer blocks changed answers from both the panel and agent a
     const {createLaptopClient}=await import('/src/laptop-client.ts'),{createDesktopSessionClient}=await import('/src/desktop-tools.ts');
     const conn={url:'wss://example.test/ws',token:'fixture'},target={paneId:'p',sessionId:'s'};
     const question={id:'q1',kind:'input',title:'Pregunta',message:'Indica la respuesta',expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
-    const approval={...question,paneId:'p',sessionId:'s',action:question.title,createdAt:''};
+    const approval={...question,paneId:'p',sessionId:'s',action:question.title,createdAt:'',questionRevision:'a'.repeat(64)};
     const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;
       if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[approval],policies:[],events:[]})};
       if(body?.action==='answer'){sessionStorage.setItem('control-sends',String(Number(sessionStorage.getItem('control-sends')??0)+1));throw new Error('lost ACK');}
-      return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question,history:{hasEarlier:false}})};
+      return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question,questionRevision:'a'.repeat(64),capabilities:{questionBinding:1},history:{hasEarlier:false}})};
     };
     let blocked=false;try{
       if(source==='panel')await createLaptopClient(conn,{current:()=>conn,request,receiptState:async()=> 'terminal'}).act({action:'answer',...target,requestId:'q1',text,reviewedApproval:approval});
@@ -46,7 +46,7 @@ test('an uncertain control requires exact human review before allowing another a
   const result=await page.evaluate(async()=>{
     const {createLaptopClient}=await import('/src/laptop-client.ts'),{createDesktopSessionClient}=await import('/src/desktop-tools.ts'),conn={url:'wss://example.test/ws',token:'fixture'};
     let sends=0;const question={id:'q1',kind:'input',title:'Pregunta',message:'Contenido a revisar',expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
-    const approval={...question,paneId:'p',sessionId:'s',action:question.title,createdAt:''};
+    const approval={...question,paneId:'p',sessionId:'s',action:question.title,createdAt:'',questionRevision:'a'.repeat(64)};
     const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[approval],policies:[],events:[]})};if(body.action==='answer'){sends++;throw new Error('lost ACK');}return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question,history:{hasEarlier:false}})};};
     const panel=createLaptopClient(conn,{current:()=>conn,request,receiptState:async()=> 'terminal'}),desktop=createDesktopSessionClient({getConnection:()=>conn,request,receiptState:async()=> 'terminal'});
     try{await panel.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q1',text:'Respuesta exacta',reviewedApproval:approval});}catch{}
@@ -63,7 +63,7 @@ test('panel refuses changed approval content with the same ID and never sends lo
   await page.goto('/');
   const result=await page.evaluate(async()=>{
     const {createLaptopClient}=await import('/src/laptop-client.ts'),conn={url:'wss://example.test/ws',token:'fixture'};
-    const approval={id:'q1',paneId:'p',sessionId:'s',title:'Enviar',message:'Texto original',action:'send',kind:'confirm' as const,createdAt:'',expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true};
+    const approval={id:'q1',paneId:'p',sessionId:'s',title:'Enviar',message:'Texto original',action:'send',kind:'confirm' as const,createdAt:'',expiresAt:new Date(Date.now()+60000).toISOString(),answerable:true,questionRevision:'a'.repeat(64)};
     let changed=true;const sent:any[]=[];
     const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[{...approval,message:changed?'Texto cambiado':approval.message}],policies:[],events:[]})};
       if(body.action==='answer'){sent.push(body);return {status:200,headers:{},body:JSON.stringify({accepted:true,sessionId:'s',instanceId:'i'})};}
@@ -73,7 +73,7 @@ test('panel refuses changed approval content with the same ID and never sends lo
     changed=false;await client.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q1',approved:true,reviewedApproval:approval});
     return {blocked,sent};
   });
-  expect(result.blocked).toBe(true);expect(result.sent).toEqual([{action:'answer',paneId:'p',sessionId:'s',requestId:'q1',approved:true,expectedInstanceId:'i'}]);
+  expect(result.blocked).toBe(true);expect(result.sent).toEqual([{action:'answer',paneId:'p',sessionId:'s',requestId:'q1',approved:true,expectedInstanceId:'i',expectedQuestionRevision:'a'.repeat(64)}]);
 });
 
 test('control pages and exact review avoid bulk reads of pending payloads',async({page})=>{
@@ -97,6 +97,21 @@ test('new host receives the reviewed revision, while the local approval remains 
    const client=createLaptopClient(conn,{current:()=>conn,request,receiptState:async()=> 'terminal'});let blocked=false;try{await client.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,reviewedApproval:approval});}catch{blocked=true;}changed=false;await client.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,reviewedApproval:approval});return {sent,blocked};
  });
  expect(result.blocked).toBe(true);expect(result.sent).toEqual({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,expectedInstanceId:'i',expectedQuestionRevision:'a'.repeat(64)});
+});
+
+test('legacy Pi questions stay readable but both human response paths refuse an unbound answer',async({page})=>{
+ await page.goto('/');
+ const result=await page.evaluate(async()=>{
+   const {createLaptopClient}=await import('/src/laptop-client.ts'),{createDesktopSessionClient}=await import('/src/desktop-tools.ts');
+   const conn={url:'wss://example.test/ws',token:'fixture'},question={id:'q',kind:'confirm',title:'Enviar',message:'Contenido',expiresAt:'2099-01-01T00:00:00.000Z',answerable:true};
+   const approval={...question,paneId:'p',sessionId:'s',action:'send',createdAt:''};let effects=0,asks=0;
+   const request=async(req:any)=>{const body=req.body?JSON.parse(req.body):null;if(!body)return {status:200,headers:{},body:JSON.stringify({available:true,mutationInstanceFence:1,sessions:[],approvals:[approval],policies:[],events:[]})};if(body.action==='inspect')return {status:200,headers:{},body:JSON.stringify({sessionId:'s',instanceId:'i',status:'waiting',messages:[],deliveries:[],question,history:{hasEarlier:false}})};effects++;return {status:200,headers:{},body:'{}'};};
+   const panel=createLaptopClient(conn,{current:()=>conn,request}),desktop=createDesktopSessionClient({getConnection:()=>conn,request});
+   let panelBlocked=false,agentBlocked=false;try{await panel.act({action:'answer',paneId:'p',sessionId:'s',requestId:'q',approved:true,reviewedApproval:approval});}catch(error){panelBlocked=String(error).includes('responde en la laptop');}
+   try{await desktop.answerFromHuman({paneId:'p',sessionId:'s',requestId:'q',confirmed:true},{signal:new AbortController().signal,askApproval:async()=>{asks++;return true;}});}catch(error){agentBlocked=String(error).includes('responde en la laptop');}
+   return {panelBlocked,agentBlocked,effects,asks,readable:(await panel.inspect('p','s')).sessionId};
+ });
+ expect(result).toEqual({panelBlocked:true,agentBlocked:true,effects:0,asks:0,readable:'s'});
 });
 
 test('shared composer retries use fresh transport IDs and wait for native terminal plus human review',async({page})=>{

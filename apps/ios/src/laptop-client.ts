@@ -150,10 +150,8 @@ export function createLaptopClient(connection: DesktopConnection, options: {
       const fresh:AgentApproval | undefined=supplied ?? (q?.id===action.requestId ? {...q,kind:q.kind as AgentApproval['kind'],paneId:action.paneId,sessionId:action.sessionId,message:q.message??'',action:q.title,createdAt:'',expiresAt:'expiresAt' in q && typeof q.expiresAt==='string'?q.expiresAt:''} : undefined);
       const reviewedFields=(a:AgentApproval)=>JSON.stringify([a.id,a.paneId,a.sessionId,a.title,a.message,a.action,a.expiresAt,a.answerable,a.kind,a.requiresConfirmation,a.options,a.placeholder,a.questions,a.questionRevision]);
       if(!fresh || reviewedFields(fresh)!==reviewedFields(reviewedApproval) || (fresh.expiresAt && Date.parse(fresh.expiresAt)<=Date.now())) throw new Error('La solicitud humana cambió o venció; vuelve a revisarla.');
-      if(reviewedApproval.questionRevision !== undefined) {
-        if (!/^[a-f0-9]{64}$/.test(reviewedApproval.questionRevision)) throw new Error('La revisión de la solicitud no es válida.');
-        wireAction={...wire,expectedInstanceId:instanceId,expectedQuestionRevision:reviewedApproval.questionRevision};
-      }
+      if (typeof reviewedApproval.questionRevision !== 'string' || !/^[a-f0-9]{64}$/.test(reviewedApproval.questionRevision)) throw new Error('Esta sesión no puede verificar el contenido al responder. Actualiza el adaptador o responde en la laptop.');
+      wireAction={...wire,expectedInstanceId:instanceId,expectedQuestionRevision:reviewedApproval.questionRevision};
       review=structuredClone(reviewedApproval);
     }
     const operationDigest=action.action==='prompt' ? await promptDigest(action.text) : undefined;

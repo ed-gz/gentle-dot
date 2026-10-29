@@ -232,13 +232,12 @@ test('rejects unsafe endpoints and blank tokens without opening a socket', () =>
   assert.equal(FakeSocket.all.length, 0);
 });
 
-test('human answers bind to the current ask and cannot bypass app or PIN channels', () => {
+test('legacy question answers remain read-only until the host can fence their reviewed content', () => {
   const { chat, socket } = fixture(); ready(socket);
   assert.equal(chat.answer('missing', { confirmed: true }), false);
   socket.receive({ type: 'ask', ask: { requestId: 'confirm', method: 'confirm', title: 'Revisar contenido' } });
   assert.equal(chat.answer('confirm', { value: 'true' }), false);
-  assert.equal(chat.answer('confirm', { confirmed: true }), true);
-  assert.deepEqual(socket.sent.at(-1), { type: 'ui_response', requestId: 'confirm', confirmed: true });
+  assert.equal(chat.answer('confirm', { confirmed: true }), false);
   socket.receive({ type: 'ask_resolved', requestId: 'confirm' });
   assert.equal(chat.answer('confirm', { confirmed: true }), false);
   for (const method of ['app', 'pin']) {
@@ -247,7 +246,7 @@ test('human answers bind to the current ask and cannot bypass app or PIN channel
   }
   socket.receive({ type: 'ask', ask: { requestId: 'select', method: 'select', title: 'Choose', options: ['A', 'B'] } });
   assert.equal(chat.answer('select', { value: 'C' }), false);
-  assert.equal(chat.answer('select', { value: 'A' }), true);
+  assert.equal(chat.answer('select', { value: 'A' }), false);
   socket.drop();
   assert.equal(chat.answer('select', { value: 'A' }), false);
 });
@@ -261,8 +260,8 @@ test('an unchanged request ID cannot authorize content that changed after human 
   const before = socket.sent.length;
   assert.equal(chat.answer(shown.requestId, { confirmed: true }, shown), false);
   assert.equal(socket.sent.length, before);
-  assert.equal(chat.answer(changed.requestId, { confirmed: true }, { message: changed.message, title: changed.title, method: changed.method, requestId: changed.requestId }), true);
-  assert.deepEqual(socket.sent.at(-1), { type: 'ui_response', requestId: changed.requestId, confirmed: true });
+  assert.equal(chat.answer(changed.requestId, { confirmed: true }, { message: changed.message, title: changed.title, method: changed.method, requestId: changed.requestId }), false);
+  assert.equal(socket.sent.length, before);
 });
 
 test('option and expiry changes invalidate the reviewed ask snapshot', () => {

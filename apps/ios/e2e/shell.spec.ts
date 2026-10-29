@@ -212,7 +212,7 @@ test('agent fixture uses the real local work tool from the conversation and pers
   await expect(page.locator('#work-list')).toContainText('Solo en este iPhone');
 });
 
-test('host activity, exact human answers and steering stay in the same conversation', async ({ page }) => {
+test('host activity, read-only legacy questions and steering stay in the same conversation', async ({ page }) => {
   const submissions: string[] = [];
   const answers: object[] = [];
   let hostSend: ((data: object) => void) | undefined;
@@ -251,21 +251,21 @@ test('host activity, exact human answers and steering stay in the same conversat
   await expect(request).toContainText('Proyecto: CAPRI\nCambio: E-503 <b>literal</b>');
   await expect(request.locator('b')).toHaveCount(0);
   expect(answers).toEqual([]);
-  const staleButton = await request.getByRole('button', { name: 'Permitir', exact: true }).elementHandle();
+  await expect(request).toContainText('responder esta solicitud, revísala en Gentle Dot en la laptop');
+  await expect(request.getByRole('button')).toHaveCount(0);
   hostSend!({ type: 'ask', ask: { requestId: 'confirm-1', method: 'confirm', title: 'Revisar cambio exacto', message: 'Proyecto: CAPRI\nCambio actualizado: E-504' } });
   await expect(request).toContainText('La solicitud cambió.');
   await expect(request.getByRole('button')).toHaveCount(0);
-  // A stale DOM event must not approve the newer server snapshot.
-  await staleButton!.evaluate(button => button.click());
   expect(answers).toEqual([]);
   const currentRequest = page.locator('#requests .review-card').last();
   await expect(currentRequest).toContainText('Cambio actualizado: E-504');
-  await currentRequest.getByRole('button', { name: 'Permitir', exact: true }).click();
-  await expect.poll(() => answers.length).toBe(1);
-  expect(answers[0]).toMatchObject({ type: 'ui_response', requestId: 'confirm-1', confirmed: true });
-  await expect(currentRequest).toContainText('esperando confirmación del host');
+  await expect(currentRequest).toContainText('responder esta solicitud, revísala en Gentle Dot en la laptop');
+  await expect(currentRequest.getByRole('button')).toHaveCount(0);
   hostSend!({ type: 'ask_resolved', requestId: 'confirm-1' });
   await expect(currentRequest).toContainText('Solicitud cerrada por el host.');
+  hostSend!({ type: 'ask', ask: { requestId: 'confirm-1', method: 'confirm', title: 'Revisar cambio exacto', message: 'Proyecto: CAPRI\nCambio actualizado: E-504' } });
+  await expect(page.locator('#requests .review-card').last()).toContainText('responder esta solicitud, revísala en Gentle Dot en la laptop');
+  expect(answers).toEqual([]);
   await expect(page.locator('#send')).toHaveAccessibleName('Añadir instrucción');
   await page.locator('#prompt').fill('Prioriza los errores de hoy.');
   await page.locator('#send').click();

@@ -257,13 +257,13 @@ test('abort approval identifies shared session, and schema guards reject forged 
 });
 test('human-only answer rechecks the exact current question after approval', async () => {
   const question = { id: 'q1', title: 'Enviar correo', message: 'A: Ana. Texto exacto.', kind: 'confirm', expiresAt: new Date(Date.now() + 60000).toISOString() };
-  let reads = 0; const f = fixture({ inspect: (_calls, value) => ({ ...value, question: { ...question, message: ++reads > 1 ? 'Texto cambiado.' : question.message } }) });
+  let reads = 0; const f = fixture({ inspect: (_calls, value) => ({ ...value, questionRevision:'a'.repeat(64), capabilities:{questionBinding:1}, question: { ...question, message: ++reads > 1 ? 'Texto cambiado.' : question.message } }) });
   await assert.rejects(f.client.answerFromHuman({ ...target, requestId: 'q1', confirmed: true }, context(async () => true)), /permiso cambió/);
   assert.equal(f.calls.some(call => call.body && JSON.parse(call.body).action === 'answer'), false);
 });
 test('human review preserves authored option effects and refuses a changed consequence', async () => {
   let reads = 0; const question = { id: 'q1', title: 'Publicar', message: 'Elige el alcance.', kind: 'select', expiresAt: new Date(Date.now() + 60000).toISOString(), fingerprint: 'content-hash', options: [{ id: 'publish', label: 'Publicar', description: 'Envía el documento completo', effect: 'Visible para el equipo', consequence: 'Comunicación externa' }] };
-  const f = fixture({ inspect: (_calls, value) => ({ ...value, question: { ...question, options: question.options.map(option => ({ ...option, consequence: ++reads > 1 ? 'Público en internet' : option.consequence })) } }) });
+  const f = fixture({ inspect: (_calls, value) => ({ ...value, questionRevision:'a'.repeat(64), capabilities:{questionBinding:1}, question: { ...question, options: question.options.map(option => ({ ...option, consequence: ++reads > 1 ? 'Público en internet' : option.consequence })) } }) });
   let reviewed;
   await assert.rejects(f.client.answerFromHuman({ ...target, requestId: 'q1', optionId: 'publish' }, context(async approval => { reviewed = JSON.parse(approval.details); return true; })), /permiso cambió/);
   assert.equal(reviewed.request.options[0].description, question.options[0].description); assert.equal(reviewed.request.options[0].consequence, 'Comunicación externa');
