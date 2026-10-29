@@ -28,6 +28,17 @@ it('does not delete any record when a reviewed record changes concurrently', asy
  await expect(compactDeliveryArchive(archive, archive.bytes.slice())).rejects.toThrow(/cambió/);
  const restored = await restoreDeliveries(); expect(restored.filter(x => x.archived)).toHaveLength(0); expect(restored).toHaveLength(2);
 });
+it('concurrent archive attempts cannot remove pending data or both claim success', async () => {
+ const pending = item('pending','unconfirmed');
+ await persistDeliveries([item('resolved'), pending]);
+ const [first, second] = await Promise.all([prepareDeliveryArchive(), prepareDeliveryArchive()]);
+ const outcomes = await Promise.allSettled([compactDeliveryArchive(first, first.bytes.slice()), compactDeliveryArchive(second, second.bytes.slice())]);
+ expect(outcomes.filter(outcome => outcome.status === 'fulfilled')).toHaveLength(1);
+ expect(outcomes.filter(outcome => outcome.status === 'rejected')).toHaveLength(1);
+ const restored = await restoreDeliveries();
+ expect(restored.find(x => x.id === 'resolved')).toMatchObject({archived:true,status:'dismissed'});
+ expect(restored.find(x => x.id === 'pending')).toMatchObject({status:'unconfirmed',payload:'payload pending'});
+});
 it('leaves legacy records intact because an older view may still write them', async () => {
  const legacy = item('old'); localStorage.setItem('gentle-dot:session-outbox:v1', JSON.stringify([{...legacy, baseline:[]}]));
  const original = await restoreDeliveries(); expect(original).toHaveLength(1);

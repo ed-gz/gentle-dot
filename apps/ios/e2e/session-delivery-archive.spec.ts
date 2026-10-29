@@ -53,3 +53,26 @@ test('archiving a full outbox frees active capacity without touching pending rec
   }, moduleUrl);
   expect(result).toEqual({addedBefore:false,count:250,addedAfter:true,markers:250,pending:['pending','pending']});
 });
+
+test('a lost archive commit callback never claims success and leaves recovery markers', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async url => {
+    const store = await import(/* @vite-ignore */ url);
+    await store.persistDeliveries([{id:'resolved',identity:'owner',text:'done',payload:'',createdAt:1,status:'dismissed',baseline:new Set()}]);
+    const archive = await store.prepareDeliveryArchive();
+    const descriptor = Object.getOwnPropertyDescriptor(IDBTransaction.prototype, 'oncomplete')!;
+    const originalTimeout = window.setTimeout; let suppress = true;
+    Object.defineProperty(IDBTransaction.prototype, 'oncomplete', { ...descriptor, set(value) {
+      if (suppress && this.db.name === 'gentle-dot:session-outbox:v2') { suppress = false; return; }
+      descriptor.set!.call(this, value);
+    }});
+    window.setTimeout = ((fn: TimerHandler, delay?: number, ...args: unknown[]) => originalTimeout(fn, delay === 12_000 ? 200 : delay, ...args)) as typeof setTimeout;
+    let confirmed = true;
+    try { await store.compactDeliveryArchive(archive, archive.bytes.slice()); } catch { confirmed = false; }
+    finally { window.setTimeout = originalTimeout; Object.defineProperty(IDBTransaction.prototype, 'oncomplete', descriptor); }
+    const restored = await store.restoreDeliveries();
+    const stale = await store.persistDeliveries([{id:'resolved',identity:'owner',text:'old',payload:'old',createdAt:1,status:'unconfirmed',baseline:new Set(),storageVersion:0}]);
+    return { confirmed, archived:restored[0]?.archived, status:restored[0]?.status, stale };
+  }, moduleUrl);
+  expect(result).toEqual({confirmed:false, archived:true, status:'dismissed', stale:false});
+});
