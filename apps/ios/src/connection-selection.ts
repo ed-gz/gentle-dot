@@ -1,5 +1,5 @@
 import { secretGet, secretSet } from './device-bridge.ts';
-import { privateOrigin, restorePairing, validConnection, type PairedConnection } from './device-pairing.ts';
+import { privateOrigin, restorePairing, restorePairingAttempt, validConnection, type PairedConnection } from './device-pairing.ts';
 import { validDaemonUrl } from './local-state.ts';
 
 export type SelectedConnection = { source: 'manual'; url: string; token: string } |
@@ -15,12 +15,13 @@ export class ConnectionSelectionPending extends Error {
 export class ConnectionSelectionAmbiguous extends Error {
   constructor() { super('Hay dos accesos guardados para esta laptop. Vuelve a elegir cómo conectarte.'); this.name = 'ConnectionSelectionAmbiguous'; }
 }
-type Marker = { version: 1; state: 'pending'; url: string; previous?: SelectedConnection; candidate?: SelectedConnection } | { version: 1; state: 'disconnected' } |
+type Marker = { version: 1; state: 'pending'; url: string; previous?: SelectedConnection; candidate?: SelectedConnection; pairingAttemptId?: string } | { version: 1; state: 'disconnected' } |
   { version: 1; state: 'active'; connection: SelectedConnection };
 type SecretReader = typeof secretGet;
 type SecretWriter = typeof secretSet;
 type PairingReader = typeof restorePairing;
 const account = 'capri.selected-connection.v1';
+const validAttempt = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
 
 function validManual(value: unknown): value is SelectedConnection & { source: 'manual' } {
   if (!value || typeof value !== 'object') return false;
@@ -47,9 +48,10 @@ function parseMarker(text: string): Marker {
   if (item.state === 'pending' && typeof item.url === 'string') {
     try {
       if (validDaemonUrl(item.url) === item.url && (item.previous === undefined || validSelected(item.previous)) &&
-          (item.candidate === undefined || (validSelected(item.candidate) && item.candidate.url === item.url)))
+          (item.candidate === undefined || (validSelected(item.candidate) && item.candidate.url === item.url)) &&
+          (item.pairingAttemptId === undefined || validAttempt(item.pairingAttemptId)))
         return { version: 1, state: 'pending', url: item.url, ...(item.previous ? { previous: item.previous as SelectedConnection } : {}),
-          ...(item.candidate ? { candidate: item.candidate as SelectedConnection } : {}) };
+          ...(item.candidate ? { candidate: item.candidate as SelectedConnection } : {}), ...(item.pairingAttemptId ? { pairingAttemptId: item.pairingAttemptId as string } : {}) };
     } catch { /* fail closed */ }
   }
   if (item.state === 'active' && validSelected(item.connection)) return { version: 1, state: 'active', connection: item.connection };
@@ -75,21 +77,24 @@ export function createConnectionSelectionStore(dependencies: {
   const pairing = dependencies.pairing ?? restorePairing;
   let generation = 0;
   let pending = false;
+  let boundAttempt: { ticket: number; pairingAttemptId?: string } | undefined;
 
   function exclusive<T>(run: () => Promise<T>): Promise<T> {
     if (pending) return Promise.reject(new Error('Espera a que termine de guardarse el acceso.'));
     pending = true;
     return run().finally(() => { pending = false; });
   }
-  async function begin(url: string, current?: SelectedConnection): Promise<number> {
+  async function begin(url: string, current?: SelectedConnection, pairingAttemptId?: string): Promise<number> {
     const canonical = validDaemonUrl(url);
     if (current && !validSelected(current)) throw new Error('No pude conservar el acceso anterior.');
+    if (pairingAttemptId !== undefined && !validAttempt(pairingAttemptId)) throw new Error('Identidad de vinculación inválida.');
     return exclusive(async () => {
       const ticket = ++generation;
       const existingText = await get('daemon-manual', account);
       const existing = existingText === null ? undefined : parseMarker(existingText);
       const previous = current ?? (existing?.state === 'active' ? existing.connection : existing?.state === 'pending' ? existing.previous : undefined);
-      await set('daemon-manual', account, JSON.stringify({ version: 1, state: 'pending', url: canonical, ...(previous ? { previous } : {}) } satisfies Marker));
+      await set('daemon-manual', account, JSON.stringify({ version: 1, state: 'pending', url: canonical, ...(previous ? { previous } : {}), ...(pairingAttemptId ? { pairingAttemptId } : {}) } satisfies Marker));
+      boundAttempt = { ticket, pairingAttemptId };
       return ticket;
     });
   }
@@ -103,7 +108,7 @@ export function createConnectionSelectionStore(dependencies: {
         ? { source: 'manual', url: connection.url, token: connection.token }
         : { source: 'paired', url: connection.url, token: connection.token, deviceId: connection.deviceId, name: connection.name };
       if (marker?.state === 'active' && JSON.stringify(marker.connection) === JSON.stringify(safe) && ticket === generation) return;
-      if (!marker || marker.state !== 'pending' || marker.url !== connection.url || ticket !== generation) {
+      if (!marker || marker.state !== 'pending' || marker.url !== connection.url || ticket !== generation || boundAttempt?.ticket !== ticket || marker.pairingAttemptId !== boundAttempt.pairingAttemptId) {
         throw new Error('La conexión cambió antes de guardar el acceso.');
       }
       // Construct an allowlisted record, never serialize extra caller fields.
@@ -126,19 +131,27 @@ export function createConnectionSelectionStore(dependencies: {
       if (ticket !== generation) throw new Error('La conexión cambió antes de guardar el acceso.');
       const markerText = await get('daemon-manual', account);
       const marker = markerText === null ? undefined : parseMarker(markerText);
-      if (!marker || marker.state !== 'pending' || marker.url !== connection.url) throw new Error('La conexión cambió antes de guardar el acceso.');
+      if (!marker || marker.state !== 'pending' || marker.url !== connection.url || boundAttempt?.ticket !== ticket || marker.pairingAttemptId !== boundAttempt.pairingAttemptId) throw new Error('La conexión cambió antes de guardar el acceso.');
       const candidate: SelectedConnection = connection.source === 'manual'
         ? { source: 'manual', url: connection.url, token: connection.token }
         : { source: 'paired', url: connection.url, token: connection.token, deviceId: connection.deviceId, name: connection.name };
       await set('daemon-manual', account, JSON.stringify({ ...marker, candidate } satisfies Marker));
     });
   }
-  async function rollback(ticket: number): Promise<SelectedConnection | null> {
+  async function rollback(ticket: number, clearEmpty = false): Promise<SelectedConnection | null> {
     return exclusive(async () => {
       if (ticket !== generation) throw new Error('La conexión cambió antes de recuperar el acceso.');
       const markerText = await get('daemon-manual', account);
       const marker = markerText === null ? undefined : parseMarker(markerText);
-      if (!marker || marker.state !== 'pending' || !marker.previous) return null;
+      if (!marker || marker.state !== 'pending') return null;
+      if (boundAttempt?.ticket !== ticket || marker.pairingAttemptId !== boundAttempt.pairingAttemptId) throw new Error('La conexión cambió antes de recuperar el acceso.');
+      if (!marker.previous) {
+        if (clearEmpty && !marker.candidate) {
+          await set('daemon-manual', account, JSON.stringify({ version: 1, state: 'disconnected' } satisfies Marker));
+          ++generation;
+        }
+        return null;
+      }
       await set('daemon-manual', account, JSON.stringify({ version: 1, state: 'active', connection: marker.previous } satisfies Marker));
       ++generation;
       return marker.previous;
@@ -165,9 +178,17 @@ export function createConnectionSelectionStore(dependencies: {
     return exclusive(async () => {
       const text = await get('daemon-manual', account);
       const marker = text === null ? undefined : parseMarker(text);
-      if (!marker || marker.state !== 'pending' || !marker.candidate) return null;
+      if (!marker || marker.state !== 'pending') return null;
+      let candidate = marker.candidate;
+      if (!candidate && marker.pairingAttemptId) {
+        const origin = new URL(marker.url.replace(/^wss:/, 'https:')).origin;
+        const paired = await restorePairingAttempt(origin, marker.pairingAttemptId, get);
+        if (paired && paired.url === marker.url) candidate = { source: 'paired', ...paired };
+      }
+      if (!candidate) return null;
       const ticket = ++generation;
-      return { ticket, connection: marker.candidate, ...(marker.previous ? { previous: marker.previous } : {}) };
+      boundAttempt = { ticket, pairingAttemptId: marker.pairingAttemptId };
+      return { ticket, connection: candidate, ...(marker.previous ? { previous: marker.previous } : {}) };
     });
   }
   async function restore(url?: string): Promise<SelectedConnection | null> {
@@ -175,7 +196,7 @@ export function createConnectionSelectionStore(dependencies: {
     if (markerText !== null) {
       const marker = parseMarker(markerText);
       if (marker.state === 'disconnected') return null;
-      if (marker.state === 'pending') throw new ConnectionSelectionPending(Boolean(marker.previous), Boolean(marker.candidate));
+      if (marker.state === 'pending') throw new ConnectionSelectionPending(Boolean(marker.previous), Boolean(marker.candidate || marker.pairingAttemptId));
       return marker.connection;
     }
     if (!url) return null;

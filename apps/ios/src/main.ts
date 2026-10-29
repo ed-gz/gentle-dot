@@ -49,7 +49,7 @@ import { checkVoice, prepareVoice, startVoice, stopVoice, cancelVoice, voiceCanc
 import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, markVoiceCancellation, clearVoiceCancellation, pendingVoiceCancellation } from './voice-origin.ts';
 import { isTauri } from '@tauri-apps/api/core';
 import { listSharedImportReport, importSharedItemStreamed, recoverImportBatch, readPendingFileChunk, type PendingCopy } from './device-bridge.ts';
-import { parseInvitation, pairDevice } from './device-pairing.ts';
+import { parseInvitation, pairDevice, PairingRejected } from './device-pairing.ts';
 import { ConnectionSelectionAmbiguous, ConnectionSelectionPending, createConnectionSelectionStore, type SelectedConnection } from './connection-selection.ts';
 import { mountPairingSaveRecovery } from './pairing-save-recovery.ts';
 import { createWork, createStreamedImportedWork, cancelStreamedImport, resumeStreamedImport } from './work-inbox.ts';
@@ -1964,10 +1964,11 @@ element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
     const invitation = parseInvitation(element<HTMLInputElement>('pairing-invitation').value);
     const epoch = ++connectionEpoch;
     const target = `${invitation.origin.replace('https:', 'wss:')}/ws`;
-    ticket = await connectionSelection.begin(target, previous);
+    const attemptId = localIdentifier();
+    ticket = await connectionSelection.begin(target, previous, attemptId);
     if (epoch !== connectionEpoch) throw new Error('La conexión cambió antes de vincular.');
     element('pairing-status').textContent = 'Esperando a Gentle Dot. Si aparece una solicitud en tu laptop, aprueba el acceso allí.';
-    const result = await pairDevice(invitation);
+    const result = await pairDevice(invitation, 'Capri iPhone', attemptId);
     if (epoch !== connectionEpoch) throw new Error('La conexión cambió durante la vinculación.');
     accepted = true;
     pairingSaveRecovery.clear();
@@ -1981,7 +1982,8 @@ element<HTMLFormElement>('pairing').addEventListener('submit', async event => {
     element('pairing-status').textContent = 'La laptop entregó el acceso. Comprobando la conexión…';
     await startPairingHandshake(pending);
   } catch (error) {
-    if (ticket !== undefined && !accepted) try { await connectionSelection.rollback(ticket); } catch { /* Keep the pending marker rather than restoring another credential. */ }
+    if (ticket !== undefined && !accepted && error instanceof PairingRejected) try { await connectionSelection.rollback(ticket, true); } catch { /* Keep the pending marker rather than restoring another credential. */ }
+    else if (ticket !== undefined && !accepted) { retryPendingAccess.hidden = false; recoverPreviousAccess.hidden = !previous; }
     if (accepted && pairingSavePending) {
       const pending = pairingSavePending;
       pairingSaveRecovery.offer(new URL(pending.connection.url.replace(/^wss:/, 'https:')).origin, pending.connection, pending.epoch);
@@ -2042,7 +2044,7 @@ retryPendingAccess.addEventListener('click', () => void (async () => {
   let waitingForManual = false;
   try {
     const pending = await connectionSelection.recoverCandidate();
-    if (!pending) throw new Error('Ya no hay un acceso pendiente que reintentar.');
+    if (!pending) throw new Error('El intento aún no tiene un acceso guardado. Puedes comprobar de nuevo o recuperar el acceso anterior.');
     const epoch = ++connectionEpoch;
     if (pending.connection.source === 'paired') {
       const attempt: PairingPending = { ...pending, epoch, connection: pending.connection };

@@ -6,7 +6,7 @@ const pairedToken = 'paired_fixture_token_1234567890ABCDEFG';
 const manualToken = 'manual_fixture_token';
 const invitation = `gentledot://pair?url=${encodeURIComponent(origin)}&code=${'x'.repeat(32)}&name=Gentle+Dot`;
 
-async function fixture(page: import('@playwright/test').Page, options: { rejectManual?: boolean; rejectPairAfterManual?: boolean; offlinePair?: boolean; noLegacy?: boolean; bothLegacy?: boolean; failActive?: boolean } = {}) {
+async function fixture(page: import('@playwright/test').Page, options: { rejectManual?: boolean; rejectPairAfterManual?: boolean; offlinePair?: boolean; noLegacy?: boolean; bothLegacy?: boolean; failActive?: boolean; holdPair?: boolean; failPair?: boolean } = {}) {
   const hellos: string[] = [];
   await page.routeWebSocket(endpoint, ws => {
     let seq = 0;
@@ -22,7 +22,7 @@ async function fixture(page: import('@playwright/test').Page, options: { rejectM
       if (message.type === 'get_history') ws.send(JSON.stringify({ seq: seq++, type: 'history', conversationId: 'fixture', messages: [] }));
     });
   });
-  await page.addInitScript(({ endpoint, origin, pairedToken, manualToken, invitation, bothLegacy, failActive, noLegacy }) => {
+  await page.addInitScript(({ endpoint, origin, pairedToken, manualToken, invitation, bothLegacy, failActive, noLegacy, holdPair, failPair }) => {
     const state = globalThis as any;
     state.isTauri = true; state.failActive = failActive; state.pairCalls = 0;
     const key = 'fixture-keychain';
@@ -49,8 +49,11 @@ async function fixture(page: import('@playwright/test').Page, options: { rejectM
       if (command.endsWith('|pair_device')) {
         state.pairCalls++;
         const connection = { url: endpoint, token: pairedToken, deviceId: 'phone-a', name: 'Capri' };
-        const values = JSON.parse(localStorage.getItem(key)!); values[`daemon-pairing:${origin}`] = JSON.stringify(connection);
-        localStorage.setItem(key, JSON.stringify(values)); return { ok: true, persisted: true, connection };
+        if (failPair) return {ok:false,error:'network'};
+        const values = JSON.parse(localStorage.getItem(key)!); values[`daemon-pairing:attempt:${args.request.attemptId}`] = JSON.stringify(connection);
+        localStorage.setItem(key, JSON.stringify(values));
+        if (holdPair) return await new Promise(resolve => { state.finishPair = () => resolve({ok:true,persisted:true,connection}); });
+        return { ok: true, persisted: true, connection };
       }
       if (command.endsWith('results_list') || command.endsWith('|share_list') || command.endsWith('|documents_list')) return { ok: true, items: [] };
       if (command.endsWith('check_availability')) return { available: false, status: 'model_not_ready', supportsSpanish: false };
@@ -92,6 +95,34 @@ test('choosing QR pairing after manual selection restores its device credential'
   await page.reload();
   await expect.poll(() => hellos.length).toBe(4);
   expect(hellos).toEqual([pairedToken, manualToken, pairedToken, pairedToken]);
+});
+
+test('an interrupted pairing recovers the exact native attempt only after a human retry and handshake', async ({page}) => {
+  const hellos=await fixture(page,{noLegacy:true,holdPair:true});await settings(page);await manual(page);
+  await expect(page.locator('#status')).toContainText('Acceso guardado');
+  await page.getByRole('button',{name:'Escanear QR',exact:true}).click();await page.getByRole('button',{name:'Vincular iPhone',exact:true}).click();
+  await expect.poll(()=>page.evaluate(()=>typeof (globalThis as any).finishPair)).toBe('function');
+  expect(hellos).toEqual([manualToken]);
+  await page.reload();await page.locator('[data-panel="settings"]').click();
+  await expect(page.locator('#retry-pending-access')).toBeVisible();
+  expect(hellos).toEqual([manualToken]);
+  await page.locator('#retry-pending-access').click();
+  await expect(page.locator('#pairing-status')).toContainText('Acceso guardado');
+  expect(hellos).toEqual([manualToken,pairedToken]);
+  await page.reload();await expect.poll(()=>hellos.length).toBe(3);expect(hellos[2]).toBe(pairedToken);
+});
+
+test('an uncertain pairing response preserves the attempt and does not redeem the invitation again', async ({page}) => {
+  const hellos=await fixture(page,{noLegacy:true,failPair:true});await settings(page);await manual(page);
+  await expect(page.locator('#status')).toContainText('Acceso guardado');
+  await page.getByRole('button',{name:'Escanear QR',exact:true}).click();await page.getByRole('button',{name:'Vincular iPhone',exact:true}).click();
+  await expect(page.locator('#retry-pending-access')).toBeVisible();
+  await page.locator('#retry-pending-access').click();
+  await expect(page.locator('#pairing-status')).toContainText('aún no tiene un acceso guardado');
+  expect(await page.evaluate(()=>(globalThis as any).pairCalls)).toBe(1);expect(hellos).toEqual([manualToken]);
+  await page.reload();await page.locator('[data-panel="settings"]').click();
+  await expect(page.locator('#retry-pending-access')).toBeVisible();await expect(page.locator('#recover-previous-access')).toBeVisible();
+  expect(hellos).toEqual([manualToken]);
 });
 
 test('rejected manual token restores the previous paired connection', async ({ page }) => {

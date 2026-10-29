@@ -37,7 +37,7 @@ private struct BridgeReply: Encodable {
     var receiptState: String? = nil
 }
 private struct SecretInput: Decodable { let scope: String; let account: String; let value: String? }
-private struct PairInput: Decodable { let origin: String; let code: String; let deviceName: String }
+private struct PairInput: Decodable { let origin: String; let code: String; let deviceName: String; let attemptId: String }
 private struct UnpairInput: Decodable { let origin: String; let token: String? }
 private struct OAuthInput: Decodable { let authorizationUrl: String; let callbackScheme: String }
 private struct ReadInput: Decodable { let id: String; let fileId: String; let offset: Int; let length: Int; let pending: Bool?; let expectedSize: Int? }
@@ -198,7 +198,8 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
         do {
             let args = try invoke.parseArgs(PairInput.self)
             let origin = try Self.privateOrigin(args.origin)
-            guard args.code.range(of: "^[A-Za-z0-9_-]{20,100}$", options: .regularExpression) != nil,
+            guard let attempt = UUID(uuidString: args.attemptId), attempt.uuidString.lowercased() == args.attemptId,
+                  args.code.range(of: "^[A-Za-z0-9_-]{20,100}$", options: .regularExpression) != nil,
                   !args.deviceName.isEmpty, args.deviceName.count <= 80,
                   !args.deviceName.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { throw DeviceFailure.invalid("Invitación inválida.") }
             let data = try JSONSerialization.data(withJSONObject: ["code": args.code, "deviceName": args.deviceName])
@@ -220,7 +221,7 @@ final class DeviceBridgePlugin: Plugin, ASWebAuthenticationPresentationContextPr
                     let connection = PairedConnection(url: origin.replacingOccurrences(of: "https://", with: "wss://") + "/ws", token: token, deviceId: deviceId, name: args.deviceName)
                     let value = String(data: try JSONEncoder().encode(connection), encoding: .utf8)!
                     do {
-                        try KeychainStore.set("daemon-pairing", origin, value)
+                        try KeychainStore.set("daemon-pairing", "attempt:\(args.attemptId)", value)
                         invoke.resolve(BridgeReply(persisted: true, connection: connection))
                     } catch {
                         // A successful redemption is not repeated. Retain the issued credential in

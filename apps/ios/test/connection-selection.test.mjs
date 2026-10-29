@@ -57,6 +57,61 @@ test('a staged candidate can be retried or the prior connection explicitly recov
   assert.deepEqual(await reloaded.restore(), { source: 'paired', ...paired });
 });
 
+test('an interrupted pairing recovers only the exact precommitted attempt and requires explicit retry', async () => {
+  const { data, store } = fixture();
+  let ticket = await store.begin(url); await store.commit(ticket, manual);
+  const attempt = 'd3dba896-4b5c-4c1c-98c9-4e60238fe6b9';
+  ticket = await store.begin(url, manual, attempt);
+  const unrelated = 'd3dba896-4b5c-4c1c-98c9-4e60238fe6ba';
+  data.set(`daemon-pairing:attempt:${unrelated}`, JSON.stringify(paired));
+  const reopened = createConnectionSelectionStore({ get: async (scope, account) => data.get(`${scope}:${account}`) ?? null,
+    set: async (scope, account, value) => { data.set(`${scope}:${account}`, value); } });
+  await assert.rejects(reopened.restore(), error => error.name === 'ConnectionSelectionPending' && error.hasPrevious && error.hasCandidate);
+  assert.equal(await reopened.recoverCandidate(), null);
+  data.set(`daemon-pairing:attempt:${attempt}`, JSON.stringify(paired));
+  const recovered = await reopened.recoverCandidate();
+  assert.deepEqual(recovered.connection, { source:'paired', ...paired });
+  await assert.rejects(reopened.restore(), /no se guardó por completo/);
+  await reopened.commit(recovered.ticket, recovered.connection);
+  assert.deepEqual(await reopened.restore(), { source:'paired', ...paired });
+});
+
+test('late pairing write cannot replace a recovered previous connection or select an unrelated host', async () => {
+  const { data, store } = fixture();
+  let ticket = await store.begin(url); await store.commit(ticket, manual);
+  const attempt = 'd3dba896-4b5c-4c1c-98c9-4e60238fe6b9';
+  await store.begin(url, manual, attempt);
+  data.set(`daemon-pairing:attempt:${attempt}`, JSON.stringify({ ...paired, url:'wss://other.example.ts.net/ws' }));
+  await assert.rejects(store.recoverCandidate(), /otro host/);
+  assert.deepEqual(await store.recoverPrevious(), manual);
+  data.set(`daemon-pairing:attempt:${attempt}`, JSON.stringify(paired));
+  assert.deepEqual(await store.restore(), manual);
+  assert.equal(await store.recoverCandidate(), null);
+});
+
+test('a known rejected first pairing can leave a disconnected marker without exposing legacy access', async () => {
+  const { data, store } = fixture(); data.set('pair', true);
+  const ticket = await store.begin(url, undefined, 'd3dba896-4b5c-4c1c-98c9-4e60238fe6b9');
+  assert.equal(await store.rollback(ticket, true), null);
+  assert.equal(await store.restore(url), null);
+});
+
+test('an older candidate cannot commit or roll back a newer attempt for the same host', async () => {
+  const { data, store } = fixture();
+  const attemptA = 'd3dba896-4b5c-4c1c-98c9-4e60238fe6b9';
+  const attemptB = 'd3dba896-4b5c-4c1c-98c9-4e60238fe6ba';
+  await store.begin(url, manual, attemptA);
+  data.set(`daemon-pairing:attempt:${attemptA}`, JSON.stringify(paired));
+  const prior = await store.recoverCandidate();
+  const other = createConnectionSelectionStore({ get: async (scope, account) => data.get(`${scope}:${account}`) ?? null,
+    set: async (scope, account, value) => { data.set(`${scope}:${account}`, value); } });
+  await other.begin(url, manual, attemptB);
+  await assert.rejects(store.commit(prior.ticket, prior.connection), /cambió/);
+  await assert.rejects(store.stage(prior.ticket, prior.connection), /cambió/);
+  await assert.rejects(store.rollback(prior.ticket, true), /cambió/);
+  await assert.rejects(other.restore(), error => error.name === 'ConnectionSelectionPending' && error.hasCandidate);
+});
+
 test('disconnect uses a durable tombstone and never falls back to legacy credentials', async () => {
   const { data, store } = fixture(); data.set('pair', true); data.set(`daemon-manual:${origin}`, manual.token);
   await store.disconnect(); assert.equal(await store.restore(url), null);

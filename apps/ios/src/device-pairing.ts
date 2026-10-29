@@ -1,8 +1,10 @@
 import { deviceInvoke, requireNative, secretGet, secretSet, type NativeReply } from './device-bridge.ts';
+import { localIdentifier } from './local-identifiers.ts';
 
 export type Invitation = { origin: string; code: string; name: string };
 export type PairedConnection = { url: string; token: string; deviceId: string; name: string };
 export type PairingResult = { connection: PairedConnection; persisted: boolean; message?: string };
+export class PairingRejected extends Error {}
 
 /** Same public contract as Android pairing; no Android runtime or master credential. */
 export function privateOrigin(input: string): string {
@@ -39,13 +41,29 @@ export function pairingMessage(status?: number, code?: string): string {
   if (status === 503) return 'La laptop no pudo guardar el acceso del dispositivo.';
   return 'No se confirmó la vinculación. Revisa Tailscale y la aprobación en la laptop.';
 }
-export async function pairDevice(invitation: Invitation, deviceName = 'Capri iPhone'): Promise<PairingResult> {
+export async function pairDevice(invitation: Invitation, deviceName = 'Capri iPhone', attemptId = localIdentifier()): Promise<PairingResult> {
   const origin = privateOrigin(invitation.origin);
   const name = Array.from(deviceName.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim()).slice(0, 80).join('') || 'Capri iPhone';
-  const reply = await deviceInvoke<NativeReply & { connection?: unknown; persisted?: boolean; status?: number }>('pair_device', { origin, code: invitation.code, deviceName: name });
-  if (!reply.ok) throw new Error(reply.message || pairingMessage(reply.status, reply.error));
+  if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(attemptId)) throw new Error('Identidad de vinculación inválida.');
+  const reply = await deviceInvoke<NativeReply & { connection?: unknown; persisted?: boolean; status?: number }>('pair_device', { origin, code: invitation.code, deviceName: name, attemptId });
+  if (!reply.ok) {
+    const message = reply.message || pairingMessage(reply.status, reply.error);
+    if ([400, 401, 403, 410, 429].includes(reply.status ?? 0)) throw new PairingRejected(message);
+    throw new Error(message);
+  }
   if (!validConnection(reply.connection, origin) || typeof reply.persisted !== 'boolean') throw new Error('La laptop devolvió una credencial inválida.');
   return { connection: reply.connection, persisted: reply.persisted, ...(reply.message ? { message: reply.message } : {}) };
+}
+/** A candidate is recoverable only by its exact precommitted attempt ID. */
+export async function restorePairingAttempt(origin: string, attemptId: string, get: typeof secretGet = secretGet): Promise<PairedConnection | null> {
+  origin = privateOrigin(origin);
+  if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(attemptId)) throw new Error('Identidad de vinculación inválida.');
+  const text = await get('daemon-pairing', `attempt:${attemptId}`);
+  if (text === null) return null;
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { throw new Error('El acceso del intento no es válido.'); }
+  if (!validConnection(value, origin)) throw new Error('El acceso del intento corresponde a otro host.');
+  return value;
 }
 export async function restorePairing(origin: string): Promise<PairedConnection | null> {
   origin = privateOrigin(origin);
