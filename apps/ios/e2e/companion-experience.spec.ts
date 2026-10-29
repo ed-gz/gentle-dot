@@ -341,6 +341,10 @@ test('PC teleport choreography reaches the conversation edge and a greeting does
   await personalBuild(page);
   await page.locator('#prompt').fill('Una respuesta para seguir leyendo.'); await page.locator('#send').click();
   await expect(page.locator('.chat-card')).toHaveCount(2);
+  // The second card is initially pending. Let its journal and model finish
+  // before advancing virtual time past real IndexedDB operation deadlines.
+  await expect(page.locator('.chat-text').last()).toContainText('Voy contigo.');
+  await expect(page.locator('#send')).toBeEnabled();
   await page.locator('#rig-handle').focus(); await page.keyboard.press('Enter');
   await expect(page.locator('#rig-handle')).toHaveAttribute('data-pose', 'hop');
   await expect(page.locator('#roam')).toHaveAttribute('aria-pressed', 'true');
