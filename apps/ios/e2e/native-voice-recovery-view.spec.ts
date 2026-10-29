@@ -83,3 +83,48 @@ test('changed receipts never insert or delete, and insertion needs an explicit g
   await root.getByRole('button', { name: 'Eliminar copia' }).click();
   expect(await page.evaluate(() => ({ appended: (globalThis as any).voiceFixture.appended, discards: (globalThis as any).voiceFixture.discards }))).toEqual({ appended: [], discards: 0 });
 });
+
+test('one invalid delivery marker does not hide the other saved dictations', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    const { mountNativeVoiceRecovery } = await import('/src/native-voice-recovery-view.ts');
+    const { createNativeVoiceDelivery, NATIVE_VOICE_DELIVERY_PREFIX } = await import('/src/native-voice-delivery.ts');
+    const name = `voice-invalid-marker-${crypto.randomUUID()}`;
+    const ids = ['abcdef01-abcd-4bcd-8bcd-abcdef012345', 'abcdef02-abcd-4bcd-8bcd-abcdef012345'];
+    const items = ids.map((id, index) => ({ receipt: { schema: 'capri-native-voice-receipt/v1', audio: { id, owner: 'abcdef03-abcd-4bcd-8bcd-abcdef012345', destination: 'chat', locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'ready', byteCount: 10, sha256: 'a'.repeat(64) }, transcript: { sessionId: id, text: `Dictado ${index + 1}`, segments: [{ text: `Dictado ${index + 1}`, startSeconds: 0, endSeconds: 1 }], durationSeconds: 1, locale: 'es-MX', source: 'apple-speech-analyzer' } }, releaseState: 'released' }));
+    await new Promise<void>((resolve, reject) => { const req = indexedDB.open(name, 1); req.onupgradeneeded = () => req.result.createObjectStore('conversation'); req.onerror = () => reject(req.error); req.onsuccess = () => { const db = req.result, tx = db.transaction('conversation', 'readwrite'); tx.objectStore('conversation').put({ corrupt: true }, NATIVE_VOICE_DELIVERY_PREFIX + ids[0]); tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = () => reject(tx.error); }; });
+    const root = document.createElement('section'); root.id = 'voice-marker-audit'; document.body.append(root);
+    const state = globalThis as any; state.voiceAudit = { appended: [], discarded: 0, name, id: ids[0] };
+    const view = mountNativeVoiceRecovery(root, { store: { list: async () => items as any, get: async id => items.find(item => item.receipt.audio.id === id) as any, release: async () => {}, discard: async () => { state.voiceAudit.discarded++; } }, isDelivered: createNativeVoiceDelivery({ databaseName: name }).delivered, append: async receipt => { state.voiceAudit.appended.push(receipt.transcript.text); }, confirmRelease: () => false, confirmDiscard: () => false });
+    await view.refresh();
+  });
+  const root = page.locator('#voice-marker-audit');
+  await expect(root.locator('summary')).toHaveCount(2);
+  const first = root.locator('details').nth(0), second = root.locator('details').nth(1);
+  await first.locator('summary').click(); await second.locator('summary').click();
+  await expect(first).toContainText('Dictado 1');
+  await expect(first).toContainText('No pude verificar');
+  await first.getByRole('button', { name: 'Añadir al mensaje', includeHidden: true }).evaluate(node => node.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await second.getByRole('button', { name: 'Añadir al mensaje' }).click();
+  await expect.poll(() => page.evaluate(() => (globalThis as any).voiceAudit.appended)).toEqual(['Dictado 2']);
+  expect(await page.evaluate(() => (globalThis as any).voiceAudit.discarded)).toBe(0);
+  await page.evaluate(async () => { const { name, id } = (globalThis as any).voiceAudit; await new Promise<void>((resolve, reject) => { const req = indexedDB.open(name, 1); req.onerror = () => reject(req.error); req.onsuccess = () => { const db = req.result, tx = db.transaction('conversation', 'readwrite'); tx.objectStore('conversation').delete(`native-voice-delivery:v1:${id}`); tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = () => reject(tx.error); }; }); });
+  await first.getByRole('button', { name: 'Revisar estado' }).click();
+  await root.locator('details').nth(0).locator('summary').click();
+  await expect(root.locator('details').nth(0).getByRole('button', { name: 'Añadir al mensaje' })).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as any).voiceAudit.appended)).toEqual(['Dictado 2']);
+});
+
+test('capacity cleanup keeps unverifiable receipts and only admits capture after space is available', async ({ page }) => {
+  await page.goto('/');
+  const result = await page.evaluate(async () => {
+    const { prepareNativeVoiceCapacity } = await import('/src/protected-voice.ts');
+    let values = Array.from({ length: 100 }, (_, index) => ({ receipt: { audio: { destination: 'chat', id: String(index) } }, releaseState: 'released' }));
+    const removed: string[] = [], eligible = (receipt: any) => receipt.audio.destination === 'chat';
+    const list = async () => values as any;
+    const blocked = await Promise.allSettled([prepareNativeVoiceCapacity({ list, eligible, cleanup: async () => { throw new Error('unverified'); } })]);
+    await prepareNativeVoiceCapacity({ list, eligible, cleanup: async (receipt: any) => { if (receipt.audio.id === '0') throw new Error('unverified'); if (receipt.audio.id === '1') { removed.push(receipt.audio.id); values = values.filter(item => item.receipt.audio.id !== receipt.audio.id); } } });
+    return { blocked: blocked[0].status, remaining: values.length, untouched: values.some(item => item.receipt.audio.id === '0'), removed };
+  });
+  expect(result).toEqual({ blocked: 'rejected', remaining: 99, untouched: true, removed: ['1'] });
+});

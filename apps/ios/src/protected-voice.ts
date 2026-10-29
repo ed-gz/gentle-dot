@@ -88,3 +88,20 @@ export async function cleanupDeliveredVoiceReceipt(receipt: NativeVoiceReceipt, 
   if (!same(saved.receipt, receipt) || saved.releaseState !== 'released' || !await deps.delivered(receipt)) throw issue();
   await deps.discard(receipt);
 }
+
+/** Do not let a failed cleanup of an older receipt block capture while the
+ * native store still has capacity. At the limit, try each eligible receipt;
+ * unverified records are left for explicit review. */
+export async function prepareNativeVoiceCapacity(deps: {
+  list(): Promise<NativeVoiceReceiptEnvelope[]>;
+  eligible(receipt: NativeVoiceReceipt): boolean;
+  cleanup(receipt: NativeVoiceReceipt): Promise<void>;
+}): Promise<void> {
+  const current = await deps.list();
+  if (current.length < 100) return;
+  for (const item of current) {
+    if (!deps.eligible(item.receipt)) continue;
+    try { await deps.cleanup(item.receipt); } catch { /* Keep uncertain receipts untouched. */ }
+  }
+  if ((await deps.list()).length >= 100) throw new Error('Hay demasiados dictados pendientes. Revísalos antes de grabar otro.');
+}

@@ -967,3 +967,30 @@ test('character artwork persists; appearance and motion controls fit small and l
   }
   expect(errors).toEqual([]);
 });
+
+test('an old unverifiable receipt does not block chat recording while capacity remains', async ({ page }) => {
+  await nativeFixture(page);
+  await page.addInitScript(() => {
+    const state = globalThis as any, previous = state.__TAURI_INTERNALS__.invoke;
+    const id = 'abcdef01-abcd-4bcd-8bcd-abcdef012345', text = 'Dictado anterior';
+    const receipt = { schema: 'capri-native-voice-receipt/v1', audio: { id, owner: 'abcdef03-abcd-4bcd-8bcd-abcdef012345', destination: 'chat', locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'ready', byteCount: 10, sha256: 'a'.repeat(64) }, transcript: { sessionId: id, text, segments: [{ text, startSeconds: 0, endSeconds: 1 }], durationSeconds: 1, locale: 'es-MX', source: 'apple-speech-analyzer' } };
+    state.oldVoiceReceipt = { receipt, releaseState: 'released' }; state.oldVoiceDeletes = 0;
+    const retained = state.wrapRetainedVoice(async (command: string, args: any) => {
+      if (command.endsWith('check_voice')) return { available: true, status: 'available', assetsInstalled: true, microphonePermission: 'granted' };
+      if (command.endsWith('start_voice')) return { ok: true, sessionId: '12345678-1234-1234-1234-123456789012', maxDurationSeconds: 90 };
+      return previous(command, args);
+    });
+    state.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
+      if (command.endsWith('list_voice_receipts')) return { ok: true, receipts: [state.oldVoiceReceipt] };
+      if (command.endsWith('discard_voice_receipt')) { state.oldVoiceDeletes++; return { ok: true }; }
+      return retained(command, args);
+    };
+  });
+  await page.goto('/');
+  await page.evaluate(async () => {
+    await new Promise<void>((resolve, reject) => { const req = indexedDB.open('capri-ios-conversation', 1); req.onerror = () => reject(req.error); req.onsuccess = () => { const db = req.result, tx = db.transaction('conversation', 'readwrite'); tx.objectStore('conversation').put({ corrupt: true }, 'native-voice-delivery:v1:abcdef01-abcd-4bcd-8bcd-abcdef012345'); tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = () => reject(tx.error); }; });
+  });
+  await page.locator('#dictate').click();
+  await expect(page.locator('#dictate')).toHaveAccessibleName('Terminar dictado');
+  expect(await page.evaluate(() => (globalThis as any).oldVoiceDeletes)).toBe(0);
+});

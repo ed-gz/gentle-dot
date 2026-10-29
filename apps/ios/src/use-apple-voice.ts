@@ -3,7 +3,7 @@ import type { VoiceControls, VoicePhase } from '@gentle-dot/ui/src/useVoice.ts';
 import { checkVoice, prepareVoice, cancelVoice, voiceCancelWithDeadline, voiceAvailabilityNote, VoiceCancelUnconfirmed, VoiceRetryPending, type VoiceAvailability } from './perception.ts';
 import { createRetainedVoiceBridge, type RetainedVoiceRecord } from './retained-voice.ts';
 import { createNativeVoiceReceipts, type NativeVoiceReceipt } from './native-voice-receipts.ts';
-import { createProtectedVoice, cleanupDeliveredVoiceReceipt } from './protected-voice.ts';
+import { createProtectedVoice, cleanupDeliveredVoiceReceipt, prepareNativeVoiceCapacity } from './protected-voice.ts';
 import { createSessionVoiceDrafts } from './session-voice-drafts.ts';
 import { localIdentifier } from './local-identifiers.ts';
 import { rememberVoiceOrigin, voiceOrigin, forgetVoiceOrigin, sessionVoiceOrigin, markVoiceCancellation, clearVoiceCancellation, pendingVoiceCancellation } from './voice-origin.ts';
@@ -238,13 +238,9 @@ export function useAppleVoice(enabled: boolean, destination?: string): VoiceCont
         setAvailability(prepared);
         if (!prepared.available) throw new Error(voiceAvailabilityNote(prepared) ?? 'Apple aún no terminó de preparar la voz. Comprueba la conexión y vuelve a intentarlo.');
       }
-      for (const item of await receipts.list()) {
-        const target = item.receipt.audio.destination;
-        if (!target.startsWith('session:')) continue;
-        await cleanupDeliveredVoiceReceipt(item.receipt, { delivered: receipt => sessionDrafts.delivered(target, receipt),
-          release: protectedVoice.release, get: receipts.get, discard: receipts.discard });
-      }
-      if ((await receipts.list()).length >= 100) throw new Error('Hay demasiados dictados pendientes. Revísalos antes de grabar otro.');
+      await prepareNativeVoiceCapacity({ list: receipts.list, eligible: receipt => receipt.audio.destination.startsWith('session:'),
+        cleanup: receipt => cleanupDeliveredVoiceReceipt(receipt, { delivered: value => sessionDrafts.delivered(receipt.audio.destination, value),
+          release: protectedVoice.release, get: receipts.get, discard: receipts.discard }) });
       if (state.epoch !== epoch || !state.enabled) return;
       setNote('Iniciando el micrófono. Si iOS pide permiso, acéptalo para dictar.');
       const started = await protectedVoice.start(ownerId, origin);

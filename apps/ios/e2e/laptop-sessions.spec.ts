@@ -1259,3 +1259,20 @@ test('a timed-out draft read exposes retry without discarding the visible draft'
   await expect(input).toHaveValue('Texto para rescatar');
   await page.reload(); await page.locator('[data-panel="agents"]').click(); await page.locator('.agent-session').filter({hasText:'Operaciones'}).click(); await expect(input).toHaveValue('Texto para rescatar');
 });
+
+test('an old unverifiable receipt does not prevent a new session recording when space remains', async ({ page }) => {
+  await linkedPhone(page);
+  await page.evaluate(async () => {
+    const id = 'abcdef01-abcd-4bcd-8bcd-abcdef012345', text = 'Dictado anterior';
+    const receipt = { schema: 'capri-native-voice-receipt/v1', audio: { id, owner: 'abcdef03-abcd-4bcd-8bcd-abcdef012345', destination: `session:${'a'.repeat(64)}`, locale: 'es-MX', kind: 'speech', createdAt: 1, state: 'ready', byteCount: 10, sha256: 'a'.repeat(64) }, transcript: { sessionId: id, text, segments: [{ text, startSeconds: 0, endSeconds: 1 }], durationSeconds: 1, locale: 'es-MX', source: 'apple-speech-analyzer' } };
+    sessionStorage.setItem('session-voice-fixture', JSON.stringify({ record: null, receipt: { receipt, releaseState: 'released' } }));
+    await new Promise<void>((resolve, reject) => { const req = indexedDB.open('capri-ios-session-voice-drafts', 1); req.onupgradeneeded = () => req.result.createObjectStore('drafts'); req.onerror = () => reject(req.error); req.onsuccess = () => { const db = req.result, tx = db.transaction('drafts', 'readwrite'); tx.objectStore('drafts').put({ corrupt: true }, `delivery:${id}`); tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = () => reject(tx.error); }; });
+  });
+  await page.locator('[data-panel="agents"]').click();
+  await page.locator('.agent-session').filter({ hasText: 'Operaciones' }).click();
+  await page.getByRole('button', { name: 'Dictar mensaje' }).click();
+  await expect(page.getByRole('button', { name: 'Terminar y revisar' })).toBeVisible();
+  const preserved = await page.evaluate(() => JSON.parse(sessionStorage.getItem('session-voice-fixture')!));
+  expect(preserved.receipt.receipt.transcript.text).toBe('Dictado anterior');
+  expect(preserved.receipt.releaseState).toBe('released');
+});

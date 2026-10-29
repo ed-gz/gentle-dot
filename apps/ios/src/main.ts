@@ -30,7 +30,7 @@ import { createNativeVoiceReceipts, type NativeVoiceReceipt } from './native-voi
 import { createNativeVoiceDelivery, prepareNativeVoiceDelivery, type NativeVoiceDeliveryIntent } from './native-voice-delivery.ts';
 import { mountNativeVoiceRecovery } from './native-voice-recovery-view.ts';
 import { exportNativeFile } from './file-export.ts';
-import { createProtectedVoice, cleanupDeliveredVoiceReceipt } from './protected-voice.ts';
+import { createProtectedVoice, cleanupDeliveredVoiceReceipt, prepareNativeVoiceCapacity } from './protected-voice.ts';
 import { createMemoryTools } from './conversation-memory-tools.ts';
 import { mountMemoryView } from './memory-view.ts';
 import { createAgentRunner } from './agent-runner.ts';
@@ -688,13 +688,10 @@ async function cleanupDeliveredVoice(receipt: NativeVoiceReceipt): Promise<void>
     get: nativeVoiceReceipts.get, discard: nativeVoiceReceipts.discard });
 }
 async function prepareVoiceCapacity(): Promise<void> {
-  for (const item of await nativeVoiceReceipts.list()) {
-    if (item.receipt.audio.destination === 'chat') await cleanupDeliveredVoice(item.receipt);
-  }
-  if ((await nativeVoiceReceipts.list()).length >= 100) {
-    await voiceRecovery.refresh();
-    throw new Error('Hay demasiados dictados pendientes. Revísalos antes de grabar otro.');
-  }
+  try {
+    await prepareNativeVoiceCapacity({ list: nativeVoiceReceipts.list,
+      eligible: receipt => receipt.audio.destination === 'chat', cleanup: cleanupDeliveredVoice });
+  } catch (error) { await voiceRecovery.refresh(); throw error; }
 }
 const voiceRecovery = mountNativeVoiceRecovery(voiceRecoveryRoot, { store: { ...nativeVoiceReceipts, release: async receipt => {
     await protectedVoice.releaseManually(receipt);

@@ -27,10 +27,14 @@ export function mountNativeVoiceRecovery(root: HTMLElement, options: {
     if (disposed) return;
     const epoch = ++generation;
     try {
-      const list: { item: NativeVoiceReceiptEnvelope; delivered: boolean }[] = [];
+      const list: { item: NativeVoiceReceiptEnvelope; delivered: boolean; uncertain: boolean }[] = [];
       for (const item of await options.store.list()) {
-        const delivered = item.receipt.audio.destination === 'chat' && await options.isDelivered(item.receipt);
-        if (!delivered || item.releaseState !== 'released') list.push({ item, delivered });
+        let delivered = false, uncertain = false;
+        if (item.receipt.audio.destination === 'chat') {
+          try { delivered = await options.isDelivered(item.receipt); }
+          catch { uncertain = true; }
+        }
+        if (!delivered || item.releaseState !== 'released') list.push({ item, delivered, uncertain });
       }
       if (disposed || generation !== epoch) return;
       // Concurrent refreshes are common while the panel opens. Do not replace
@@ -39,28 +43,31 @@ export function mountNativeVoiceRecovery(root: HTMLElement, options: {
       if (key === renderedKey) return;
       const viewEpoch = ++renderGeneration;
       const fragment = document.createDocumentFragment();
-      for (const [index, { item, delivered }] of list.entries()) {
+      for (const [index, { item, delivered, uncertain }] of list.entries()) {
         const foreign = item.receipt.audio.destination !== 'chat';
         const label = foreign ? 'Dictado de otra sesión' : 'Dictado guardado';
         const group = node('details'), summary = node('summary', list.length === 1 ? label : `${label} ${index + 1}`);
         const text = node('p', item.receipt.transcript.text); text.className = 'voice-receipt-text';
         const actions = node('div'); actions.className = 'actions';
         const append = node('button', 'Añadir al mensaje'); append.type = 'button';
-        append.hidden = foreign || delivered;
+        append.hidden = foreign || delivered || uncertain;
         const exportButton = node('button', 'Exportar texto'); exportButton.type = 'button'; exportButton.hidden = !foreign || !options.exportTranscript;
         const release = node('button', 'Eliminar audio'); release.type = 'button'; release.hidden = item.releaseState === 'released';
         const discard = node('button', 'Eliminar copia'); discard.type = 'button'; discard.disabled = item.releaseState !== 'released';
+        const retry = node('button', 'Revisar estado'); retry.type = 'button'; retry.hidden = !uncertain;
         const status = node('p'); status.className = 'hint'; status.setAttribute('role', 'status');
-        if (item.receipt.transcript.text.length > 8000) status.textContent = 'El texto supera el espacio del mensaje. Selecciona y copia fragmentos.';
+        if (uncertain) status.textContent = 'No pude verificar si este dictado ya se añadió. Revisa su texto antes de gestionarlo.';
+        else if (item.receipt.transcript.text.length > 8000) status.textContent = 'El texto supera el espacio del mensaje. Selecciona y copia fragmentos.';
         let applied = false, busy = false;
-        const update = () => { append.disabled = busy || applied || item.receipt.transcript.text.length > 8000; exportButton.disabled = busy; release.disabled = busy; discard.disabled = busy || item.releaseState !== 'released'; };
+        const update = () => { append.disabled = busy || applied || item.receipt.transcript.text.length > 8000; exportButton.disabled = busy; release.disabled = busy; retry.disabled = busy; discard.disabled = busy || item.releaseState !== 'released'; };
         async function exact() {
           const current = await options.store.get(item.receipt.audio.id);
           if (!current || !same(current.receipt, item.receipt)) throw new Error('El dictado cambió.');
           return current;
         }
+        retry.addEventListener('click', () => void refresh());
         append.addEventListener('click', () => void (async () => {
-          if (foreign || busy) return; busy = true; update();
+          if (foreign || uncertain || busy) return; busy = true; update();
           try { const current = await exact(); if (disposed || renderGeneration !== viewEpoch) return;
             if (await options.isDelivered(current.receipt)) { await refresh(); return; }
             if (disposed || renderGeneration !== viewEpoch) return;
@@ -88,7 +95,7 @@ export function mountNativeVoiceRecovery(root: HTMLElement, options: {
           catch { status.textContent = 'No pude confirmar que se eliminó la copia. Vuelve a intentarlo.'; }
           finally { busy = false; update(); }
         })());
-        update(); actions.append(append, exportButton, release, discard); group.append(summary);
+        update(); actions.append(append, exportButton, release, discard, retry); group.append(summary);
         if (foreign) group.append(node('p', 'Este dictado pertenece a una sesión de la laptop. No se añadirá a esta conversación.'));
         group.append(text, actions, status); fragment.append(group);
       }
