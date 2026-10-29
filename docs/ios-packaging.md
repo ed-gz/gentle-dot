@@ -19,6 +19,12 @@ La IPA inspeccionada mide 2 254 373 bytes y tiene SHA-256 `87005776433c862eaafb4
 
 El sello ad-hoc conserva XML y solicita también DER. El lector de App Groups de Capri admite el XML firmado; una firma que sólo tenga DER produce un error explícito. La comprobación portable del ZIP no sustituye la verificación criptográfica de `codesign`.
 
+## Compilación de comprobación sin IPA
+
+[`check-device-archive.sh`](../apps/ios/scripts/check-device-archive.sh) está diseñado para un runner macOS limpio con Xcode 26+, XcodeGen, Node/pnpm, Rust para iOS y `cargo-tauri` 2.12.1. Genera el proyecto de Tauri con Share y Live Activity, desactiva la firma y ejecuta `cargo tauri ios build --target aarch64 --no-sign --archive-only --ci -- --locked`. Rechaza productos iOS anteriores y una IPA nueva; inspecciona el `.xcarchive` recién compilado para comprobar la app, ambas extensiones, arm64, configuración y enlaces de frameworks. El runner no debe publicar ese archivo.
+
+Esta ruta aún requiere ejecución en un runner macOS para quedar validada. Comprueba compilación y contenido del archive: no firma, no valida entitlements embebidos, SideStore, instalación, cámara, micrófono ni comportamiento en el iPhone. El empaquetador de IPA sigue siendo una ruta separada.
+
 ## Comprobar una descarga desde Linux
 
 Desde la raíz del repositorio, con la ruta al IPA extraído del artefacto de Actions:
