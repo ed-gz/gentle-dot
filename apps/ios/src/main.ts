@@ -719,7 +719,7 @@ const voiceRecovery = mountNativeVoiceRecovery(voiceRecoveryRoot, { store: { ...
 voiceRecoverButton.addEventListener('click', () => { showPanel('inbox'); void voiceRecovery.refresh(); });
 const draftRecoveryRoot = document.createElement('section');
 element('chat-notice').after(draftRecoveryRoot);
-const draftRecovery = mountConversationDraftRecovery(draftRecoveryRoot, { store: draftRescueStore,
+const draftRecovery = mountConversationDraftRecovery(draftRecoveryRoot, { store: draftRescueStore, canEdit: () => conversationReady,
   confirmDiscard: () => window.confirm('¿Descartar esta copia del borrador?'),
   append: async record => {
     if (record.attachedWork && attachedWork && record.attachedWork !== attachedWork) throw new Error('Ya hay otro material adjunto.');
@@ -1270,6 +1270,7 @@ async function restoreConversation() {
     if (!draftEdited) { prompt.value = saved.draft; if (!attachedWork) showAttachedWork(saved.attachedWork); }
     if (attachedWork) showAttachedWork(attachedWork, 'Material guardado en este iPhone');
     conversationReady = true;
+    void draftRecovery.refresh();
     conversationRestoreFailed = false;
     showStorageWarning(persistence.status().blocked);
     retry.hidden = true;
@@ -1328,7 +1329,9 @@ async function initialize() {
     element('art-placeholder').textContent = 'No se pudo cargar Capri. Revisa Personaje en Ajustes.';
   });
   const servicesReady = Promise.all([checkModel(), inbox.refresh(), restoreDeviceConnection(), importSharedFiles(), connectionSettings.refresh(), memoryView.refresh()]);
-  await Promise.all([artworkReady, servicesReady, restoreConversation()]);
+  const conversation = restoreConversation();
+  void draftRecovery.refresh();
+  await Promise.all([artworkReady, servicesReady, conversation]);
 }
 queueMicrotask(() => void initialize());
 
