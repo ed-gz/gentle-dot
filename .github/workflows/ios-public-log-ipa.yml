@@ -1,6 +1,6 @@
 name: Capri personal IPA via encrypted log
 
-# Public source for the personal-capri candidate (Lock Screen defaults, phone
+# Public source for the personal-capri candidate (laptop-first routing, Lock Screen defaults, phone
 # presence, composer fixes), standard public runner;
 # private art and encryption key are
 # injected as short-lived Actions secrets. No plaintext IPA or art is uploaded.
