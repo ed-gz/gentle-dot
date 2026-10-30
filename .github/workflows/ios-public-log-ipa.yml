@@ -5,6 +5,9 @@ name: Capri personal IPA via encrypted log
 # private art and encryption key are
 # injected as short-lived Actions secrets. No plaintext IPA or art is uploaded.
 on:
+  # Manual trigger lets a personal build start on an exact commit without
+  # fabricating a commit that only touches this file to satisfy the push filter.
+  workflow_dispatch: {}
   push:
     branches:
       - fix/android-capri-motion-mobile
